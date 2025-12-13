@@ -21,6 +21,7 @@ t_max_err dictionary_getatoms_nested(t_dictionary *d, const char *path, long *ar
 int compare_doubles(const void *a, const void *b);
 void dictionary_to_json_string_recursive(t_dictionary *d, char **str, long *len, long *capacity);
 char* dictionary_to_string(t_dictionary *d);
+void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d);
 
 t_class *whichoffset_class;
 
@@ -59,12 +60,8 @@ void whichoffset_bang(t_whichoffset *x) {
     t_dictionary *d = dictobj_findregistered_clone(x->dict_name);
 
     if (d) {
-        whichoffset_print_dict(d, 0);
-        
-        char *dict_str = dictionary_to_string(d);
-        visualize(dict_str);
-        sysmem_freeptr(dict_str);
-        
+        //whichoffset_print_dict(d, 0);
+        whichoffset_send_dict_in_chunks(x, d);
         object_free(d);
     } else {
         object_error((t_object *)x, "could not find dictionary %s", x->dict_name->s_name);
@@ -324,9 +321,71 @@ char* dictionary_to_string(t_dictionary *d) {
     return str;
 }
 
+void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d) {
+    long num_tracks;
+    t_symbol **tracks;
+    dictionary_getkeys(d, &num_tracks, &tracks);
+
+    if (tracks) {
+        for (long i = 0; i < num_tracks; i++) {
+            t_symbol *track_key = tracks[i];
+
+            t_atom *track_atom_ptr = NULL;
+            long track_argc = 0;
+            dictionary_getatoms(d, track_key, &track_argc, &track_atom_ptr);
+
+            if (track_argc == 1 && atom_gettype(track_atom_ptr) == A_OBJ && object_classname(atom_getobj(track_atom_ptr)) == gensym("dictionary")) {
+                t_dictionary *track_dict = (t_dictionary *)atom_getobj(track_atom_ptr);
+
+                long num_measures;
+                t_symbol **measures;
+                dictionary_getkeys(track_dict, &num_measures, &measures);
+
+                if (measures) {
+                    for (long j = 0; j < num_measures; j++) {
+                        t_symbol *measure_key = measures[j];
+
+                        t_atom *measure_atom_ptr = NULL;
+                        long measure_argc = 0;
+                        dictionary_getatoms(track_dict, measure_key, &measure_argc, &measure_atom_ptr);
+
+                        if (measure_argc == 1 && atom_gettype(measure_atom_ptr) == A_OBJ && object_classname(atom_getobj(measure_atom_ptr)) == gensym("dictionary")) {
+                            t_dictionary *measure_dict = (t_dictionary *)atom_getobj(measure_atom_ptr);
+                            t_dictionary *measure_dict_clone = (t_dictionary *)object_clone((t_object *)measure_dict);
+
+                            t_dictionary *final_dict = dictionary_new();
+                            t_dictionary *transcript_dict = dictionary_new();
+                            t_dictionary *single_track_dict = dictionary_new();
+
+                            dictionary_appenddictionary(single_track_dict, measure_key, (t_object *)measure_dict_clone);
+                            dictionary_appenddictionary(transcript_dict, track_key, (t_object *)single_track_dict);
+                            dictionary_appenddictionary(final_dict, gensym("transcript"), (t_object *)transcript_dict);
+
+                            char *json_str = dictionary_to_string(final_dict);
+                            visualize(json_str);
+                            sysmem_freeptr(json_str);
+
+                            object_free(final_dict);
+                        }
+
+                        if (measure_atom_ptr) {
+                            sysmem_freeptr(measure_atom_ptr);
+                        }
+                    }
+                    sysmem_freeptr(measures);
+                }
+            }
+            if (track_atom_ptr) {
+                sysmem_freeptr(track_atom_ptr);
+            }
+        }
+        sysmem_freeptr(tracks);
+    }
+}
+
 void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(bang) Print Dictionary, (int) Set Track, (span <list>) Calculate Offset");
+        sprintf(s, "(bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
     } else { // ASSIST_OUTLET
         sprintf(s, "Calculated Optimal Offset (float)");
     }

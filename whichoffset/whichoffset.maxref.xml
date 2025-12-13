@@ -13,8 +13,8 @@
     
     <!-- Messages -->
     <method name="bang">
-        <digest>Print dictionary contents.</digest>
-        <description>Sends a `bang` to this object to print the entire contents of its associated dictionary to the Max console, formatted for readability.</description>
+        <digest>Visualize dictionary contents.</digest>
+        <description>Sends a `bang` to this object to send the entire contents of its associated dictionary to an external visualizer via UDP.</description>
     </method>
     
     <method name="int">
@@ -40,7 +40,7 @@
     <!-- Inlets -->
     <inlet name="in" type="bang, int, list">
         <digest>Input for messages: bang, int, span.</digest>
-        <description>Accepts `bang` to print, an `int` to set the track, and a `span` message followed by a list of timestamps to perform the calculation.</description>
+        <description>Accepts `bang` to visualize the dictionary, an `int` to set the track, and a `span` message followed by a list of timestamps to perform the calculation.</description>
     </inlet>
     
     <!-- Outlets -->
