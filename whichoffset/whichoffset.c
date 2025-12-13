@@ -96,8 +96,8 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
     post("whichoffset: min_ts %ld, max_ts %ld", min_ts, max_ts);
 
     char min_path[256], max_path[256];
-    snprintf(min_path, 256, "%ld::%ld::absolute_ts", x->track, min_ts);
-    snprintf(max_path, 256, "%ld::%ld::absolute_ts", x->track, max_ts);
+    snprintf(min_path, 256, "%ld::%ld::absolutes", x->track, min_ts);
+    snprintf(max_path, 256, "%ld::%ld::absolutes", x->track, max_ts);
 
     t_atom *min_abs_ts_atoms = NULL, *max_abs_ts_atoms = NULL;
     long min_abs_ts_argc = 0, max_abs_ts_argc = 0;
