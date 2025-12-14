@@ -34,8 +34,8 @@ void *assemblespans_new(void) {
     if (x) {
         x->working_memory = dictionary_new();
         x->current_track = 0;
-        intin((t_object *)x, 2);
         floatin((t_object *)x, 1);
+        intin((t_object *)x, 2);
     }
     return (x);
 }
@@ -48,6 +48,7 @@ void assemblespans_free(t_assemblespans *x) {
 
 void assemblespans_float(t_assemblespans *x, double f) {
     long inlet = proxy_getinlet((t_object *)x);
+
     char track_str[32];
     snprintf(track_str, 32, "%ld", x->current_track);
     t_symbol *track_sym = gensym(track_str);
@@ -66,6 +67,8 @@ void assemblespans_float(t_assemblespans *x, double f) {
         t_atom notes_atom;
         if (!dictionary_hasentry(track_dict, gensym("notes"))) {
             notes = atomarray_new(0, NULL);
+            atom_setobj(&notes_atom, (t_object *)notes);
+            dictionary_appendatom(track_dict, gensym("notes"), &notes_atom);
         } else {
             dictionary_getatom(track_dict, gensym("notes"), &notes_atom);
             notes = (t_atomarray *)atom_getobj(&notes_atom);
@@ -73,19 +76,21 @@ void assemblespans_float(t_assemblespans *x, double f) {
         t_atom note_atom;
         atom_setfloat(&note_atom, f);
         atomarray_appendatom(notes, &note_atom);
-        atom_setobj(&notes_atom, (t_object *)notes);
-        dictionary_appendatom(track_dict, gensym("notes"), &notes_atom);
     } else if (inlet == 1) { // Offset inlet
         dictionary_appendfloat(track_dict, gensym("offset"), f);
-        post("Track %ld offset: %.2f", x->current_track, f);
     }
 
     post_working_memory(x);
 }
 
 void assemblespans_int(t_assemblespans *x, long n) {
-    x->current_track = n;
-    post("Current track set to: %ld", n);
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 2) {
+        x->current_track = n;
+        post("Current track set to: %ld", n);
+    } else {
+        post("Integer received on unexpected inlet: %ld", inlet);
+    }
 }
 
 void post_working_memory(t_assemblespans *x) {
@@ -128,6 +133,9 @@ void post_working_memory(t_assemblespans *x) {
             dictionary_getfloat(track_dict, gensym("offset"), &offset_val);
             post("  Offset: %.2f", offset_val);
         }
+    }
+    if (tracks) {
+        sysmem_freeptr(tracks);
     }
     post("--------------------");
 }
