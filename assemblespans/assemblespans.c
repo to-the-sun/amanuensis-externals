@@ -78,6 +78,9 @@ void assemblespans_offset(t_assemblespans *x, double f) {
     dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
     t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
+    if (dictionary_hasentry(track_dict, gensym("offset"))) {
+        dictionary_deleteentry(track_dict, gensym("offset"));
+    }
     dictionary_appendfloat(track_dict, gensym("offset"), f);
     post("Offset for track %ld updated to: %.2f", x->current_track, f);
 }
@@ -164,7 +167,13 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 
     // Store the current offset and palette in the bar dictionary
+    if (dictionary_hasentry(bar_dict, gensym("offset"))) {
+        dictionary_deleteentry(bar_dict, gensym("offset"));
+    }
     dictionary_appendfloat(bar_dict, gensym("offset"), offset_val);
+    if (dictionary_hasentry(bar_dict, gensym("palette"))) {
+        dictionary_deleteentry(bar_dict, gensym("palette"));
+    }
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
     post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, offset_val);
     post("Updated dictionary entry: %s::%s::palette -> %s", track_sym->s_name, bar_sym->s_name, x->current_palette->s_name);
@@ -218,6 +227,9 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             sum += atom_getfloat(&score_atom);
         }
         double mean = sum / scores_count;
+        if (dictionary_hasentry(bar_dict, gensym("mean"))) {
+            dictionary_deleteentry(bar_dict, gensym("mean"));
+        }
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
         post("Updated dictionary entry: %s::%s::mean -> %.2f", track_sym->s_name, bar_sym->s_name, mean);
     }
