@@ -1,23 +1,26 @@
 #include "ext.h"
-#include <math.h>
 #include "ext_obex.h"
 #include "ext_dictobj.h"
+#include "ext_proto.h"
+#include <math.h>
 
 typedef struct _assemblespans {
     t_object s_obj;
     t_dictionary *working_memory;
     long current_track;
-    double bar;
+    long bar_length;
+    t_symbol *current_palette;
 } t_assemblespans;
 
 // Function prototypes
 void *assemblespans_new(void);
 void assemblespans_free(t_assemblespans *x);
-void assemblespans_float(t_assemblespans *x, double f);
+void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_int(t_assemblespans *x, long n);
 void assemblespans_offset(t_assemblespans *x, double f);
-void assemblespans_bar(t_assemblespans *x, double f);
+void assemblespans_bar_length(t_assemblespans *x, long n);
 void assemblespans_track(t_assemblespans *x, long n);
+void assemblespans_palette(t_assemblespans *x, t_symbol *s);
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void post_working_memory(t_assemblespans *x);
 
@@ -25,12 +28,13 @@ t_class *assemblespans_class;
 
 void ext_main(void *r) {
     t_class *c;
-    c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, 0);
-    class_addmethod(c, (method)assemblespans_float, "float", A_FLOAT, 0);
+    c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)assemblespans_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
-    class_addmethod(c, (method)assemblespans_bar, "ft2", A_FLOAT, 0);
-    class_addmethod(c, (method)assemblespans_track, "in3", A_LONG, 0);
+    class_addmethod(c, (method)assemblespans_track, "in2", A_LONG, 0);
+    class_addmethod(c, (method)assemblespans_bar_length, "in3", A_LONG, 0);
+    class_addmethod(c, (method)assemblespans_palette, "symbol", A_DEFSYM, 0);
     class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
     class_register(CLASS_BOX, c);
     assemblespans_class = c;
@@ -41,10 +45,12 @@ void *assemblespans_new(void) {
     if (x) {
         x->working_memory = dictionary_new();
         x->current_track = 0;
-        x->bar = 125.0; // Default bar length
+        x->bar_length = 125; // Default bar length
+        x->current_palette = gensym("");
         // Inlets are created from right to left.
-        intin((t_object *)x, 3);    // Track Number
-        floatin((t_object *)x, 2);  // Bar Length
+        proxy_new((t_object *)x, 4, NULL); // Palette
+        intin((t_object *)x, 3);    // Bar Length
+        intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
     }
     return (x);
@@ -56,7 +62,7 @@ void assemblespans_free(t_assemblespans *x) {
     }
 }
 
-// Handler for float messages on inlet 1 (offset)
+// Handler for float messages on inlet 2 (offset)
 void assemblespans_offset(t_assemblespans *x, double f) {
     char track_str[32];
     snprintf(track_str, 32, "%ld", x->current_track);
@@ -76,10 +82,10 @@ void assemblespans_offset(t_assemblespans *x, double f) {
     post("Offset for track %ld updated to: %.2f", x->current_track, f);
 }
 
-// Handler for float messages on inlet 2 (bar length)
-void assemblespans_bar(t_assemblespans *x, double f) {
-    x->bar = f;
-    post("Bar length updated to: %.2f", f);
+// Handler for int messages on inlet 4 (bar length)
+void assemblespans_bar_length(t_assemblespans *x, long n) {
+    x->bar_length = n;
+    post("Bar length updated to: %ld", n);
 }
 
 // Handler for int messages on inlet 3 (track number)
@@ -88,10 +94,28 @@ void assemblespans_track(t_assemblespans *x, long n) {
     post("Track updated to: %ld", n);
 }
 
-// Handler for float messages on the main inlet (note timestamp)
-void assemblespans_float(t_assemblespans *x, double f) {
-    post("--- New Timestamp Received ---");
-    post("Absolute timestamp: %.2f", f);
+// Handler for symbol messages on inlet 5 (palette)
+void assemblespans_palette(t_assemblespans *x, t_symbol *s) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+    if (inlet_num == 4) {
+        x->current_palette = s;
+        post("Palette set to: %s", s->s_name);
+    }
+}
+
+
+// Handler for list messages on the main inlet
+void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
+        object_error((t_object *)x, "Input must be a list of two floats: timestamp and score.");
+        return;
+    }
+
+    double timestamp = atom_getfloat(argv);
+    double score = atom_getfloat(argv + 1);
+
+    post("--- New Timestamp-Score Pair Received ---");
+    post("Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
 
     // Get current track symbol
     char track_str[32];
@@ -117,11 +141,11 @@ void assemblespans_float(t_assemblespans *x, double f) {
     post("Current offset for track %ld is: %.2f", x->current_track, offset_val);
 
     // Subtract offset and calculate bar timestamp
-    double relative_timestamp = f - offset_val;
+    double relative_timestamp = timestamp - offset_val;
     post("Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
 
-    long bar_timestamp_val = floor(relative_timestamp / x->bar) * x->bar;
-    post("Calculated bar timestamp (rounded down to nearest %.2f): %ld", x->bar, bar_timestamp_val);
+    long bar_timestamp_val = floor(relative_timestamp / x->bar_length) * x->bar_length;
+    post("Calculated bar timestamp (rounded down to nearest %ld): %ld", x->bar_length, bar_timestamp_val);
 
     // Get bar dictionary (level 2)
     char bar_str[32];
@@ -139,9 +163,12 @@ void assemblespans_float(t_assemblespans *x, double f) {
         bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
     }
 
-    // Store the current offset in the bar dictionary
+    // Store the current offset and palette in the bar dictionary
     dictionary_appendfloat(bar_dict, gensym("offset"), offset_val);
+    dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
     post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, offset_val);
+    post("Updated dictionary entry: %s::%s::palette -> %s", track_sym->s_name, bar_sym->s_name, x->current_palette->s_name);
+
 
     // Get or create the 'absolutes' atomarray (level 3)
     t_atomarray *absolutes_array;
@@ -158,16 +185,36 @@ void assemblespans_float(t_assemblespans *x, double f) {
 
     // Append the new absolute timestamp
     t_atom new_absolute_atom;
-    atom_setfloat(&new_absolute_atom, f);
+    atom_setfloat(&new_absolute_atom, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute_atom);
-    post("Appended to dictionary entry: %s::%s::absolutes -> %.2f", track_sym->s_name, bar_sym->s_name, f);
+    post("Appended to dictionary entry: %s::%s::absolutes -> %.2f", track_sym->s_name, bar_sym->s_name, timestamp);
+
+    // Get or create the 'scores' atomarray (level 3)
+    t_atomarray *scores_array;
+    if (!dictionary_hasentry(bar_dict, gensym("scores"))) {
+        scores_array = atomarray_new(0, NULL);
+        t_atom scores_atom;
+        atom_setobj(&scores_atom, (t_object *)scores_array);
+        dictionary_appendatom(bar_dict, gensym("scores"), &scores_atom);
+    } else {
+        t_atom scores_atom;
+        dictionary_getatom(bar_dict, gensym("scores"), &scores_atom);
+        scores_array = (t_atomarray *)atom_getobj(&scores_atom);
+    }
+
+    // Append the new score
+    t_atom new_score_atom;
+    atom_setfloat(&new_score_atom, score);
+    atomarray_appendatom(scores_array, &new_score_atom);
+    post("Appended to dictionary entry: %s::%s::scores -> %.2f", track_sym->s_name, bar_sym->s_name, score);
 
     post_working_memory(x);
 }
 
+
 // Handler for int messages on the main inlet
 void assemblespans_int(t_assemblespans *x, long n) {
-    assemblespans_float(x, (double)n);
+    object_error((t_object *)x, "Invalid input: main inlet expects a list of two floats.");
 }
 
 void post_working_memory(t_assemblespans *x) {
@@ -221,16 +268,19 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) 
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(float) Note Timestamp");
+                sprintf(s, "(list) Timestamp-Score Pair");
                 break;
             case 1:
                 sprintf(s, "(float) Offset Timestamp");
                 break;
             case 2:
-                sprintf(s, "(float) Bar Length");
+                sprintf(s, "(int) Track Number");
                 break;
             case 3:
-                sprintf(s, "(int) Track Number");
+                sprintf(s, "(int) Bar Length");
+                break;
+            case 4:
+                sprintf(s, "(symbol) Palette");
                 break;
         }
     }
