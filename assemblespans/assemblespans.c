@@ -13,6 +13,8 @@ void *assemblespans_new(void);
 void assemblespans_free(t_assemblespans *x);
 void assemblespans_float(t_assemblespans *x, double f);
 void assemblespans_int(t_assemblespans *x, long n);
+void assemblespans_offset(t_assemblespans *x, double f);
+void assemblespans_track(t_assemblespans *x, long n);
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void post_working_memory(t_assemblespans *x);
 
@@ -23,8 +25,8 @@ void ext_main(void *r) {
     c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, 0);
     class_addmethod(c, (method)assemblespans_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
-    class_addmethod(c, (method)assemblespans_float, "ft1", A_FLOAT, 0);
-    class_addmethod(c, (method)assemblespans_int, "in2", A_LONG, 0);
+    class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
+    class_addmethod(c, (method)assemblespans_track, "in2", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
     class_register(CLASS_BOX, c);
     assemblespans_class = c;
@@ -49,16 +51,8 @@ void assemblespans_free(t_assemblespans *x) {
     }
 }
 
-void assemblespans_float(t_assemblespans *x, double f) {
-    long inlet = proxy_getinlet((t_object *)x);
-
-    // Max number boxes can send floats to int inlets, so we handle track selection here too.
-    if (inlet == 2) {
-        x->current_track = (long)f;
-        post("Current track set to: %ld", x->current_track);
-        return;
-    }
-
+// Handler for float messages on inlet 1 (offset)
+void assemblespans_offset(t_assemblespans *x, double f) {
     char track_str[32];
     snprintf(track_str, 32, "%ld", x->current_track);
     t_symbol *track_sym = gensym(track_str);
@@ -73,36 +67,60 @@ void assemblespans_float(t_assemblespans *x, double f) {
     dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
     t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
-    if (inlet == 0) { // Note inlet
-        t_atomarray *notes;
-        t_atom notes_atom;
-        if (!dictionary_hasentry(track_dict, gensym("notes"))) {
-            notes = atomarray_new(0, NULL);
-            atom_setobj(&notes_atom, (t_object *)notes);
-            dictionary_appendatom(track_dict, gensym("notes"), &notes_atom);
-        } else {
-            dictionary_getatom(track_dict, gensym("notes"), &notes_atom);
-            notes = (t_atomarray *)atom_getobj(&notes_atom);
-        }
-        t_atom note_atom;
-        atom_setfloat(&note_atom, f);
-        atomarray_appendatom(notes, &note_atom);
-    } else if (inlet == 1) { // Offset inlet
-        dictionary_appendfloat(track_dict, gensym("offset"), f);
+    dictionary_appendfloat(track_dict, gensym("offset"), f);
+    post("Offset for track %ld updated to: %.2f", x->current_track, f);
+}
+
+// Handler for int messages on inlet 2 (track number)
+void assemblespans_track(t_assemblespans *x, long n) {
+    x->current_track = n;
+    post("Track updated to: %ld", n);
+}
+
+// Handler for float messages on the main inlet (note timestamp)
+void assemblespans_float(t_assemblespans *x, double f) {
+    char track_str[32];
+    snprintf(track_str, 32, "%ld", x->current_track);
+    t_symbol *track_sym = gensym(track_str);
+
+    // Ensure a dictionary exists for the current track
+    if (!dictionary_hasentry(x->working_memory, track_sym)) {
+        t_dictionary *track_dict = dictionary_new();
+        dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
     }
+
+    t_atom track_dict_atom;
+    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+    // Post the current offset
+    double offset_val = 0.0;
+    if (dictionary_hasentry(track_dict, gensym("offset"))) {
+        dictionary_getfloat(track_dict, gensym("offset"), &offset_val);
+    }
+    post("Absolute timestamp received: %.2f, current offset for track %ld is: %.2f", f, x->current_track, offset_val);
+
+    // Add the note to the 'notes' atomarray
+    t_atomarray *notes;
+    t_atom notes_atom;
+    if (!dictionary_hasentry(track_dict, gensym("notes"))) {
+        notes = atomarray_new(0, NULL);
+        atom_setobj(&notes_atom, (t_object *)notes);
+        dictionary_appendatom(track_dict, gensym("notes"), &notes_atom);
+    } else {
+        dictionary_getatom(track_dict, gensym("notes"), &notes_atom);
+        notes = (t_atomarray *)atom_getobj(&notes_atom);
+    }
+    t_atom note_atom;
+    atom_setfloat(&note_atom, f);
+    atomarray_appendatom(notes, &note_atom);
 
     post_working_memory(x);
 }
 
+// Handler for int messages on the main inlet
 void assemblespans_int(t_assemblespans *x, long n) {
-    long inlet = proxy_getinlet((t_object *)x);
-    if (inlet == 2) {
-        x->current_track = n;
-        post("Current track set to: %ld", n);
-    } else {
-        // Silently ignore integers on other inlets, or post a message if that's preferred.
-        // post("Integer received on unexpected inlet: %ld", inlet);
-    }
+    assemblespans_float(x, (double)n);
 }
 
 void post_working_memory(t_assemblespans *x) {
