@@ -208,6 +208,20 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     atomarray_appendatom(scores_array, &new_score_atom);
     post("Appended to dictionary entry: %s::%s::scores -> %.2f", track_sym->s_name, bar_sym->s_name, score);
 
+    // Calculate and store the mean of the scores
+    long scores_count = atomarray_getsize(scores_array);
+    if (scores_count > 0) {
+        double sum = 0.0;
+        for (long i = 0; i < scores_count; i++) {
+            t_atom score_atom;
+            atomarray_getindex(scores_array, i, &score_atom);
+            sum += atom_getfloat(&score_atom);
+        }
+        double mean = sum / scores_count;
+        dictionary_appendfloat(bar_dict, gensym("mean"), mean);
+        post("Updated dictionary entry: %s::%s::mean -> %.2f", track_sym->s_name, bar_sym->s_name, mean);
+    }
+
     post_working_memory(x);
 }
 
