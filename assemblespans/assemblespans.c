@@ -20,7 +20,7 @@ void assemblespans_int(t_assemblespans *x, long n);
 void assemblespans_offset(t_assemblespans *x, double f);
 void assemblespans_bar_length(t_assemblespans *x, long n);
 void assemblespans_track(t_assemblespans *x, long n);
-void assemblespans_palette(t_assemblespans *x, t_symbol *s);
+void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void post_working_memory(t_assemblespans *x);
 
@@ -34,7 +34,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)assemblespans_track, "in2", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_bar_length, "in3", A_LONG, 0);
-    class_addmethod(c, (method)assemblespans_palette, "symbol", A_DEFSYM, 0);
+    class_addmethod(c, (method)assemblespans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
     class_register(CLASS_BOX, c);
     assemblespans_class = c;
@@ -62,7 +62,7 @@ void assemblespans_free(t_assemblespans *x) {
     }
 }
 
-// Handler for float messages on inlet 2 (offset)
+// Handler for float messages on the 2nd inlet (proxy #1, offset)
 void assemblespans_offset(t_assemblespans *x, double f) {
     char track_str[32];
     snprintf(track_str, 32, "%ld", x->current_track);
@@ -85,24 +85,35 @@ void assemblespans_offset(t_assemblespans *x, double f) {
     post("Offset for track %ld updated to: %.2f", x->current_track, f);
 }
 
-// Handler for int messages on inlet 4 (bar length)
+// Handler for int messages on the 4th inlet (proxy #3, bar length)
 void assemblespans_bar_length(t_assemblespans *x, long n) {
     x->bar_length = n;
     post("Bar length updated to: %ld", n);
 }
 
-// Handler for int messages on inlet 3 (track number)
+// Handler for int messages on the 3rd inlet (proxy #2, track number)
 void assemblespans_track(t_assemblespans *x, long n) {
     x->current_track = n;
     post("Track updated to: %ld", n);
 }
 
-// Handler for symbol messages on inlet 5 (palette)
-void assemblespans_palette(t_assemblespans *x, t_symbol *s) {
+// Handler for various messages, including palette symbol
+void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
+
+    // Inlet 4 is the palette symbol inlet
     if (inlet_num == 4) {
-        x->current_palette = s;
-        post("Palette set to: %s", s->s_name);
+        // A standalone symbol is a message with argc=0
+        if (argc == 0) {
+            x->current_palette = s;
+            post("Palette set to: %s", s->s_name);
+        } else {
+            // If it has arguments, it's a list starting with a symbol, which we don't handle here.
+            object_error((t_object *)x, "Palette inlet expects a single symbol, but received a list.");
+        }
+    } else {
+        // Post an error for unhandled messages on other inlets to avoid silent failures.
+        object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
     }
 }
 
@@ -196,7 +207,27 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     t_atom new_absolute_atom;
     atom_setfloat(&new_absolute_atom, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute_atom);
-    post("Appended to dictionary entry: %s::%s::absolutes -> %.2f. New size: %ld", track_sym->s_name, bar_sym->s_name, timestamp, atomarray_getsize(absolutes_array));
+
+    // Post the entire absolutes array
+    long str_size_abs = 256;
+    char *abs_str = (char *)sysmem_newptr(str_size_abs);
+    long offset_abs = snprintf(abs_str, str_size_abs, "Updated %s::%s::absolutes: [ ", track_sym->s_name, bar_sym->s_name);
+    for (long j = 0; j < atomarray_getsize(absolutes_array); j++) {
+        char temp[32];
+        t_atom item;
+        atomarray_getindex(absolutes_array, j, &item);
+        int len = snprintf(temp, 32, "%.2f ", atom_getfloat(&item));
+        if (offset_abs + len + 2 >= str_size_abs) { // +2 for " ]"
+            str_size_abs *= 2;
+            abs_str = (char *)sysmem_resizeptr(abs_str, str_size_abs);
+        }
+        strcat(abs_str, temp);
+        offset_abs += len;
+    }
+    strcat(abs_str, "]");
+    post(abs_str);
+    sysmem_freeptr(abs_str);
+
 
     // Get or create the 'scores' atomarray (level 3)
     t_atomarray *scores_array;
@@ -215,7 +246,26 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     t_atom new_score_atom;
     atom_setfloat(&new_score_atom, score);
     atomarray_appendatom(scores_array, &new_score_atom);
-    post("Appended to dictionary entry: %s::%s::scores -> %.2f. New size: %ld", track_sym->s_name, bar_sym->s_name, score, atomarray_getsize(scores_array));
+
+    // Post the entire scores array
+    long str_size_scores = 256;
+    char *scores_str = (char *)sysmem_newptr(str_size_scores);
+    long offset_scores = snprintf(scores_str, str_size_scores, "Updated %s::%s::scores: [ ", track_sym->s_name, bar_sym->s_name);
+    for (long j = 0; j < atomarray_getsize(scores_array); j++) {
+        char temp[32];
+        t_atom item;
+        atomarray_getindex(scores_array, j, &item);
+        int len = snprintf(temp, 32, "%.2f ", atom_getfloat(&item));
+        if (offset_scores + len + 2 >= str_size_scores) { // +2 for " ]"
+            str_size_scores *= 2;
+            scores_str = (char *)sysmem_resizeptr(scores_str, str_size_scores);
+        }
+        strcat(scores_str, temp);
+        offset_scores += len;
+    }
+    strcat(scores_str, "]");
+    post(scores_str);
+    sysmem_freeptr(scores_str);
 
     // Calculate and store the mean of the scores
     long scores_count = atomarray_getsize(scores_array);
