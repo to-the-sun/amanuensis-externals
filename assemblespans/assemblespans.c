@@ -344,9 +344,30 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             dictionary_appendatom(temp_bar_dict, gensym("span"), &span_atom);
         }
 
+        // Post the entire span array for diagnostics
+        long str_size_span = 256;
+        char *span_str = (char *)sysmem_newptr(str_size_span);
+        long offset_span = snprintf(span_str, str_size_span, "Updated %s::span: [ ", track_sym->s_name);
+        for (long j = 0; j < atomarray_getsize(span_array); j++) {
+            char temp[32];
+            t_atom item;
+            atomarray_getindex(span_array, j, &item);
+            int len = snprintf(temp, 32, "%ld ", atom_getlong(&item));
+            if (offset_span + len + 2 >= str_size_span) { // +2 for " ]"
+                str_size_span *= 2;
+                span_str = (char *)sysmem_resizeptr(span_str, str_size_span);
+            }
+            strcat(span_str, temp);
+            offset_span += len;
+        }
+        strcat(span_str, "]");
+        post(span_str);
+        sysmem_freeptr(span_str);
+
         // Free memory
         sysmem_freeptr(bar_timestamps);
         if (keys) sysmem_freeptr(keys);
+        // Do not free span_array here, it's owned by the dictionaries now
     }
 }
 
