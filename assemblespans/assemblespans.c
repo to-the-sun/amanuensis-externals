@@ -196,7 +196,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     t_atom new_absolute_atom;
     atom_setfloat(&new_absolute_atom, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute_atom);
-    post("Appended to dictionary entry: %s::%s::absolutes -> %.2f", track_sym->s_name, bar_sym->s_name, timestamp);
+    post("Appended to dictionary entry: %s::%s::absolutes -> %.2f. New size: %ld", track_sym->s_name, bar_sym->s_name, timestamp, atomarray_getsize(absolutes_array));
 
     // Get or create the 'scores' atomarray (level 3)
     t_atomarray *scores_array;
@@ -215,7 +215,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     t_atom new_score_atom;
     atom_setfloat(&new_score_atom, score);
     atomarray_appendatom(scores_array, &new_score_atom);
-    post("Appended to dictionary entry: %s::%s::scores -> %.2f", track_sym->s_name, bar_sym->s_name, score);
+    post("Appended to dictionary entry: %s::%s::scores -> %.2f. New size: %ld", track_sym->s_name, bar_sym->s_name, score, atomarray_getsize(scores_array));
 
     // Calculate and store the mean of the scores
     long scores_count = atomarray_getsize(scores_array);
