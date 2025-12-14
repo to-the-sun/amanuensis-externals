@@ -3,6 +3,15 @@
 #include "ext_dictobj.h"
 #include "ext_proto.h"
 #include <math.h>
+#include <stdlib.h> // For qsort
+#include <string.h> // For isdigit
+
+// Comparison function for qsort
+int compare_longs(const void *a, const void *b) {
+    long la = *(const long *)a;
+    long lb = *(const long *)b;
+    return (la > lb) - (la < lb);
+}
 
 typedef struct _assemblespans {
     t_object s_obj;
@@ -22,7 +31,6 @@ void assemblespans_bar_length(t_assemblespans *x, long n);
 void assemblespans_track(t_assemblespans *x, long n);
 void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
-void post_working_memory(t_assemblespans *x);
 
 t_class *assemblespans_class;
 
@@ -167,10 +175,12 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     t_symbol *bar_sym = gensym(bar_str);
 
     t_dictionary *bar_dict;
+    int new_bar_created = 0;
     if (!dictionary_hasentry(track_dict, bar_sym)) {
         bar_dict = dictionary_new();
         dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
         post("Created new dictionary for: %s::%s", track_sym->s_name, bar_sym->s_name);
+        new_bar_created = 1;
     } else {
         t_atom bar_dict_atom;
         dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
@@ -284,60 +294,66 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         post("Updated dictionary entry: %s::%s::mean -> %.2f", track_sym->s_name, bar_sym->s_name, mean);
     }
 
-    post_working_memory(x);
+    if (new_bar_created) {
+        // Collect all numeric bar timestamps for the current track
+        long num_keys;
+        t_symbol **keys;
+        dictionary_getkeys(track_dict, &num_keys, &keys);
+
+        long bar_timestamps_count = 0;
+        long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
+
+        for (long i = 0; i < num_keys; i++) {
+            char *key_str = keys[i]->s_name;
+            char *endptr;
+            long val = strtol(key_str, &endptr, 10);
+
+            // Check if the entire string was consumed, excluding a leading minus sign if present
+            if (*endptr == '\0' && (isdigit(key_str[0]) || (key_str[0] == '-' && key_str[1] != '\0'))) {
+                 bar_timestamps[bar_timestamps_count++] = val;
+            }
+        }
+
+        // Sort the bar timestamps
+        qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
+
+        // Create the definitive span atomarray
+        t_atomarray *span_array = atomarray_new(0, NULL);
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            t_atom bar_atom;
+            atom_setlong(&bar_atom, bar_timestamps[i]);
+            atomarray_appendatom(span_array, &bar_atom);
+        }
+
+        // Back-propagate the updated span to all bars in the track
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            char temp_bar_str[32];
+            snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+            t_symbol *temp_bar_sym = gensym(temp_bar_str);
+
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
+            t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+            t_atom span_atom;
+            atom_setobj(&span_atom, (t_object *)span_array);
+
+            if (dictionary_hasentry(temp_bar_dict, gensym("span"))) {
+                dictionary_deleteentry(temp_bar_dict, gensym("span"));
+            }
+            dictionary_appendatom(temp_bar_dict, gensym("span"), &span_atom);
+        }
+
+        // Free memory
+        sysmem_freeptr(bar_timestamps);
+        if (keys) sysmem_freeptr(keys);
+    }
 }
 
 
 // Handler for int messages on the main inlet
 void assemblespans_int(t_assemblespans *x, long n) {
     object_error((t_object *)x, "Invalid input: main inlet expects a list of two floats.");
-}
-
-void post_working_memory(t_assemblespans *x) {
-    long num_tracks;
-    t_symbol **tracks = NULL;
-    dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
-    post("--- Working Memory ---");
-    for (int i = 0; i < num_tracks; i++) {
-        t_atom track_dict_atom;
-        dictionary_getatom(x->working_memory, tracks[i], &track_dict_atom);
-        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-        post("Track %s:", tracks[i]->s_name);
-        if (dictionary_hasentry(track_dict, gensym("notes"))) {
-            t_atom notes_atom;
-            dictionary_getatom(track_dict, gensym("notes"), &notes_atom);
-            t_atomarray *notes = (t_atomarray *)atom_getobj(&notes_atom);
-
-            long str_size = 1024;
-            char *notes_str = (char *)sysmem_newptr(str_size);
-            long offset = snprintf(notes_str, str_size, "  Notes: ");
-
-            for (long j = 0; j < atomarray_getsize(notes); j++) {
-                char temp[32];
-                t_atom note;
-                atomarray_getindex(notes, j, &note);
-                int len = snprintf(temp, 32, "%.2f ", atom_getfloat(&note));
-                if (offset + len >= str_size) {
-                    str_size *= 2;
-                    notes_str = (char *)sysmem_resizeptr(notes_str, str_size);
-                }
-                strcat(notes_str, temp);
-                offset += len;
-            }
-            post(notes_str);
-            sysmem_freeptr(notes_str);
-        }
-        if (dictionary_hasentry(track_dict, gensym("offset"))) {
-            double offset_val;
-            dictionary_getfloat(track_dict, gensym("offset"), &offset_val);
-            post("  Offset: %.2f", offset_val);
-        }
-    }
-    if (tracks) {
-        sysmem_freeptr(tracks);
-    }
-    post("--------------------");
 }
 
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) {
