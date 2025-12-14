@@ -19,6 +19,8 @@ typedef struct _assemblespans {
     long current_track;
     long bar_length;
     t_symbol *current_palette;
+    void *span_outlet;
+    void *track_outlet;
 } t_assemblespans;
 
 // Function prototypes
@@ -31,6 +33,8 @@ void assemblespans_bar_length(t_assemblespans *x, long n);
 void assemblespans_track(t_assemblespans *x, long n);
 void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
+void assemblespans_bang(t_assemblespans *x);
+void assemblespans_flush(t_assemblespans *x);
 
 t_class *assemblespans_class;
 
@@ -44,6 +48,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)assemblespans_bar_length, "in3", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)assemblespans_bang, "bang", 0);
     class_register(CLASS_BOX, c);
     assemblespans_class = c;
 }
@@ -60,6 +65,10 @@ void *assemblespans_new(void) {
         intin((t_object *)x, 3);    // Bar Length
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
+
+        // Outlets are created from left to right
+        x->span_outlet = listout((t_object *)x);
+        x->track_outlet = intout((t_object *)x);
     }
     return (x);
 }
@@ -369,6 +378,64 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         if (keys) sysmem_freeptr(keys);
         // Do not free span_array here, it's owned by the dictionaries now
     }
+}
+
+void assemblespans_bang(t_assemblespans *x) {
+    post("Flush triggered by bang.");
+    assemblespans_flush(x);
+}
+
+void assemblespans_flush(t_assemblespans *x) {
+    long num_tracks;
+    t_symbol **tracks;
+    dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
+    if (!tracks) return;
+
+    for (long i = 0; i < num_tracks; i++) {
+        t_atom track_dict_atom;
+        dictionary_getatom(x->working_memory, tracks[i], &track_dict_atom);
+        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+        t_atomarray *span_to_output = NULL;
+        long num_keys;
+        t_symbol **keys;
+        dictionary_getkeys(track_dict, &num_keys, &keys);
+        if (!keys) continue;
+
+        // Find the first valid span in the track
+        for (long j = 0; j < num_keys; j++) {
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
+            if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                    t_atom span_atom;
+                    dictionary_getatom(bar_dict, gensym("span"), &span_atom);
+                    span_to_output = (t_atomarray *)atom_getobj(&span_atom);
+                    break;
+                }
+            }
+        }
+
+        if (span_to_output) {
+            // Output track number and span list
+            outlet_int(x->track_outlet, atol(tracks[i]->s_name));
+            t_atom *atoms = NULL;
+            long atom_count = 0;
+            atomarray_getatoms(span_to_output, &atom_count, &atoms);
+            outlet_list(x->span_outlet, NULL, atom_count, atoms);
+
+            // Delete the bar dictionaries associated with this span
+            for (long k = 0; k < atom_count; k++) {
+                char bar_to_delete_str[32];
+                snprintf(bar_to_delete_str, 32, "%ld", atom_getlong(&atoms[k]));
+                dictionary_deleteentry(track_dict, gensym(bar_to_delete_str));
+            }
+        }
+
+        if (keys) sysmem_freeptr(keys);
+    }
+    if (tracks) sysmem_freeptr(tracks);
 }
 
 

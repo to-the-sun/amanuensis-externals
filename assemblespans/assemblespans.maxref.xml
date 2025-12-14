@@ -26,4 +26,14 @@
         <digest>Palette name.</digest>
         <description>Receives a symbol that sets the current palette.</description>
     </inlet>
+
+    <!-- Outlets -->
+    <outlet name="out" type="list">
+        <digest>Span of bar timestamps.</digest>
+        <description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+    </outlet>
+    <outlet name="out" type="int">
+        <digest>Track number.</digest>
+        <description>Outputs the track number associated with the completed span.</description>
+    </outlet>
 </c74object>
