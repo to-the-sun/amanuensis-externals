@@ -8,6 +8,7 @@ typedef struct _assemblespans {
     long current_track;
 } t_assemblespans;
 
+// Function prototypes
 void *assemblespans_new(void);
 void assemblespans_free(t_assemblespans *x);
 void assemblespans_float(t_assemblespans *x, double f);
@@ -19,12 +20,12 @@ t_class *assemblespans_class;
 
 void ext_main(void *r) {
     t_class *c;
-
     c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, 0);
     class_addmethod(c, (method)assemblespans_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)assemblespans_float, "ft1", A_FLOAT, 0);
+    class_addmethod(c, (method)assemblespans_int, "in2", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
-
     class_register(CLASS_BOX, c);
     assemblespans_class = c;
 }
@@ -34,8 +35,10 @@ void *assemblespans_new(void) {
     if (x) {
         x->working_memory = dictionary_new();
         x->current_track = 0;
-        floatin((t_object *)x, 1);
-        intin((t_object *)x, 2);
+        // Inlets are created from right to left.
+        // The last one created is the leftmost proxy inlet.
+        intin((t_object *)x, 2);    // Right-most inlet, index 2
+        floatin((t_object *)x, 1);  // Middle inlet, index 1
     }
     return (x);
 }
@@ -49,10 +52,18 @@ void assemblespans_free(t_assemblespans *x) {
 void assemblespans_float(t_assemblespans *x, double f) {
     long inlet = proxy_getinlet((t_object *)x);
 
+    // Max number boxes can send floats to int inlets, so we handle track selection here too.
+    if (inlet == 2) {
+        x->current_track = (long)f;
+        post("Current track set to: %ld", x->current_track);
+        return;
+    }
+
     char track_str[32];
     snprintf(track_str, 32, "%ld", x->current_track);
     t_symbol *track_sym = gensym(track_str);
 
+    // Ensure a dictionary exists for the current track
     if (!dictionary_hasentry(x->working_memory, track_sym)) {
         t_dictionary *track_dict = dictionary_new();
         dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
@@ -89,13 +100,14 @@ void assemblespans_int(t_assemblespans *x, long n) {
         x->current_track = n;
         post("Current track set to: %ld", n);
     } else {
-        post("Integer received on unexpected inlet: %ld", inlet);
+        // Silently ignore integers on other inlets, or post a message if that's preferred.
+        // post("Integer received on unexpected inlet: %ld", inlet);
     }
 }
 
 void post_working_memory(t_assemblespans *x) {
     long num_tracks;
-    t_symbol **tracks;
+    t_symbol **tracks = NULL;
     dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
     post("--- Working Memory ---");
     for (int i = 0; i < num_tracks; i++) {
