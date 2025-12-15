@@ -6,9 +6,9 @@
     </description>
 
     <!-- Inlets -->
-    <inlet name="in" type="float">
-        <digest>Absolute millisecond timestamp of a single note.</digest>
-        <description>Receives a float representing the absolute millisecond timestamp of a single note.</description>
+    <inlet name="in" type="list">
+        <digest>Timestamp-score pair for a single note.</digest>
+        <description>Receives a list of two floats: the absolute millisecond timestamp of a single note and its corresponding score.</description>
     </inlet>
     <inlet name="in" type="float">
         <digest>Absolute millisecond timestamp of an offset.</digest>
@@ -18,5 +18,22 @@
         <digest>Track number.</digest>
         <description>Receives an integer that sets the current track for incoming notes and offsets.</description>
     </inlet>
+    <inlet name="in" type="int">
+        <digest>Bar length in milliseconds.</digest>
+        <description>Receives an integer that sets the bar length in milliseconds.</description>
+    </inlet>
+    <inlet name="in" type="symbol">
+        <digest>Palette name.</digest>
+        <description>Receives a symbol that sets the current palette.</description>
+    </inlet>
 
+    <!-- Outlets -->
+    <outlet name="out" type="list">
+        <digest>Span of bar timestamps.</digest>
+        <description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+    </outlet>
+    <outlet name="out" type="int">
+        <digest>Track number.</digest>
+        <description>Outputs the track number associated with the completed span.</description>
+    </outlet>
 </c74object>
