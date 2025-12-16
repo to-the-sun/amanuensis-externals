@@ -17,6 +17,7 @@ typedef struct _assemblespans {
     t_object s_obj;
     t_dictionary *working_memory;
     long current_track;
+    double current_offset;
     long bar_length;
     t_symbol *current_palette;
     void *span_outlet;
@@ -61,6 +62,7 @@ void *assemblespans_new(void) {
     if (x) {
         x->working_memory = dictionary_new();
         x->current_track = 0;
+        x->current_offset = 0.0;
         x->bar_length = 125; // Default bar length
         x->current_palette = gensym("");
         // Inlets are created from right to left.
@@ -88,6 +90,7 @@ void assemblespans_clear(t_assemblespans *x) {
     }
     x->working_memory = dictionary_new();
     x->current_track = 0;
+    x->current_offset = 0.0;
     x->bar_length = 125; // Default bar length
     x->current_palette = gensym("");
     post("assemblespans cleared.");
@@ -95,25 +98,8 @@ void assemblespans_clear(t_assemblespans *x) {
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void assemblespans_offset(t_assemblespans *x, double f) {
-    char track_str[32];
-    snprintf(track_str, 32, "%ld", x->current_track);
-    t_symbol *track_sym = gensym(track_str);
-
-    // Ensure a dictionary exists for the current track
-    if (!dictionary_hasentry(x->working_memory, track_sym)) {
-        t_dictionary *track_dict = dictionary_new();
-        dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
-    }
-
-    t_atom track_dict_atom;
-    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-    if (dictionary_hasentry(track_dict, gensym("offset"))) {
-        dictionary_deleteentry(track_dict, gensym("offset"));
-    }
-    dictionary_appendfloat(track_dict, gensym("offset"), f);
-    post("Offset for track %ld updated to: %.2f", x->current_track, f);
+    x->current_offset = f;
+    post("Global offset updated to: %.2f", f);
 }
 
 // Handler for int messages on the 4th inlet (proxy #3, bar length)
@@ -179,11 +165,8 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 
     // Get current offset
-    double offset_val = 0.0;
-    if (dictionary_hasentry(track_dict, gensym("offset"))) {
-        dictionary_getfloat(track_dict, gensym("offset"), &offset_val);
-    }
-    post("Current offset for track %ld is: %.2f", x->current_track, offset_val);
+    double offset_val = x->current_offset;
+    post("Current offset is: %.2f", offset_val);
 
     // Subtract offset and calculate bar timestamp
     double relative_timestamp = timestamp - offset_val;
@@ -248,16 +231,11 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
     }
 
-    // Store the current offset and palette in the bar dictionary
-    if (dictionary_hasentry(bar_dict, gensym("offset"))) {
-        dictionary_deleteentry(bar_dict, gensym("offset"));
-    }
-    dictionary_appendfloat(bar_dict, gensym("offset"), offset_val);
+    // Store the current palette in the bar dictionary
     if (dictionary_hasentry(bar_dict, gensym("palette"))) {
         dictionary_deleteentry(bar_dict, gensym("palette"));
     }
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
-    post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, offset_val);
     post("Updated dictionary entry: %s::%s::palette -> %s", track_sym->s_name, bar_sym->s_name, x->current_palette->s_name);
 
 
