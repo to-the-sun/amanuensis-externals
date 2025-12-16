@@ -475,31 +475,40 @@ void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
         atomarray_getatoms(span_to_output, &atom_count, &atoms);
         outlet_list(x->span_outlet, NULL, atom_count, atoms);
 
-        // Clean up the bar dictionaries and the shared span array
-        for (long k = 0; k < atom_count; k++) {
-            char bar_to_delete_str[32];
-            snprintf(bar_to_delete_str, 32, "%ld", atom_getlong(&atoms[k]));
-            t_symbol *bar_sym = gensym(bar_to_delete_str);
+        // --- Two-pass cleanup to avoid double-freeing the shared span ---
 
+        // Pass 1: Decouple the shared span object from all bar dictionaries
+        for (long k = 0; k < atom_count; k++) {
+            char bar_str[32];
+            snprintf(bar_str, 32, "%ld", atom_getlong(&atoms[k]));
+            t_symbol *bar_sym = gensym(bar_str);
             if (dictionary_hasentry(track_dict, bar_sym)) {
                 t_atom bar_dict_atom;
                 dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
                 t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-
-                // Remove the reference to the shared span array to prevent double-freeing
                 if (dictionary_hasentry(bar_dict, gensym("span"))) {
                     dictionary_deleteentry(bar_dict, gensym("span"));
                 }
+            }
+        }
 
-                // Now we can safely free the bar dictionary and its contents (absolutes, scores)
-                object_free(bar_dict);
+        // Pass 2: Now it's safe to free each bar dictionary
+        for (long k = 0; k < atom_count; k++) {
+            char bar_str[32];
+            snprintf(bar_str, 32, "%ld", atom_getlong(&atoms[k]));
+            t_symbol *bar_sym = gensym(bar_str);
+            if (dictionary_hasentry(track_dict, bar_sym)) {
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
 
-                // And remove the entry from the track dictionary
+                // Free the bar dictionary object itself
+                object_free(atom_getobj(&bar_dict_atom));
+                // Remove its entry from the parent track dictionary
                 dictionary_deleteentry(track_dict, bar_sym);
             }
         }
 
-        // After all bar dictionaries are gone, free the shared span array itself
+        // Finally, free the now-orphaned span array
         object_free(span_to_output);
     }
 
