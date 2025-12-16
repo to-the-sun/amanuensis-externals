@@ -2,7 +2,7 @@
 <c74object name="assemblespans">
     <digest>Assembles spans of notes and offsets for a music transcript.</digest>
     <description>
-        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track.
+        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends (flushes) a span when it receives a timestamp that creates a bar that is not contiguous with the previous bars in the span. A span can also be ended manually by sending a `bang` to the first inlet.
     </description>
 
     <!-- Methods -->

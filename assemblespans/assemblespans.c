@@ -36,6 +36,7 @@ void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void assemblespans_bang(t_assemblespans *x);
 void assemblespans_flush(t_assemblespans *x);
+void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym);
 
 t_class *assemblespans_class;
 
@@ -190,6 +191,44 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     long bar_timestamp_val = floor(relative_timestamp / x->bar_length) * x->bar_length;
     post("Calculated bar timestamp (rounded down to nearest %ld): %ld", x->bar_length, bar_timestamp_val);
+
+    // --- Check for discontiguous bar ---
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(track_dict, &num_keys, &keys);
+    if (keys && num_keys > 0) {
+        long last_bar_timestamp = -1; // Initialize with a value lower than any possible timestamp
+
+        // Find the most recent bar in the existing span
+        for (long i = 0; i < num_keys; i++) {
+            char *key_str = keys[i]->s_name;
+            char *endptr;
+            long val = strtol(key_str, &endptr, 10);
+            if (*endptr == '\0') { // It's a numeric key
+                if (last_bar_timestamp == -1 || val > last_bar_timestamp) {
+                    last_bar_timestamp = val;
+                }
+            }
+        }
+        sysmem_freeptr(keys);
+
+        // Check for discontinuity
+        if (last_bar_timestamp != -1 && bar_timestamp_val > last_bar_timestamp + x->bar_length) {
+            post("Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.",
+                 bar_timestamp_val, x->bar_length, last_bar_timestamp);
+            assemblespans_flush_track(x, track_sym);
+            // After flushing, the track_dict is invalid. We need to get it again.
+            if (!dictionary_hasentry(x->working_memory, track_sym)) {
+                track_dict = dictionary_new();
+                dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
+            } else {
+                 t_atom track_dict_atom;
+                dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+                track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+            }
+        }
+    }
+    // --- End of check ---
 
     // Get bar dictionary (level 2)
     char bar_str[32];
@@ -393,6 +432,80 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 }
 
+void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
+    if (!dictionary_hasentry(x->working_memory, track_sym)) {
+        return;
+    }
+
+    t_atom track_dict_atom;
+    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+    t_atomarray *span_to_output = NULL;
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(track_dict, &num_keys, &keys);
+    if (!keys) return;
+
+    // Find the first valid span in the track. Any bar will have it.
+    for (long j = 0; j < num_keys; j++) {
+        char *key_str = keys[j]->s_name;
+        char *endptr;
+        strtol(key_str, &endptr, 10);
+        if (*endptr != '\0') continue; // Skip non-numeric keys
+
+        t_atom bar_dict_atom;
+        dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
+        if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
+            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+            if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                t_atom span_atom;
+                dictionary_getatom(bar_dict, gensym("span"), &span_atom);
+                span_to_output = (t_atomarray *)atom_getobj(&span_atom);
+                break;
+            }
+        }
+    }
+
+    if (span_to_output) {
+        post("Flushing span for track %s...", track_sym->s_name);
+        outlet_int(x->track_outlet, atol(track_sym->s_name));
+        t_atom *atoms = NULL;
+        long atom_count = 0;
+        atomarray_getatoms(span_to_output, &atom_count, &atoms);
+        outlet_list(x->span_outlet, NULL, atom_count, atoms);
+
+        // Clean up the bar dictionaries and the shared span array
+        for (long k = 0; k < atom_count; k++) {
+            char bar_to_delete_str[32];
+            snprintf(bar_to_delete_str, 32, "%ld", atom_getlong(&atoms[k]));
+            t_symbol *bar_sym = gensym(bar_to_delete_str);
+
+            if (dictionary_hasentry(track_dict, bar_sym)) {
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+                // Remove the reference to the shared span array to prevent double-freeing
+                if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                    dictionary_deleteentry(bar_dict, gensym("span"));
+                }
+
+                // Now we can safely free the bar dictionary and its contents (absolutes, scores)
+                object_free(bar_dict);
+
+                // And remove the entry from the track dictionary
+                dictionary_deleteentry(track_dict, bar_sym);
+            }
+        }
+
+        // After all bar dictionaries are gone, free the shared span array itself
+        object_free(span_to_output);
+    }
+
+    if (keys) sysmem_freeptr(keys);
+}
+
 void assemblespans_bang(t_assemblespans *x) {
     post("Flush triggered by bang.");
     assemblespans_flush(x);
@@ -405,48 +518,7 @@ void assemblespans_flush(t_assemblespans *x) {
     if (!tracks) return;
 
     for (long i = 0; i < num_tracks; i++) {
-        t_atom track_dict_atom;
-        dictionary_getatom(x->working_memory, tracks[i], &track_dict_atom);
-        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-        t_atomarray *span_to_output = NULL;
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(track_dict, &num_keys, &keys);
-        if (!keys) continue;
-
-        // Find the first valid span in the track
-        for (long j = 0; j < num_keys; j++) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
-            if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                    t_atom span_atom;
-                    dictionary_getatom(bar_dict, gensym("span"), &span_atom);
-                    span_to_output = (t_atomarray *)atom_getobj(&span_atom);
-                    break;
-                }
-            }
-        }
-
-        if (span_to_output) {
-            // Output track number and span list
-            outlet_int(x->track_outlet, atol(tracks[i]->s_name));
-            t_atom *atoms = NULL;
-            long atom_count = 0;
-            atomarray_getatoms(span_to_output, &atom_count, &atoms);
-            outlet_list(x->span_outlet, NULL, atom_count, atoms);
-
-            // Delete the bar dictionaries associated with this span
-            for (long k = 0; k < atom_count; k++) {
-                char bar_to_delete_str[32];
-                snprintf(bar_to_delete_str, 32, "%ld", atom_getlong(&atoms[k]));
-                dictionary_deleteentry(track_dict, gensym(bar_to_delete_str));
-            }
-        }
-
-        if (keys) sysmem_freeptr(keys);
+        assemblespans_flush_track(x, tracks[i]);
     }
     if (tracks) sysmem_freeptr(tracks);
 }
