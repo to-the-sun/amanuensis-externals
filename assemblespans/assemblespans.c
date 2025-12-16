@@ -445,26 +445,28 @@ void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(track_dict, &num_keys, &keys);
-    if (!keys) return;
 
-    // Find the first valid span in the track. Any bar will have it.
-    for (long j = 0; j < num_keys; j++) {
-        char *key_str = keys[j]->s_name;
-        char *endptr;
-        strtol(key_str, &endptr, 10);
-        if (*endptr != '\0') continue; // Skip non-numeric keys
+    if (keys) {
+        // Find the first valid span in the track. Any bar will have it.
+        for (long j = 0; j < num_keys; j++) {
+            char *key_str = keys[j]->s_name;
+            char *endptr;
+            strtol(key_str, &endptr, 10);
+            if (*endptr != '\0') continue; // Skip non-numeric keys
 
-        t_atom bar_dict_atom;
-        dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
-        if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
-            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-            if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                t_atom span_atom;
-                dictionary_getatom(bar_dict, gensym("span"), &span_atom);
-                span_to_output = (t_atomarray *)atom_getobj(&span_atom);
-                break;
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
+            if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                    t_atom span_atom;
+                    dictionary_getatom(bar_dict, gensym("span"), &span_atom);
+                    span_to_output = (t_atomarray *)atom_getobj(&span_atom);
+                    break;
+                }
             }
         }
+        sysmem_freeptr(keys);
     }
 
     if (span_to_output) {
@@ -474,45 +476,13 @@ void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
         long atom_count = 0;
         atomarray_getatoms(span_to_output, &atom_count, &atoms);
         outlet_list(x->span_outlet, NULL, atom_count, atoms);
-
-        // --- Two-pass cleanup to avoid double-freeing the shared span ---
-
-        // Pass 1: Decouple the shared span object from all bar dictionaries
-        for (long k = 0; k < atom_count; k++) {
-            char bar_str[32];
-            snprintf(bar_str, 32, "%ld", atom_getlong(&atoms[k]));
-            t_symbol *bar_sym = gensym(bar_str);
-            if (dictionary_hasentry(track_dict, bar_sym)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                    dictionary_deleteentry(bar_dict, gensym("span"));
-                }
-            }
-        }
-
-        // Pass 2: Now it's safe to free each bar dictionary
-        for (long k = 0; k < atom_count; k++) {
-            char bar_str[32];
-            snprintf(bar_str, 32, "%ld", atom_getlong(&atoms[k]));
-            t_symbol *bar_sym = gensym(bar_str);
-            if (dictionary_hasentry(track_dict, bar_sym)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-
-                // Free the bar dictionary object itself
-                object_free(atom_getobj(&bar_dict_atom));
-                // Remove its entry from the parent track dictionary
-                dictionary_deleteentry(track_dict, bar_sym);
-            }
-        }
-
-        // Finally, free the now-orphaned span array
-        object_free(span_to_output);
     }
 
-    if (keys) sysmem_freeptr(keys);
+    // Free the entire track dictionary object. This recursively frees all sub-dictionaries and atomarrays.
+    object_free((t_object *)track_dict);
+
+    // Remove the entry for the track from the main working_memory.
+    dictionary_deleteentry(x->working_memory, track_sym);
 }
 
 void assemblespans_bang(t_assemblespans *x) {
