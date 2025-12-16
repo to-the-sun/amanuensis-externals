@@ -26,6 +26,7 @@ typedef struct _assemblespans {
 // Function prototypes
 void *assemblespans_new(void);
 void assemblespans_free(t_assemblespans *x);
+void assemblespans_clear(t_assemblespans *x);
 void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_int(t_assemblespans *x, long n);
 void assemblespans_offset(t_assemblespans *x, double f);
@@ -41,6 +42,7 @@ t_class *assemblespans_class;
 void ext_main(void *r) {
     t_class *c;
     c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)assemblespans_clear, "clear", 0);
     class_addmethod(c, (method)assemblespans_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
@@ -77,6 +79,17 @@ void assemblespans_free(t_assemblespans *x) {
     if (x->working_memory) {
         object_free(x->working_memory);
     }
+}
+
+void assemblespans_clear(t_assemblespans *x) {
+    if (x->working_memory) {
+        object_free(x->working_memory);
+    }
+    x->working_memory = dictionary_new();
+    x->current_track = 0;
+    x->bar_length = 125; // Default bar length
+    x->current_palette = gensym("");
+    post("assemblespans cleared.");
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
@@ -448,7 +461,7 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) 
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(list) Timestamp-Score Pair");
+                sprintf(s, "(list) Timestamp-Score Pair, (clear) Clear Memory");
                 break;
             case 1:
                 sprintf(s, "(float) Offset Timestamp");

@@ -5,6 +5,12 @@
         The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track.
     </description>
 
+    <!-- Methods -->
+    <method name="clear">
+        <digest>Resets the object's internal state.</digest>
+        <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
+    </method>
+
     <!-- Inlets -->
     <inlet name="in" type="list">
         <digest>Timestamp-score pair for a single note.</digest>
