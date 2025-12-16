@@ -2,8 +2,14 @@
 <c74object name="assemblespans">
     <digest>Assembles spans of notes and offsets for a music transcript.</digest>
     <description>
-        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track.
+        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends (flushes) a span when it receives a timestamp that creates a bar that is not contiguous with the previous bars in the span. A span can also be ended manually by sending a `bang` to the first inlet.
     </description>
+
+    <!-- Methods -->
+    <method name="clear">
+        <digest>Resets the object's internal state.</digest>
+        <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
+    </method>
 
     <!-- Inlets -->
     <inlet name="in" type="list">
@@ -11,8 +17,8 @@
         <description>Receives a list of two floats: the absolute millisecond timestamp of a single note and its corresponding score.</description>
     </inlet>
     <inlet name="in" type="float">
-        <digest>Absolute millisecond timestamp of an offset.</digest>
-        <description>Receives a float representing the absolute millisecond timestamp of an offset.</description>
+        <digest>Global offset timestamp.</digest>
+        <description>Receives a float representing a global offset in milliseconds. This value is stored as a global setting for the object. When a new bar is created, a copy of this global offset is stored in the bar's dictionary. The global offset value persists even when spans are flushed.</description>
     </inlet>
     <inlet name="in" type="int">
         <digest>Track number.</digest>

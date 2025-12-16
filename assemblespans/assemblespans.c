@@ -17,6 +17,7 @@ typedef struct _assemblespans {
     t_object s_obj;
     t_dictionary *working_memory;
     long current_track;
+    double current_offset;
     long bar_length;
     t_symbol *current_palette;
     void *span_outlet;
@@ -26,6 +27,7 @@ typedef struct _assemblespans {
 // Function prototypes
 void *assemblespans_new(void);
 void assemblespans_free(t_assemblespans *x);
+void assemblespans_clear(t_assemblespans *x);
 void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
 void assemblespans_int(t_assemblespans *x, long n);
 void assemblespans_offset(t_assemblespans *x, double f);
@@ -35,12 +37,14 @@ void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *
 void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void assemblespans_bang(t_assemblespans *x);
 void assemblespans_flush(t_assemblespans *x);
+void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym);
 
 t_class *assemblespans_class;
 
 void ext_main(void *r) {
     t_class *c;
     c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)assemblespans_clear, "clear", 0);
     class_addmethod(c, (method)assemblespans_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
@@ -58,6 +62,7 @@ void *assemblespans_new(void) {
     if (x) {
         x->working_memory = dictionary_new();
         x->current_track = 0;
+        x->current_offset = 0.0;
         x->bar_length = 125; // Default bar length
         x->current_palette = gensym("");
         // Inlets are created from right to left.
@@ -79,27 +84,22 @@ void assemblespans_free(t_assemblespans *x) {
     }
 }
 
+void assemblespans_clear(t_assemblespans *x) {
+    if (x->working_memory) {
+        object_free(x->working_memory);
+    }
+    x->working_memory = dictionary_new();
+    x->current_track = 0;
+    x->current_offset = 0.0;
+    x->bar_length = 125; // Default bar length
+    x->current_palette = gensym("");
+    post("assemblespans cleared.");
+}
+
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void assemblespans_offset(t_assemblespans *x, double f) {
-    char track_str[32];
-    snprintf(track_str, 32, "%ld", x->current_track);
-    t_symbol *track_sym = gensym(track_str);
-
-    // Ensure a dictionary exists for the current track
-    if (!dictionary_hasentry(x->working_memory, track_sym)) {
-        t_dictionary *track_dict = dictionary_new();
-        dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
-    }
-
-    t_atom track_dict_atom;
-    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-    if (dictionary_hasentry(track_dict, gensym("offset"))) {
-        dictionary_deleteentry(track_dict, gensym("offset"));
-    }
-    dictionary_appendfloat(track_dict, gensym("offset"), f);
-    post("Offset for track %ld updated to: %.2f", x->current_track, f);
+    x->current_offset = f;
+    post("Global offset updated to: %.2f", f);
 }
 
 // Handler for int messages on the 4th inlet (proxy #3, bar length)
@@ -165,11 +165,8 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 
     // Get current offset
-    double offset_val = 0.0;
-    if (dictionary_hasentry(track_dict, gensym("offset"))) {
-        dictionary_getfloat(track_dict, gensym("offset"), &offset_val);
-    }
-    post("Current offset for track %ld is: %.2f", x->current_track, offset_val);
+    double offset_val = x->current_offset;
+    post("Current offset is: %.2f", offset_val);
 
     // Subtract offset and calculate bar timestamp
     double relative_timestamp = timestamp - offset_val;
@@ -177,6 +174,44 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     long bar_timestamp_val = floor(relative_timestamp / x->bar_length) * x->bar_length;
     post("Calculated bar timestamp (rounded down to nearest %ld): %ld", x->bar_length, bar_timestamp_val);
+
+    // --- Check for discontiguous bar ---
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(track_dict, &num_keys, &keys);
+    if (keys && num_keys > 0) {
+        long last_bar_timestamp = -1; // Initialize with a value lower than any possible timestamp
+
+        // Find the most recent bar in the existing span
+        for (long i = 0; i < num_keys; i++) {
+            char *key_str = keys[i]->s_name;
+            char *endptr;
+            long val = strtol(key_str, &endptr, 10);
+            if (*endptr == '\0') { // It's a numeric key
+                if (last_bar_timestamp == -1 || val > last_bar_timestamp) {
+                    last_bar_timestamp = val;
+                }
+            }
+        }
+        sysmem_freeptr(keys);
+
+        // Check for discontinuity
+        if (last_bar_timestamp != -1 && bar_timestamp_val > last_bar_timestamp + x->bar_length) {
+            post("Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.",
+                 bar_timestamp_val, x->bar_length, last_bar_timestamp);
+            assemblespans_flush_track(x, track_sym);
+            // After flushing, the track_dict is invalid. We need to get it again.
+            if (!dictionary_hasentry(x->working_memory, track_sym)) {
+                track_dict = dictionary_new();
+                dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
+            } else {
+                 t_atom track_dict_atom;
+                dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+                track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+            }
+        }
+    }
+    // --- End of check ---
 
     // Get bar dictionary (level 2)
     char bar_str[32];
@@ -200,12 +235,12 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     if (dictionary_hasentry(bar_dict, gensym("offset"))) {
         dictionary_deleteentry(bar_dict, gensym("offset"));
     }
-    dictionary_appendfloat(bar_dict, gensym("offset"), offset_val);
+    dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
     if (dictionary_hasentry(bar_dict, gensym("palette"))) {
         dictionary_deleteentry(bar_dict, gensym("palette"));
     }
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
-    post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, offset_val);
+    post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, x->current_offset);
     post("Updated dictionary entry: %s::%s::palette -> %s", track_sym->s_name, bar_sym->s_name, x->current_palette->s_name);
 
 
@@ -380,30 +415,28 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 }
 
-void assemblespans_bang(t_assemblespans *x) {
-    post("Flush triggered by bang.");
-    assemblespans_flush(x);
-}
+void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
+    if (!dictionary_hasentry(x->working_memory, track_sym)) {
+        return;
+    }
 
-void assemblespans_flush(t_assemblespans *x) {
-    long num_tracks;
-    t_symbol **tracks;
-    dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
-    if (!tracks) return;
+    t_atom track_dict_atom;
+    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
-    for (long i = 0; i < num_tracks; i++) {
-        t_atom track_dict_atom;
-        dictionary_getatom(x->working_memory, tracks[i], &track_dict_atom);
-        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+    t_atomarray *span_to_output = NULL;
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(track_dict, &num_keys, &keys);
 
-        t_atomarray *span_to_output = NULL;
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(track_dict, &num_keys, &keys);
-        if (!keys) continue;
-
-        // Find the first valid span in the track
+    if (keys) {
+        // Find the first valid span in the track. Any bar will have it.
         for (long j = 0; j < num_keys; j++) {
+            char *key_str = keys[j]->s_name;
+            char *endptr;
+            strtol(key_str, &endptr, 10);
+            if (*endptr != '\0') continue; // Skip non-numeric keys
+
             t_atom bar_dict_atom;
             dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
             if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
@@ -416,24 +449,38 @@ void assemblespans_flush(t_assemblespans *x) {
                 }
             }
         }
+        sysmem_freeptr(keys);
+    }
 
-        if (span_to_output) {
-            // Output track number and span list
-            outlet_int(x->track_outlet, atol(tracks[i]->s_name));
-            t_atom *atoms = NULL;
-            long atom_count = 0;
-            atomarray_getatoms(span_to_output, &atom_count, &atoms);
-            outlet_list(x->span_outlet, NULL, atom_count, atoms);
+    if (span_to_output) {
+        post("Flushing span for track %s...", track_sym->s_name);
+        outlet_int(x->track_outlet, atol(track_sym->s_name));
+        t_atom *atoms = NULL;
+        long atom_count = 0;
+        atomarray_getatoms(span_to_output, &atom_count, &atoms);
+        outlet_list(x->span_outlet, NULL, atom_count, atoms);
+    }
 
-            // Delete the bar dictionaries associated with this span
-            for (long k = 0; k < atom_count; k++) {
-                char bar_to_delete_str[32];
-                snprintf(bar_to_delete_str, 32, "%ld", atom_getlong(&atoms[k]));
-                dictionary_deleteentry(track_dict, gensym(bar_to_delete_str));
-            }
-        }
+    // Free the entire track dictionary object. This recursively frees all sub-dictionaries and atomarrays.
+    object_free((t_object *)track_dict);
 
-        if (keys) sysmem_freeptr(keys);
+    // Remove the entry for the track from the main working_memory.
+    dictionary_deleteentry(x->working_memory, track_sym);
+}
+
+void assemblespans_bang(t_assemblespans *x) {
+    post("Flush triggered by bang.");
+    assemblespans_flush(x);
+}
+
+void assemblespans_flush(t_assemblespans *x) {
+    long num_tracks;
+    t_symbol **tracks;
+    dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
+    if (!tracks) return;
+
+    for (long i = 0; i < num_tracks; i++) {
+        assemblespans_flush_track(x, tracks[i]);
     }
     if (tracks) sysmem_freeptr(tracks);
 }
@@ -448,7 +495,7 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) 
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(list) Timestamp-Score Pair");
+                sprintf(s, "(list) Timestamp-Score Pair, (clear) Clear Memory");
                 break;
             case 1:
                 sprintf(s, "(float) Offset Timestamp");
