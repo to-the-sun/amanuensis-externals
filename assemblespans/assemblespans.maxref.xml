@@ -18,7 +18,7 @@
     </inlet>
     <inlet name="in" type="float">
         <digest>Global offset timestamp.</digest>
-        <description>Receives a float representing a global offset in milliseconds. This offset is subtracted from all incoming timestamps before they are processed. Unlike the track number, this is a global setting for the object and is not reset when a span is flushed.</description>
+        <description>Receives a float representing a global offset in milliseconds. This value is stored as a global setting for the object. When a new bar is created, a copy of this global offset is stored in the bar's dictionary. The global offset value persists even when spans are flushed.</description>
     </inlet>
     <inlet name="in" type="int">
         <digest>Track number.</digest>

@@ -231,11 +231,16 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
     }
 
-    // Store the current palette in the bar dictionary
+    // Store the current offset and palette in the bar dictionary
+    if (dictionary_hasentry(bar_dict, gensym("offset"))) {
+        dictionary_deleteentry(bar_dict, gensym("offset"));
+    }
+    dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
     if (dictionary_hasentry(bar_dict, gensym("palette"))) {
         dictionary_deleteentry(bar_dict, gensym("palette"));
     }
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
+    post("Updated dictionary entry: %s::%s::offset -> %.2f", track_sym->s_name, bar_sym->s_name, x->current_offset);
     post("Updated dictionary entry: %s::%s::palette -> %s", track_sym->s_name, bar_sym->s_name, x->current_palette->s_name);
 
 
