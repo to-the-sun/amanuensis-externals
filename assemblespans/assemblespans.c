@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "ext_proto.h"
+#include "../shared/visualize.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
@@ -38,8 +39,128 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
 void assemblespans_bang(t_assemblespans *x);
 void assemblespans_flush(t_assemblespans *x);
 void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym);
+void assemblespans_visualize_memory(t_assemblespans *x);
+
 
 t_class *assemblespans_class;
+
+void assemblespans_visualize_memory(t_assemblespans *x) {
+    long buffer_size = 4096;
+    char *json_buffer = (char *)sysmem_newptr(buffer_size);
+    if (!json_buffer) {
+        object_error((t_object *)x, "Failed to allocate memory for visualization buffer.");
+        return;
+    }
+    long offset = 0;
+
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"working_memory\":{");
+
+    long num_tracks;
+    t_symbol **track_keys;
+    dictionary_getkeys(x->working_memory, &num_tracks, &track_keys);
+
+    int first_track = 1;
+    if (track_keys) {
+        for (long i = 0; i < num_tracks; i++) {
+            if (buffer_size - offset < 1024) {
+                buffer_size *= 2;
+                json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
+            }
+
+            if (!first_track) {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            }
+            first_track = 0;
+
+            t_symbol *track_sym = track_keys[i];
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
+
+            t_atom track_dict_atom;
+            dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+            t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+            long num_bars;
+            t_symbol **bar_keys;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+            int first_absolute = 1;
+            if (bar_keys) {
+                for (long j = 0; j < num_bars; j++) {
+                    t_symbol *bar_sym = bar_keys[j];
+                    char *endptr;
+                    strtol(bar_sym->s_name, &endptr, 10);
+                    if (*endptr != '\0') continue;
+
+                    t_atom bar_dict_atom;
+                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+                    if (dictionary_hasentry(bar_dict, gensym("absolutes"))) {
+                        t_atom absolutes_atom;
+                        dictionary_getatom(bar_dict, gensym("absolutes"), &absolutes_atom);
+                        t_atomarray *absolutes_array = (t_atomarray *)atom_getobj(&absolutes_atom);
+                        long absolutes_count = atomarray_getsize(absolutes_array);
+
+                        for (long k = 0; k < absolutes_count; k++) {
+                           if (buffer_size - offset < 256) {
+                                buffer_size *= 2;
+                                json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
+                            }
+                            if (!first_absolute) {
+                                offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                            }
+                            first_absolute = 0;
+                            t_atom val_atom;
+                            atomarray_getindex(absolutes_array, k, &val_atom);
+                            double val = atom_getfloat(&val_atom);
+                            offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", val);
+                        }
+                    }
+                }
+                sysmem_freeptr(bar_keys);
+            }
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
+
+            int first_offset = 1;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys); // Re-fetch keys
+            if (bar_keys) {
+                 for (long j = 0; j < num_bars; j++) {
+                    t_symbol *bar_sym = bar_keys[j];
+                    char *endptr;
+                    strtol(bar_sym->s_name, &endptr, 10);
+                    if (*endptr != '\0') continue;
+
+                    t_atom bar_dict_atom;
+                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+                    if (dictionary_hasentry(bar_dict, gensym("offset"))) {
+                        if (buffer_size - offset < 256) {
+                            buffer_size *= 2;
+                            json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
+                        }
+                        if (!first_offset) {
+                            offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                        }
+                        first_offset = 0;
+                        t_atom offset_val_atom;
+                        dictionary_getatom(bar_dict, gensym("offset"), &offset_val_atom);
+                        double val = atom_getfloat(&offset_val_atom);
+                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", val);
+                    }
+                }
+                sysmem_freeptr(bar_keys);
+            }
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
+        }
+        sysmem_freeptr(track_keys);
+    }
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+
+    visualize(json_buffer);
+    sysmem_freeptr(json_buffer);
+}
+
 
 void ext_main(void *r) {
     t_class *c;
@@ -74,11 +195,16 @@ void *assemblespans_new(void) {
         // Outlets are created from left to right
         x->span_outlet = listout((t_object *)x);
         x->track_outlet = intout((t_object *)x);
+
+        if (visualize_init() != 0) {
+            object_error((t_object *)x, "Failed to initialize visualization.");
+        }
     }
     return (x);
 }
 
 void assemblespans_free(t_assemblespans *x) {
+    visualize_cleanup();
     if (x->working_memory) {
         object_free(x->working_memory);
     }
@@ -94,6 +220,7 @@ void assemblespans_clear(t_assemblespans *x) {
     x->bar_length = 125; // Default bar length
     x->current_palette = gensym("");
     post("assemblespans cleared.");
+    assemblespans_visualize_memory(x);
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
@@ -413,6 +540,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         if (keys) sysmem_freeptr(keys);
         // Do not free span_array here, it's owned by the dictionaries now
     }
+    assemblespans_visualize_memory(x);
 }
 
 void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
@@ -466,6 +594,7 @@ void assemblespans_flush_track(t_assemblespans *x, t_symbol *track_sym) {
 
     // Remove the entry for the track from the main working_memory.
     dictionary_deleteentry(x->working_memory, track_sym);
+    assemblespans_visualize_memory(x);
 }
 
 void assemblespans_bang(t_assemblespans *x) {

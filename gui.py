@@ -7,7 +7,7 @@ import math
 
 # Configuration
 UDP_PORT = 9999
-WINDOW_SIZE = (1000, 600)
+WINDOW_SIZE = (1000, 800)
 BACKGROUND = (38, 38, 46)  # close to sketch.glclearcolor(0.15...)
 FPS = 60
 FLASH_DURATION = 0.5  # seconds (500 ms)
@@ -17,7 +17,8 @@ X_FLASH_DURATION = 0.35
 state = {
     "song_length": 0.0,
     "measure_length": 1.0,
-    "transcript": {}
+    "transcript": {},
+    "working_memory": {}
 }
 state_lock = threading.Lock()
 
@@ -61,6 +62,9 @@ def udp_listener():
                             if "measure_length" in pkt["bar"]:
                                 val = float(pkt["bar"]["measure_length"])
                                 state["measure_length"] = val if val > 0 else 1.0
+
+                        if "working_memory" in pkt and isinstance(pkt["working_memory"], dict):
+                            state["working_memory"] = pkt["working_memory"]
 
                         # Incremental transcript updates (merge/delete semantics)
                         if "transcript" in pkt and isinstance(pkt["transcript"], dict):
@@ -293,6 +297,7 @@ def run_gui():
                 measure_length = float(state.get("measure_length", 1) or 1)
                 transcript = {tk: {mk: dict(v) for mk, v in ms.items()} for tk, ms in state.get("transcript", {}).items()}
                 flash_snapshot = {k: dict(v) for k, v in flash_state.items()}
+                working_memory = state.get("working_memory", {})
 
             # compute layout
             numTracks = max(1, 4)
@@ -302,9 +307,13 @@ def run_gui():
 
             w, h = WINDOW_SIZE
             aspect = w / float(h)
+
+            timeline_top = 40
+            timeline_h = 200
+
             grid_left = 40
             grid_right = w - 40
-            grid_top = 40
+            grid_top = timeline_top + timeline_h + 40
             grid_bottom = h - 40
             grid_w = grid_right - grid_left
             grid_h = grid_bottom - grid_top
@@ -314,6 +323,37 @@ def run_gui():
 
             # background
             screen.fill(BACKGROUND)
+
+            # draw working_memory timeline
+            if working_memory:
+                all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
+                if all_ts:
+                    min_ts, max_ts = min(all_ts), max(all_ts)
+                    span_ts = max_ts - min_ts if max_ts > min_ts else 1.0
+
+                    timeline_rect = pygame.Rect(grid_left, timeline_top, grid_w, timeline_h)
+                    pygame.draw.rect(screen, (20, 20, 25), timeline_rect)
+
+                    track_h = timeline_h / max(1, len(working_memory))
+                    sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k))
+
+                    for i, track_id in enumerate(sorted_track_keys):
+                        track_data = working_memory[track_id]
+                        track_y = timeline_top + i * track_h
+
+                        # Draw track label
+                        track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
+                        screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
+
+                        # Draw hash marks for absolutes
+                        for ts in track_data.get("absolutes", []):
+                            x = grid_left + grid_w * (ts - min_ts) / span_ts
+                            pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
+
+                        # Draw hash marks for offsets
+                        for ts in track_data.get("offsets", []):
+                            x = grid_left + grid_w * (ts - min_ts) / span_ts
+                            pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
 
             # draw measure start labels
             for col in range(numColumns):
