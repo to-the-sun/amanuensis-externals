@@ -269,6 +269,7 @@ def run_gui():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("Arial", 16)
     large_font = pygame.font.SysFont("Arial", 20)
+    small_font = pygame.font.SysFont("Arial", 12)
 
     running = True
     while running:
@@ -334,6 +335,13 @@ def run_gui():
                     timeline_rect = pygame.Rect(grid_left, timeline_top, grid_w, timeline_h)
                     pygame.draw.rect(screen, (20, 20, 25), timeline_rect)
 
+                    # Draw min and max labels for the timeline
+                    min_label = small_font.render(f"{min_ts:.2f}", True, (204, 204, 204))
+                    max_label = small_font.render(f"{max_ts:.2f}", True, (204, 204, 204))
+                    screen.blit(min_label, (grid_left, timeline_top + timeline_h + 5))
+                    screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
+
+
                     track_h = timeline_h / max(1, len(working_memory))
                     sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k))
 
@@ -345,15 +353,21 @@ def run_gui():
                         track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
                         screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
 
-                        # Draw hash marks for absolutes
+                        # Draw hash marks and labels for absolutes
                         for ts in track_data.get("absolutes", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
+                            label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
+                            screen.blit(label, (x + 2, track_y + (i % 2) * 15))
 
-                        # Draw hash marks for offsets
+
+                        # Draw hash marks and labels for offsets
                         for ts in track_data.get("offsets", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
+                            label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
+                            screen.blit(label, (x + 2, track_y + track_h - 15 - (i % 2) * 15))
+
 
             # draw measure start labels
             for col in range(numColumns):
