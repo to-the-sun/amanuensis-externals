@@ -19,7 +19,7 @@ state = {
     "measure_length": 1.0,
     "transcript": {},
     "working_memory": {},
-    "global_offset": 0.0
+    "current_offset": 0.0
 }
 state_lock = threading.Lock()
 
@@ -67,8 +67,8 @@ def udp_listener():
                         if "working_memory" in pkt and isinstance(pkt["working_memory"], dict):
                             state["working_memory"] = pkt["working_memory"]
 
-                        if "global_offset" in pkt:
-                            state["global_offset"] = float(pkt["global_offset"])
+                        if "current_offset" in pkt:
+                            state["current_offset"] = float(pkt["current_offset"])
 
                         # Incremental transcript updates (merge/delete semantics)
                         if "transcript" in pkt and isinstance(pkt["transcript"], dict):
@@ -303,7 +303,7 @@ def run_gui():
                 transcript = {tk: {mk: dict(v) for mk, v in ms.items()} for tk, ms in state.get("transcript", {}).items()}
                 flash_snapshot = {k: dict(v) for k, v in flash_state.items()}
                 working_memory = state.get("working_memory", {})
-                global_offset = state.get("global_offset", 0.0)
+                current_offset = state.get("current_offset", 0.0)
 
             # compute layout
             numTracks = max(1, 4)
@@ -331,25 +331,24 @@ def run_gui():
             screen.fill(BACKGROUND)
 
             # draw working_memory timeline
-            if working_memory:
-                all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
-                if global_offset is not None:
-                    all_ts.append(global_offset)
+            all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
+            if current_offset is not None:
+                all_ts.append(current_offset)
 
-                if all_ts:
-                    min_ts, max_ts = min(all_ts), max(all_ts)
-                    span_ts = max_ts - min_ts if max_ts > min_ts else 1.0
+            if all_ts:
+                min_ts, max_ts = min(all_ts), max(all_ts)
+                span_ts = max_ts - min_ts if max_ts > min_ts else 1.0
 
-                    timeline_rect = pygame.Rect(grid_left, timeline_top, grid_w, timeline_h)
-                    pygame.draw.rect(screen, (20, 20, 25), timeline_rect)
+                timeline_rect = pygame.Rect(grid_left, timeline_top, grid_w, timeline_h)
+                pygame.draw.rect(screen, (20, 20, 25), timeline_rect)
 
-                    # Draw min and max labels for the timeline
-                    min_label = small_font.render(f"{min_ts:.2f}", True, (204, 204, 204))
-                    max_label = small_font.render(f"{max_ts:.2f}", True, (204, 204, 204))
-                    screen.blit(min_label, (grid_left, timeline_top + timeline_h + 5))
-                    screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
+                # Draw min and max labels for the timeline
+                min_label = small_font.render(f"{min_ts:.2f}", True, (204, 204, 204))
+                max_label = small_font.render(f"{max_ts:.2f}", True, (204, 204, 204))
+                screen.blit(min_label, (grid_left, timeline_top + timeline_h + 5))
+                screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
 
-
+                if working_memory:
                     track_h = timeline_h / max(1, len(working_memory))
                     sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k))
 
@@ -369,22 +368,17 @@ def run_gui():
                             screen.blit(label, (x + 2, track_y + (i % 2) * 15))
 
 
+                        # Consolidate and de-duplicate offsets
+                        all_offsets = set(track_data.get("offsets", []))
+                        if current_offset is not None:
+                            all_offsets.add(current_offset)
+
                         # Draw hash marks and labels for offsets
-                        for ts in track_data.get("offsets", []):
+                        for ts in all_offsets:
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
                             label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
                             screen.blit(label, (x + 2, track_y + track_h - 15 - (i % 2) * 15))
-
-                    # Draw global offset
-                    if global_offset is not None:
-                        x = grid_left + grid_w * (global_offset - min_ts) / span_ts
-                        # Draw a dashed line
-                        for y in range(timeline_top, timeline_top + timeline_h, 10):
-                             pygame.draw.line(screen, (255, 255, 0), (x, y), (x, y + 5), 2)
-                        label = small_font.render(f"Global: {global_offset:.2f}", True, (255, 255, 0))
-                        screen.blit(label, (x + 2, timeline_top))
-
 
 
             # draw measure start labels

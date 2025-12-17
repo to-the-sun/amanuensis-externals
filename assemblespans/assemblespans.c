@@ -155,7 +155,7 @@ void assemblespans_visualize_memory(t_assemblespans *x) {
         }
         sysmem_freeptr(track_keys);
     }
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"global_offset\":%.2f}", x->current_offset);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f}", x->current_offset);
 
     visualize(json_buffer);
     sysmem_freeptr(json_buffer);
