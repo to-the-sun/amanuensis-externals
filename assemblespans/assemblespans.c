@@ -155,7 +155,7 @@ void assemblespans_visualize_memory(t_assemblespans *x) {
         }
         sysmem_freeptr(track_keys);
     }
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"global_offset\":%.2f}", x->current_offset);
 
     visualize(json_buffer);
     sysmem_freeptr(json_buffer);
@@ -227,6 +227,7 @@ void assemblespans_clear(t_assemblespans *x) {
 void assemblespans_offset(t_assemblespans *x, double f) {
     x->current_offset = f;
     post("Global offset updated to: %.2f", f);
+    assemblespans_visualize_memory(x);
 }
 
 // Handler for int messages on the 4th inlet (proxy #3, bar length)

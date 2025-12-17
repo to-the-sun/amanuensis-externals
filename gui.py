@@ -18,7 +18,8 @@ state = {
     "song_length": 0.0,
     "measure_length": 1.0,
     "transcript": {},
-    "working_memory": {}
+    "working_memory": {},
+    "global_offset": 0.0
 }
 state_lock = threading.Lock()
 
@@ -65,6 +66,9 @@ def udp_listener():
 
                         if "working_memory" in pkt and isinstance(pkt["working_memory"], dict):
                             state["working_memory"] = pkt["working_memory"]
+
+                        if "global_offset" in pkt:
+                            state["global_offset"] = float(pkt["global_offset"])
 
                         # Incremental transcript updates (merge/delete semantics)
                         if "transcript" in pkt and isinstance(pkt["transcript"], dict):
@@ -299,6 +303,7 @@ def run_gui():
                 transcript = {tk: {mk: dict(v) for mk, v in ms.items()} for tk, ms in state.get("transcript", {}).items()}
                 flash_snapshot = {k: dict(v) for k, v in flash_state.items()}
                 working_memory = state.get("working_memory", {})
+                global_offset = state.get("global_offset", 0.0)
 
             # compute layout
             numTracks = max(1, 4)
@@ -328,6 +333,9 @@ def run_gui():
             # draw working_memory timeline
             if working_memory:
                 all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
+                if global_offset is not None:
+                    all_ts.append(global_offset)
+
                 if all_ts:
                     min_ts, max_ts = min(all_ts), max(all_ts)
                     span_ts = max_ts - min_ts if max_ts > min_ts else 1.0
@@ -367,6 +375,16 @@ def run_gui():
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
                             label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
                             screen.blit(label, (x + 2, track_y + track_h - 15 - (i % 2) * 15))
+
+                    # Draw global offset
+                    if global_offset is not None:
+                        x = grid_left + grid_w * (global_offset - min_ts) / span_ts
+                        # Draw a dashed line
+                        for y in range(timeline_top, timeline_top + timeline_h, 10):
+                             pygame.draw.line(screen, (255, 255, 0), (x, y), (x, y + 5), 2)
+                        label = small_font.render(f"Global: {global_offset:.2f}", True, (255, 255, 0))
+                        screen.blit(label, (x + 2, timeline_top))
+
 
 
             # draw measure start labels
