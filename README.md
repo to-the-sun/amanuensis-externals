@@ -36,11 +36,13 @@ Each external object's directory typically contains:
         ```
         - Press `Enter` to accept the default package selection.
         - Type `Y` and press `Enter` to proceed with the installation.
-    3.  **Add the compiler to your Windows PATH environment variable.** This is a critical step.
+    3.  **Add the MSYS2 tools to your Windows PATH.** This is a critical step to ensure both the compiler (`gcc`) and the `make` command can be found in your Command Prompt.
         - Search for "Edit the system environment variables" in the Windows search bar and open it.
         - Click "Environment Variables..."
         - In the "User variables" section, select the `Path` variable and click "Edit..."
-        - Click "New" and add the path to your MinGW-w64 `bin` folder. The default path is: `C:\msys64\ucrt64\bin`
+        - You will need to add **two** new entries. Click "New" and add each of the following paths:
+          - `C:\msys64\ucrt64\bin`  *(this is for the compiler, gcc.exe)*
+          - `C:\msys64\usr\bin`    *(this is for build tools like make.exe)*
         - Click `OK` on all windows to save the changes.
     4.  **Verify the installation.** Open a **new** Command Prompt and run `gcc --version`. If it's installed correctly, you will see the compiler version information.
 
