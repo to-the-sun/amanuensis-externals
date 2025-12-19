@@ -4,7 +4,7 @@ LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -lMaxAPI 
 OBJS = whichoffset.o ../shared/visualize.o
 
 whichoffset.mxe64: $(OBJS)
-	$(CC) $(CFLAGS) -o whichoffset.mxe64 $(OBJS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o ../externals/whichoffset.mxe64 $(OBJS) $(LDFLAGS)
 
 whichoffset.o: whichoffset.c
 	$(CC) $(CFLAGS) -c whichoffset.c -o whichoffset.o
@@ -13,4 +13,4 @@ whichoffset.o: whichoffset.c
 	$(CC) $(CFLAGS) -c ../shared/visualize.c -o ../shared/visualize.o
 
 clean:
-	rm -f whichoffset.mxe64 *.o ../shared/*.o
+	rm -f ../externals/whichoffset.mxe64 *.o ../shared/*.o
