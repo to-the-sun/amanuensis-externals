@@ -26,14 +26,29 @@ Each external object's directory typically contains:
     ```bash
     git clone https://github.com/Cycling74/max-sdk.git --recursive
     ```
-2.  **MinGW-w64**: The `x86_64-w64-mingw32-gcc` compiler is used for building the 64-bit Windows binaries (`.mxe64`).
-    ```bash
-    sudo apt-get update && sudo apt-get install -y mingw-w64
-    ```
+2.  **MinGW-w64**: The `x86_64-w64-mingw32-gcc` compiler is used for building the 64-bit Windows binaries (`.mxe64`). The recommended way to install it on Windows is via **MSYS2**.
+
+    **Installation Steps:**
+    1.  **Download and install MSYS2** from [https://www.msys2.org/](https://www.msys2.org/). Follow the instructions on the site.
+    2.  **Open the MSYS2 terminal** after installation and run the following command to install the toolchain:
+        ```
+        pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain
+        ```
+        - Press `Enter` to accept the default package selection.
+        - Type `Y` and press `Enter` to proceed with the installation.
+    3.  **Add the MSYS2 tools to your Windows PATH.** This is a critical step to ensure both the compiler (`gcc`) and the `make` command can be found in your Command Prompt.
+        - Search for "Edit the system environment variables" in the Windows search bar and open it.
+        - Click "Environment Variables..."
+        - In the "User variables" section, select the `Path` variable and click "Edit..."
+        - You will need to add **two** new entries. Click "New" and add each of the following paths:
+          - `C:\msys64\ucrt64\bin`  *(this is for the compiler, gcc.exe)*
+          - `C:\msys64\usr\bin`    *(this is for build tools like make.exe)*
+        - Click `OK` on all windows to save the changes.
+    4.  **Verify the installation.** Open a **new** Command Prompt and run `gcc --version`. If it's installed correctly, you will see the compiler version information.
 
 ### Compilation
 
-To build an individual external object, navigate into its specific directory and run the `make` command:
+To build an individual external object, navigate into its specific directory and run the `make` command from a standard Windows Command Prompt or PowerShell:
 
 ```bash
 cd assemblespans/
