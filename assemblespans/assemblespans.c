@@ -451,6 +451,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     // Calculate and store the mean of the scores
     long scores_count = atomarray_getsize(scores_array);
+    double mean = 0.0;
     if (scores_count > 0) {
         double sum = 0.0;
         for (long i = 0; i < scores_count; i++) {
@@ -458,13 +459,15 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             atomarray_getindex(scores_array, i, &score_atom);
             sum += atom_getfloat(&score_atom);
         }
-        double mean = sum / scores_count;
+        mean = sum / scores_count;
         if (dictionary_hasentry(bar_dict, gensym("mean"))) {
             dictionary_deleteentry(bar_dict, gensym("mean"));
         }
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
         post("Updated dictionary entry: %s::%s::mean -> %.2f", track_sym->s_name, bar_sym->s_name, mean);
     }
+
+    t_atomarray *span_array = NULL;
 
     if (new_bar_created) {
         // Collect all numeric bar timestamps for the current track
@@ -490,7 +493,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
         // Create the definitive span atomarray
-        t_atomarray *span_array = atomarray_new(0, NULL);
+        span_array = atomarray_new(0, NULL);
         for (long i = 0; i < bar_timestamps_count; i++) {
             t_atom bar_atom;
             atom_setlong(&bar_atom, bar_timestamps[i]);
@@ -540,7 +543,65 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         sysmem_freeptr(bar_timestamps);
         if (keys) sysmem_freeptr(keys);
         // Do not free span_array here, it's owned by the dictionaries now
+    } else {
+        if (dictionary_hasentry(bar_dict, gensym("span"))) {
+            t_atom span_atom;
+            dictionary_getatom(bar_dict, gensym("span"), &span_atom);
+            span_array = (t_atomarray *)atom_getobj(&span_atom);
+        }
     }
+
+    // --- RATING CALCULATION ---
+    if (span_array) {
+        double lowest_mean = -1.0;
+        long num_bars_in_span = atomarray_getsize(span_array);
+        t_atom* bar_timestamps_atoms = NULL;
+        atomarray_getatoms(span_array, &num_bars_in_span, &bar_timestamps_atoms);
+
+        // Find the true lowest mean by iterating through all bars in the span
+        for (long i = 0; i < num_bars_in_span; i++) {
+            char temp_bar_str[32];
+            snprintf(temp_bar_str, 32, "%ld", atom_getlong(&bar_timestamps_atoms[i]));
+            t_symbol* temp_bar_sym = gensym(temp_bar_str);
+
+            t_atom temp_bar_dict_atom;
+            dictionary_getatom(track_dict, temp_bar_sym, &temp_bar_dict_atom);
+            t_dictionary* temp_bar_dict = (t_dictionary*)atom_getobj(&temp_bar_dict_atom);
+
+            if (dictionary_hasentry(temp_bar_dict, gensym("mean"))) {
+                t_atom mean_atom;
+                dictionary_getatom(temp_bar_dict, gensym("mean"), &mean_atom);
+                double current_bar_mean = atom_getfloat(&mean_atom);
+                if (lowest_mean == -1.0 || current_bar_mean < lowest_mean) {
+                    lowest_mean = current_bar_mean;
+                }
+            }
+        }
+
+        if (lowest_mean != -1.0) {
+            post("Lowest mean for track %s is: %.2f", track_sym->s_name, lowest_mean);
+            double rating = lowest_mean * num_bars_in_span;
+            post("Calculated rating: %.2f (lowest_mean %.2f * %ld bars)", rating, lowest_mean, num_bars_in_span);
+
+            // Back-propagate the rating to all bars
+            for (long i = 0; i < num_bars_in_span; i++) {
+                char temp_bar_str[32];
+                snprintf(temp_bar_str, 32, "%ld", atom_getlong(&bar_timestamps_atoms[i]));
+                t_symbol* temp_bar_sym = gensym(temp_bar_str);
+
+                t_atom temp_bar_dict_atom;
+                dictionary_getatom(track_dict, temp_bar_sym, &temp_bar_dict_atom);
+                t_dictionary* temp_bar_dict = (t_dictionary*)atom_getobj(&temp_bar_dict_atom);
+
+                if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) {
+                    dictionary_deleteentry(temp_bar_dict, gensym("rating"));
+                }
+                dictionary_appendfloat(temp_bar_dict, gensym("rating"), rating);
+            }
+            post("Back-propagated rating to all %ld bars in the span.", num_bars_in_span);
+        }
+    }
+
     assemblespans_visualize_memory(x);
 }
 
