@@ -2,7 +2,10 @@
 <c74object name="assemblespans">
     <digest>Assembles spans of notes and offsets for a music transcript.</digest>
     <description>
-        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends (flushes) a span when it receives a timestamp that creates a bar that is not contiguous with the previous bars in the span. A span can also be ended manually by sending a `bang` to the first inlet.
+        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
+        1.  **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars.
+        2.  **Rating Decrease:** A span will also end if adding a new bar would decrease the span's overall rating. If the rating would stay the same or increase, the span continues. The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
+        A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
     </description>
 
     <!-- Methods -->
