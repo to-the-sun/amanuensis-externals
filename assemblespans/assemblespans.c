@@ -403,6 +403,9 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
                     post("Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.",
                          last_bar_timestamp, rating_without, rating_with);
                     assemblespans_prune_span(x, track_sym, last_bar_timestamp);
+                } else {
+                    post("Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f). Continuing span.",
+                         last_bar_timestamp, rating_without, rating_with);
                 }
             }
             if (span_keys) sysmem_freeptr(span_keys);
@@ -428,8 +431,11 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     if (dictionary_hasentry(bar_dict, gensym("offset"))) dictionary_deleteentry(bar_dict, gensym("offset"));
     dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
+    post("Updated '%s' for bar %s to %.2f", "offset", bar_sym->s_name, x->current_offset);
+
     if (dictionary_hasentry(bar_dict, gensym("palette"))) dictionary_deleteentry(bar_dict, gensym("palette"));
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
+    post("Updated '%s' for bar %s to %s", "palette", bar_sym->s_name, x->current_palette->s_name);
 
     t_atomarray *absolutes_array;
     if (!dictionary_hasentry(bar_dict, gensym("absolutes"))) {
@@ -464,6 +470,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         double mean = sum / count;
         if (dictionary_hasentry(bar_dict, gensym("mean"))) dictionary_deleteentry(bar_dict, gensym("mean"));
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
+        post("Updated '%s' for bar %s to %.2f", "mean", bar_sym->s_name, mean);
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
