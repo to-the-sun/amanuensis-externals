@@ -607,7 +607,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
             post("%s::%s::%s %.2f", track_sym->s_name, temp_bar_sym->s_name, "rating", final_rating);
         }
-        post("Final rating for span on track %s: %.2f", track_sym->s_name, final_rating);
+        post("Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
 
     sysmem_freeptr(bar_timestamps);
