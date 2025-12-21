@@ -7,6 +7,53 @@
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
 
+// Helper function to convert an atomarray to a string for posting
+char* atomarray_to_string(t_atomarray *arr) {
+    if (!arr) return NULL;
+
+    long count = atomarray_getsize(arr);
+    if (count == 0) {
+        char *empty_str = (char *)sysmem_newptr(3);
+        strcpy(empty_str, "[]");
+        return empty_str;
+    }
+
+    long buffer_size = 256; // Initial size
+    char *buffer = (char *)sysmem_newptr(buffer_size);
+    long offset = 0;
+
+    offset += snprintf(buffer + offset, buffer_size - offset, "[");
+
+    for (long i = 0; i < count; i++) {
+        t_atom a;
+        atomarray_getindex(arr, i, &a);
+
+        char temp_str[64];
+        if (atom_gettype(&a) == A_FLOAT) {
+            snprintf(temp_str, 64, "%.2f", atom_getfloat(&a));
+        } else if (atom_gettype(&a) == A_LONG) {
+            snprintf(temp_str, 64, "%ld", atom_getlong(&a));
+        } else {
+            snprintf(temp_str, 64, "?");
+        }
+
+        if (buffer_size - offset < strlen(temp_str) + 4) { // +4 for ", ]\0"
+            buffer_size *= 2;
+            buffer = (char *)sysmem_resizeptr(buffer, buffer_size);
+            if (!buffer) return NULL;
+        }
+
+        offset += snprintf(buffer + offset, buffer_size - offset, "%s", temp_str);
+        if (i < count - 1) {
+            offset += snprintf(buffer + offset, buffer_size - offset, ", ");
+        }
+    }
+
+    snprintf(buffer + offset, buffer_size - offset, "]");
+    return buffer;
+}
+
+
 // Comparison function for qsort
 int compare_longs(const void *a, const void *b) {
     long la = *(const long *)a;
@@ -431,11 +478,11 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     if (dictionary_hasentry(bar_dict, gensym("offset"))) dictionary_deleteentry(bar_dict, gensym("offset"));
     dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
-    post("Updated '%s' for bar %s to %.2f", "offset", bar_sym->s_name, x->current_offset);
+    post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "offset", x->current_offset);
 
     if (dictionary_hasentry(bar_dict, gensym("palette"))) dictionary_deleteentry(bar_dict, gensym("palette"));
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
-    post("Updated '%s' for bar %s to %s", "palette", bar_sym->s_name, x->current_palette->s_name);
+    post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "palette", x->current_palette->s_name);
 
     t_atomarray *absolutes_array;
     if (!dictionary_hasentry(bar_dict, gensym("absolutes"))) {
@@ -448,7 +495,11 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
-    post("Appended %.2f to '%s' for bar %s", timestamp, "absolutes", bar_sym->s_name);
+    char *abs_str = atomarray_to_string(absolutes_array);
+    if (abs_str) {
+        post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "absolutes", abs_str);
+        sysmem_freeptr(abs_str);
+    }
 
     t_atomarray *scores_array;
     if (!dictionary_hasentry(bar_dict, gensym("scores"))) {
@@ -461,7 +512,11 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
-    post("Appended %.2f to '%s' for bar %s", score, "scores", bar_sym->s_name);
+    char *scores_str = atomarray_to_string(scores_array);
+    if (scores_str) {
+        post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "scores", scores_str);
+        sysmem_freeptr(scores_str);
+    }
 
     long scores_count = atomarray_getsize(scores_array);
     if (scores_count > 0) {
@@ -472,7 +527,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         double mean = sum / count;
         if (dictionary_hasentry(bar_dict, gensym("mean"))) dictionary_deleteentry(bar_dict, gensym("mean"));
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
-        post("Updated '%s' for bar %s to %.2f", "mean", bar_sym->s_name, mean);
+        post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "mean", mean);
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
@@ -508,7 +563,17 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         atom_setobj(&span_atom, (t_object *)span_array);
         if (dictionary_hasentry(temp_bar_dict, gensym("span"))) dictionary_deleteentry(temp_bar_dict, gensym("span"));
         dictionary_appendatom(temp_bar_dict, gensym("span"), &span_atom);
-        post("Updated '%s' for bar %s", "span", temp_bar_sym->s_name);
+        // No need to free span_str here because it's the same array object for all bars.
+    }
+    char *span_str = atomarray_to_string(span_array);
+    if (span_str) {
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            char temp_bar_str[32];
+            snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+            t_symbol *temp_bar_sym = gensym(temp_bar_str);
+            post("%s::%s::%s %s", track_sym->s_name, temp_bar_sym->s_name, "span", span_str);
+        }
+        sysmem_freeptr(span_str);
     }
 
     // --- RATING CALCULATION & BACK-PROPAGATION ---
@@ -540,9 +605,9 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
             if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) dictionary_deleteentry(temp_bar_dict, gensym("rating"));
             dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
-            post("Updated '%s' for bar %s to %.2f", "rating", temp_bar_sym->s_name, final_rating);
+            post("%s::%s::%s %.2f", track_sym->s_name, temp_bar_sym->s_name, "rating", final_rating);
         }
-        post("Final rating for span: %.2f", final_rating);
+        post("Final rating for span on track %s: %.2f", track_sym->s_name, final_rating);
     }
 
     sysmem_freeptr(bar_timestamps);
