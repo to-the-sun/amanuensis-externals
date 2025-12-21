@@ -714,9 +714,7 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) 
 }
 
 void assemblespans_prune_span(t_assemblespans *x, t_symbol *track_sym, long bar_to_keep) {
-    if (!dictionary_hasentry(x->working_memory, track_sym)) {
-        return;
-    }
+    if (!dictionary_hasentry(x->working_memory, track_sym)) return;
 
     t_atom track_dict_atom;
     dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
@@ -727,54 +725,83 @@ void assemblespans_prune_span(t_assemblespans *x, t_symbol *track_sym, long bar_
     dictionary_getkeys(track_dict, &num_keys, &keys);
     if (!keys) return;
 
-    // Create a sorted list of bars to flush
-    long *bars_to_flush = (long *)sysmem_newptr(num_keys * sizeof(long));
+    t_atomarray *shared_span_array = NULL;
+    t_symbol **bars_to_flush_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
     long flush_count = 0;
+
+    // First pass: Identify bars to flush and find the shared span array.
     for (long i = 0; i < num_keys; i++) {
         char *key_str = keys[i]->s_name;
         char *endptr;
         long val = strtol(key_str, &endptr, 10);
-         if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1) && val != bar_to_keep) {
-            bars_to_flush[flush_count++] = val;
+        if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, keys[i], &bar_dict_atom);
+            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+            if (val != bar_to_keep) {
+                bars_to_flush_syms[flush_count++] = keys[i];
+            }
+            if (!shared_span_array && dictionary_hasentry(bar_dict, gensym("span"))) {
+                t_atom span_atom;
+                dictionary_getatom(bar_dict, gensym("span"), &span_atom);
+                shared_span_array = (t_atomarray *)atom_getobj(&span_atom);
+            }
         }
     }
-    qsort(bars_to_flush, flush_count, sizeof(long), compare_longs);
 
-    // Create an atomarray from the sorted list for output
-    t_atomarray *span_to_output = atomarray_new(0, NULL);
-    for(long i = 0; i < flush_count; i++) {
-        t_atom a;
-        atom_setlong(&a, bars_to_flush[i]);
-        atomarray_appendatom(span_to_output, &a);
-    }
-
-    // Output the flushed span
-    if (atomarray_getsize(span_to_output) > 0) {
+    // Output the span that is being ended.
+    if (flush_count > 0) {
         post("Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
+
+        long *bars_to_output_vals = (long *)sysmem_newptr(flush_count * sizeof(long));
+        for(long i=0; i<flush_count; ++i) bars_to_output_vals[i] = atol(bars_to_flush_syms[i]->s_name);
+        qsort(bars_to_output_vals, flush_count, sizeof(long), compare_longs);
+
+        t_atom *output_atoms = (t_atom *)sysmem_newptr(flush_count * sizeof(t_atom));
+        for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_output_vals[i]);
+
         outlet_int(x->track_outlet, atol(track_sym->s_name));
-        t_atom *atoms = NULL;
-        long atom_count = 0;
-        atomarray_getatoms(span_to_output, &atom_count, &atoms);
-        outlet_list(x->span_outlet, NULL, atom_count, atoms);
+        outlet_list(x->span_outlet, NULL, flush_count, output_atoms);
+
+        sysmem_freeptr(bars_to_output_vals);
+        sysmem_freeptr(output_atoms);
     }
-    object_free(span_to_output); // Free the temporary atomarray
 
-    // Remove the flushed bars from the track dictionary
-    for(long i = 0; i < flush_count; i++) {
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bars_to_flush[i]);
-        t_symbol *bar_sym_to_delete = gensym(bar_str);
+    // Second pass: Unlink the shared span from ALL bars to prevent double-freeing.
+    if (shared_span_array) {
+        for (long i = 0; i < num_keys; i++) {
+            char *key_str = keys[i]->s_name;
+            char *endptr;
+            strtol(key_str, &endptr, 10);
+            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, keys[i], &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                    dictionary_deleteentry(bar_dict, gensym("span"));
+                }
+            }
+        }
+    }
 
+    // Third pass: Now it's safe to free the flushed bar dictionaries.
+    for (long i = 0; i < flush_count; i++) {
+        t_symbol *bar_sym_to_delete = bars_to_flush_syms[i];
         if (dictionary_hasentry(track_dict, bar_sym_to_delete)) {
             t_atom bar_dict_atom;
             dictionary_getatom(track_dict, bar_sym_to_delete, &bar_dict_atom);
-            object_free(atom_getobj(&bar_dict_atom)); // This frees the sub-dictionary and its contents
+            object_free(atom_getobj(&bar_dict_atom)); // This will no longer free the shared span
             dictionary_deleteentry(track_dict, bar_sym_to_delete);
         }
     }
 
-    sysmem_freeptr(bars_to_flush);
-    sysmem_freeptr(keys);
+    // Finally, free the now-unreferenced shared span array itself.
+    if (shared_span_array) {
+        object_free(shared_span_array);
+    }
 
+    sysmem_freeptr(bars_to_flush_syms);
+    sysmem_freeptr(keys);
     assemblespans_visualize_memory(x);
 }
