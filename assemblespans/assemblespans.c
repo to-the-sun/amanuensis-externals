@@ -448,6 +448,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
+    post("Appended %.2f to '%s' for bar %s", timestamp, "absolutes", bar_sym->s_name);
 
     t_atomarray *scores_array;
     if (!dictionary_hasentry(bar_dict, gensym("scores"))) {
@@ -460,6 +461,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
+    post("Appended %.2f to '%s' for bar %s", score, "scores", bar_sym->s_name);
 
     long scores_count = atomarray_getsize(scores_array);
     if (scores_count > 0) {
@@ -506,6 +508,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
         atom_setobj(&span_atom, (t_object *)span_array);
         if (dictionary_hasentry(temp_bar_dict, gensym("span"))) dictionary_deleteentry(temp_bar_dict, gensym("span"));
         dictionary_appendatom(temp_bar_dict, gensym("span"), &span_atom);
+        post("Updated '%s' for bar %s", "span", temp_bar_sym->s_name);
     }
 
     // --- RATING CALCULATION & BACK-PROPAGATION ---
@@ -537,6 +540,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
             t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
             if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) dictionary_deleteentry(temp_bar_dict, gensym("rating"));
             dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
+            post("Updated '%s' for bar %s to %.2f", "rating", temp_bar_sym->s_name, final_rating);
         }
         post("Final rating for span: %.2f", final_rating);
     }
