@@ -61,38 +61,38 @@ int compare_longs(const void *a, const void *b) {
     return (la > lb) - (la < lb);
 }
 
-typedef struct _assemblespans {
+typedef struct _buildspans {
     t_object s_obj;
-    t_dictionary *working_memory;
+    t_dictionary *building;
     long current_track;
     double current_offset;
     long bar_length;
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
-} t_assemblespans;
+} t_buildspans;
 
 // Function prototypes
-void *assemblespans_new(void);
-void assemblespans_free(t_assemblespans *x);
-void assemblespans_clear(t_assemblespans *x);
-void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
-void assemblespans_int(t_assemblespans *x, long n);
-void assemblespans_offset(t_assemblespans *x, double f);
-void assemblespans_bar_length(t_assemblespans *x, long n);
-void assemblespans_track(t_assemblespans *x, long n);
-void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv);
-void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s);
-void assemblespans_bang(t_assemblespans *x);
-void assemblespans_flush(t_assemblespans *x);
-void assemblespans_end_track_span(t_assemblespans *x, t_symbol *track_sym);
-void assemblespans_prune_span(t_assemblespans *x, t_symbol *track_sym, long bar_to_keep);
-void assemblespans_visualize_memory(t_assemblespans *x);
+void *buildspans_new(void);
+void buildspans_free(t_buildspans *x);
+void buildspans_clear(t_buildspans *x);
+void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_int(t_buildspans *x, long n);
+void buildspans_offset(t_buildspans *x, double f);
+void buildspans_bar_length(t_buildspans *x, long n);
+void buildspans_track(t_buildspans *x, long n);
+void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
+void buildspans_bang(t_buildspans *x);
+void buildspans_flush(t_buildspans *x);
+void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym);
+void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep);
+void buildspans_visualize_memory(t_buildspans *x);
 
 
-t_class *assemblespans_class;
+t_class *buildspans_class;
 
-void assemblespans_visualize_memory(t_assemblespans *x) {
+void buildspans_visualize_memory(t_buildspans *x) {
     long buffer_size = 4096;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     if (!json_buffer) {
@@ -101,11 +101,11 @@ void assemblespans_visualize_memory(t_assemblespans *x) {
     }
     long offset = 0;
 
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"working_memory\":{");
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"building\":{");
 
     long num_tracks;
     t_symbol **track_keys;
-    dictionary_getkeys(x->working_memory, &num_tracks, &track_keys);
+    dictionary_getkeys(x->building, &num_tracks, &track_keys);
 
     int first_track = 1;
     if (track_keys) {
@@ -124,7 +124,7 @@ void assemblespans_visualize_memory(t_assemblespans *x) {
             offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
 
             t_atom track_dict_atom;
-            dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+            dictionary_getatom(x->building, track_sym, &track_dict_atom);
             t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
             long num_bars;
@@ -212,24 +212,24 @@ void assemblespans_visualize_memory(t_assemblespans *x) {
 
 void ext_main(void *r) {
     t_class *c;
-    c = class_new("assemblespans", (method)assemblespans_new, (method)assemblespans_free, (short)sizeof(t_assemblespans), 0L, A_GIMME, 0);
-    class_addmethod(c, (method)assemblespans_clear, "clear", 0);
-    class_addmethod(c, (method)assemblespans_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)assemblespans_int, "int", A_LONG, 0);
-    class_addmethod(c, (method)assemblespans_offset, "ft1", A_FLOAT, 0);
-    class_addmethod(c, (method)assemblespans_track, "in2", A_LONG, 0);
-    class_addmethod(c, (method)assemblespans_bar_length, "in3", A_LONG, 0);
-    class_addmethod(c, (method)assemblespans_anything, "anything", A_GIMME, 0);
-    class_addmethod(c, (method)assemblespans_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)assemblespans_bang, "bang", 0);
+    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, (short)sizeof(t_buildspans), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_clear, "clear", 0);
+    class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
+    class_addmethod(c, (method)buildspans_bar_length, "in3", A_LONG, 0);
+    class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)buildspans_bang, "bang", 0);
     class_register(CLASS_BOX, c);
-    assemblespans_class = c;
+    buildspans_class = c;
 }
 
-void *assemblespans_new(void) {
-    t_assemblespans *x = (t_assemblespans *)object_alloc(assemblespans_class);
+void *buildspans_new(void) {
+    t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
     if (x) {
-        x->working_memory = dictionary_new();
+        x->building = dictionary_new();
         x->current_track = 0;
         x->current_offset = 0.0;
         x->bar_length = 125; // Default bar length
@@ -251,47 +251,47 @@ void *assemblespans_new(void) {
     return (x);
 }
 
-void assemblespans_free(t_assemblespans *x) {
+void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
-    if (x->working_memory) {
-        object_free(x->working_memory);
+    if (x->building) {
+        object_free(x->building);
     }
 }
 
-void assemblespans_clear(t_assemblespans *x) {
-    if (x->working_memory) {
-        object_free(x->working_memory);
+void buildspans_clear(t_buildspans *x) {
+    if (x->building) {
+        object_free(x->building);
     }
-    x->working_memory = dictionary_new();
+    x->building = dictionary_new();
     x->current_track = 0;
     x->current_offset = 0.0;
     x->bar_length = 125; // Default bar length
     x->current_palette = gensym("");
-    post("assemblespans cleared.");
-    assemblespans_visualize_memory(x);
+    post("buildspans cleared.");
+    buildspans_visualize_memory(x);
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
-void assemblespans_offset(t_assemblespans *x, double f) {
+void buildspans_offset(t_buildspans *x, double f) {
     x->current_offset = f;
     post("Global offset updated to: %.2f", f);
-    assemblespans_visualize_memory(x);
+    buildspans_visualize_memory(x);
 }
 
 // Handler for int messages on the 4th inlet (proxy #3, bar length)
-void assemblespans_bar_length(t_assemblespans *x, long n) {
+void buildspans_bar_length(t_buildspans *x, long n) {
     x->bar_length = n;
     post("Bar length updated to: %ld", n);
 }
 
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
-void assemblespans_track(t_assemblespans *x, long n) {
+void buildspans_track(t_buildspans *x, long n) {
     x->current_track = n;
     post("Track updated to: %ld", n);
 }
 
 // Handler for various messages, including palette symbol
-void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv) {
+void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
     // Inlet 4 is the palette symbol inlet
@@ -312,7 +312,7 @@ void assemblespans_anything(t_assemblespans *x, t_symbol *s, long argc, t_atom *
 
 
 // Handler for list messages on the main inlet
-void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv) {
+void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
         object_error((t_object *)x, "Input must be a list of two floats: timestamp and score.");
         return;
@@ -331,12 +331,12 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
     // Get track dictionary (level 1)
     t_dictionary *track_dict;
-    if (!dictionary_hasentry(x->working_memory, track_sym)) {
+    if (!dictionary_hasentry(x->building, track_sym)) {
         track_dict = dictionary_new();
-        dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
+        dictionary_appenddictionary(x->building, track_sym, (t_object *)track_dict);
     } else {
         t_atom track_dict_atom;
-        dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+        dictionary_getatom(x->building, track_sym, &track_dict_atom);
         track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
     }
 
@@ -443,7 +443,7 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
                 post("Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
             }
 
-            if (prune_span) assemblespans_prune_span(x, track_sym, last_bar_timestamp);
+            if (prune_span) buildspans_prune_span(x, track_sym, last_bar_timestamp);
         }
         if (span_keys) sysmem_freeptr(span_keys);
 
@@ -466,13 +466,13 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
 
         if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + x->bar_length) {
             post("Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, x->bar_length, most_recent_bar_after_rating_check);
-            assemblespans_end_track_span(x, track_sym);
-            if (!dictionary_hasentry(x->working_memory, track_sym)) {
+            buildspans_end_track_span(x, track_sym);
+            if (!dictionary_hasentry(x->building, track_sym)) {
                 track_dict = dictionary_new();
-                dictionary_appenddictionary(x->working_memory, track_sym, (t_object *)track_dict);
+                dictionary_appenddictionary(x->building, track_sym, (t_object *)track_dict);
             } else {
                 t_atom track_dict_atom;
-                dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+                dictionary_getatom(x->building, track_sym, &track_dict_atom);
                 track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
             }
         }
@@ -630,14 +630,14 @@ void assemblespans_list(t_assemblespans *x, t_symbol *s, long argc, t_atom *argv
     }
 
     sysmem_freeptr(bar_timestamps);
-    assemblespans_visualize_memory(x);
+    buildspans_visualize_memory(x);
 }
 
-void assemblespans_end_track_span(t_assemblespans *x, t_symbol *track_sym) {
-    if (!dictionary_hasentry(x->working_memory, track_sym)) return;
+void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
+    if (!dictionary_hasentry(x->building, track_sym)) return;
 
     t_atom track_dict_atom;
-    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+    dictionary_getatom(x->building, track_sym, &track_dict_atom);
     t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
     t_atomarray *span_to_output = NULL;
@@ -731,34 +731,34 @@ void assemblespans_end_track_span(t_assemblespans *x, t_symbol *track_sym) {
     }
 
     object_free((t_object *)track_dict);
-    dictionary_deleteentry(x->working_memory, track_sym);
-    assemblespans_visualize_memory(x);
+    dictionary_deleteentry(x->building, track_sym);
+    buildspans_visualize_memory(x);
 }
 
-void assemblespans_bang(t_assemblespans *x) {
+void buildspans_bang(t_buildspans *x) {
     post("Flush triggered by bang.");
-    assemblespans_flush(x);
+    buildspans_flush(x);
 }
 
-void assemblespans_flush(t_assemblespans *x) {
+void buildspans_flush(t_buildspans *x) {
     long num_tracks;
     t_symbol **tracks;
-    dictionary_getkeys(x->working_memory, &num_tracks, &tracks);
+    dictionary_getkeys(x->building, &num_tracks, &tracks);
     if (!tracks) return;
 
     for (long i = 0; i < num_tracks; i++) {
-        assemblespans_end_track_span(x, tracks[i]);
+        buildspans_end_track_span(x, tracks[i]);
     }
     if (tracks) sysmem_freeptr(tracks);
 }
 
 
 // Handler for int messages on the main inlet
-void assemblespans_int(t_assemblespans *x, long n) {
+void buildspans_int(t_buildspans *x, long n) {
     object_error((t_object *)x, "Invalid input: main inlet expects a list of two floats.");
 }
 
-void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) {
+void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
@@ -780,11 +780,11 @@ void assemblespans_assist(t_assemblespans *x, void *b, long m, long a, char *s) 
     }
 }
 
-void assemblespans_prune_span(t_assemblespans *x, t_symbol *track_sym, long bar_to_keep) {
-    if (!dictionary_hasentry(x->working_memory, track_sym)) return;
+void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep) {
+    if (!dictionary_hasentry(x->building, track_sym)) return;
 
     t_atom track_dict_atom;
-    dictionary_getatom(x->working_memory, track_sym, &track_dict_atom);
+    dictionary_getatom(x->building, track_sym, &track_dict_atom);
     t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
     long num_keys;
@@ -870,5 +870,5 @@ void assemblespans_prune_span(t_assemblespans *x, t_symbol *track_sym, long bar_
 
     sysmem_freeptr(bars_to_flush_syms);
     sysmem_freeptr(keys);
-    assemblespans_visualize_memory(x);
+    buildspans_visualize_memory(x);
 }

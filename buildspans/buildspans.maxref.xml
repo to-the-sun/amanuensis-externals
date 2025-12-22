@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<c74object name="assemblespans">
+<c74object name="buildspans">
     <digest>Assembles spans of notes and offsets for a music transcript.</digest>
     <description>
-        The `assemblespans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
+        The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
         1.  **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This check happens *after* the deferred rating check.
         2.  **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a *new* bar is started. The object evaluates the *previous* bar against the span and will end the span before that previous bar if either of these two conditions are met:
             a. Including the previous bar would have decreased the span's overall rating.
