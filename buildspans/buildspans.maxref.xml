@@ -8,8 +8,15 @@
             a. Including the previous bar would have decreased the span's overall rating.
             b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
         The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
+        When a span ends, its data is copied to an external `dict` object specified by the first argument.
         A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
     </description>
+
+    <!-- Arguments -->
+    <arg name="dictionary-name" type="symbol" optional="0">
+        <digest>The name of the `dict` object to write to.</digest>
+        <description>The object requires the name of a `dict` object as its first argument. When a span of bars ends, either by discontinuity, rating, or a `flush` command, the complete data for each bar in that span is copied into the named `dict` object. The data retains its `track::bar::key` structure.</description>
+    </arg>
 
     <!-- Methods -->
     <method name="clear">

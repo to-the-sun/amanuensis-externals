@@ -1,6 +1,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_dictobj.h"
+#include "ext_obex_util.h"
 #include "ext_proto.h"
 #include "../shared/visualize.h"
 #include <math.h>
@@ -53,6 +54,47 @@ char* atomarray_to_string(t_atomarray *arr) {
     return buffer;
 }
 
+// Helper to deep copy a bar's dictionary into a destination dictionary
+void buildspans_copy_bar_to_dict(t_dictionary *dest_track_dict, t_symbol *bar_sym, t_dictionary *bar_to_copy) {
+    t_dictionary *new_bar_dict = dictionary_new();
+
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(bar_to_copy, &num_keys, &keys);
+    if (keys) {
+        for (long i = 0; i < num_keys; i++) {
+            t_symbol *key = keys[i];
+            long argc = 0;
+            t_atom *argv = NULL;
+            dictionary_getatoms(bar_to_copy, key, &argc, &argv);
+
+            if (argc > 0 && argv) {
+                // If it's an object, we need to clone it to avoid use-after-free
+                if (atom_gettype(argv) == A_OBJ) {
+                    t_object *obj = atom_getobj(argv);
+                    if (object_classname(obj) == gensym("atomarray")) {
+                        long arr_size;
+                        t_atom *arr_atoms;
+                        atomarray_getatoms((t_atomarray *)obj, &arr_size, &arr_atoms);
+                        t_atomarray *new_arr = atomarray_new(arr_size, arr_atoms);
+                        t_atom a;
+                        atom_setobj(&a, (t_object *)new_arr);
+                        dictionary_appendatom(new_bar_dict, key, &a);
+                    }
+                    // Not handling nested dicts as we don't have any in bars
+                } else {
+                    // For primitives, just copy the atoms
+                    dictionary_appendatoms(new_bar_dict, key, argc, argv);
+                }
+                sysmem_freeptr(argv);
+            }
+        }
+        sysmem_freeptr(keys);
+    }
+
+    dictionary_appenddictionary(dest_track_dict, bar_sym, (t_object *)new_bar_dict);
+}
+
 
 // Comparison function for qsort
 int compare_longs(const void *a, const void *b) {
@@ -63,6 +105,7 @@ int compare_longs(const void *a, const void *b) {
 
 typedef struct _buildspans {
     t_object s_obj;
+    t_symbol *dict_name;
     t_dictionary *building;
     long current_track;
     double current_offset;
@@ -73,7 +116,7 @@ typedef struct _buildspans {
 } t_buildspans;
 
 // Function prototypes
-void *buildspans_new(void);
+void *buildspans_new(t_symbol *s);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
@@ -212,7 +255,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
 
 void ext_main(void *r) {
     t_class *c;
-    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, (short)sizeof(t_buildspans), 0L, A_GIMME, 0);
+    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, (short)sizeof(t_buildspans), 0L, A_DEFSYM, 0);
     class_addmethod(c, (method)buildspans_clear, "clear", 0);
     class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_int, "int", A_LONG, 0);
@@ -226,9 +269,10 @@ void ext_main(void *r) {
     buildspans_class = c;
 }
 
-void *buildspans_new(void) {
+void *buildspans_new(t_symbol *s) {
     t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
     if (x) {
+        x->dict_name = s;
         x->building = dictionary_new();
         x->current_track = 0;
         x->current_offset = 0.0;
@@ -696,6 +740,37 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
         t_atom *span_atoms = NULL;
         atomarray_getatoms(span_to_output, &span_size, &span_atoms);
 
+        // --- Copy to external dict ---
+        t_dictionary *external_dict = dictobj_findregistered_retain(x->dict_name);
+        if (external_dict && span_size > 0) {
+            // Get or create the track sub-dictionary in the external dict
+            t_dictionary *external_track_dict;
+            if (!dictionary_hasentry(external_dict, track_sym)) {
+                external_track_dict = dictionary_new();
+                dictionary_appenddictionary(external_dict, track_sym, (t_object *)external_track_dict);
+            } else {
+                t_atom external_track_atom;
+                dictionary_getatom(external_dict, track_sym, &external_track_atom);
+                external_track_dict = (t_dictionary *)atom_getobj(&external_track_atom);
+            }
+
+            for (long i = 0; i < span_size; i++) {
+                long bar_ts = atom_getlong(&span_atoms[i]);
+                char bar_str[32];
+                snprintf(bar_str, 32, "%ld", bar_ts);
+                t_symbol *bar_sym = gensym(bar_str);
+
+                if (dictionary_hasentry(track_dict, bar_sym)) {
+                    t_atom bar_dict_atom;
+                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                    buildspans_copy_bar_to_dict(external_track_dict, bar_sym, bar_dict);
+                }
+            }
+            object_release((t_object *)external_dict);
+        }
+
+        // --- Calculate rating and output ---
         double lowest_mean = -1.0;
         if (span_size > 0) {
             for (long i = 0; i < span_size; i++) {
@@ -819,6 +894,31 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     // Output the span that is being ended.
     if (flush_count > 0) {
+        // --- Copy to external dict ---
+        t_dictionary *external_dict = dictobj_findregistered_retain(x->dict_name);
+        if (external_dict) {
+            t_dictionary *external_track_dict;
+            if (!dictionary_hasentry(external_dict, track_sym)) {
+                external_track_dict = dictionary_new();
+                dictionary_appenddictionary(external_dict, track_sym, (t_object *)external_track_dict);
+            } else {
+                t_atom external_track_atom;
+                dictionary_getatom(external_dict, track_sym, &external_track_atom);
+                external_track_dict = (t_dictionary *)atom_getobj(&external_track_atom);
+            }
+
+            for (long i = 0; i < flush_count; i++) {
+                t_symbol *bar_sym_to_copy = bars_to_flush_syms[i];
+                if (dictionary_hasentry(track_dict, bar_sym_to_copy)) {
+                    t_atom bar_dict_atom;
+                    dictionary_getatom(track_dict, bar_sym_to_copy, &bar_dict_atom);
+                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                    buildspans_copy_bar_to_dict(external_track_dict, bar_sym_to_copy, bar_dict);
+                }
+            }
+            object_release((t_object *)external_dict);
+        }
+
         post("Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
 
         long *bars_to_output_vals = (long *)sysmem_newptr(flush_count * sizeof(long));
