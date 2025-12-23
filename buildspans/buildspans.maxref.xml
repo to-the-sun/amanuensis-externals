@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<c74object name="buildspans">
+    <digest>Assembles spans of notes and offsets for a music transcript.</digest>
+    <description>
+        The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
+        1.  **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This check happens *after* the deferred rating check.
+        2.  **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a *new* bar is started. The object evaluates the *previous* bar against the span and will end the span before that previous bar if either of these two conditions are met:
+            a. Including the previous bar would have decreased the span's overall rating.
+            b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
+        The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
+        A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
+    </description>
+
+    <!-- Methods -->
+    <method name="clear">
+        <digest>Resets the object's internal state.</digest>
+        <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
+    </method>
+
+    <!-- Inlets -->
+    <inlet name="in" type="list">
+        <digest>Timestamp-score pair for a single note.</digest>
+        <description>Receives a list of two floats: the absolute millisecond timestamp of a single note and its corresponding score.</description>
+    </inlet>
+    <inlet name="in" type="float">
+        <digest>Global offset timestamp.</digest>
+        <description>Receives a float representing a global offset in milliseconds. This value is stored as a global setting for the object. When a new bar is created, a copy of this global offset is stored in the bar's dictionary. The global offset value persists even when spans are flushed.</description>
+    </inlet>
+    <inlet name="in" type="int">
+        <digest>Track number.</digest>
+        <description>Receives an integer that sets the current track for incoming notes and offsets.</description>
+    </inlet>
+    <inlet name="in" type="int">
+        <digest>Bar length in milliseconds.</digest>
+        <description>Receives an integer that sets the bar length in milliseconds.</description>
+    </inlet>
+    <inlet name="in" type="symbol">
+        <digest>Palette name.</digest>
+        <description>Receives a symbol that sets the current palette.</description>
+    </inlet>
+
+    <!-- Outlets -->
+    <outlet name="out" type="list">
+        <digest>Span of bar timestamps.</digest>
+        <description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+    </outlet>
+    <outlet name="out" type="int">
+        <digest>Track number.</digest>
+        <description>Outputs the track number associated with the completed span.</description>
+    </outlet>
+</c74object>
