@@ -242,6 +242,9 @@ void buildspans_log_update(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_s
             atomarray_getatoms(arr, &argc, &argv);
         }
         outlet_anything(x->verbose_outlet, path_sym, argc, argv);
+        if (argv) {
+            sysmem_freeptr(argv);
+        }
     } else {
         // For simple types, just send the path symbol and the single value atom
         outlet_anything(x->verbose_outlet, path_sym, 1, &value_atom);
@@ -279,10 +282,10 @@ void *buildspans_new(void) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from left to right.
-        x->span_outlet = listout((t_object *)x);
-        x->track_outlet = intout((t_object *)x);
-        x->verbose_outlet = outlet_new((t_object *)x, NULL);
+        // Outlets are created from right-to-left in C, so the last one created is the leftmost one in Max.
+        x->verbose_outlet = outlet_new((t_object *)x, NULL); // Becomes rightmost
+        x->track_outlet = intout((t_object *)x);      // Becomes middle
+        x->span_outlet = listout((t_object *)x);       // Becomes leftmost
 
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize visualization.");
