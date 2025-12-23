@@ -50,6 +50,6 @@
     </outlet>
     <outlet name="out" type="list">
         <digest>Verbose logging outlet.</digest>
-        <description>Outputs detailed information about dictionary modifications. The message format is `track::bar::key value`.</description>
+        <description>Outputs detailed information about dictionary modifications. The message format is a list where the first element is a symbol in the format `track::bar::key` and the rest of the list is the value.</description>
     </outlet>
 </c74object>

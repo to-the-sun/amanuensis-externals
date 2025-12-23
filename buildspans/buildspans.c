@@ -228,43 +228,24 @@ void buildspans_log_update(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_s
     t_atom value_atom;
     if (dictionary_getatom(bar_dict, key_sym, &value_atom) != 0) return;
 
-    // We'll build the string piece by piece.
-    char log_message[1024];
-    char value_str[512]; // Buffer for the value part of the string
+    // Create the path symbol (e.g., '1::125::offset')
+    char path_str[256];
+    snprintf(path_str, 256, "%s::%s::%s", track_sym->s_name, bar_sym->s_name, key_sym->s_name);
+    t_symbol *path_sym = gensym(path_str);
 
-    // Format the value into value_str
-    if (atom_gettype(&value_atom) == A_FLOAT) {
-        snprintf(value_str, 512, "%.2f", atom_getfloat(&value_atom));
-    } else if (atom_gettype(&value_atom) == A_LONG) {
-        snprintf(value_str, 512, "%ld", atom_getlong(&value_atom));
-    } else if (atom_gettype(&value_atom) == A_SYM) {
-        snprintf(value_str, 512, "%s", atom_getsym(&value_atom)->s_name);
-    } else if (atom_gettype(&value_atom) == A_OBJ && object_classname(atom_getobj(&value_atom)) == gensym("atomarray")) {
-        t_atomarray* arr = (t_atomarray*)atom_getobj(&value_atom);
-        char* arr_str = atomarray_to_string(arr);
-        if (arr_str) {
-            strncpy(value_str, arr_str, 511);
-            value_str[511] = '\0'; // ensure null termination
-            sysmem_freeptr(arr_str);
-        } else {
-            strcpy(value_str, "[]");
+    // Send the message out the outlet
+    if (atom_gettype(&value_atom) == A_OBJ && object_classname(atom_getobj(&value_atom)) == gensym("atomarray")) {
+        t_atomarray *arr = (t_atomarray *)atom_getobj(&value_atom);
+        long argc = atomarray_getsize(arr);
+        t_atom *argv = NULL;
+        if (argc > 0) {
+            atomarray_getatoms(arr, &argc, &argv);
         }
+        outlet_anything(x->verbose_outlet, path_sym, argc, argv);
     } else {
-        // Fallback for other types
-        strcpy(value_str, "[unhandled type]");
+        // For simple types, just send the path symbol and the single value atom
+        outlet_anything(x->verbose_outlet, path_sym, 1, &value_atom);
     }
-
-    // Combine into the final log message
-    snprintf(log_message, 1024, "%s::%s::%s %s",
-             track_sym->s_name,
-             bar_sym->s_name,
-             key_sym->s_name,
-             value_str);
-
-    // Send the full string out the verbose outlet as a list with a single symbol
-    t_atom out_atom;
-    atom_setsym(&out_atom, gensym(log_message));
-    outlet_anything(x->verbose_outlet, gensym("list"), 1, &out_atom);
 }
 
 
@@ -298,7 +279,7 @@ void *buildspans_new(void) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from left to right
+        // Outlets are created from left to right.
         x->span_outlet = listout((t_object *)x);
         x->track_outlet = intout((t_object *)x);
         x->verbose_outlet = outlet_new((t_object *)x, NULL);
