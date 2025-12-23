@@ -604,31 +604,50 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             char *key_str = all_keys[i]->s_name;
             char *endptr;
             long val = strtol(key_str, &endptr, 10);
-            if (*endptr == '\0') bar_timestamps[bar_timestamps_count++] = val;
+            if (*endptr == '\0' && (*key_str != '-' || strlen(key_str) > 1)) {
+                bar_timestamps[bar_timestamps_count++] = val;
+            }
         }
         sysmem_freeptr(all_keys);
     }
     qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
-    // Get the old shared span object before doing anything else
+    // --- SAFELY REPLACE SHARED SPAN ARRAY ---
+
+    // 1. Unlink the old array from all bars and get a pointer to it.
     t_atomarray *old_span_array = NULL;
     if (bar_timestamps_count > 0) {
-        char first_bar_str[32];
-        snprintf(first_bar_str, 32, "%ld", bar_timestamps[0]);
-        t_symbol *first_bar_sym = gensym(first_bar_str);
-
+        char temp_bar_str[32];
+        snprintf(temp_bar_str, 32, "%ld", bar_timestamps[0]);
+        t_symbol *temp_bar_sym = gensym(temp_bar_str);
         t_atom bar_dict_atom;
-        dictionary_getatom(track_dict, first_bar_sym, &bar_dict_atom);
-        t_dictionary *first_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+        if (dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom) == MAX_ERR_NONE) {
+            t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+            if (dictionary_hasentry(temp_bar_dict, gensym("span"))) {
+                t_atom old_span_atom;
+                dictionary_getatom(temp_bar_dict, gensym("span"), &old_span_atom);
+                old_span_array = (t_atomarray *)atom_getobj(&old_span_atom);
+            }
+        }
 
-        if (dictionary_hasentry(first_bar_dict, gensym("span"))) {
-            t_atom old_span_atom;
-            dictionary_getatom(first_bar_dict, gensym("span"), &old_span_atom);
-            old_span_array = (t_atomarray *)atom_getobj(&old_span_atom);
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+            temp_bar_sym = gensym(temp_bar_str);
+            if (dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom) == MAX_ERR_NONE) {
+                t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if (dictionary_hasentry(temp_bar_dict, gensym("span"))) {
+                    dictionary_deleteentry(temp_bar_dict, gensym("span"));
+                }
+            }
         }
     }
 
-    // Create the new span array that will be shared
+    // 2. Free the now-unreferenced old array.
+    if (old_span_array) {
+        object_free(old_span_array);
+    }
+
+    // 3. Create and link the new shared array.
     t_atomarray *new_span_array = atomarray_new(0, NULL);
     for (long i = 0; i < bar_timestamps_count; i++) {
         t_atom a;
@@ -636,7 +655,6 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         atomarray_appendatom(new_span_array, &a);
     }
 
-    // Replace the old span with the new one in all bars
     t_atom new_span_atom;
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
     for (long i = 0; i < bar_timestamps_count; i++) {
@@ -648,13 +666,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
         t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
 
-        // Overwrite the existing entry. This is safer than delete/append in a loop.
         dictionary_appendatom(temp_bar_dict, gensym("span"), &new_span_atom);
-    }
-
-    // If there was an old span array, and it's different from the new one, free it.
-    if (old_span_array && old_span_array != new_span_array) {
-        object_free(old_span_array);
     }
 
     char *span_str = atomarray_to_string(new_span_array);
