@@ -48,4 +48,8 @@
         <digest>Track number.</digest>
         <description>Outputs the track number associated with the completed span.</description>
     </outlet>
+    <outlet name="out" type="anything">
+        <digest>Log messages for dictionary updates.</digest>
+        <description>Outputs a log message whenever a key in the internal 'building' dictionary is modified. The message is a list where the first element is a symbol in the format 'track::bar::key' and the rest of the list is the new value(s).</description>
+    </outlet>
 </c74object>

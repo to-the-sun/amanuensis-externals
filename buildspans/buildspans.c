@@ -70,6 +70,7 @@ typedef struct _buildspans {
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
+    void *log_outlet;
 } t_buildspans;
 
 // Function prototypes
@@ -88,6 +89,15 @@ void buildspans_flush(t_buildspans *x);
 void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym);
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep);
 void buildspans_visualize_memory(t_buildspans *x);
+void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_symbol *key, long argc, t_atom *argv);
+
+
+// Helper function to send log messages out the log outlet
+void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_symbol *key, long argc, t_atom *argv) {
+    char log_key_str[256];
+    snprintf(log_key_str, 256, "%s::%s::%s", track->s_name, bar->s_name, key->s_name);
+    outlet_anything(x->log_outlet, gensym(log_key_str), argc, argv);
+}
 
 
 t_class *buildspans_class;
@@ -240,9 +250,10 @@ void *buildspans_new(void) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from left to right
-        x->span_outlet = listout((t_object *)x);
+        // Outlets are created from right to left
+        x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
+        x->span_outlet = listout((t_object *)x);
 
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize visualization.");
@@ -498,10 +509,16 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (dictionary_hasentry(bar_dict, gensym("offset"))) dictionary_deleteentry(bar_dict, gensym("offset"));
     dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
     post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "offset", x->current_offset);
+    t_atom offset_atom;
+    atom_setfloat(&offset_atom, x->current_offset);
+    buildspans_log_update(x, track_sym, bar_sym, gensym("offset"), 1, &offset_atom);
 
     if (dictionary_hasentry(bar_dict, gensym("palette"))) dictionary_deleteentry(bar_dict, gensym("palette"));
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
     post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "palette", x->current_palette->s_name);
+    t_atom palette_atom;
+    atom_setsym(&palette_atom, x->current_palette);
+    buildspans_log_update(x, track_sym, bar_sym, gensym("palette"), 1, &palette_atom);
 
     t_atomarray *absolutes_array;
     if (!dictionary_hasentry(bar_dict, gensym("absolutes"))) {
@@ -518,6 +535,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (abs_str) {
         post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "absolutes", abs_str);
         sysmem_freeptr(abs_str);
+        long count; t_atom *atoms;
+        atomarray_getatoms(absolutes_array, &count, &atoms);
+        buildspans_log_update(x, track_sym, bar_sym, gensym("absolutes"), count, atoms);
     }
 
     t_atomarray *scores_array;
@@ -535,6 +555,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (scores_str) {
         post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "scores", scores_str);
         sysmem_freeptr(scores_str);
+        long count; t_atom *atoms;
+        atomarray_getatoms(scores_array, &count, &atoms);
+        buildspans_log_update(x, track_sym, bar_sym, gensym("scores"), count, atoms);
     }
 
     long scores_count = atomarray_getsize(scores_array);
@@ -547,6 +570,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         if (dictionary_hasentry(bar_dict, gensym("mean"))) dictionary_deleteentry(bar_dict, gensym("mean"));
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
         post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "mean", mean);
+        t_atom mean_atom;
+        atom_setfloat(&mean_atom, mean);
+        buildspans_log_update(x, track_sym, bar_sym, gensym("mean"), 1, &mean_atom);
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
@@ -591,6 +617,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
             post("%s::%s::%s %s", track_sym->s_name, temp_bar_sym->s_name, "span", span_str);
+            long count; t_atom *atoms;
+            atomarray_getatoms(span_array, &count, &atoms);
+            buildspans_log_update(x, track_sym, temp_bar_sym, gensym("span"), count, atoms);
         }
         sysmem_freeptr(span_str);
     }
@@ -625,6 +654,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) dictionary_deleteentry(temp_bar_dict, gensym("rating"));
             dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
             post("%s::%s::%s %.2f", track_sym->s_name, temp_bar_sym->s_name, "rating", final_rating);
+            t_atom rating_atom;
+            atom_setfloat(&rating_atom, final_rating);
+            buildspans_log_update(x, track_sym, temp_bar_sym, gensym("rating"), 1, &rating_atom);
         }
         post("Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
@@ -776,6 +808,12 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
             case 4:
                 sprintf(s, "(symbol) Palette");
                 break;
+        }
+    } else { // ASSIST_OUTLET
+        switch (a) {
+            case 0: sprintf(s, "Span Data (list)"); break;
+            case 1: sprintf(s, "Track Number (int)"); break;
+            case 2: sprintf(s, "Log Messages (anything)"); break;
         }
     }
 }
