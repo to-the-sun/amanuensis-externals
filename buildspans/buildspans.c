@@ -250,10 +250,10 @@ void *buildspans_new(void) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from left to right
-        x->span_outlet = listout((t_object *)x);
-        x->track_outlet = intout((t_object *)x);
+        // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
+        x->track_outlet = intout((t_object *)x);
+        x->span_outlet = listout((t_object *)x);
 
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize visualization.");
