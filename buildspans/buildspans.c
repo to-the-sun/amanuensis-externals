@@ -70,6 +70,7 @@ typedef struct _buildspans {
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
+    void *verbose_outlet;
 } t_buildspans;
 
 // Function prototypes
@@ -86,8 +87,9 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_flush(t_buildspans *x);
 void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym);
-void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep);
-void buildspans_visualize_memory(t_buildspans *x);
+void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep);\
+void buildspans_visualize_memory(t_buildspans *x);\
+void buildspans_log_update(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym, t_symbol *key_sym);
 
 
 t_class *buildspans_class;
@@ -209,6 +211,62 @@ void buildspans_visualize_memory(t_buildspans *x) {
     sysmem_freeptr(json_buffer);
 }
 
+void buildspans_log_update(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym, t_symbol *key_sym) {
+    // This function logs an update to the verbose outlet.
+    // It's designed to be called *after* a value has been set in the dictionary.
+
+    t_atom track_dict_atom;
+    if (dictionary_getatom(x->building, track_sym, &track_dict_atom) != 0) return;
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+    if (!track_dict) return;
+
+    t_atom bar_dict_atom;
+    if (dictionary_getatom(track_dict, bar_sym, &bar_dict_atom) != 0) return;
+    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+    if (!bar_dict) return;
+
+    t_atom value_atom;
+    if (dictionary_getatom(bar_dict, key_sym, &value_atom) != 0) return;
+
+    // We'll build the string piece by piece.
+    char log_message[1024];
+    char value_str[512]; // Buffer for the value part of the string
+
+    // Format the value into value_str
+    if (atom_gettype(&value_atom) == A_FLOAT) {
+        snprintf(value_str, 512, "%.2f", atom_getfloat(&value_atom));
+    } else if (atom_gettype(&value_atom) == A_LONG) {
+        snprintf(value_str, 512, "%ld", atom_getlong(&value_atom));
+    } else if (atom_gettype(&value_atom) == A_SYM) {
+        snprintf(value_str, 512, "%s", atom_getsym(&value_atom)->s_name);
+    } else if (atom_gettype(&value_atom) == A_OBJ && object_classname(atom_getobj(&value_atom)) == gensym("atomarray")) {
+        t_atomarray* arr = (t_atomarray*)atom_getobj(&value_atom);
+        char* arr_str = atomarray_to_string(arr);
+        if (arr_str) {
+            strncpy(value_str, arr_str, 511);
+            value_str[511] = '\0'; // ensure null termination
+            sysmem_freeptr(arr_str);
+        } else {
+            strcpy(value_str, "[]");
+        }
+    } else {
+        // Fallback for other types
+        strcpy(value_str, "[unhandled type]");
+    }
+
+    // Combine into the final log message
+    snprintf(log_message, 1024, "%s::%s::%s %s",
+             track_sym->s_name,
+             bar_sym->s_name,
+             key_sym->s_name,
+             value_str);
+
+    // Send the full string out the verbose outlet as a list with a single symbol
+    t_atom out_atom;
+    atom_setsym(&out_atom, gensym(log_message));
+    outlet_anything(x->verbose_outlet, gensym("list"), 1, &out_atom);
+}
+
 
 void ext_main(void *r) {
     t_class *c;
@@ -243,6 +301,7 @@ void *buildspans_new(void) {
         // Outlets are created from left to right
         x->span_outlet = listout((t_object *)x);
         x->track_outlet = intout((t_object *)x);
+        x->verbose_outlet = outlet_new((t_object *)x, NULL);
 
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize visualization.");
@@ -498,10 +557,12 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (dictionary_hasentry(bar_dict, gensym("offset"))) dictionary_deleteentry(bar_dict, gensym("offset"));
     dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
     post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "offset", x->current_offset);
+    buildspans_log_update(x, track_sym, bar_sym, gensym("offset"));
 
     if (dictionary_hasentry(bar_dict, gensym("palette"))) dictionary_deleteentry(bar_dict, gensym("palette"));
     dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
     post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "palette", x->current_palette->s_name);
+    buildspans_log_update(x, track_sym, bar_sym, gensym("palette"));
 
     t_atomarray *absolutes_array;
     if (!dictionary_hasentry(bar_dict, gensym("absolutes"))) {
@@ -519,6 +580,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "absolutes", abs_str);
         sysmem_freeptr(abs_str);
     }
+    buildspans_log_update(x, track_sym, bar_sym, gensym("absolutes"));
 
     t_atomarray *scores_array;
     if (!dictionary_hasentry(bar_dict, gensym("scores"))) {
@@ -536,6 +598,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "scores", scores_str);
         sysmem_freeptr(scores_str);
     }
+    buildspans_log_update(x, track_sym, bar_sym, gensym("scores"));
 
     long scores_count = atomarray_getsize(scores_array);
     if (scores_count > 0) {
@@ -547,6 +610,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         if (dictionary_hasentry(bar_dict, gensym("mean"))) dictionary_deleteentry(bar_dict, gensym("mean"));
         dictionary_appendfloat(bar_dict, gensym("mean"), mean);
         post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "mean", mean);
+        buildspans_log_update(x, track_sym, bar_sym, gensym("mean"));
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
@@ -591,6 +655,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
             post("%s::%s::%s %s", track_sym->s_name, temp_bar_sym->s_name, "span", span_str);
+            buildspans_log_update(x, track_sym, temp_bar_sym, gensym("span"));
         }
         sysmem_freeptr(span_str);
     }
@@ -625,6 +690,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) dictionary_deleteentry(temp_bar_dict, gensym("rating"));
             dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
             post("%s::%s::%s %.2f", track_sym->s_name, temp_bar_sym->s_name, "rating", final_rating);
+            buildspans_log_update(x, track_sym, temp_bar_sym, gensym("rating"));
         }
         post("Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
@@ -775,6 +841,18 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 break;
             case 4:
                 sprintf(s, "(symbol) Palette");
+                break;
+        }
+    } else { // ASSIST_OUTLET
+        switch (a) {
+            case 0:
+                sprintf(s, "(list) Span of Bar Timestamps");
+                break;
+            case 1:
+                sprintf(s, "(int) Track Number");
+                break;
+            case 2:
+                sprintf(s, "Verbose Logging Outlet");
                 break;
         }
     }

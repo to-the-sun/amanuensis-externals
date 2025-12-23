@@ -48,4 +48,8 @@
         <digest>Track number.</digest>
         <description>Outputs the track number associated with the completed span.</description>
     </outlet>
+    <outlet name="out" type="list">
+        <digest>Verbose logging outlet.</digest>
+        <description>Outputs detailed information about dictionary modifications. The message format is `track::bar::key value`.</description>
+    </outlet>
 </c74object>
