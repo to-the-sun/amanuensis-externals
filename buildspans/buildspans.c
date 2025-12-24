@@ -339,8 +339,8 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     post("Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
 
     // Get current track symbol
-    char track_str[32];
-    snprintf(track_str, 32, "%ld", x->current_track);
+    char track_str[64];
+    snprintf(track_str, 64, "%ld-%.0f", x->current_track, x->current_offset);
     t_symbol *track_sym = gensym(track_str);
 
     // Get track dictionary (level 1)
@@ -739,7 +739,9 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
         double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
         post("Ending span for track %s with rating %.2f (%.2f * %ld)", track_sym->s_name, final_rating, lowest_mean, span_size);
 
-        outlet_int(x->track_outlet, atol(track_sym->s_name));
+        long track_num_to_output;
+        sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
+        outlet_int(x->track_outlet, track_num_to_output);
         outlet_list(x->span_outlet, NULL, span_size, span_atoms);
 
         if (local_span_created) {
@@ -896,7 +898,9 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         t_atom *output_atoms = (t_atom *)sysmem_newptr(flush_count * sizeof(t_atom));
         for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_output_vals[i]);
 
-        outlet_int(x->track_outlet, atol(track_sym->s_name));
+        long track_num_to_output;
+        sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
+        outlet_int(x->track_outlet, track_num_to_output);
         outlet_list(x->span_outlet, NULL, flush_count, output_atoms);
 
         sysmem_freeptr(bars_to_output_vals);
