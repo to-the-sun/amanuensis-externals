@@ -91,6 +91,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 void buildspans_visualize_memory(t_buildspans *x);
 void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_symbol *key, long argc, t_atom *argv);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym);
+void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 
 
 // Helper function to send log messages out the log outlet
@@ -807,13 +808,8 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
         outlet_int(x->track_outlet, atol(track_sym->s_name));
         outlet_list(x->span_outlet, NULL, span_size, span_atoms);
 
-        // Reset all bars in the ended span to standalone state before freeing them.
-        for (long i = 0; i < span_size; i++) {
-            long bar_ts = atom_getlong(&span_atoms[i]);
-            char bar_str[32];
-            snprintf(bar_str, 32, "%ld", bar_ts);
-            buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_str));
-        }
+        // Finalize the state of all bars in the ended span before freeing them.
+        buildspans_finalize_and_log_span(x, track_sym, span_to_output);
 
         if (local_span_created) {
             object_free(span_to_output);
@@ -948,9 +944,16 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         }
     }
 
-    // Third pass: Reset the bars to be flushed to standalone state before freeing them.
-    for (long i = 0; i < flush_count; i++) {
-        buildspans_reset_bar_to_standalone(x, track_sym, bars_to_flush_syms[i]);
+    // Third pass: Finalize the state of the flushed bars as a completed span.
+    if (flush_count > 0) {
+        t_atomarray *flushed_span_array = atomarray_new(0, NULL);
+        for(long i = 0; i < flush_count; ++i) {
+            t_atom a;
+            atom_setlong(&a, atol(bars_to_flush_syms[i]->s_name));
+            atomarray_appendatom(flushed_span_array, &a);
+        }
+        buildspans_finalize_and_log_span(x, track_sym, flushed_span_array);
+        object_free(flushed_span_array); // Free the temporary array.
     }
 
     // Fourth pass: Now it's safe to free the flushed bar dictionaries.
@@ -1025,4 +1028,75 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
         buildspans_log_update(x, track_sym, bar_sym, gensym("span"), count, atoms);
         sysmem_freeptr(span_str);
     }
+}
+
+
+void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array) {
+    if (!span_array || !dictionary_hasentry(x->building, track_sym)) return;
+
+    long span_size = 0;
+    t_atom *span_atoms = NULL;
+    atomarray_getatoms(span_array, &span_size, &span_atoms);
+    if (span_size == 0) return;
+
+    t_atom track_dict_atom;
+    dictionary_getatom(x->building, track_sym, &track_dict_atom);
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+    // 1. Calculate the final rating for this span.
+    double lowest_mean = -1.0;
+    for (long i = 0; i < span_size; i++) {
+        long bar_ts = atom_getlong(&span_atoms[i]);
+        char bar_str[32];
+        snprintf(bar_str, 32, "%ld", bar_ts);
+        t_symbol *bar_sym = gensym(bar_str);
+        if (dictionary_hasentry(track_dict, bar_sym)) {
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+            if (dictionary_hasentry(bar_dict, gensym("mean"))) {
+                t_atom mean_atom;
+                dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
+                double bar_mean = atom_getfloat(&mean_atom);
+                if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
+                    lowest_mean = bar_mean;
+                }
+            }
+        }
+    }
+    double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
+
+    // 2. Back-propagate the final rating and span to all bars in the span.
+    t_atom rating_atom;
+    atom_setfloat(&rating_atom, final_rating);
+    t_atom span_atom;
+    atom_setobj(&span_atom, (t_object *)span_array);
+    char *span_str = atomarray_to_string(span_array);
+
+    for (long i = 0; i < span_size; i++) {
+        long bar_ts = atom_getlong(&span_atoms[i]);
+        char bar_str[32];
+        snprintf(bar_str, 32, "%ld", bar_ts);
+        t_symbol *bar_sym = gensym(bar_str);
+        if (dictionary_hasentry(track_dict, bar_sym)) {
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+
+            // Update rating
+            if (dictionary_hasentry(bar_dict, gensym("rating"))) dictionary_deleteentry(bar_dict, gensym("rating"));
+            dictionary_appendatom(bar_dict, gensym("rating"), &rating_atom);
+            post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "rating", final_rating);
+            buildspans_log_update(x, track_sym, bar_sym, gensym("rating"), 1, &rating_atom);
+
+            // Update span
+            if (dictionary_hasentry(bar_dict, gensym("span"))) dictionary_deleteentry(bar_dict, gensym("span"));
+            dictionary_appendatom(bar_dict, gensym("span"), &span_atom);
+            if (span_str) {
+                post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "span", span_str);
+                buildspans_log_update(x, track_sym, bar_sym, gensym("span"), span_size, span_atoms);
+            }
+        }
+    }
+    if (span_str) sysmem_freeptr(span_str);
 }
