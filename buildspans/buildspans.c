@@ -92,6 +92,7 @@ void buildspans_visualize_memory(t_buildspans *x);
 void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_symbol *key, long argc, t_atom *argv);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
+void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
 
 
 // Helper function to send log messages out the log outlet
@@ -389,79 +390,12 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (is_new_bar && last_bar_timestamp != -1) {
 
         // 1. DEFERRED RATING CHECK (NOW HAPPENS FIRST)
-        long num_span_keys;
-        t_symbol **span_keys;
-        dictionary_getkeys(track_dict, &num_span_keys, &span_keys);
-
-        int prune_span = 0;
-
-        if (span_keys && num_span_keys > 1) {
-            // RATING WITH LAST BAR
-            double lowest_mean_with = -1.0;
-            for (long i = 0; i < num_span_keys; i++) {
-                char *key_str = span_keys[i]->s_name;
-                char *endptr;
-                strtol(key_str, &endptr, 10);
-                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                     t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
-                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                    if(dictionary_hasentry(bar_dict, gensym("mean"))) {
-                        t_atom mean_atom;
-                        dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                        double bar_mean = atom_getfloat(&mean_atom);
-                         if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) lowest_mean_with = bar_mean;
-                    }
-                }
-            }
-            double rating_with = lowest_mean_with * num_span_keys;
-
-            // RATING WITHOUT LAST BAR
-            double lowest_mean_without = -1.0;
-            long bars_without_count = 0;
-            char last_bar_str[32];
-            snprintf(last_bar_str, 32, "%ld", last_bar_timestamp);
-            t_symbol *last_bar_sym = gensym(last_bar_str);
-            double last_bar_mean = 0.0;
-
-            for (long i = 0; i < num_span_keys; i++) {
-                char *key_str = span_keys[i]->s_name;
-                char *endptr;
-                strtol(key_str, &endptr, 10);
-                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                    t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
-                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                    if(dictionary_hasentry(bar_dict, gensym("mean"))) {
-                        t_atom mean_atom;
-                        dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                        double bar_mean = atom_getfloat(&mean_atom);
-                        if (span_keys[i] == last_bar_sym) last_bar_mean = bar_mean;
-                        if (span_keys[i] != last_bar_sym) {
-                            if (lowest_mean_without == -1.0 || bar_mean < lowest_mean_without) lowest_mean_without = bar_mean;
-                            bars_without_count++;
-                        }
-                    }
-                }
-            }
-            double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
-
-            if (rating_with < rating_without) {
-                post("Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
-                prune_span = 1;
-            } else if (last_bar_mean > rating_with) {
-                post("Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
-                prune_span = 1;
-            } else {
-                post("Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
-            }
-
-            if (prune_span) buildspans_prune_span(x, track_sym, last_bar_timestamp);
-        }
-        if (span_keys) sysmem_freeptr(span_keys);
+        buildspans_deferred_rating_check(x, track_sym, last_bar_timestamp);
 
         // 2. DISCONTIGUITY CHECK (NOW HAPPENS SECOND)
         long most_recent_bar_after_rating_check = -1;
+        long num_span_keys;
+        t_symbol **span_keys;
         dictionary_getkeys(track_dict, &num_span_keys, &span_keys);
          if (span_keys && num_span_keys > 0) {
             for (long i = 0; i < num_span_keys; i++) {
@@ -808,9 +742,6 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
         outlet_int(x->track_outlet, atol(track_sym->s_name));
         outlet_list(x->span_outlet, NULL, span_size, span_atoms);
 
-        // Finalize the state of all bars in the ended span before freeing them.
-        buildspans_finalize_and_log_span(x, track_sym, span_to_output);
-
         if (local_span_created) {
             object_free(span_to_output);
         }
@@ -832,10 +763,55 @@ void buildspans_flush(t_buildspans *x) {
     dictionary_getkeys(x->building, &num_tracks, &tracks);
     if (!tracks) return;
 
-    for (long i = 0; i < num_tracks; i++) {
-        buildspans_end_track_span(x, tracks[i]);
+    // Create a copy of the track symbols because the dictionary might be modified during iteration.
+    t_symbol **tracks_copy = (t_symbol **)sysmem_newptr(num_tracks * sizeof(t_symbol *));
+    if (!tracks_copy) {
+        if (tracks) sysmem_freeptr(tracks);
+        return;
     }
+    for(long i=0; i<num_tracks; ++i) tracks_copy[i] = tracks[i];
     if (tracks) sysmem_freeptr(tracks);
+
+
+    for (long i = 0; i < num_tracks; i++) {
+        t_symbol *track_sym = tracks_copy[i];
+        if (!dictionary_hasentry(x->building, track_sym)) continue;
+
+        t_atom track_dict_atom;
+        dictionary_getatom(x->building, track_sym, &track_dict_atom);
+        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+        // Find the last bar to perform the deferred rating check on.
+        long last_bar_timestamp = -1;
+        long num_keys;
+        t_symbol **keys;
+        dictionary_getkeys(track_dict, &num_keys, &keys);
+        if (keys && num_keys > 0) {
+            for (long j = 0; j < num_keys; j++) {
+                char *key_str = keys[j]->s_name;
+                char *endptr;
+                long val = strtol(key_str, &endptr, 10);
+                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
+                    if (last_bar_timestamp == -1 || val > last_bar_timestamp) {
+                        last_bar_timestamp = val;
+                    }
+                }
+            }
+            sysmem_freeptr(keys);
+        }
+
+        if (last_bar_timestamp != -1) {
+            buildspans_deferred_rating_check(x, track_sym, last_bar_timestamp);
+        }
+
+        // If the track still exists after the check (i.e., it wasn't fully pruned),
+        // or even if it was pruned and a 'kept' bar remains,
+        // we must end the final span to complete the flush.
+        if (dictionary_hasentry(x->building, track_sym)) {
+            buildspans_end_track_span(x, track_sym);
+        }
+    }
+    sysmem_freeptr(tracks_copy);
 }
 
 
@@ -946,6 +922,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     // Third pass: Finalize the state of the flushed bars as a completed span.
     if (flush_count > 0) {
+        post("Finalizing flushed span...");
         t_atomarray *flushed_span_array = atomarray_new(0, NULL);
         for(long i = 0; i < flush_count; ++i) {
             t_atom a;
@@ -969,7 +946,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     // Finally, free the now-unreferenced shared span array itself.
     if (shared_span_array) {
-        object_free(shared_span_array);
+        // object_free(shared_span_array); // This was a double-free bug. The dictionary_deleteentry calls handle the refcounting.
     }
 
     sysmem_freeptr(bars_to_flush_syms);
@@ -977,6 +954,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
+    post("Resetting kept bar...");
     buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_to_keep_str));
 
     buildspans_visualize_memory(x);
@@ -1066,7 +1044,23 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
     }
     double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
 
-    // 2. Back-propagate the final rating and span to all bars in the span.
+    // 2. Unlink any old span objects first to prevent use-after-free.
+    for (long i = 0; i < span_size; i++) {
+        long bar_ts = atom_getlong(&span_atoms[i]);
+        char bar_str[32];
+        snprintf(bar_str, 32, "%ld", bar_ts);
+        t_symbol *bar_sym = gensym(bar_str);
+        if (dictionary_hasentry(track_dict, bar_sym)) {
+            t_atom bar_dict_atom;
+            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+            if (dictionary_hasentry(bar_dict, gensym("span"))) {
+                dictionary_deleteentry(bar_dict, gensym("span"));
+            }
+        }
+    }
+
+    // 3. Back-propagate the final rating and span to all bars in the span.
     t_atom rating_atom;
     atom_setfloat(&rating_atom, final_rating);
     t_atom span_atom;
@@ -1090,7 +1084,6 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
             buildspans_log_update(x, track_sym, bar_sym, gensym("rating"), 1, &rating_atom);
 
             // Update span
-            if (dictionary_hasentry(bar_dict, gensym("span"))) dictionary_deleteentry(bar_dict, gensym("span"));
             dictionary_appendatom(bar_dict, gensym("span"), &span_atom);
             if (span_str) {
                 post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "span", span_str);
@@ -1099,4 +1092,84 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
         }
     }
     if (span_str) sysmem_freeptr(span_str);
+}
+
+
+void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp) {
+    if (!dictionary_hasentry(x->building, track_sym)) return;
+
+    t_atom track_dict_atom;
+    dictionary_getatom(x->building, track_sym, &track_dict_atom);
+    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+
+    long num_span_keys;
+    t_symbol **span_keys;
+    dictionary_getkeys(track_dict, &num_span_keys, &span_keys);
+
+    int prune_span = 0;
+
+    if (span_keys && num_span_keys > 1) {
+        // RATING WITH LAST BAR
+        double lowest_mean_with = -1.0;
+        for (long i = 0; i < num_span_keys; i++) {
+            char *key_str = span_keys[i]->s_name;
+            char *endptr;
+            strtol(key_str, &endptr, 10);
+            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
+                 t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if(dictionary_hasentry(bar_dict, gensym("mean"))) {
+                    t_atom mean_atom;
+                    dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
+                    double bar_mean = atom_getfloat(&mean_atom);
+                     if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) lowest_mean_with = bar_mean;
+                }
+            }
+        }
+        double rating_with = lowest_mean_with * num_span_keys;
+
+        // RATING WITHOUT LAST BAR
+        double lowest_mean_without = -1.0;
+        long bars_without_count = 0;
+        char last_bar_str[32];
+        snprintf(last_bar_str, 32, "%ld", last_bar_timestamp);
+        t_symbol *last_bar_sym = gensym(last_bar_str);
+        double last_bar_mean = 0.0;
+
+        for (long i = 0; i < num_span_keys; i++) {
+            char *key_str = span_keys[i]->s_name;
+            char *endptr;
+            strtol(key_str, &endptr, 10);
+            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if(dictionary_hasentry(bar_dict, gensym("mean"))) {
+                    t_atom mean_atom;
+                    dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
+                    double bar_mean = atom_getfloat(&mean_atom);
+                    if (span_keys[i] == last_bar_sym) last_bar_mean = bar_mean;
+                    if (span_keys[i] != last_bar_sym) {
+                        if (lowest_mean_without == -1.0 || bar_mean < lowest_mean_without) lowest_mean_without = bar_mean;
+                        bars_without_count++;
+                    }
+                }
+            }
+        }
+        double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
+
+        if (rating_with < rating_without) {
+            post("Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
+            prune_span = 1;
+        } else if (last_bar_mean > rating_with) {
+            post("Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
+            prune_span = 1;
+        } else {
+            post("Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
+        }
+
+        if (prune_span) buildspans_prune_span(x, track_sym, last_bar_timestamp);
+    }
+    if (span_keys) sysmem_freeptr(span_keys);
 }
