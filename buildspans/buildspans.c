@@ -7,6 +7,42 @@
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
 
+// Helper function to generate a hierarchical key symbol
+t_symbol* generate_hierarchical_key(t_symbol *track, t_symbol *bar, t_symbol *key) {
+    char key_str[256];
+    snprintf(key_str, 256, "%s::%s::%s", track->s_name, bar->s_name, key->s_name);
+    return gensym(key_str);
+}
+
+// Helper function to parse a hierarchical key symbol.
+// Returns 1 on success, 0 on failure.
+// Pointers passed for track, bar, and key will be set to newly allocated char buffers.
+// The caller is responsible for freeing these buffers.
+int parse_hierarchical_key(t_symbol *hierarchical_key, char **track, char **bar, char **key) {
+    const char *key_str = hierarchical_key->s_name;
+    const char *first_delim = strstr(key_str, "::");
+    if (!first_delim) return 0;
+
+    const char *second_delim = strstr(first_delim + 2, "::");
+    if (!second_delim) return 0;
+
+    size_t track_len = first_delim - key_str;
+    *track = (char *)sysmem_newptr(track_len + 1);
+    strncpy(*track, key_str, track_len);
+    (*track)[track_len] = '\0';
+
+    size_t bar_len = second_delim - (first_delim + 2);
+    *bar = (char *)sysmem_newptr(bar_len + 1);
+    strncpy(*bar, first_delim + 2, bar_len);
+    (*bar)[bar_len] = '\0';
+
+    *key = (char *)sysmem_newptr(strlen(second_delim + 2) + 1);
+    strcpy(*key, second_delim + 2);
+
+    return 1;
+}
+
+
 // Helper function to convert an atomarray to a string for posting
 char* atomarray_to_string(t_atomarray *arr) {
     if (!arr) return NULL;
@@ -106,113 +142,149 @@ void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_sy
 t_class *buildspans_class;
 
 void buildspans_visualize_memory(t_buildspans *x) {
+    // Create a temporary nested dictionary to reconstruct the structure for visualization
+    t_dictionary *vis_dict = dictionary_new();
+
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+
+    if (keys) {
+        for (long i = 0; i < num_keys; i++) {
+            char *track_str, *bar_str, *prop_str;
+            if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
+                t_symbol *track_sym = gensym(track_str);
+                t_symbol *bar_sym = gensym(bar_str);
+                t_symbol *prop_sym = gensym(prop_str);
+
+                // Get/create track dictionary
+                t_dictionary *track_dict;
+                if (!dictionary_hasentry(vis_dict, track_sym)) {
+                    track_dict = dictionary_new();
+                    dictionary_appenddictionary(vis_dict, track_sym, (t_object *)track_dict);
+                } else {
+                    t_atom track_dict_atom;
+                    dictionary_getatom(vis_dict, track_sym, &track_dict_atom);
+                    track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+                }
+
+                // Get/create bar dictionary
+                t_dictionary *bar_dict;
+                 if (!dictionary_hasentry(track_dict, bar_sym)) {
+                    bar_dict = dictionary_new();
+                    dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
+                } else {
+                    t_atom bar_dict_atom;
+                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                    bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                }
+
+                // Copy the atom from the main building dictionary
+                t_atom value_atom;
+                dictionary_getatom(x->building, keys[i], &value_atom);
+                dictionary_appendatom(bar_dict, prop_sym, &value_atom);
+
+                sysmem_freeptr(track_str);
+                sysmem_freeptr(bar_str);
+                sysmem_freeptr(prop_str);
+            }
+        }
+        sysmem_freeptr(keys);
+    }
+
+    // Now generate JSON from the temporary nested dictionary
     long buffer_size = 4096;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
-    if (!json_buffer) {
-        object_error((t_object *)x, "Failed to allocate memory for visualization buffer.");
-        return;
-    }
     long offset = 0;
-
     offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"building\":{");
 
     long num_tracks;
     t_symbol **track_keys;
-    dictionary_getkeys(x->building, &num_tracks, &track_keys);
+    dictionary_getkeys(vis_dict, &num_tracks, &track_keys);
 
     int first_track = 1;
     if (track_keys) {
         for (long i = 0; i < num_tracks; i++) {
-            if (buffer_size - offset < 1024) {
+             if (buffer_size - offset < 1024) { // Buffer check
                 buffer_size *= 2;
                 json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
             }
-
-            if (!first_track) {
-                offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            }
+            if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
             first_track = 0;
 
             t_symbol *track_sym = track_keys[i];
             offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
 
             t_atom track_dict_atom;
-            dictionary_getatom(x->building, track_sym, &track_dict_atom);
+            dictionary_getatom(vis_dict, track_sym, &track_dict_atom);
             t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
 
             long num_bars;
             t_symbol **bar_keys;
             dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
+            // Sort bars numerically for correct visualization order
+            long *bar_timestamps = (long *)sysmem_newptr(num_bars * sizeof(long));
+            long bar_count = 0;
+            if(bar_keys) {
+                 for(long j=0; j<num_bars; ++j) bar_timestamps[bar_count++] = atol(bar_keys[j]->s_name);
+                 sysmem_freeptr(bar_keys);
+            }
+            qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
+
             int first_absolute = 1;
-            if (bar_keys) {
-                for (long j = 0; j < num_bars; j++) {
-                    t_symbol *bar_sym = bar_keys[j];
-                    char *endptr;
-                    strtol(bar_sym->s_name, &endptr, 10);
-                    if (*endptr != '\0') continue;
+            for (long j = 0; j < bar_count; j++) {
+                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+                t_symbol *bar_sym = gensym(bar_str);
 
-                    t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
 
-                    if (dictionary_hasentry(bar_dict, gensym("absolutes"))) {
-                        t_atom absolutes_atom;
-                        dictionary_getatom(bar_dict, gensym("absolutes"), &absolutes_atom);
-                        t_atomarray *absolutes_array = (t_atomarray *)atom_getobj(&absolutes_atom);
-                        long absolutes_count = atomarray_getsize(absolutes_array);
+                if (dictionary_hasentry(bar_dict, gensym("absolutes"))) {
+                    t_atom absolutes_atom;
+                    dictionary_getatom(bar_dict, gensym("absolutes"), &absolutes_atom);
+                    t_atomarray *absolutes_array = (t_atomarray *)atom_getobj(&absolutes_atom);
+                    long absolutes_count = atomarray_getsize(absolutes_array);
 
-                        for (long k = 0; k < absolutes_count; k++) {
-                           if (buffer_size - offset < 256) {
-                                buffer_size *= 2;
-                                json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
-                            }
-                            if (!first_absolute) {
-                                offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                            }
-                            first_absolute = 0;
-                            t_atom val_atom;
-                            atomarray_getindex(absolutes_array, k, &val_atom);
-                            double val = atom_getfloat(&val_atom);
-                            offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", val);
+                    for (long k = 0; k < absolutes_count; k++) {
+                        if (buffer_size - offset < 256) { // Buffer check
+                            buffer_size *= 2;
+                            json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
                         }
+                        if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                        first_absolute = 0;
+                        t_atom val_atom;
+                        atomarray_getindex(absolutes_array, k, &val_atom);
+                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&val_atom));
                     }
                 }
-                sysmem_freeptr(bar_keys);
             }
             offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
 
             int first_offset = 1;
-            dictionary_getkeys(track_dict, &num_bars, &bar_keys); // Re-fetch keys
-            if (bar_keys) {
-                 for (long j = 0; j < num_bars; j++) {
-                    t_symbol *bar_sym = bar_keys[j];
-                    char *endptr;
-                    strtol(bar_sym->s_name, &endptr, 10);
-                    if (*endptr != '\0') continue;
+            for (long j = 0; j < bar_count; j++) {
+                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+                t_symbol *bar_sym = gensym(bar_str);
 
-                    t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                t_atom bar_dict_atom;
+                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
+                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
 
-                    if (dictionary_hasentry(bar_dict, gensym("offset"))) {
-                        if (buffer_size - offset < 256) {
-                            buffer_size *= 2;
-                            json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
-                        }
-                        if (!first_offset) {
-                            offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                        }
-                        first_offset = 0;
-                        t_atom offset_val_atom;
-                        dictionary_getatom(bar_dict, gensym("offset"), &offset_val_atom);
-                        double val = atom_getfloat(&offset_val_atom);
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", val);
+                if (dictionary_hasentry(bar_dict, gensym("offset"))) {
+                    if (buffer_size - offset < 256) { // Buffer check
+                        buffer_size *= 2;
+                        json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
                     }
+                    if (!first_offset) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    first_offset = 0;
+                    t_atom offset_val_atom;
+                    dictionary_getatom(bar_dict, gensym("offset"), &offset_val_atom);
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&offset_val_atom));
                 }
-                sysmem_freeptr(bar_keys);
             }
             offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
+            sysmem_freeptr(bar_timestamps);
         }
         sysmem_freeptr(track_keys);
     }
@@ -220,6 +292,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
 
     visualize(json_buffer);
     sysmem_freeptr(json_buffer);
+    object_free(vis_dict); // Free the temporary dictionary
 }
 
 
@@ -343,42 +416,30 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     snprintf(track_str, 64, "%ld-%.0f", x->current_track, x->current_offset);
     t_symbol *track_sym = gensym(track_str);
 
-    // Get track dictionary (level 1)
-    t_dictionary *track_dict;
-    if (!dictionary_hasentry(x->building, track_sym)) {
-        track_dict = dictionary_new();
-        dictionary_appenddictionary(x->building, track_sym, (t_object *)track_dict);
-    } else {
-        t_atom track_dict_atom;
-        dictionary_getatom(x->building, track_sym, &track_dict_atom);
-        track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-    }
-
-    // Get current offset
-    double offset_val = x->current_offset;
-    post("Current offset is: %.2f", offset_val);
-
-    // Subtract offset and calculate bar timestamp
-    double relative_timestamp = timestamp - offset_val;
+    // Calculate bar timestamp
+    double relative_timestamp = timestamp - x->current_offset;
     post("Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
-
     long bar_timestamp_val = floor(relative_timestamp / x->bar_length) * x->bar_length;
     post("Calculated bar timestamp (rounded down to nearest %ld): %ld", x->bar_length, bar_timestamp_val);
 
-    // --- Find the most recent bar to see if this is a new bar ---
+    // --- Find the most recent bar for the current track to see if this is a new bar ---
     long last_bar_timestamp = -1;
     long num_keys;
     t_symbol **keys;
-    dictionary_getkeys(track_dict, &num_keys, &keys);
-    if (keys && num_keys > 0) {
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (keys) {
         for (long i = 0; i < num_keys; i++) {
-            char *key_str = keys[i]->s_name;
-            char *endptr;
-            long val = strtol(key_str, &endptr, 10);
-            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) { // It's a numeric key, not just "-"
-                if (last_bar_timestamp == -1 || val > last_bar_timestamp) {
-                    last_bar_timestamp = val;
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0) {
+                    long bar_val = atol(key_bar);
+                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                        last_bar_timestamp = bar_val;
+                    }
                 }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
             }
         }
         sysmem_freeptr(keys);
@@ -388,114 +449,104 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     // --- Deferred span ending logic (only if a new bar is detected) ---
     if (is_new_bar && last_bar_timestamp != -1) {
-
-        // 1. DEFERRED RATING CHECK (NOW HAPPENS FIRST)
         buildspans_deferred_rating_check(x, track_sym, last_bar_timestamp);
 
-        // 2. DISCONTIGUITY CHECK (NOW HAPPENS SECOND)
+        // Discontiguity check: find the most recent bar for this track AGAIN
+        // as the deferred check might have pruned some bars.
         long most_recent_bar_after_rating_check = -1;
-        long num_span_keys;
-        t_symbol **span_keys;
-        dictionary_getkeys(track_dict, &num_span_keys, &span_keys);
-         if (span_keys && num_span_keys > 0) {
-            for (long i = 0; i < num_span_keys; i++) {
-                char *key_str = span_keys[i]->s_name;
-                char *endptr;
-                long val = strtol(key_str, &endptr, 10);
-                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                    if (most_recent_bar_after_rating_check == -1 || val > most_recent_bar_after_rating_check) {
-                        most_recent_bar_after_rating_check = val;
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            for (long i = 0; i < num_keys; i++) {
+                char *key_track, *key_bar, *key_prop;
+                if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                    if (strcmp(key_track, track_sym->s_name) == 0) {
+                        long bar_val = atol(key_bar);
+                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
+                            most_recent_bar_after_rating_check = bar_val;
+                        }
                     }
+                    sysmem_freeptr(key_track);
+                    sysmem_freeptr(key_bar);
+                    sysmem_freeptr(key_prop);
                 }
             }
-            sysmem_freeptr(span_keys);
+            sysmem_freeptr(keys);
         }
 
         if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + x->bar_length) {
             post("Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, x->bar_length, most_recent_bar_after_rating_check);
             buildspans_end_track_span(x, track_sym);
-            if (!dictionary_hasentry(x->building, track_sym)) {
-                track_dict = dictionary_new();
-                dictionary_appenddictionary(x->building, track_sym, (t_object *)track_dict);
-            } else {
-                t_atom track_dict_atom;
-                dictionary_getatom(x->building, track_sym, &track_dict_atom);
-                track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-            }
         }
     }
-
 
     // --- ADD OR UPDATE BAR ---
     char bar_str[32];
     snprintf(bar_str, 32, "%ld", bar_timestamp_val);
     t_symbol *bar_sym = gensym(bar_str);
 
-    t_dictionary *bar_dict;
-    if (!dictionary_hasentry(track_dict, bar_sym)) {
-        bar_dict = dictionary_new();
-        dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
-        post("Created new dictionary for: %s::%s", track_sym->s_name, bar_sym->s_name);
-    } else {
-        t_atom bar_dict_atom;
-        dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-        bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-    }
-
-    if (dictionary_hasentry(bar_dict, gensym("offset"))) dictionary_deleteentry(bar_dict, gensym("offset"));
-    dictionary_appendfloat(bar_dict, gensym("offset"), x->current_offset);
-    post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "offset", x->current_offset);
+    // Update offset
+    t_symbol *offset_key = generate_hierarchical_key(track_sym, bar_sym, gensym("offset"));
+    if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
+    dictionary_appendfloat(x->building, offset_key, x->current_offset);
+    post("%s::%s %.2f", offset_key->s_name, "offset", x->current_offset);
     t_atom offset_atom;
     atom_setfloat(&offset_atom, x->current_offset);
     buildspans_log_update(x, track_sym, bar_sym, gensym("offset"), 1, &offset_atom);
 
-    if (dictionary_hasentry(bar_dict, gensym("palette"))) dictionary_deleteentry(bar_dict, gensym("palette"));
-    dictionary_appendsym(bar_dict, gensym("palette"), x->current_palette);
-    post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "palette", x->current_palette->s_name);
+    // Update palette
+    t_symbol *palette_key = generate_hierarchical_key(track_sym, bar_sym, gensym("palette"));
+    if (dictionary_hasentry(x->building, palette_key)) dictionary_deleteentry(x->building, palette_key);
+    dictionary_appendsym(x->building, palette_key, x->current_palette);
+    post("%s::%s %s", palette_key->s_name, "palette", x->current_palette->s_name);
     t_atom palette_atom;
     atom_setsym(&palette_atom, x->current_palette);
     buildspans_log_update(x, track_sym, bar_sym, gensym("palette"), 1, &palette_atom);
 
+    // Update absolutes array
+    t_symbol *absolutes_key = generate_hierarchical_key(track_sym, bar_sym, gensym("absolutes"));
     t_atomarray *absolutes_array;
-    if (!dictionary_hasentry(bar_dict, gensym("absolutes"))) {
+    if (!dictionary_hasentry(x->building, absolutes_key)) {
         absolutes_array = atomarray_new(0, NULL);
         t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
-        dictionary_appendatom(bar_dict, gensym("absolutes"), &a);
+        dictionary_appendatom(x->building, absolutes_key, &a);
     } else {
-        t_atom a; dictionary_getatom(bar_dict, gensym("absolutes"), &a);
+        t_atom a; dictionary_getatom(x->building, absolutes_key, &a);
         absolutes_array = (t_atomarray *)atom_getobj(&a);
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {
-        post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "absolutes", abs_str);
+        post("%s %s", absolutes_key->s_name, abs_str);
         sysmem_freeptr(abs_str);
         long count; t_atom *atoms;
         atomarray_getatoms(absolutes_array, &count, &atoms);
         buildspans_log_update(x, track_sym, bar_sym, gensym("absolutes"), count, atoms);
     }
 
+    // Update scores array
+    t_symbol *scores_key = generate_hierarchical_key(track_sym, bar_sym, gensym("scores"));
     t_atomarray *scores_array;
-    if (!dictionary_hasentry(bar_dict, gensym("scores"))) {
+    if (!dictionary_hasentry(x->building, scores_key)) {
         scores_array = atomarray_new(0, NULL);
         t_atom a; atom_setobj(&a, (t_object *)scores_array);
-        dictionary_appendatom(bar_dict, gensym("scores"), &a);
+        dictionary_appendatom(x->building, scores_key, &a);
     } else {
-        t_atom a; dictionary_getatom(bar_dict, gensym("scores"), &a);
+        t_atom a; dictionary_getatom(x->building, scores_key, &a);
         scores_array = (t_atomarray *)atom_getobj(&a);
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
     char *scores_str = atomarray_to_string(scores_array);
     if (scores_str) {
-        post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "scores", scores_str);
+        post("%s %s", scores_key->s_name, scores_str);
         sysmem_freeptr(scores_str);
         long count; t_atom *atoms;
         atomarray_getatoms(scores_array, &count, &atoms);
         buildspans_log_update(x, track_sym, bar_sym, gensym("scores"), count, atoms);
     }
 
+    // Update mean
     long scores_count = atomarray_getsize(scores_array);
     if (scores_count > 0) {
         double sum = 0.0;
@@ -503,124 +554,77 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         atomarray_getatoms(scores_array, &count, &atoms);
         for (long i = 0; i < count; i++) sum += atom_getfloat(&atoms[i]);
         double mean = sum / count;
-        if (dictionary_hasentry(bar_dict, gensym("mean"))) dictionary_deleteentry(bar_dict, gensym("mean"));
-        dictionary_appendfloat(bar_dict, gensym("mean"), mean);
-        post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "mean", mean);
+
+        t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+        if (dictionary_hasentry(x->building, mean_key)) dictionary_deleteentry(x->building, mean_key);
+        dictionary_appendfloat(x->building, mean_key, mean);
+        post("%s %.2f", mean_key->s_name, mean);
         t_atom mean_atom;
         atom_setfloat(&mean_atom, mean);
         buildspans_log_update(x, track_sym, bar_sym, gensym("mean"), 1, &mean_atom);
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
-    long num_all_keys;
-    t_symbol **all_keys;
-    dictionary_getkeys(track_dict, &num_all_keys, &all_keys);
+    // 1. Get all bar timestamps for the current track.
+    dictionary_getkeys(x->building, &num_keys, &keys);
     long bar_timestamps_count = 0;
-    long *bar_timestamps = (long *)sysmem_newptr(num_all_keys * sizeof(long));
-    if (all_keys) {
-        for (long i = 0; i < num_all_keys; i++) {
-            char *key_str = all_keys[i]->s_name;
-            char *endptr;
-            long val = strtol(key_str, &endptr, 10);
-            if (*endptr == '\0') bar_timestamps[bar_timestamps_count++] = val;
-        }
-    }
-
-    qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
-
-    // 1. Get a reference to the OLD shared span array before we do anything else.
-    t_atomarray *old_span_array = NULL;
-    if (bar_timestamps_count > 1 && all_keys) { // only need to do this if there was a previous span
-        for (long i = 0; i < num_all_keys; i++) {
-             char *key_str = all_keys[i]->s_name;
-            char *endptr;
-            strtol(key_str, &endptr, 10);
-            if (*endptr == '\0') {
-                 t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, all_keys[i], &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                    t_atom span_atom;
-                    dictionary_getatom(bar_dict, gensym("span"), &span_atom);
-                    old_span_array = (t_atomarray *)atom_getobj(&span_atom);
-                    break; // Found it, we can stop.
+    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate, then count
+    if (keys) {
+        for (long i = 0; i < num_keys; i++) {
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0) {
+                    // To avoid duplicates, only add when we see the 'mean' property
+                    if (strcmp(key_prop, "mean") == 0) {
+                        bar_timestamps[bar_timestamps_count++] = atol(key_bar);
+                    }
                 }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
             }
         }
+        sysmem_freeptr(keys);
     }
+    qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
-
-    // 2. Create the NEW span array.
+    // 2. Create the NEW span array and link it to all bars in the track.
     t_atomarray *new_span_array = atomarray_new(0, NULL);
     for (long i = 0; i < bar_timestamps_count; i++) {
-        t_atom a;
-        atom_setlong(&a, bar_timestamps[i]);
+        t_atom a; atom_setlong(&a, bar_timestamps[i]);
         atomarray_appendatom(new_span_array, &a);
     }
     t_atom new_span_atom;
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
-    // 3. Unlink the OLD span array from all bars.
-    if (old_span_array) {
-        long old_span_size = 0;
-        t_atom *old_span_atoms = NULL;
-        atomarray_getatoms(old_span_array, &old_span_size, &old_span_atoms);
-
-        for (long i = 0; i < old_span_size; i++) {
-            long old_bar_ts = atom_getlong(&old_span_atoms[i]);
-            char temp_bar_str[32];
-            snprintf(temp_bar_str, 32, "%ld", old_bar_ts);
-            t_symbol *temp_bar_sym = gensym(temp_bar_str);
-            if (dictionary_hasentry(track_dict, temp_bar_sym)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
-                t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(temp_bar_dict, gensym("span"))) {
-                    dictionary_deleteentry(temp_bar_dict, gensym("span"));
-                }
-            }
-        }
-    }
-
-
-    // 4. Link the NEW span array to all bars and log it.
     char *span_str = atomarray_to_string(new_span_array);
     if (span_str) {
         for (long i = 0; i < bar_timestamps_count; i++) {
-            char temp_bar_str[32];
-            snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+            char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
-            if (dictionary_hasentry(track_dict, temp_bar_sym)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
-                t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                dictionary_appendatom(temp_bar_dict, gensym("span"), &new_span_atom);
+            t_symbol *span_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("span"));
 
-                // Logging
-                post("%s::%s::%s %s", track_sym->s_name, temp_bar_sym->s_name, "span", span_str);
-                long count; t_atom *atoms;
-                atomarray_getatoms(new_span_array, &count, &atoms);
-                buildspans_log_update(x, track_sym, temp_bar_sym, gensym("span"), count, atoms);
-            }
+            // dictionary_appendatom with an object replaces the old one and handles refcount
+            dictionary_appendatom(x->building, span_key, &new_span_atom);
+
+            // Logging
+            post("%s %s", span_key->s_name, span_str);
+            long count; t_atom *atoms;
+            atomarray_getatoms(new_span_array, &count, &atoms);
+            buildspans_log_update(x, track_sym, temp_bar_sym, gensym("span"), count, atoms);
         }
         sysmem_freeptr(span_str);
     }
 
-    if (all_keys) sysmem_freeptr(all_keys);
-
-
     // --- RATING CALCULATION & BACK-PROPAGATION ---
     double final_lowest_mean = -1.0;
     for (long i = 0; i < bar_timestamps_count; i++) {
-        char temp_bar_str[32];
-        snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+        char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
         t_symbol *temp_bar_sym = gensym(temp_bar_str);
-        t_atom bar_dict_atom;
-        dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
-        t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-        if (dictionary_hasentry(temp_bar_dict, gensym("mean"))) {
+        t_symbol *mean_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("mean"));
+        if (dictionary_hasentry(x->building, mean_key)) {
             t_atom mean_atom;
-            dictionary_getatom(temp_bar_dict, gensym("mean"), &mean_atom);
+            dictionary_getatom(x->building, mean_key, &mean_atom);
             double current_bar_mean = atom_getfloat(&mean_atom);
             if (final_lowest_mean == -1.0 || current_bar_mean < final_lowest_mean) {
                 final_lowest_mean = current_bar_mean;
@@ -630,15 +634,12 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (final_lowest_mean != -1.0) {
         double final_rating = final_lowest_mean * bar_timestamps_count;
         for (long i = 0; i < bar_timestamps_count; i++) {
-            char temp_bar_str[32];
-            snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+            char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, temp_bar_sym, &bar_dict_atom);
-            t_dictionary *temp_bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-            if (dictionary_hasentry(temp_bar_dict, gensym("rating"))) dictionary_deleteentry(temp_bar_dict, gensym("rating"));
-            dictionary_appendfloat(temp_bar_dict, gensym("rating"), final_rating);
-            post("%s::%s::%s %.2f", track_sym->s_name, temp_bar_sym->s_name, "rating", final_rating);
+            t_symbol *rating_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("rating"));
+            if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
+            dictionary_appendfloat(x->building, rating_key, final_rating);
+            post("%s %.2f", rating_key->s_name, final_rating);
             t_atom rating_atom;
             atom_setfloat(&rating_atom, final_rating);
             buildspans_log_update(x, track_sym, temp_bar_sym, gensym("rating"), 1, &rating_atom);
@@ -651,87 +652,80 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
-    if (!dictionary_hasentry(x->building, track_sym)) return;
-
-    t_atom track_dict_atom;
-    dictionary_getatom(x->building, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-    t_atomarray *span_to_output = NULL;
-    int local_span_created = 0;
-
     long num_keys;
     t_symbol **keys;
-    dictionary_getkeys(track_dict, &num_keys, &keys);
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
 
+    // 1. Find the first 'span' atomarray for the track. They are all shared.
+    t_atomarray *span_to_output = NULL;
     if (keys) {
-        for (long j = 0; j < num_keys; j++) {
-            char *key_str = keys[j]->s_name;
-            char *endptr;
-            strtol(key_str, &endptr, 10);
-            if (*endptr != '\0') continue;
-
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, keys[j], &bar_dict_atom);
-            if (atom_gettype(&bar_dict_atom) == A_OBJ && object_classname(atom_getobj(&bar_dict_atom)) == gensym("dictionary")) {
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                    t_atom span_atom;
-                    dictionary_getatom(bar_dict, gensym("span"), &span_atom);
-                    span_to_output = (t_atomarray *)atom_getobj(&span_atom);
-                    break;
+        for (long i = 0; i < num_keys; i++) {
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "span") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    span_to_output = (t_atomarray *)atom_getobj(&a);
+                    sysmem_freeptr(key_track);
+                    sysmem_freeptr(key_bar);
+                    sysmem_freeptr(key_prop);
+                    break; // Found it.
                 }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
             }
         }
-
-        if (!span_to_output && num_keys > 0) {
-            local_span_created = 1;
-            long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
-            long bar_count = 0;
-            for (long i = 0; i < num_keys; i++) {
-                char *key_str = keys[i]->s_name;
-                char *endptr;
-                long val = strtol(key_str, &endptr, 10);
-                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                    bar_timestamps[bar_count++] = val;
-                }
-            }
-            qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
-            span_to_output = atomarray_new(0, NULL);
-            for (long i = 0; i < bar_count; i++) {
-                t_atom a;
-                atom_setlong(&a, bar_timestamps[i]);
-                atomarray_appendatom(span_to_output, &a);
-            }
-            sysmem_freeptr(bar_timestamps);
-        }
-        sysmem_freeptr(keys);
     }
 
+    // 2. If no span was found (e.g., single bar), create one locally.
+    int local_span_created = 0;
+    if (!span_to_output && keys) {
+        local_span_created = 1;
+        span_to_output = atomarray_new(0, NULL);
+        long bar_count = 0;
+        long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
+        for (long i = 0; i < num_keys; i++) {
+            char *key_track, *key_bar, *key_prop;
+             if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
+                     bar_timestamps[bar_count++] = atol(key_bar);
+                }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
+            }
+        }
+        qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
+        for(long i=0; i<bar_count; ++i) {
+            t_atom a;
+            atom_setlong(&a, bar_timestamps[i]);
+            atomarray_appendatom(span_to_output, &a);
+        }
+        sysmem_freeptr(bar_timestamps);
+    }
+
+
+    // 3. Calculate rating and output.
     if (span_to_output) {
         long span_size;
-        t_atom *span_atoms = NULL;
+        t_atom *span_atoms;
         atomarray_getatoms(span_to_output, &span_size, &span_atoms);
 
         double lowest_mean = -1.0;
         if (span_size > 0) {
-            for (long i = 0; i < span_size; i++) {
+             for (long i = 0; i < span_size; i++) {
                 long bar_ts = atom_getlong(&span_atoms[i]);
-                char bar_str[32];
-                snprintf(bar_str, 32, "%ld", bar_ts);
+                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
                 t_symbol *bar_sym = gensym(bar_str);
-
-                if (dictionary_hasentry(track_dict, bar_sym)) {
-                    t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                    if (dictionary_hasentry(bar_dict, gensym("mean"))) {
-                        t_atom mean_atom;
-                        dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                        double bar_mean = atom_getfloat(&mean_atom);
-                        if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
-                            lowest_mean = bar_mean;
-                        }
+                t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+                if (dictionary_hasentry(x->building, mean_key)) {
+                    t_atom mean_atom;
+                    dictionary_getatom(x->building, mean_key, &mean_atom);
+                    double bar_mean = atom_getfloat(&mean_atom);
+                    if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
+                        lowest_mean = bar_mean;
                     }
                 }
             }
@@ -749,10 +743,31 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
         }
     }
 
-    object_free((t_object *)track_dict);
-    dictionary_deleteentry(x->building, track_sym);
+    // 4. Delete all keys associated with the track.
+    if (keys) {
+        t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
+        long delete_count = 0;
+        for(long i=0; i<num_keys; ++i) {
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+                 if (strcmp(key_track, track_sym->s_name) == 0) {
+                     keys_to_delete[delete_count++] = keys[i];
+                 }
+                 sysmem_freeptr(key_track);
+                 sysmem_freeptr(key_bar);
+                 sysmem_freeptr(key_prop);
+             }
+        }
+        for(long i=0; i<delete_count; ++i) {
+            dictionary_deleteentry(x->building, keys_to_delete[i]);
+        }
+        sysmem_freeptr(keys_to_delete);
+        sysmem_freeptr(keys);
+    }
+
     buildspans_visualize_memory(x);
 }
+
 
 void buildspans_bang(t_buildspans *x) {
     post("Flush triggered by bang.");
@@ -761,59 +776,62 @@ void buildspans_bang(t_buildspans *x) {
 
 void buildspans_flush(t_buildspans *x) {
     long num_tracks;
-    t_symbol **tracks;
-    dictionary_getkeys(x->building, &num_tracks, &tracks);
-    if (!tracks) return;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_tracks, &keys);
+    if (!keys) return;
 
-    // Create a copy of the track symbols because the dictionary might be modified during iteration.
-    t_symbol **tracks_copy = (t_symbol **)sysmem_newptr(num_tracks * sizeof(t_symbol *));
-    if (!tracks_copy) {
-        if (tracks) sysmem_freeptr(tracks);
-        return;
-    }
-    for(long i=0; i<num_tracks; ++i) tracks_copy[i] = tracks[i];
-    if (tracks) sysmem_freeptr(tracks);
-
-
+    // 1. Identify all unique tracks.
+    long track_count = 0;
+    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_tracks * sizeof(t_symbol *));
     for (long i = 0; i < num_tracks; i++) {
-        t_symbol *track_sym = tracks_copy[i];
-        if (!dictionary_hasentry(x->building, track_sym)) continue;
-
-        t_atom track_dict_atom;
-        dictionary_getatom(x->building, track_sym, &track_dict_atom);
-        t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-        // Find the last bar to perform the deferred rating check on.
-        long last_bar_timestamp = -1;
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(track_dict, &num_keys, &keys);
-        if (keys && num_keys > 0) {
-            for (long j = 0; j < num_keys; j++) {
-                char *key_str = keys[j]->s_name;
-                char *endptr;
-                long val = strtol(key_str, &endptr, 10);
-                if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                    if (last_bar_timestamp == -1 || val > last_bar_timestamp) {
-                        last_bar_timestamp = val;
-                    }
+        char *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+            int found = 0;
+            for(long j=0; j<track_count; ++j) {
+                if (strcmp(track_syms[j]->s_name, key_track) == 0) {
+                    found = 1;
+                    break;
                 }
             }
-            sysmem_freeptr(keys);
+            if (!found) {
+                track_syms[track_count++] = gensym(key_track);
+            }
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
+        }
+    }
+
+    // 2. For each track, perform deferred rating check and end the span.
+    for (long i = 0; i < track_count; i++) {
+        t_symbol *track_sym = track_syms[i];
+
+        // Find the last bar for this track.
+        long last_bar_timestamp = -1;
+        for (long j = 0; j < num_tracks; j++) {
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[j], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0) {
+                    long bar_val = atol(key_bar);
+                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                        last_bar_timestamp = bar_val;
+                    }
+                }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
+            }
         }
 
         if (last_bar_timestamp != -1) {
             buildspans_deferred_rating_check(x, track_sym, last_bar_timestamp);
         }
 
-        // If the track still exists after the check (i.e., it wasn't fully pruned),
-        // or even if it was pruned and a 'kept' bar remains,
-        // we must end the final span to complete the flush.
-        if (dictionary_hasentry(x->building, track_sym)) {
-            buildspans_end_track_span(x, track_sym);
-        }
+        buildspans_end_track_span(x, track_sym);
     }
-    sysmem_freeptr(tracks_copy);
+
+    sysmem_freeptr(track_syms);
+    sysmem_freeptr(keys);
 }
 
 
@@ -851,142 +869,101 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep) {
-    if (!dictionary_hasentry(x->building, track_sym)) return;
-
-    t_atom track_dict_atom;
-    dictionary_getatom(x->building, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
     long num_keys;
     t_symbol **keys;
-    dictionary_getkeys(track_dict, &num_keys, &keys);
+    dictionary_getkeys(x->building, &num_keys, &keys);
     if (!keys) return;
 
-    t_atomarray *shared_span_array = NULL;
-    t_symbol **bars_to_flush_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+    // 1. Identify all bars to flush.
     long flush_count = 0;
+    long *bars_to_flush_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
 
-    // First pass: Identify bars to flush and find the shared span array.
     for (long i = 0; i < num_keys; i++) {
-        char *key_str = keys[i]->s_name;
-        char *endptr;
-        long val = strtol(key_str, &endptr, 10);
-        if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, keys[i], &bar_dict_atom);
-            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-
-            if (val != bar_to_keep) {
-                bars_to_flush_syms[flush_count++] = keys[i];
+        char *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+            if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
+                long bar_val = atol(key_bar);
+                if (bar_val != bar_to_keep) {
+                    bars_to_flush_vals[flush_count++] = bar_val;
+                }
             }
-            if (!shared_span_array && dictionary_hasentry(bar_dict, gensym("span"))) {
-                t_atom span_atom;
-                dictionary_getatom(bar_dict, gensym("span"), &span_atom);
-                shared_span_array = (t_atomarray *)atom_getobj(&span_atom);
-            }
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
         }
     }
 
-    // Output the span that is being ended.
+    // 2. Output the flushed span.
     if (flush_count > 0) {
         post("Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
-
-        long *bars_to_output_vals = (long *)sysmem_newptr(flush_count * sizeof(long));
-        for(long i=0; i<flush_count; ++i) bars_to_output_vals[i] = atol(bars_to_flush_syms[i]->s_name);
-        qsort(bars_to_output_vals, flush_count, sizeof(long), compare_longs);
-
+        qsort(bars_to_flush_vals, flush_count, sizeof(long), compare_longs);
         t_atom *output_atoms = (t_atom *)sysmem_newptr(flush_count * sizeof(t_atom));
-        for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_output_vals[i]);
-
+        for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_flush_vals[i]);
         long track_num_to_output;
         sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
         outlet_int(x->track_outlet, track_num_to_output);
         outlet_list(x->span_outlet, NULL, flush_count, output_atoms);
-
-        sysmem_freeptr(bars_to_output_vals);
         sysmem_freeptr(output_atoms);
     }
 
-    // Second pass: Unlink the shared span from ALL bars to prevent double-freeing.
-    if (shared_span_array) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_str = keys[i]->s_name;
-            char *endptr;
-            strtol(key_str, &endptr, 10);
-            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, keys[i], &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                    dictionary_deleteentry(bar_dict, gensym("span"));
-                }
-            }
-        }
-    }
-
-    // Third pass: Finalize the state of the flushed bars as a completed span.
+    // 3. Finalize the state of the flushed bars.
     if (flush_count > 0) {
         post("Finalizing flushed span...");
         t_atomarray *flushed_span_array = atomarray_new(0, NULL);
         for(long i = 0; i < flush_count; ++i) {
-            t_atom a;
-            atom_setlong(&a, atol(bars_to_flush_syms[i]->s_name));
+            t_atom a; atom_setlong(&a, bars_to_flush_vals[i]);
             atomarray_appendatom(flushed_span_array, &a);
         }
         buildspans_finalize_and_log_span(x, track_sym, flushed_span_array);
-        object_free(flushed_span_array); // Free the temporary array.
+        object_free(flushed_span_array);
     }
 
-    // Fourth pass: Now it's safe to free the flushed bar dictionaries.
+    // 4. Delete keys for flushed bars.
+    t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
+    long delete_count = 0;
     for (long i = 0; i < flush_count; i++) {
-        t_symbol *bar_sym_to_delete = bars_to_flush_syms[i];
-        if (dictionary_hasentry(track_dict, bar_sym_to_delete)) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, bar_sym_to_delete, &bar_dict_atom);
-            object_free(atom_getobj(&bar_dict_atom)); // This will no longer free the shared span
-            dictionary_deleteentry(track_dict, bar_sym_to_delete);
+        char bar_str[32];
+        snprintf(bar_str, 32, "%ld", bars_to_flush_vals[i]);
+        for(long j=0; j<num_keys; ++j) {
+            char *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[j], &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_bar, bar_str) == 0) {
+                     keys_to_delete[delete_count++] = keys[j];
+                }
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
+            }
         }
     }
-
-    // Finally, free the now-unreferenced shared span array itself.
-    if (shared_span_array) {
-        // object_free(shared_span_array); // This was a double-free bug. The dictionary_deleteentry calls handle the refcounting.
+    for(long i=0; i<delete_count; ++i) {
+        dictionary_deleteentry(x->building, keys_to_delete[i]);
     }
 
-    sysmem_freeptr(bars_to_flush_syms);
+    sysmem_freeptr(keys_to_delete);
+    sysmem_freeptr(bars_to_flush_vals);
     sysmem_freeptr(keys);
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
     post("Resetting kept bar...");
     buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_to_keep_str));
-
     buildspans_visualize_memory(x);
 }
 
 
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym) {
-    if (!dictionary_hasentry(x->building, track_sym)) return;
-
-    t_atom track_dict_atom;
-    dictionary_getatom(x->building, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-    if (!dictionary_hasentry(track_dict, bar_sym)) return;
-
-    t_atom bar_dict_atom;
-    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-    t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-
     // Update rating to mean
-    if (dictionary_hasentry(bar_dict, gensym("mean"))) {
+    t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+    if (dictionary_hasentry(x->building, mean_key)) {
         t_atom mean_atom;
-        dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
+        dictionary_getatom(x->building, mean_key, &mean_atom);
         double mean_val = atom_getfloat(&mean_atom);
 
-        if (dictionary_hasentry(bar_dict, gensym("rating"))) dictionary_deleteentry(bar_dict, gensym("rating"));
-        dictionary_appendfloat(bar_dict, gensym("rating"), mean_val);
-        post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "rating", mean_val);
+        t_symbol *rating_key = generate_hierarchical_key(track_sym, bar_sym, gensym("rating"));
+        if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
+        dictionary_appendfloat(x->building, rating_key, mean_val);
+        post("%s %.2f", rating_key->s_name, mean_val);
         buildspans_log_update(x, track_sym, bar_sym, gensym("rating"), 1, &mean_atom);
     }
 
@@ -999,12 +976,12 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
     t_atom new_span_atom;
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
-    if (dictionary_hasentry(bar_dict, gensym("span"))) dictionary_deleteentry(bar_dict, gensym("span"));
-    dictionary_appendatom(bar_dict, gensym("span"), &new_span_atom);
+    t_symbol *span_key = generate_hierarchical_key(track_sym, bar_sym, gensym("span"));
+    dictionary_appendatom(x->building, span_key, &new_span_atom);
 
     char *span_str = atomarray_to_string(new_span_array);
     if (span_str) {
-        post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "span", span_str);
+        post("%s %s", span_key->s_name, span_str);
         long count; t_atom *atoms;
         atomarray_getatoms(new_span_array, &count, &atoms);
         buildspans_log_update(x, track_sym, bar_sym, gensym("span"), count, atoms);
@@ -1014,85 +991,54 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
 
 
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array) {
-    if (!span_array || !dictionary_hasentry(x->building, track_sym)) return;
+    if (!span_array) return;
 
     long span_size = 0;
     t_atom *span_atoms = NULL;
     atomarray_getatoms(span_array, &span_size, &span_atoms);
     if (span_size == 0) return;
 
-    t_atom track_dict_atom;
-    dictionary_getatom(x->building, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
     // 1. Calculate the final rating for this span.
     double lowest_mean = -1.0;
     for (long i = 0; i < span_size; i++) {
         long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bar_ts);
+        char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
         t_symbol *bar_sym = gensym(bar_str);
-        if (dictionary_hasentry(track_dict, bar_sym)) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-            if (dictionary_hasentry(bar_dict, gensym("mean"))) {
-                t_atom mean_atom;
-                dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                double bar_mean = atom_getfloat(&mean_atom);
-                if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
-                    lowest_mean = bar_mean;
-                }
+        t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+        if (dictionary_hasentry(x->building, mean_key)) {
+            t_atom mean_atom;
+            dictionary_getatom(x->building, mean_key, &mean_atom);
+            double bar_mean = atom_getfloat(&mean_atom);
+            if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
+                lowest_mean = bar_mean;
             }
         }
     }
     double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
 
-    // 2. Unlink any old span objects first to prevent use-after-free.
-    for (long i = 0; i < span_size; i++) {
-        long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bar_ts);
-        t_symbol *bar_sym = gensym(bar_str);
-        if (dictionary_hasentry(track_dict, bar_sym)) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-            if (dictionary_hasentry(bar_dict, gensym("span"))) {
-                dictionary_deleteentry(bar_dict, gensym("span"));
-            }
-        }
-    }
-
-    // 3. Back-propagate the final rating and span to all bars in the span.
+    // 2. Back-propagate the final rating and span to all bars in the span.
     t_atom rating_atom;
     atom_setfloat(&rating_atom, final_rating);
     t_atom span_atom;
-    atom_setobj(&span_atom, (t_object *)span_array);
+    atom_setobj(&span_atom, (t_object *)span_array); // This is a shared object
     char *span_str = atomarray_to_string(span_array);
 
     for (long i = 0; i < span_size; i++) {
         long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bar_ts);
+        char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
         t_symbol *bar_sym = gensym(bar_str);
-        if (dictionary_hasentry(track_dict, bar_sym)) {
-            t_atom bar_dict_atom;
-            dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-            t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
 
-            // Update rating
-            if (dictionary_hasentry(bar_dict, gensym("rating"))) dictionary_deleteentry(bar_dict, gensym("rating"));
-            dictionary_appendatom(bar_dict, gensym("rating"), &rating_atom);
-            post("%s::%s::%s %.2f", track_sym->s_name, bar_sym->s_name, "rating", final_rating);
-            buildspans_log_update(x, track_sym, bar_sym, gensym("rating"), 1, &rating_atom);
+        t_symbol *rating_key = generate_hierarchical_key(track_sym, bar_sym, gensym("rating"));
+        if(dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
+        dictionary_appendatom(x->building, rating_key, &rating_atom);
+        post("%s %.2f", rating_key->s_name, final_rating);
+        buildspans_log_update(x, track_sym, bar_sym, gensym("rating"), 1, &rating_atom);
 
-            // Update span
-            dictionary_appendatom(bar_dict, gensym("span"), &span_atom);
-            if (span_str) {
-                post("%s::%s::%s %s", track_sym->s_name, bar_sym->s_name, "span", span_str);
-                buildspans_log_update(x, track_sym, bar_sym, gensym("span"), span_size, span_atoms);
-            }
+        t_symbol *span_key = generate_hierarchical_key(track_sym, bar_sym, gensym("span"));
+        dictionary_appendatom(x->building, span_key, &span_atom);
+        if (span_str) {
+            post("%s %s", span_key->s_name, span_str);
+            buildspans_log_update(x, track_sym, bar_sym, gensym("span"), span_size, span_atoms);
         }
     }
     if (span_str) sysmem_freeptr(span_str);
@@ -1100,64 +1046,64 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
 
 
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp) {
-    if (!dictionary_hasentry(x->building, track_sym)) return;
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
 
-    t_atom track_dict_atom;
-    dictionary_getatom(x->building, track_sym, &track_dict_atom);
-    t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-    long num_span_keys;
-    t_symbol **span_keys;
-    dictionary_getkeys(track_dict, &num_span_keys, &span_keys);
+    // 1. Get all bars for the track
+    long bar_count = 0;
+    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
+    for (long i = 0; i < num_keys; i++) {
+        char *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+            if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
+                bar_timestamps[bar_count++] = atol(key_bar);
+            }
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
+        }
+    }
 
     int prune_span = 0;
-
-    if (span_keys && num_span_keys > 1) {
-        // RATING WITH LAST BAR
+    if (bar_count > 1) {
+        // 2. RATING WITH LAST BAR
         double lowest_mean_with = -1.0;
-        for (long i = 0; i < num_span_keys; i++) {
-            char *key_str = span_keys[i]->s_name;
-            char *endptr;
-            strtol(key_str, &endptr, 10);
-            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                 t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if(dictionary_hasentry(bar_dict, gensym("mean"))) {
-                    t_atom mean_atom;
-                    dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                    double bar_mean = atom_getfloat(&mean_atom);
-                     if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) lowest_mean_with = bar_mean;
+        for (long i = 0; i < bar_count; i++) {
+            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
+            t_symbol *bar_sym = gensym(bar_str);
+            t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+            if (dictionary_hasentry(x->building, mean_key)) {
+                t_atom mean_atom;
+                dictionary_getatom(x->building, mean_key, &mean_atom);
+                double bar_mean = atom_getfloat(&mean_atom);
+                if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) {
+                    lowest_mean_with = bar_mean;
                 }
             }
         }
-        double rating_with = lowest_mean_with * num_span_keys;
+        double rating_with = lowest_mean_with * bar_count;
 
-        // RATING WITHOUT LAST BAR
+        // 3. RATING WITHOUT LAST BAR
         double lowest_mean_without = -1.0;
         long bars_without_count = 0;
-        char last_bar_str[32];
-        snprintf(last_bar_str, 32, "%ld", last_bar_timestamp);
-        t_symbol *last_bar_sym = gensym(last_bar_str);
         double last_bar_mean = 0.0;
-
-        for (long i = 0; i < num_span_keys; i++) {
-            char *key_str = span_keys[i]->s_name;
-            char *endptr;
-            strtol(key_str, &endptr, 10);
-            if (*endptr == '\0' && (*key_str != '-' || endptr != key_str + 1)) {
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, span_keys[i], &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-                if(dictionary_hasentry(bar_dict, gensym("mean"))) {
-                    t_atom mean_atom;
-                    dictionary_getatom(bar_dict, gensym("mean"), &mean_atom);
-                    double bar_mean = atom_getfloat(&mean_atom);
-                    if (span_keys[i] == last_bar_sym) last_bar_mean = bar_mean;
-                    if (span_keys[i] != last_bar_sym) {
-                        if (lowest_mean_without == -1.0 || bar_mean < lowest_mean_without) lowest_mean_without = bar_mean;
-                        bars_without_count++;
+        for (long i = 0; i < bar_count; i++) {
+             char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
+            t_symbol *bar_sym = gensym(bar_str);
+            t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
+            if (dictionary_hasentry(x->building, mean_key)) {
+                t_atom mean_atom;
+                dictionary_getatom(x->building, mean_key, &mean_atom);
+                double bar_mean = atom_getfloat(&mean_atom);
+                if (bar_timestamps[i] == last_bar_timestamp) {
+                    last_bar_mean = bar_mean;
+                } else {
+                     if (lowest_mean_without == -1.0 || bar_mean < lowest_mean_without) {
+                        lowest_mean_without = bar_mean;
                     }
+                    bars_without_count++;
                 }
             }
         }
@@ -1173,7 +1119,11 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
             post("Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
         }
 
-        if (prune_span) buildspans_prune_span(x, track_sym, last_bar_timestamp);
+        if (prune_span) {
+            buildspans_prune_span(x, track_sym, last_bar_timestamp);
+        }
     }
-    if (span_keys) sysmem_freeptr(span_keys);
+
+    sysmem_freeptr(bar_timestamps);
+    sysmem_freeptr(keys);
 }
