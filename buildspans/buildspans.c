@@ -142,157 +142,106 @@ void buildspans_log_update(t_buildspans *x, t_symbol *track, t_symbol *bar, t_sy
 t_class *buildspans_class;
 
 void buildspans_visualize_memory(t_buildspans *x) {
-    // Create a temporary nested dictionary to reconstruct the structure for visualization
-    t_dictionary *vis_dict = dictionary_new();
-
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
 
+    // 1. Identify all unique tracks
+    long unique_track_count = 0;
+    t_symbol **unique_tracks = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *)); // Over-allocate
     if (keys) {
         for (long i = 0; i < num_keys; i++) {
             char *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
-                t_symbol *track_sym = gensym(track_str);
-                t_symbol *bar_sym = gensym(bar_str);
-                t_symbol *prop_sym = gensym(prop_str);
-
-                // Get/create track dictionary
-                t_dictionary *track_dict;
-                if (!dictionary_hasentry(vis_dict, track_sym)) {
-                    track_dict = dictionary_new();
-                    dictionary_appenddictionary(vis_dict, track_sym, (t_object *)track_dict);
-                } else {
-                    t_atom track_dict_atom;
-                    dictionary_getatom(vis_dict, track_sym, &track_dict_atom);
-                    track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
+                int found = 0;
+                for (long j = 0; j < unique_track_count; j++) {
+                    if (strcmp(unique_tracks[j]->s_name, track_str) == 0) {
+                        found = 1;
+                        break;
+                    }
                 }
-
-                // Get/create bar dictionary
-                t_dictionary *bar_dict;
-                 if (!dictionary_hasentry(track_dict, bar_sym)) {
-                    bar_dict = dictionary_new();
-                    dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
-                } else {
-                    t_atom bar_dict_atom;
-                    dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                    bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
+                if (!found) {
+                    unique_tracks[unique_track_count++] = gensym(track_str);
                 }
-
-                // Copy the atom from the main building dictionary
-                t_atom value_atom;
-                dictionary_getatom(x->building, keys[i], &value_atom);
-                dictionary_appendatom(bar_dict, prop_sym, &value_atom);
-
                 sysmem_freeptr(track_str);
                 sysmem_freeptr(bar_str);
                 sysmem_freeptr(prop_str);
             }
         }
-        sysmem_freeptr(keys);
     }
 
-    // Now generate JSON from the temporary nested dictionary
+    // 2. Generate JSON
     long buffer_size = 4096;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     long offset = 0;
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"building\":{");
+    offset += snprintf(json_buffer + offset, buffer_size, "{\"building\":{");
 
-    long num_tracks;
-    t_symbol **track_keys;
-    dictionary_getkeys(vis_dict, &num_tracks, &track_keys);
+    for (long i = 0; i < unique_track_count; i++) {
+        t_symbol *track_sym = unique_tracks[i];
+        if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
 
-    int first_track = 1;
-    if (track_keys) {
-        for (long i = 0; i < num_tracks; i++) {
-             if (buffer_size - offset < 1024) { // Buffer check
-                buffer_size *= 2;
-                json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
+
+        // a. Find and sort bars for this track
+        long bar_count = 0;
+        long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
+        if (keys) {
+            for (long j = 0; j < num_keys; j++) {
+                 char *track_str, *bar_str, *prop_str;
+                 if (parse_hierarchical_key(keys[j], &track_str, &bar_str, &prop_str)) {
+                     if (strcmp(track_str, track_sym->s_name) == 0 && strcmp(prop_str, "mean") == 0) {
+                         bar_timestamps[bar_count++] = atol(bar_str);
+                     }
+                     sysmem_freeptr(track_str);
+                     sysmem_freeptr(bar_str);
+                     sysmem_freeptr(prop_str);
+                 }
             }
-            if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            first_track = 0;
-
-            t_symbol *track_sym = track_keys[i];
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
-
-            t_atom track_dict_atom;
-            dictionary_getatom(vis_dict, track_sym, &track_dict_atom);
-            t_dictionary *track_dict = (t_dictionary *)atom_getobj(&track_dict_atom);
-
-            long num_bars;
-            t_symbol **bar_keys;
-            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-
-            // Sort bars numerically for correct visualization order
-            long *bar_timestamps = (long *)sysmem_newptr(num_bars * sizeof(long));
-            long bar_count = 0;
-            if(bar_keys) {
-                 for(long j=0; j<num_bars; ++j) bar_timestamps[bar_count++] = atol(bar_keys[j]->s_name);
-                 sysmem_freeptr(bar_keys);
-            }
-            qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
-
-            int first_absolute = 1;
-            for (long j = 0; j < bar_count; j++) {
-                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
-                t_symbol *bar_sym = gensym(bar_str);
-
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-
-                if (dictionary_hasentry(bar_dict, gensym("absolutes"))) {
-                    t_atom absolutes_atom;
-                    dictionary_getatom(bar_dict, gensym("absolutes"), &absolutes_atom);
-                    t_atomarray *absolutes_array = (t_atomarray *)atom_getobj(&absolutes_atom);
-                    long absolutes_count = atomarray_getsize(absolutes_array);
-
-                    for (long k = 0; k < absolutes_count; k++) {
-                        if (buffer_size - offset < 256) { // Buffer check
-                            buffer_size *= 2;
-                            json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
-                        }
-                        if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                        first_absolute = 0;
-                        t_atom val_atom;
-                        atomarray_getindex(absolutes_array, k, &val_atom);
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&val_atom));
-                    }
-                }
-            }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
-
-            int first_offset = 1;
-            for (long j = 0; j < bar_count; j++) {
-                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
-                t_symbol *bar_sym = gensym(bar_str);
-
-                t_atom bar_dict_atom;
-                dictionary_getatom(track_dict, bar_sym, &bar_dict_atom);
-                t_dictionary *bar_dict = (t_dictionary *)atom_getobj(&bar_dict_atom);
-
-                if (dictionary_hasentry(bar_dict, gensym("offset"))) {
-                    if (buffer_size - offset < 256) { // Buffer check
-                        buffer_size *= 2;
-                        json_buffer = (char *)sysmem_resizeptr(json_buffer, buffer_size);
-                    }
-                    if (!first_offset) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                    first_offset = 0;
-                    t_atom offset_val_atom;
-                    dictionary_getatom(bar_dict, gensym("offset"), &offset_val_atom);
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&offset_val_atom));
-                }
-            }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
-            sysmem_freeptr(bar_timestamps);
         }
-        sysmem_freeptr(track_keys);
+        qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
+
+        // b. Append absolutes
+        int first_absolute = 1;
+        for (long j = 0; j < bar_count; j++) {
+            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+            t_symbol* abs_key = generate_hierarchical_key(track_sym, gensym(bar_str), gensym("absolutes"));
+            if (dictionary_hasentry(x->building, abs_key)) {
+                t_atom a;
+                dictionary_getatom(x->building, abs_key, &a);
+                t_atomarray *arr = (t_atomarray *)atom_getobj(&a);
+                long ac; t_atom *av;
+                atomarray_getatoms(arr, &ac, &av);
+                for (long k = 0; k < ac; k++) {
+                    if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    first_absolute = 0;
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
+                }
+            }
+        }
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
+
+        // c. Append offsets
+        int first_offset = 1;
+        for (long j = 0; j < bar_count; j++) {
+            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+            t_symbol* offset_key = generate_hierarchical_key(track_sym, gensym(bar_str), gensym("offset"));
+             if (dictionary_hasentry(x->building, offset_key)) {
+                 if (!first_offset) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                 first_offset = 0;
+                 t_atom a;
+                 dictionary_getatom(x->building, offset_key, &a);
+                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&a));
+             }
+        }
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
+        sysmem_freeptr(bar_timestamps);
     }
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f}", x->current_offset);
 
     visualize(json_buffer);
     sysmem_freeptr(json_buffer);
-    object_free(vis_dict); // Free the temporary dictionary
+    sysmem_freeptr(unique_tracks);
+    if(keys) sysmem_freeptr(keys);
 }
 
 
