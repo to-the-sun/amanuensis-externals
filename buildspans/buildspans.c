@@ -2,7 +2,6 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "ext_proto.h"
-#include "../shared/visualize.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
@@ -253,7 +252,17 @@ void buildspans_visualize_memory(t_buildspans *x) {
     }
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f}", x->current_offset);
 
-    visualize(json_buffer);
+    if (x->verbose && x->verbose_log_outlet) {
+        // Prepend "visualize, " to the JSON string and send it out the verbose outlet
+        size_t final_len = strlen("visualize, ") + strlen(json_buffer) + 1;
+        char *final_message = (char *)sysmem_newptr(final_len);
+        if (final_message) {
+            snprintf(final_message, final_len, "visualize, %s", json_buffer);
+            outlet_anything(x->verbose_log_outlet, gensym(final_message), 0, NULL);
+            sysmem_freeptr(final_message);
+        }
+    }
+
     sysmem_freeptr(json_buffer);
     sysmem_freeptr(unique_tracks);
     if(keys) sysmem_freeptr(keys);
@@ -307,16 +316,11 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
         x->span_outlet = listout((t_object *)x);
-
-        if (visualize_init() != 0) {
-            object_error((t_object *)x, "Failed to initialize visualization.");
-        }
     }
     return (x);
 }
 
 void buildspans_free(t_buildspans *x) {
-    visualize_cleanup();
     if (x->building) {
         object_free(x->building);
     }
@@ -842,7 +846,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 case 0: sprintf(s, "Span Data (list)"); break;
                 case 1: sprintf(s, "Track Number (int)"); break;
                 case 2: sprintf(s, "Sync Outlet (anything)"); break;
-                case 3: sprintf(s, "Verbose Logging Outlet"); break;
+                case 3: sprintf(s, "Verbose Logging & Visualization Outlet"); break;
             }
         } else {
             switch (a) {
