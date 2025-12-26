@@ -565,7 +565,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
     qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
-    // 2. Create the NEW span array and link it to all bars in the track.
+    // 2. Create the NEW span array.
     t_atomarray *new_span_array = atomarray_new(0, NULL);
     for (long i = 0; i < bar_timestamps_count; i++) {
         t_atom a; atom_setlong(&a, bar_timestamps[i]);
@@ -574,6 +574,17 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     t_atom new_span_atom;
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
+    // 3. Unlink the OLD span array from all bars in the track (PASS 1)
+    for (long i = 0; i < bar_timestamps_count; i++) {
+        char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
+        t_symbol *temp_bar_sym = gensym(temp_bar_str);
+        t_symbol *span_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("span"));
+        if (dictionary_hasentry(x->building, span_key)) {
+            dictionary_deleteentry(x->building, span_key);
+        }
+    }
+
+    // 4. Link the NEW span array to all bars in the track (PASS 2)
     char *span_str = atomarray_to_string(new_span_array);
     if (span_str) {
         for (long i = 0; i < bar_timestamps_count; i++) {
@@ -581,7 +592,6 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
             t_symbol *span_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("span"));
 
-            // dictionary_appendatom with an object replaces the old one and handles refcount
             dictionary_appendatom(x->building, span_key, &new_span_atom);
 
             // Logging
