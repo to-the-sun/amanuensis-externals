@@ -548,7 +548,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     // 2. Also consider the global current offset as a potential new span
     char current_track_str[64];
-    snprintf(current_track_str, 64, "%ld-%.4f", x->current_track, x->current_offset);
+    snprintf(current_track_str, 64, "%ld-%.0f", x->current_track, x->current_offset);
     t_symbol *current_track_sym = gensym(current_track_str);
     int global_offset_found = 0;
     for (long i = 0; i < unique_tracks_count; i++) {
@@ -578,7 +578,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset) {
     // Get current track symbol
     char track_str[64];
-    snprintf(track_str, 64, "%ld-%.4f", x->current_track, offset);
+    snprintf(track_str, 64, "%ld-%.0f", x->current_track, offset);
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
