@@ -111,6 +111,18 @@ int compare_longs(const void *a, const void *b) {
     return (la > lb) - (la < lb);
 }
 
+// Struct for holding note pairs for sorting
+typedef struct { double timestamp; double score; } NotePair;
+
+// Comparison function for qsort to sort NotePairs
+int compare_notepairs(const void *a, const void *b) {
+    NotePair *pa = (NotePair *)a;
+    NotePair *pb = (NotePair *)b;
+    if (pa->timestamp < pb->timestamp) return -1;
+    if (pa->timestamp > pb->timestamp) return 1;
+    return 0;
+}
+
 typedef struct _buildspans {
     t_object s_obj;
     t_dictionary *building;
@@ -397,8 +409,6 @@ void buildspans_offset(t_buildspans *x, double f) {
     if (source_track_sym) {
         buildspans_verbose_log(x, "Duplicating existing span for track %ld with new offset %.2f", x->current_track, f);
 
-        // Using a dynamic array for note pairs
-        typedef struct { double timestamp; double score; } NotePair;
         long notes_capacity = 128;
         long notes_count = 0;
         NotePair *notes = (NotePair *)sysmem_newptr(notes_capacity * sizeof(NotePair));
@@ -439,15 +449,7 @@ void buildspans_offset(t_buildspans *x, double f) {
         }
 
         // Chronological sort based on timestamp
-        for (long i = 0; i < notes_count - 1; i++) {
-            for (long j = i + 1; j < notes_count; j++) {
-                if (notes[i].timestamp > notes[j].timestamp) {
-                    NotePair temp = notes[i];
-                    notes[i] = notes[j];
-                    notes[j] = temp;
-                }
-            }
-        }
+        qsort(notes, notes_count, sizeof(NotePair), compare_notepairs);
 
         // Re-process notes with the new offset
         for (long i = 0; i < notes_count; i++) {
@@ -496,6 +498,10 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for list messages on the main inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->bar_length <= 0) {
+        object_warn((t_object *)x, "Bar length is not set. Ignoring input.");
+        return;
+    }
     if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
         object_error((t_object *)x, "Input must be a list of two floats: timestamp and score.");
         return;
@@ -505,13 +511,13 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     buildspans_verbose_log(x, "--- New Timestamp-Score Pair Received ---");
     buildspans_verbose_log(x, "Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
 
-    // 1. Find all unique offsets for the current track.
+    // 1. Find all unique track symbols for the current track.
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
 
-    long offsets_count = 0;
-    double *found_offsets = (double *)sysmem_newptr(num_keys * sizeof(double)); // Over-allocate
+    long unique_tracks_count = 0;
+    t_symbol **unique_track_syms = (t_symbol **)sysmem_newptr((num_keys + 1) * sizeof(t_symbol *));
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", x->current_track);
 
@@ -520,20 +526,16 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             char *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
                 if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                    // Extract offset from track_str
-                    const char *offset_part = strchr(track_str, '-');
-                    if (offset_part) {
-                        double offset = atof(offset_part + 1);
-                        int found = 0;
-                        for (long j = 0; j < offsets_count; j++) {
-                            if (fabs(found_offsets[j] - offset) < 1e-9) { // Compare doubles for equality
-                                found = 1;
-                                break;
-                            }
+                    t_symbol *current_track_sym = gensym(track_str);
+                    int found = 0;
+                    for (long j = 0; j < unique_tracks_count; j++) {
+                        if (unique_track_syms[j] == current_track_sym) {
+                            found = 1;
+                            break;
                         }
-                        if (!found) {
-                            found_offsets[offsets_count++] = offset;
-                        }
+                    }
+                    if (!found) {
+                        unique_track_syms[unique_tracks_count++] = current_track_sym;
                     }
                 }
                 sysmem_freeptr(track_str);
@@ -545,31 +547,38 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     // 2. Also consider the global current offset as a potential new span
+    char current_track_str[64];
+    snprintf(current_track_str, 64, "%ld-%.4f", x->current_track, x->current_offset);
+    t_symbol *current_track_sym = gensym(current_track_str);
     int global_offset_found = 0;
-    for (long i = 0; i < offsets_count; i++) {
-        if (fabs(found_offsets[i] - x->current_offset) < 1e-9) {
+    for (long i = 0; i < unique_tracks_count; i++) {
+        if (unique_track_syms[i] == current_track_sym) {
             global_offset_found = 1;
             break;
         }
     }
     if (!global_offset_found) {
-        found_offsets[offsets_count++] = x->current_offset;
+        unique_track_syms[unique_tracks_count++] = current_track_sym;
     }
 
-    // 3. Add the note to each span (identified by its offset)
-    buildspans_verbose_log(x, "Adding note to %ld span(s) on track %ld", offsets_count, x->current_track);
-    for (long i = 0; i < offsets_count; i++) {
-         buildspans_process_and_add_note(x, timestamp, score, found_offsets[i]);
+    // 3. Add the note to each span (identified by its unique track symbol)
+    buildspans_verbose_log(x, "Adding note to %ld span(s) on track %ld", unique_tracks_count, x->current_track);
+    for (long i = 0; i < unique_tracks_count; i++) {
+        const char *offset_part = strchr(unique_track_syms[i]->s_name, '-');
+        if (offset_part) {
+            double offset = strtod(offset_part + 1, NULL);
+            buildspans_process_and_add_note(x, timestamp, score, offset);
+        }
     }
 
-    sysmem_freeptr(found_offsets);
+    sysmem_freeptr(unique_track_syms);
 }
 
 
 void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset) {
     // Get current track symbol
     char track_str[64];
-    snprintf(track_str, 64, "%ld-%.0f", x->current_track, offset);
+    snprintf(track_str, 64, "%ld-%.4f", x->current_track, offset);
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
