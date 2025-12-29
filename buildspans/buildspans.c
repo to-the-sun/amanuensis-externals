@@ -373,26 +373,34 @@ void buildspans_clear(t_buildspans *x) {
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset(t_buildspans *x, double f) {
+    // Update the global offset first
+    x->current_offset = f;
+    buildspans_verbose_log(x, "Global offset updated to: %.2f. Duplicating one span for each active track.", f);
 
-    // 1. Find an existing span for the current track to use as a source for duplication.
-    // It doesn't matter which one, as they should all be duplicates.
-    t_symbol *source_track_sym = NULL;
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
-    char track_prefix[32];
-    snprintf(track_prefix, 32, "%ld-", x->current_track);
+    if (!keys) return;
 
+    // 1. Identify all unique track numbers (the integer part of the track-offset key)
+    long unique_track_num_count = 0;
+    long *unique_track_nums = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
     if (keys) {
         for (long i = 0; i < num_keys; i++) {
             char *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
-                if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                    source_track_sym = gensym(track_str);
-                    sysmem_freeptr(track_str);
-                    sysmem_freeptr(bar_str);
-                    sysmem_freeptr(prop_str);
-                    break; // Found one, that's enough
+                long current_track_num;
+                if (sscanf(track_str, "%ld-", &current_track_num) == 1) {
+                    int found = 0;
+                    for (long j = 0; j < unique_track_num_count; j++) {
+                        if (unique_track_nums[j] == current_track_num) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        unique_track_nums[unique_track_num_count++] = current_track_num;
+                    }
                 }
                 sysmem_freeptr(track_str);
                 sysmem_freeptr(bar_str);
@@ -401,43 +409,64 @@ void buildspans_offset(t_buildspans *x, double f) {
         }
     }
 
-    // Update the global offset regardless
-    x->current_offset = f;
-    buildspans_verbose_log(x, "Global offset updated to: %.2f", f);
+    // 2. For each unique track number, find one representative span, gather its notes, and re-process them.
+    for (long i = 0; i < unique_track_num_count; i++) {
+        long track_num_to_process = unique_track_nums[i];
+        t_symbol *source_track_sym = NULL;
 
-    // 2. If a source span exists, gather all its notes and re-process them.
-    if (source_track_sym) {
-        buildspans_verbose_log(x, "Duplicating existing span for track %ld with new offset %.2f", x->current_track, f);
+        // Find the first track-offset symbol that matches the current track number.
+        if (keys) {
+            for (long j = 0; j < num_keys; j++) {
+                char *track_str, *bar_str, *prop_str;
+                 if (parse_hierarchical_key(keys[j], &track_str, &bar_str, &prop_str)) {
+                    long current_key_track_num;
+                    if (sscanf(track_str, "%ld-", &current_key_track_num) == 1 && current_key_track_num == track_num_to_process) {
+                        source_track_sym = gensym(track_str);
+                        sysmem_freeptr(track_str);
+                        sysmem_freeptr(bar_str);
+                        sysmem_freeptr(prop_str);
+                        break; // Found our representative
+                    }
+                    sysmem_freeptr(track_str);
+                    sysmem_freeptr(bar_str);
+                    sysmem_freeptr(prop_str);
+                }
+            }
+        }
+
+        if (!source_track_sym) continue; // Should not happen, but a safe guard.
+
+        buildspans_verbose_log(x, "Found representative span %s for track number %ld. Duplicating with new offset %.2f", source_track_sym->s_name, track_num_to_process, f);
 
         long notes_capacity = 128;
         long notes_count = 0;
         NotePair *notes = (NotePair *)sysmem_newptr(notes_capacity * sizeof(NotePair));
 
         if (keys) {
-            for (long i = 0; i < num_keys; i++) {
+            for (long j = 0; j < num_keys; j++) {
                 char *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
+                if (parse_hierarchical_key(keys[j], &track_str, &bar_str, &prop_str)) {
                     if (strcmp(track_str, source_track_sym->s_name) == 0 && strcmp(prop_str, "absolutes") == 0) {
                         t_atom a;
-                        dictionary_getatom(x->building, keys[i], &a);
+                        dictionary_getatom(x->building, keys[j], &a);
                         t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
 
                         t_symbol *scores_key = generate_hierarchical_key(source_track_sym, gensym(bar_str), gensym("scores"));
                         dictionary_getatom(x->building, scores_key, &a);
                         t_atomarray *scores = (t_atomarray *)atom_getobj(&a);
 
-                        long abs_count, scores_count;
-                        t_atom *abs_atoms, *scores_atoms;
+                        long abs_count; t_atom *abs_atoms;
+                        long scores_count; t_atom *scores_atoms;
                         atomarray_getatoms(absolutes, &abs_count, &abs_atoms);
                         atomarray_getatoms(scores, &scores_count, &scores_atoms);
 
-                        for (long j = 0; j < abs_count; j++) {
+                        for (long k = 0; k < abs_count; k++) {
                             if (notes_count >= notes_capacity) {
                                 notes_capacity *= 2;
                                 notes = (NotePair *)sysmem_resizeptr(notes, notes_capacity * sizeof(NotePair));
                             }
-                            notes[notes_count].timestamp = atom_getfloat(abs_atoms + j);
-                            notes[notes_count].score = atom_getfloat(scores_atoms + j);
+                            notes[notes_count].timestamp = atom_getfloat(abs_atoms + k);
+                            notes[notes_count].score = atom_getfloat(scores_atoms + k);
                             notes_count++;
                         }
                     }
@@ -448,17 +477,22 @@ void buildspans_offset(t_buildspans *x, double f) {
             }
         }
 
-        // Chronological sort based on timestamp
-        qsort(notes, notes_count, sizeof(NotePair), compare_notepairs);
+        if (notes_count > 0) {
+            qsort(notes, notes_count, sizeof(NotePair), compare_notepairs);
 
-        // Re-process notes with the new offset
-        for (long i = 0; i < notes_count; i++) {
-            buildspans_process_and_add_note(x, notes[i].timestamp, notes[i].score, f);
+            long original_track = x->current_track;
+            x->current_track = track_num_to_process;
+
+            for (long k = 0; k < notes_count; k++) {
+                buildspans_process_and_add_note(x, notes[k].timestamp, notes[k].score, f);
+            }
+
+            x->current_track = original_track;
         }
-
         sysmem_freeptr(notes);
     }
 
+    sysmem_freeptr(unique_track_nums);
     if (keys) sysmem_freeptr(keys);
     buildspans_visualize_memory(x);
 }
