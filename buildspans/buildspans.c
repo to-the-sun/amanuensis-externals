@@ -653,7 +653,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     t_symbol *offset_key = generate_hierarchical_key(track_sym, bar_sym, gensym("offset"));
     if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
     dictionary_appendfloat(x->building, offset_key, offset);
-    buildspans_verbose_log(x, "%s::%s %.2f", offset_key->s_name, "offset", offset);
+    buildspans_verbose_log(x, "%s %.2f", offset_key->s_name, offset);
     t_atom offset_atom;
     atom_setfloat(&offset_atom, offset);
     buildspans_log_update(x, track_sym, bar_sym, gensym("offset"), 1, &offset_atom);
@@ -662,7 +662,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     t_symbol *palette_key = generate_hierarchical_key(track_sym, bar_sym, gensym("palette"));
     if (dictionary_hasentry(x->building, palette_key)) dictionary_deleteentry(x->building, palette_key);
     dictionary_appendsym(x->building, palette_key, x->current_palette);
-    buildspans_verbose_log(x, "%s::%s %s", palette_key->s_name, "palette", x->current_palette->s_name);
+    buildspans_verbose_log(x, "%s %s", palette_key->s_name, x->current_palette->s_name);
     t_atom palette_atom;
     atom_setsym(&palette_atom, x->current_palette);
     buildspans_log_update(x, track_sym, bar_sym, gensym("palette"), 1, &palette_atom);
