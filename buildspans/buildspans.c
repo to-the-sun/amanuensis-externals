@@ -281,14 +281,9 @@ void buildspans_visualize_memory(t_buildspans *x) {
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f}", x->current_offset);
 
     if (x->verbose && x->verbose_log_outlet) {
-        // Prepend "visualize " to the JSON string and send it out the verbose outlet
-        size_t final_len = strlen("visualize ") + strlen(json_buffer) + 1;
-        char *final_message = (char *)sysmem_newptr(final_len);
-        if (final_message) {
-            snprintf(final_message, final_len, "visualize %s", json_buffer);
-            outlet_anything(x->verbose_log_outlet, gensym(final_message), 0, NULL);
-            sysmem_freeptr(final_message);
-        }
+        t_atom json_atom;
+        atom_setsym(&json_atom, gensym(json_buffer));
+        outlet_anything(x->verbose_log_outlet, gensym("visualize"), 1, &json_atom);
     }
 
     sysmem_freeptr(json_buffer);
