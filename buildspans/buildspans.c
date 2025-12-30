@@ -373,6 +373,13 @@ void buildspans_clear(t_buildspans *x) {
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset(t_buildspans *x, double f) {
+    // Only duplicate if the new offset is different and the old offset was not the initial default.
+    if (f == x->current_offset || x->current_offset == 0.0) {
+        x->current_offset = f;
+        buildspans_verbose_log(x, "Global offset updated to: %.2f. No duplication.", f);
+        return;
+    }
+
     // Update the global offset first
     x->current_offset = f;
     buildspans_verbose_log(x, "Global offset updated to: %.2f. Duplicating one span for each active track.", f);
