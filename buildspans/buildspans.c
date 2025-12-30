@@ -817,7 +817,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
             // Logging
-            buildspans_verbose_log(x, "%s %s", span_key->s_name, span_str);
+            char log_buffer[512];
+            snprintf(log_buffer, 512, "%s %s", span_key->s_name, span_str);
+            buildspans_verbose_log(x, "%s", log_buffer);
             long count; t_atom *atoms;
             atomarray_getatoms(new_span_array, &count, &atoms);
             buildspans_log_update(x, track_sym, temp_bar_sym, gensym("span"), count, atoms);
