@@ -35,207 +35,30 @@ def udp_listener():
     while True:
         try:
             data, addr = sock.recvfrom(65536)
-            text = data.decode("utf-8", errors="ignore").replace('\x00', '').strip()
+            text = data.decode("utf-8", errors="ignore").rstrip(",").strip()
             print("UDP recv from {}: {}".format(addr, text))
             if not text:
                 continue
 
-            now = time.time()
+            # The C code sends a single JSON object per UDP packet.
+            # It might have a trailing comma from a previous bug, so we strip it.
+            if text.endswith(','):
+                text = text[:-1]
 
-            # If the packet looks like JSON, parse and handle known keys (stats, bar, transcript)
-            if text.startswith("{") or text.startswith("["):
-                try:
-                    pkt = json.loads(text)
-                except Exception as e:
-                    print("UDP listener: JSON parse error:", e)
-                    continue
-
-                if not isinstance(pkt, dict):
-                    print("UDP listener: JSON packet is not a dict")
-                    continue
-
-                try:
-                    with state_lock:
-                        if "stats" in pkt and isinstance(pkt["stats"], dict):
-                            if "song_length" in pkt["stats"]:
-                                state["song_length"] = float(pkt["stats"]["song_length"])
-                        if "bar" in pkt and isinstance(pkt["bar"], dict):
-                            if "measure_length" in pkt["bar"]:
-                                val = float(pkt["bar"]["measure_length"])
-                                state["measure_length"] = val if val > 0 else 1.0
-
-                        if "working_memory" in pkt and isinstance(pkt["working_memory"], dict):
-                            state["working_memory"] = pkt["working_memory"]
-
-                        if "current_offset" in pkt:
-                            state["current_offset"] = float(pkt["current_offset"])
-
-                        # Incremental transcript updates (merge/delete semantics)
-                        if "transcript" in pkt and isinstance(pkt["transcript"], dict):
-                            incoming = pkt["transcript"]
-                            for trackKey, measures in incoming.items():
-                                tKey = str(trackKey)
-                                if measures is None:
-                                    if tKey in state["transcript"]:
-                                        for m in list(state["transcript"][tKey].keys()):
-                                            cellKey = f"{tKey}_{m}"
-                                            if cellKey in flash_state:
-                                                del flash_state[cellKey]
-                                        del state["transcript"][tKey]
-                                    continue
-                                if not isinstance(measures, dict):
-                                    continue
-                                if tKey not in state["transcript"]:
-                                    state["transcript"][tKey] = {}
-                                for measureStart, entry in measures.items():
-                                    mKey = str(measureStart)
-                                    cellKey = f"{tKey}_{mKey}"
-                                    if entry is None:
-                                        if mKey in state["transcript"][tKey]:
-                                            del state["transcript"][tKey][mKey]
-                                            if cellKey in flash_state:
-                                                del flash_state[cellKey]
-                                        continue
-                                    if not isinstance(entry, dict):
-                                        continue
-                                    # preserve previous entry to detect newly added ratings inside spans
-                                    prev_entry = state["transcript"][tKey].get(mKey)
-                                    state["transcript"][tKey][mKey] = dict(entry)
-                                    if "offset" in entry or "rating" in entry:
-                                        if "offset" in entry:
-                                            flash_color = (255, 153, 26)
-                                        else:
-                                            # rating present: if this entry has a 'span' and previously there was no rating,
-                                            # treat it as a newly added span and flash orange; otherwise use blue.
-                                            prev_rating = None
-                                            if isinstance(prev_entry, dict):
-                                                prev_rating = prev_entry.get("rating")
-                                            if "span" in entry and (prev_entry is None or prev_rating in (None, [], "", False)):
-                                                flash_color = (255, 153, 26)  # orange for newly added span ratings
-                                            else:
-                                                flash_color = (25, 51, 128)   # normal blue for rating updates
-                                        fs = flash_state.setdefault(cellKey, {})
-                                        fs["flash_until"] = now + FLASH_DURATION
-                                        fs["flash_color"] = flash_color
-                                    if entry.get("flashX"):
-                                         fs = flash_state.setdefault(cellKey, {})
-                                         fs["x_until"] = now + X_FLASH_DURATION
-                except Exception as e:
-                    print("UDP listener: Error updating state from JSON:", e)
+            try:
+                pkt = json.loads(text)
+            except json.JSONDecodeError as e:
+                print(f"UDP listener: JSON parse error: {e}")
                 continue
 
-            # Non-JSON handling: support raw text formats
-            try:
-                t = text.rstrip().rstrip(",").strip()
-
-                parts_space = t.split()
-                if len(parts_space) >= 2 and parts_space[0] in ("song_length", "bar"):
-                    try:
-                        # Clean up value: remove non-numeric chars except dot and minus
-                        raw_val = parts_space[1]
-                        cleaned_val = ''.join(c for c in raw_val if c.isdigit() or c in '.-')
-                        val = float(cleaned_val)
-                        with state_lock:
-                            if parts_space[0] == "song_length":
-                                state["song_length"] = val
-                            else:
-                                state["measure_length"] = val if val > 0 else 1.0
-                    except Exception as e:
-                        print("UDP listener: Error parsing song_length/bar:", e)
-                    continue
-
-                if "nonexistent_recitation" in t:
-                    import re
-                    m = re.findall(r"(-?\d+)", t)
-                    if len(m) >= 2:
-                        try:
-                            tKey = str(int(m[0]))
-                            mKey = str(int(m[1]))
-                            cellKey = f"{tKey}_{mKey}"
-                            with state_lock:
-                                fs = flash_state.setdefault(cellKey, {})
-                                fs["x_until"] = now + X_FLASH_DURATION
-                        except Exception as e:
-                            print("UDP listener: Error parsing nonexistent_recitation:", e)
-                    continue
-
-                if "::" in t:
-                    parts = t.split("::")
-                    if len(parts) >= 3:
-                        try:
-                            track = str(int(parts[0].split()[-1]))
-                            measure = str(int(parts[1].split()[0]))
-
-                            field_part = parts[2].strip()
-                            value_raw = None
-                            if len(parts) >= 4:
-                                value_raw = "::".join(parts[3:]).strip()
-                                if " " in field_part:
-                                    fsplit = field_part.split(None, 1)
-                                    field = fsplit[0]
-                                    if not value_raw:
-                                        value_raw = fsplit[1]
-                                else:
-                                    field = field_part
-                            else:
-                                if " " in field_part:
-                                    fsplit = field_part.split(None, 1)
-                                    field = fsplit[0]
-                                    value_raw = fsplit[1]
-                                else:
-                                    field = field_part
-
-                            def _parse_token(tok):
-                                try:
-                                    if "." in tok:
-                                        return float(tok)
-                                    else:
-                                        return int(tok)
-                                except:
-                                    lt = tok.lower()
-                                    if lt in ("true", "false"):
-                                        return lt == "true"
-                                    return tok
-
-                            if value_raw is None or value_raw == "":
-                                value = True
-                            else:
-                                toks = [p for p in value_raw.replace(",", " ").split() if p]
-                                if len(toks) == 1:
-                                    value = _parse_token(toks[0])
-                                else:
-                                    value = [_parse_token(p) for p in toks]
-
-                            with state_lock:
-                                if track not in state["transcript"]:
-                                    state["transcript"][track] = {}
-                                if measure not in state["transcript"][track]:
-                                    state["transcript"][track][measure] = {}
-                                state["transcript"][track][measure][field] = value
-
-                                cellKey = f"{track}_{measure}"
-                                if field in ("offset", "rating"):
-                                    if field == "offset":
-                                        flash_color = (255, 153, 26)
-                                    else:
-                                        flash_color = (25, 51, 128)
-                                    fs = flash_state.setdefault(cellKey, {})
-                                    fs["flash_until"] = now + FLASH_DURATION
-                                    fs["flash_color"] = flash_color
-                                if field == "flashX":
-                                    fs = flash_state.setdefault(cellKey, {})
-                                    fs["x_until"] = now + X_FLASH_DURATION
-                        except Exception as e:
-                            print("UDP listener: Error parsing hierarchical :: message:", e)
-                    continue
-            except Exception as e:
-                print("UDP listener: Error in non-JSON parsing:", e)
-
-            # If we get here, the text was unrecognized: ignore
-            # (already printed the raw message above)
+            with state_lock:
+                if "building" in pkt:
+                    state["working_memory"] = pkt["building"]
+                if "current_offset" in pkt:
+                    state["current_offset"] = float(pkt["current_offset"])
 
         except Exception as e:
-            print("UDP listener: Unexpected error:", e)
+            print(f"UDP listener: Unexpected error: {e}")
 
 # Helper to prune flash_state when transcript replacement/deletion occurs.
 def _prune_flash_state_unlocked():
@@ -349,36 +172,50 @@ def run_gui():
                 screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
 
                 if working_memory:
-                    track_h = timeline_h / max(1, len(working_memory))
-                    sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k))
+                    # Group by track number (the part before the hyphen)
+                    grouped_by_track = {}
+                    for k, v in working_memory.items():
+                        track_num = k.split('-')[0]
+                        if track_num not in grouped_by_track:
+                            grouped_by_track[track_num] = {"absolutes": [], "offsets": []}
+                        grouped_by_track[track_num]["absolutes"].extend(v.get("absolutes", []))
+                        grouped_by_track[track_num]["offsets"].extend(v.get("offsets", []))
+
+                    track_h = timeline_h / max(1, len(grouped_by_track))
+                    sorted_track_keys = sorted(grouped_by_track.keys(), key=lambda k: int(k))
 
                     for i, track_id in enumerate(sorted_track_keys):
-                        track_data = working_memory[track_id]
+                        track_data = grouped_by_track[track_id]
                         track_y = timeline_top + i * track_h
 
                         # Draw track label
                         track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
                         screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
 
-                        # Draw hash marks and labels for absolutes
+                        # Draw hash marks and labels for absolutes for this track only
                         for ts in track_data.get("absolutes", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
                             label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
                             screen.blit(label, (x + 2, track_y + (i % 2) * 15))
 
+                    # Consolidate and de-duplicate all offsets from all tracks
+                    all_offsets = set()
+                    for track_data in grouped_by_track.values():
+                        all_offsets.update(track_data.get("offsets", []))
+                    if current_offset is not None:
+                        all_offsets.add(current_offset)
 
-                        # Consolidate and de-duplicate offsets
-                        all_offsets = set(track_data.get("offsets", []))
-                        if current_offset is not None:
-                            all_offsets.add(current_offset)
-
-                        # Draw hash marks and labels for offsets
+                    # Draw hash marks for all offsets on all tracks
+                    for i, track_id in enumerate(sorted_track_keys):
+                        track_y = timeline_top + i * track_h
                         for ts in all_offsets:
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
-                            label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
-                            screen.blit(label, (x + 2, track_y + track_h - 15 - (i % 2) * 15))
+                            # To avoid label clutter, we can draw labels only once, e.g., at the top
+                            if i == 0:
+                                label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
+                                screen.blit(label, (x + 2, timeline_top - 15))
 
 
             # draw measure start labels
