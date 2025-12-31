@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "ext_proto.h"
+#include "../shared/visualize.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
@@ -281,9 +282,10 @@ void buildspans_visualize_memory(t_buildspans *x) {
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f}", x->current_offset);
 
     if (x->verbose && x->verbose_log_outlet) {
-        t_atom json_atom;
-        atom_setsym(&json_atom, gensym(json_buffer));
-        outlet_anything(x->verbose_log_outlet, gensym("visualize"), 1, &json_atom);
+        visualize(json_buffer);
+        // t_atom json_atom;
+        // atom_setsym(&json_atom, gensym(json_buffer));
+        // outlet_anything(x->verbose_log_outlet, gensym("visualize"), 1, &json_atom);
     }
 
     sysmem_freeptr(json_buffer);
@@ -336,6 +338,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Outlets are created from right to left
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+            visualize_init();
         }
         x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
@@ -345,6 +348,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void buildspans_free(t_buildspans *x) {
+    if (x->verbose) {
+        visualize_cleanup();
+    }
     if (x->building) {
         buildspans_verbose_log(x, "FREE: Freeing building dictionary: %p", x->building);
         object_free(x->building);
