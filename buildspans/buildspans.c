@@ -307,7 +307,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
         sysmem_freeptr(bar_timestamps);
     }
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%ld}", x->current_offset);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%ld,\"bar_length\":%ld}", x->current_offset, x->bar_length);
 
     if (x->verbose && x->verbose_log_outlet) {
         visualize(json_buffer);

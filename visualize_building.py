@@ -19,7 +19,8 @@ state = {
     "measure_length": 1.0,
     "transcript": {},
     "working_memory": {},
-    "current_offset": 0.0
+    "current_offset": 0.0,
+    "bar_length": 125.0
 }
 state_lock = threading.Lock()
 
@@ -56,6 +57,8 @@ def udp_listener():
                     state["working_memory"] = pkt["building"]
                 if "current_offset" in pkt:
                     state["current_offset"] = float(pkt["current_offset"])
+                if "bar_length" in pkt:
+                    state["bar_length"] = float(pkt["bar_length"])
 
         except Exception as e:
             print(f"UDP listener: Unexpected error: {e}")
@@ -127,6 +130,7 @@ def run_gui():
                 flash_snapshot = {k: dict(v) for k, v in flash_state.items()}
                 working_memory = state.get("working_memory", {})
                 current_offset = state.get("current_offset", 0.0)
+                bar_length = state.get("bar_length", 125.0)
 
             # compute layout
             numTracks = max(1, 4)
@@ -201,36 +205,36 @@ def run_gui():
                         # Draw horizontal bars for spans
                         span_data = track_data.get("span", [])
                         if span_data:
-                            # Extract the offset from the track_id
                             try:
                                 offset = float(track_id.split('-')[1])
 
-                                # Find the min and max timestamps *within the span* for this specific track
-                                min_span_ts = min(span_data)
-                                max_span_ts = max(span_data)
+                                # The main container bar. The timestamps in span_data are relative.
+                                # To get the absolute position, we need to add the track's offset.
+                                min_abs_span_ts = min(span_data) + offset
+                                max_abs_span_ts = max(span_data) + offset + bar_length # Add bar_length to get the end of the last bar
 
-                                # Calculate the screen coordinates for the start and end of the span bar
-                                start_x = grid_left + grid_w * (min_span_ts - min_ts) / span_ts
-                                end_x = grid_left + grid_w * (max_span_ts - min_ts) / span_ts
+                                start_x = grid_left + grid_w * (min_abs_span_ts - min_ts) / span_ts
+                                end_x = grid_left + grid_w * (max_abs_span_ts - min_ts) / span_ts
 
-                                # Draw the main bar for the span
                                 bar_y = track_y + track_h * 0.5 # Center the bar vertically
                                 bar_height = track_h * 0.4
                                 pygame.draw.rect(screen, (100, 100, 255), (start_x, bar_y - bar_height / 2, end_x - start_x, bar_height))
 
                                 # Draw individual bars within the span and their relative labels
-                                for bar_ts in span_data:
-                                    bar_start_x = grid_left + grid_w * (bar_ts - min_ts) / span_ts
-                                    # Assuming a fixed length for now, e.g., 10 pixels wide or based on a property if available
-                                    bar_width = 5
-                                    pygame.draw.rect(screen, (200, 200, 255), (bar_start_x, bar_y - bar_height / 2, bar_width, bar_height))
+                                for bar_relative_ts in span_data:
+                                    # Calculate absolute position for drawing
+                                    bar_abs_start_ts = bar_relative_ts + offset
+                                    bar_start_x = grid_left + grid_w * (bar_abs_start_ts - min_ts) / span_ts
 
-                                    # Label with relative timestamp
-                                    relative_ts = bar_ts - offset
-                                    label_text = f"{relative_ts:.0f}"
+                                    # Calculate width in pixels based on bar_length
+                                    bar_width_pixels = (grid_w * bar_length) / span_ts
+
+                                    pygame.draw.rect(screen, (200, 200, 255), (bar_start_x, bar_y - bar_height / 2, bar_width_pixels, bar_height))
+
+                                    # Label with the relative timestamp from the span data
+                                    label_text = f"{bar_relative_ts:.0f}"
                                     label = small_font.render(label_text, True, (255, 255, 255))
                                     screen.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
-
 
                             except (ValueError, IndexError):
                                 # Handle cases where the track_id format is unexpected
