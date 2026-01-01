@@ -158,7 +158,13 @@ def run_gui():
             screen.fill(BACKGROUND)
 
             # draw working_memory timeline
-            all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
+            all_ts = [
+                ts
+                for track_data in working_memory.values()
+                for key, ts_list in track_data.items()
+                if key in ("absolutes", "offsets")
+                for ts in ts_list
+            ]
             if current_offset is not None:
                 all_ts.append(current_offset)
 
