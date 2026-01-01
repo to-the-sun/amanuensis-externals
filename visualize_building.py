@@ -172,50 +172,77 @@ def run_gui():
                 screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
 
                 if working_memory:
-                    # Group by track number (the part before the hyphen)
-                    grouped_by_track = {}
-                    for k, v in working_memory.items():
-                        track_num = k.split('-')[0]
-                        if track_num not in grouped_by_track:
-                            grouped_by_track[track_num] = {"absolutes": [], "offsets": []}
-                        grouped_by_track[track_num]["absolutes"].extend(v.get("absolutes", []))
-                        grouped_by_track[track_num]["offsets"].extend(v.get("offsets", []))
-
-                    track_h = timeline_h / max(1, len(grouped_by_track))
-                    sorted_track_keys = sorted(grouped_by_track.keys(), key=lambda k: int(k))
+                    # Each unique track-offset identifier gets its own row
+                    sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k.split('-')[0]))
+                    track_h = timeline_h / max(1, len(sorted_track_keys))
 
                     for i, track_id in enumerate(sorted_track_keys):
-                        track_data = grouped_by_track[track_id]
+                        track_data = working_memory[track_id]
                         track_y = timeline_top + i * track_h
 
                         # Draw track label
                         track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
                         screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
 
-                        # Draw hash marks and labels for absolutes for this track only
+                        # Draw hash marks for absolutes
                         for ts in track_data.get("absolutes", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
                             label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
-                            screen.blit(label, (x + 2, track_y + (i % 2) * 15))
+                            screen.blit(label, (x + 2, track_y + 5))
 
-                    # Consolidate and de-duplicate all offsets from all tracks
-                    all_offsets = set()
-                    for track_data in grouped_by_track.values():
-                        all_offsets.update(track_data.get("offsets", []))
-                    if current_offset is not None:
-                        all_offsets.add(current_offset)
-
-                    # Draw hash marks for all offsets on all tracks
-                    for i, track_id in enumerate(sorted_track_keys):
-                        track_y = timeline_top + i * track_h
-                        for ts in all_offsets:
+                        # Draw hash marks for offsets
+                        for ts in track_data.get("offsets", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
-                            # To avoid label clutter, we can draw labels only once, e.g., at the top
-                            if i == 0:
-                                label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
-                                screen.blit(label, (x + 2, timeline_top - 15))
+                            label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
+                            screen.blit(label, (x + 2, track_y + 20))
+
+                        # Draw horizontal bars for spans
+                        span_data = track_data.get("span", [])
+                        if span_data:
+                            # Extract the offset from the track_id
+                            try:
+                                offset = float(track_id.split('-')[1])
+
+                                # Find the min and max timestamps *within the span* for this specific track
+                                min_span_ts = min(span_data)
+                                max_span_ts = max(span_data)
+
+                                # Calculate the screen coordinates for the start and end of the span bar
+                                start_x = grid_left + grid_w * (min_span_ts - min_ts) / span_ts
+                                end_x = grid_left + grid_w * (max_span_ts - min_ts) / span_ts
+
+                                # Draw the main bar for the span
+                                bar_y = track_y + track_h * 0.5 # Center the bar vertically
+                                bar_height = track_h * 0.4
+                                pygame.draw.rect(screen, (100, 100, 255), (start_x, bar_y - bar_height / 2, end_x - start_x, bar_height))
+
+                                # Draw individual bars within the span and their relative labels
+                                for bar_ts in span_data:
+                                    bar_start_x = grid_left + grid_w * (bar_ts - min_ts) / span_ts
+                                    # Assuming a fixed length for now, e.g., 10 pixels wide or based on a property if available
+                                    bar_width = 5
+                                    pygame.draw.rect(screen, (200, 200, 255), (bar_start_x, bar_y - bar_height / 2, bar_width, bar_height))
+
+                                    # Label with relative timestamp
+                                    relative_ts = bar_ts - offset
+                                    label_text = f"{relative_ts:.0f}"
+                                    label = small_font.render(label_text, True, (255, 255, 255))
+                                    screen.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
+
+
+                            except (ValueError, IndexError):
+                                # Handle cases where the track_id format is unexpected
+                                pass
+
+
+                    # Draw a single line for the current global offset across all tracks
+                    if current_offset is not None:
+                         x = grid_left + grid_w * (current_offset - min_ts) / span_ts
+                         pygame.draw.line(screen, (255, 100, 100), (x, timeline_top), (x, timeline_top + timeline_h), 2)
+                         label = small_font.render(f"{current_offset:.2f}", True, (255, 100, 100))
+                         screen.blit(label, (x + 2, timeline_top - 15))
 
 
             # draw measure start labels
