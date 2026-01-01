@@ -19,7 +19,8 @@ state = {
     "measure_length": 1.0,
     "transcript": {},
     "working_memory": {},
-    "current_offset": 0.0
+    "current_offset": 0.0,
+    "bar_length": 125.0
 }
 state_lock = threading.Lock()
 
@@ -56,6 +57,8 @@ def udp_listener():
                     state["working_memory"] = pkt["building"]
                 if "current_offset" in pkt:
                     state["current_offset"] = float(pkt["current_offset"])
+                if "bar_length" in pkt:
+                    state["bar_length"] = float(pkt["bar_length"])
 
         except Exception as e:
             print(f"UDP listener: Unexpected error: {e}")
@@ -127,6 +130,7 @@ def run_gui():
                 flash_snapshot = {k: dict(v) for k, v in flash_state.items()}
                 working_memory = state.get("working_memory", {})
                 current_offset = state.get("current_offset", 0.0)
+                bar_length = state.get("bar_length", 125.0)
 
             # compute layout
             numTracks = max(1, 4)
@@ -154,7 +158,13 @@ def run_gui():
             screen.fill(BACKGROUND)
 
             # draw working_memory timeline
-            all_ts = [ts for track_data in working_memory.values() for ts_type in track_data.values() for ts in ts_type]
+            all_ts = [
+                ts
+                for track_data in working_memory.values()
+                for key, ts_list in track_data.items()
+                if key in ("absolutes", "offsets")
+                for ts in ts_list
+            ]
             if current_offset is not None:
                 all_ts.append(current_offset)
 
@@ -172,51 +182,85 @@ def run_gui():
                 screen.blit(max_label, (grid_right - max_label.get_width(), timeline_top + timeline_h + 5))
 
                 if working_memory:
-                    # Group by track number (the part before the hyphen)
-                    grouped_by_track = {}
-                    for k, v in working_memory.items():
-                        track_num = k.split('-')[0]
-                        if track_num not in grouped_by_track:
-                            grouped_by_track[track_num] = {"absolutes": [], "offsets": []}
-                        grouped_by_track[track_num]["absolutes"].extend(v.get("absolutes", []))
-                        grouped_by_track[track_num]["offsets"].extend(v.get("offsets", []))
-
-                    track_h = timeline_h / max(1, len(grouped_by_track))
-                    sorted_track_keys = sorted(grouped_by_track.keys(), key=lambda k: int(k))
+                    # Each unique track-offset identifier gets its own row
+                    sorted_track_keys = sorted(working_memory.keys(), key=lambda k: int(k.split('-')[0]))
+                    track_h = timeline_h / max(1, len(sorted_track_keys))
 
                     for i, track_id in enumerate(sorted_track_keys):
-                        track_data = grouped_by_track[track_id]
+                        track_data = working_memory[track_id]
                         track_y = timeline_top + i * track_h
 
                         # Draw track label
                         track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
                         screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
 
-                        # Draw hash marks and labels for absolutes for this track only
+                        # Draw horizontal bars for spans (drawn first, in the background)
+                        span_data = track_data.get("span", [])
+                        if span_data:
+                            try:
+                                offset = float(track_id.split('-')[1])
+
+                                # The main container bar. The timestamps in span_data are relative.
+                                # To get the absolute position, we need to add the track's offset.
+                                min_abs_span_ts = min(span_data) + offset
+                                max_abs_span_ts = max(span_data) + offset + bar_length # Add bar_length to get the end of the last bar
+
+                                start_x = grid_left + grid_w * (min_abs_span_ts - min_ts) / span_ts
+                                end_x = grid_left + grid_w * (max_abs_span_ts - min_ts) / span_ts
+
+                                bar_y = track_y + track_h * 0.5 # Center the bar vertically
+                                bar_height = track_h * 0.4
+
+                                # Use a surface to handle opacity
+                                s = pygame.Surface((end_x - start_x, bar_height), pygame.SRCALPHA)
+                                s.fill((60, 60, 100, 128)) # Dull blue with alpha
+                                screen.blit(s, (start_x, bar_y - bar_height / 2))
+
+
+                                # Draw individual bars within the span and their relative labels
+                                for bar_relative_ts in span_data:
+                                    # Calculate absolute position for drawing
+                                    bar_abs_start_ts = bar_relative_ts + offset
+                                    bar_start_x = grid_left + grid_w * (bar_abs_start_ts - min_ts) / span_ts
+
+                                    # Calculate width in pixels based on bar_length
+                                    bar_width_pixels = (grid_w * bar_length) / span_ts
+
+                                    s = pygame.Surface((bar_width_pixels, bar_height), pygame.SRCALPHA)
+                                    s.fill((90, 90, 130, 128)) # Slightly lighter dull blue
+                                    screen.blit(s, (bar_start_x, bar_y - bar_height / 2))
+
+                                    # Label with the relative timestamp from the span data
+                                    label_text = f"{bar_relative_ts:.0f}"
+                                    label = small_font.render(label_text, True, (204, 204, 204))
+                                    screen.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
+
+                            except (ValueError, IndexError):
+                                # Handle cases where the track_id format is unexpected
+                                pass
+
+                        # Draw hash marks for absolutes
                         for ts in track_data.get("absolutes", []):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
                             label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
-                            screen.blit(label, (x + 2, track_y + (i % 2) * 15))
+                            screen.blit(label, (x + 2, track_y + 5))
 
-                    # Consolidate and de-duplicate all offsets from all tracks
+                    # Collect all unique offsets from all tracks
                     all_offsets = set()
-                    for track_data in grouped_by_track.values():
+                    for track_data in working_memory.values():
                         all_offsets.update(track_data.get("offsets", []))
-                    if current_offset is not None:
-                        all_offsets.add(current_offset)
 
-                    # Draw hash marks for all offsets on all tracks
+                    # Draw all offset hash marks on all tracks
                     for i, track_id in enumerate(sorted_track_keys):
                         track_y = timeline_top + i * track_h
                         for ts in all_offsets:
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
-                            # To avoid label clutter, we can draw labels only once, e.g., at the top
+                            # Label offsets only on the top track to avoid clutter
                             if i == 0:
-                                label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
+                                label = small_font.render(f"{ts:.0f}", True, (200, 100, 100))
                                 screen.blit(label, (x + 2, timeline_top - 15))
-
 
             # draw measure start labels
             for col in range(numColumns):
