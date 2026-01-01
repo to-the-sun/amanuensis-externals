@@ -160,6 +160,8 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset);
+void buildspans_cleanup_track_offsets(t_buildspans *x, long track_num_to_clean);
+void buildspans_delete_track_offset_keys(t_buildspans *x, t_symbol *track_sym_to_delete);
 
 
 // Helper function to send verbose log messages
@@ -1015,8 +1017,18 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
             dictionary_deleteentry(x->building, keys_to_delete[i]);
         }
         sysmem_freeptr(keys_to_delete);
-        sysmem_freeptr(keys);
     }
+
+    // 5. Run the cleanup function for the track that just ended a span
+    long track_num_to_clean;
+    if (sscanf(track_sym->s_name, "%ld-", &track_num_to_clean) == 1) {
+        buildspans_cleanup_track_offsets(x, track_num_to_clean);
+    }
+
+    if(keys) { // keys needs to be freed at the very end
+      sysmem_freeptr(keys);
+    }
+
 
     buildspans_visualize_memory(x);
 }
@@ -1402,4 +1414,145 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
     
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
+}
+
+
+void buildspans_delete_track_offset_keys(t_buildspans *x, t_symbol *track_sym_to_delete) {
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
+
+    buildspans_verbose_log(x, "CLEANUP: Deleting all keys for track-offset: %s", track_sym_to_delete->s_name);
+
+    t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
+    long delete_count = 0;
+
+    for (long i = 0; i < num_keys; i++) {
+        char *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+            if (strcmp(key_track, track_sym_to_delete->s_name) == 0) {
+                // Log atomarrays before they are deleted for debugging memory management
+                if (strcmp(key_prop, "absolutes") == 0 || strcmp(key_prop, "scores") == 0 || strcmp(key_prop, "span") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    t_object *obj = atom_getobj(&a);
+                    if (obj) {
+                        buildspans_verbose_log(x, "CLEANUP: Deleting %s object: %p", key_prop, obj);
+                    }
+                }
+                keys_to_delete[delete_count++] = keys[i];
+            }
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
+        }
+    }
+
+    for (long i = 0; i < delete_count; i++) {
+        dictionary_deleteentry(x->building, keys_to_delete[i]);
+    }
+
+    sysmem_freeptr(keys_to_delete);
+    sysmem_freeptr(keys);
+}
+
+// Struct to hold offset info for cleanup sorting
+typedef struct {
+    long offset;
+    long latest_bar_ts;
+} t_offset_info;
+
+// Comparison function for qsort to sort t_offset_info structs
+int compare_offset_info(const void *a, const void *b) {
+    t_offset_info *ia = (t_offset_info *)a;
+    t_offset_info *ib = (t_offset_info *)b;
+    return (ia->offset > ib->offset) - (ia->offset < ib->offset);
+}
+
+void buildspans_cleanup_track_offsets(t_buildspans *x, long track_num_to_clean) {
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
+
+    // 1. Single Pass: Gather latest bar timestamp for each offset of the track
+    long info_capacity = 16;
+    long info_count = 0;
+    t_offset_info *offset_infos = (t_offset_info *)sysmem_newptr(info_capacity * sizeof(t_offset_info));
+
+    char track_prefix[32];
+    snprintf(track_prefix, 32, "%ld-", track_num_to_clean);
+
+    for (long i = 0; i < num_keys; i++) {
+        char *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_track, &key_bar, &key_prop)) {
+            if (strncmp(key_track, track_prefix, strlen(track_prefix)) == 0 && strcmp(key_prop, "mean") == 0) {
+                const char *offset_str = key_track + strlen(track_prefix);
+                long current_offset = atol(offset_str);
+                long bar_ts = atol(key_bar);
+
+                int found = 0;
+                for (long j = 0; j < info_count; j++) {
+                    if (offset_infos[j].offset == current_offset) {
+                        if (bar_ts > offset_infos[j].latest_bar_ts) {
+                            offset_infos[j].latest_bar_ts = bar_ts;
+                        }
+                        found = 1;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    if (info_count >= info_capacity) {
+                        info_capacity *= 2;
+                        offset_infos = (t_offset_info *)sysmem_resizeptr(offset_infos, info_capacity * sizeof(t_offset_info));
+                    }
+                    offset_infos[info_count].offset = current_offset;
+                    offset_infos[info_count].latest_bar_ts = bar_ts;
+                    info_count++;
+                }
+            }
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
+        }
+    }
+    sysmem_freeptr(keys); // Free keys as soon as we're done with them.
+
+    if (info_count < 2) {
+        sysmem_freeptr(offset_infos);
+        return; // Nothing to clean
+    }
+
+    // 2. Sort the collected info by offset
+    qsort(offset_infos, info_count, sizeof(t_offset_info), compare_offset_info);
+    buildspans_verbose_log(x, "CLEANUP: Found %ld offsets for track %ld to check.", info_count, track_num_to_clean);
+
+    // 3. Identify obsolete offsets and add them to a deletion list
+    long delete_count = 0;
+    t_symbol **offsets_to_delete = (t_symbol **)sysmem_newptr(info_count * sizeof(t_symbol *));
+
+    for (long i = 0; i < info_count - 1; i++) {
+        long current_offset_val = offset_infos[i].offset;
+        long latest_bar_ts = offset_infos[i].latest_bar_ts;
+        long next_offset_val = offset_infos[i+1].offset;
+
+        if ((latest_bar_ts + current_offset_val) < next_offset_val) {
+            char track_sym_str[64];
+            snprintf(track_sym_str, 64, "%ld-%ld", track_num_to_clean, current_offset_val);
+            t_symbol* sym_to_delete = gensym(track_sym_str);
+            offsets_to_delete[delete_count++] = sym_to_delete;
+            buildspans_verbose_log(x, "CLEANUP: Track-offset %s is obsolete. Latest bar starts at %ld, next offset is %ld. Queued for deletion.",
+                sym_to_delete->s_name, latest_bar_ts + current_offset_val, next_offset_val);
+        }
+    }
+
+    // 4. Perform all deletions in a separate step
+    for (long i = 0; i < delete_count; i++) {
+        buildspans_delete_track_offset_keys(x, offsets_to_delete[i]);
+    }
+
+    sysmem_freeptr(offset_infos);
+    sysmem_freeptr(offsets_to_delete);
 }
