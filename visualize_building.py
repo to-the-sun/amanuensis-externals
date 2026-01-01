@@ -188,21 +188,7 @@ def run_gui():
                         track_label = font.render(f"Track {track_id}", True, (204, 204, 204))
                         screen.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
 
-                        # Draw hash marks for absolutes
-                        for ts in track_data.get("absolutes", []):
-                            x = grid_left + grid_w * (ts - min_ts) / span_ts
-                            pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
-                            label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
-                            screen.blit(label, (x + 2, track_y + 5))
-
-                        # Draw hash marks for offsets
-                        for ts in set(track_data.get("offsets", [])):
-                            x = grid_left + grid_w * (ts - min_ts) / span_ts
-                            pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
-                            label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
-                            screen.blit(label, (x + 2, track_y + 20))
-
-                        # Draw horizontal bars for spans
+                        # Draw horizontal bars for spans (drawn first, in the background)
                         span_data = track_data.get("span", [])
                         if span_data:
                             try:
@@ -218,7 +204,12 @@ def run_gui():
 
                                 bar_y = track_y + track_h * 0.5 # Center the bar vertically
                                 bar_height = track_h * 0.4
-                                pygame.draw.rect(screen, (100, 100, 255), (start_x, bar_y - bar_height / 2, end_x - start_x, bar_height))
+
+                                # Use a surface to handle opacity
+                                s = pygame.Surface((end_x - start_x, bar_height), pygame.SRCALPHA)
+                                s.fill((60, 60, 100, 128)) # Dull blue with alpha
+                                screen.blit(s, (start_x, bar_y - bar_height / 2))
+
 
                                 # Draw individual bars within the span and their relative labels
                                 for bar_relative_ts in span_data:
@@ -229,16 +220,41 @@ def run_gui():
                                     # Calculate width in pixels based on bar_length
                                     bar_width_pixels = (grid_w * bar_length) / span_ts
 
-                                    pygame.draw.rect(screen, (200, 200, 255), (bar_start_x, bar_y - bar_height / 2, bar_width_pixels, bar_height))
+                                    s = pygame.Surface((bar_width_pixels, bar_height), pygame.SRCALPHA)
+                                    s.fill((90, 90, 130, 128)) # Slightly lighter dull blue
+                                    screen.blit(s, (bar_start_x, bar_y - bar_height / 2))
 
                                     # Label with the relative timestamp from the span data
                                     label_text = f"{bar_relative_ts:.0f}"
-                                    label = small_font.render(label_text, True, (255, 255, 255))
+                                    label = small_font.render(label_text, True, (204, 204, 204))
                                     screen.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
 
                             except (ValueError, IndexError):
                                 # Handle cases where the track_id format is unexpected
                                 pass
+
+                        # Draw hash marks for absolutes
+                        for ts in track_data.get("absolutes", []):
+                            x = grid_left + grid_w * (ts - min_ts) / span_ts
+                            pygame.draw.line(screen, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
+                            label = small_font.render(f"{ts:.2f}", True, (100, 200, 100))
+                            screen.blit(label, (x + 2, track_y + 5))
+
+                    # Collect all unique offsets from all tracks
+                    all_offsets = set()
+                    for track_data in working_memory.values():
+                        all_offsets.update(track_data.get("offsets", []))
+
+                    # Draw all offset hash marks on all tracks
+                    for i, track_id in enumerate(sorted_track_keys):
+                        track_y = timeline_top + i * track_h
+                        for ts in all_offsets:
+                            x = grid_left + grid_w * (ts - min_ts) / span_ts
+                            pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
+                            # Label offsets only on the top track to avoid clutter
+                            if i == 0:
+                                label = small_font.render(f"{ts:.0f}", True, (200, 100, 100))
+                                screen.blit(label, (x + 2, timeline_top - 15))
 
             # draw measure start labels
             for col in range(numColumns):
