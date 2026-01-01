@@ -192,7 +192,7 @@ def run_gui():
                             screen.blit(label, (x + 2, track_y + 5))
 
                         # Draw hash marks for offsets
-                        for ts in track_data.get("offsets", []):
+                        for ts in set(track_data.get("offsets", [])):
                             x = grid_left + grid_w * (ts - min_ts) / span_ts
                             pygame.draw.line(screen, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
                             label = small_font.render(f"{ts:.2f}", True, (200, 100, 100))
@@ -235,15 +235,6 @@ def run_gui():
                             except (ValueError, IndexError):
                                 # Handle cases where the track_id format is unexpected
                                 pass
-
-
-                    # Draw a single line for the current global offset across all tracks
-                    if current_offset is not None:
-                         x = grid_left + grid_w * (current_offset - min_ts) / span_ts
-                         pygame.draw.line(screen, (255, 100, 100), (x, timeline_top), (x, timeline_top + timeline_h), 2)
-                         label = small_font.render(f"{current_offset:.2f}", True, (255, 100, 100))
-                         screen.blit(label, (x + 2, timeline_top - 15))
-
 
             # draw measure start labels
             for col in range(numColumns):
