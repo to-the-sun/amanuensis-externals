@@ -127,6 +127,7 @@ int compare_notepairs(const void *a, const void *b) {
 typedef struct _buildspans {
     t_object s_obj;
     t_dictionary *building;
+    t_dictionary *tracks_ended_in_current_event;
     long current_track;
     long current_offset;
     long bar_length;
@@ -160,6 +161,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset);
+void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym);
 
 
 // Helper function to send verbose log messages
@@ -347,6 +349,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
     t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
     if (x) {
         x->building = dictionary_new();
+        x->tracks_ended_in_current_event = dictionary_new();
         buildspans_verbose_log(x, "NEW: Created building dictionary: %p", x->building);
         x->current_track = 0;
         x->current_offset = 0;
@@ -383,6 +386,9 @@ void buildspans_free(t_buildspans *x) {
         buildspans_verbose_log(x, "FREE: Freeing building dictionary: %p", x->building);
         object_free(x->building);
     }
+    if (x->tracks_ended_in_current_event) {
+        object_free(x->tracks_ended_in_current_event);
+    }
 }
 
 void buildspans_clear(t_buildspans *x) {
@@ -390,7 +396,11 @@ void buildspans_clear(t_buildspans *x) {
         buildspans_verbose_log(x, "CLEAR: Freeing building dictionary: %p", x->building);
         object_free(x->building);
     }
+    if (x->tracks_ended_in_current_event) {
+        object_free(x->tracks_ended_in_current_event);
+    }
     x->building = dictionary_new();
+    x->tracks_ended_in_current_event = dictionary_new();
     buildspans_verbose_log(x, "CLEAR: Created new building dictionary: %p", x->building);
     x->current_track = 0;
     x->current_offset = 0;
@@ -643,6 +653,18 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     sysmem_freeptr(unique_track_syms);
+
+    // --- Deferred Cleanup ---
+    long num_ended_tracks;
+    t_symbol **ended_track_keys;
+    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
+    if (ended_track_keys) {
+        for (long i = 0; i < num_ended_tracks; i++) {
+            buildspans_cleanup_track_offset_if_needed(x, ended_track_keys[i]);
+        }
+        sysmem_freeptr(ended_track_keys);
+    }
+    dictionary_clear(x->tracks_ended_in_current_event);
 }
 
 
@@ -1019,6 +1041,8 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
     }
 
     buildspans_visualize_memory(x);
+    // Defer the cleanup check by adding the track to a temporary dictionary.
+    dictionary_appendsym(x->tracks_ended_in_current_event, track_sym, 0);
 }
 
 
@@ -1085,6 +1109,18 @@ void buildspans_flush(t_buildspans *x) {
 
     sysmem_freeptr(track_syms);
     sysmem_freeptr(keys);
+
+    // --- Deferred Cleanup ---
+    long num_ended_tracks;
+    t_symbol **ended_track_keys;
+    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
+    if (ended_track_keys) {
+        for (long i = 0; i < num_ended_tracks; i++) {
+            buildspans_cleanup_track_offset_if_needed(x, ended_track_keys[i]);
+        }
+        sysmem_freeptr(ended_track_keys);
+    }
+    dictionary_clear(x->tracks_ended_in_current_event);
 }
 
 
@@ -1136,9 +1172,9 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
     dictionary_getkeys(x->building, &num_keys, &keys);
     if (!keys) return;
 
-    // 1. Identify all bars to flush.
-    long flush_count = 0;
-    long *bars_to_flush_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
+    // 1. Identify all bars to end.
+    long end_count = 0;
+    long *bars_to_end_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
 
     for (long i = 0; i < num_keys; i++) {
         char *key_track, *key_bar, *key_prop;
@@ -1146,7 +1182,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
             if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
                 long bar_val = atol(key_bar);
                 if (bar_val != bar_to_keep) {
-                    bars_to_flush_vals[flush_count++] = bar_val;
+                    bars_to_end_vals[end_count++] = bar_val;
                 }
             }
             sysmem_freeptr(key_track);
@@ -1155,38 +1191,38 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         }
     }
 
-    // 2. Output the flushed span.
-    if (flush_count > 0) {
+    // 2. Output the ended span.
+    if (end_count > 0) {
         buildspans_verbose_log(x, "Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
-        qsort(bars_to_flush_vals, flush_count, sizeof(long), compare_longs);
-        t_atom *output_atoms = (t_atom *)sysmem_newptr(flush_count * sizeof(t_atom));
-        for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_flush_vals[i]);
+        qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
+        t_atom *output_atoms = (t_atom *)sysmem_newptr(end_count * sizeof(t_atom));
+        for(long i=0; i<end_count; ++i) atom_setlong(output_atoms + i, bars_to_end_vals[i]);
         long track_num_to_output;
         sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
         outlet_int(x->track_outlet, track_num_to_output);
-        outlet_list(x->span_outlet, NULL, flush_count, output_atoms);
+        outlet_list(x->span_outlet, NULL, end_count, output_atoms);
         sysmem_freeptr(output_atoms);
     }
     
-    // 3. Finalize the state of the flushed bars.
-    if (flush_count > 0) {
-        buildspans_verbose_log(x, "Finalizing flushed span...");
-        t_atomarray *flushed_span_array = atomarray_new(0, NULL);
-        buildspans_verbose_log(x, "PRUNE: Created flushed_span_array: %p", flushed_span_array);
-        for(long i = 0; i < flush_count; ++i) {
-            t_atom a; atom_setlong(&a, bars_to_flush_vals[i]);
-            atomarray_appendatom(flushed_span_array, &a);
+    // 3. Finalize the state of the ended bars.
+    if (end_count > 0) {
+        buildspans_verbose_log(x, "Finalizing ended span...");
+        t_atomarray *ended_span_array = atomarray_new(0, NULL);
+        buildspans_verbose_log(x, "PRUNE: Created ended_span_array: %p", ended_span_array);
+        for(long i = 0; i < end_count; ++i) {
+            t_atom a; atom_setlong(&a, bars_to_end_vals[i]);
+            atomarray_appendatom(ended_span_array, &a);
         }
-        buildspans_finalize_and_log_span(x, track_sym, flushed_span_array);
-        object_free(flushed_span_array);
+        buildspans_finalize_and_log_span(x, track_sym, ended_span_array);
+        object_free(ended_span_array);
     }
 
-    // 4. Delete keys for flushed bars.
+    // 4. Delete keys for ended bars.
     t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
     long delete_count = 0;
-    for (long i = 0; i < flush_count; i++) {
+    for (long i = 0; i < end_count; i++) {
         char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bars_to_flush_vals[i]);
+        snprintf(bar_str, 32, "%ld", bars_to_end_vals[i]);
         for(long j=0; j<num_keys; ++j) {
             char *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_track, &key_bar, &key_prop)) {
@@ -1213,13 +1249,19 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
     }
 
     sysmem_freeptr(keys_to_delete);
-    sysmem_freeptr(bars_to_flush_vals);
+    sysmem_freeptr(bars_to_end_vals);
     sysmem_freeptr(keys);
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
     buildspans_verbose_log(x, "Resetting kept bar...");
     buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_to_keep_str));
+
+    // Since a span was ended, we need to schedule a cleanup check.
+    if (end_count > 0) {
+        dictionary_appendsym(x->tracks_ended_in_current_event, track_sym, 0);
+    }
+
     buildspans_visualize_memory(x);
 }
 
@@ -1402,4 +1444,128 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
     
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
+}
+
+void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym) {
+    // 1. Parse the track and offset from the input symbol.
+    long track_num_to_check, offset_val_to_check;
+    if (sscanf(track_offset_sym->s_name, "%ld-%ld", &track_num_to_check, &offset_val_to_check) != 2) {
+        return; // Not a valid track-offset symbol
+    }
+    buildspans_verbose_log(x, "--- Cleanup Check for %s ---", track_offset_sym->s_name);
+
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
+
+    // --- Single Pass ---
+    // In one loop, we will:
+    // a) Collect all unique offsets for the given track number.
+    // b) Find the oldest absolute time for the specific track-offset we are checking.
+    // c) Collect all keys that belong to the track-offset to be checked.
+
+    t_dictionary *unique_offsets_dict = dictionary_new();
+    double oldest_absolute_time = -1.0;
+    t_symbol **keys_to_delete = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+    long delete_count = 0;
+
+    char track_prefix[32];
+    snprintf(track_prefix, 32, "%ld-", track_num_to_check);
+
+    for (long i = 0; i < num_keys; i++) {
+        char *track_str, *bar_str, *prop_str;
+        if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
+            // Check if it's the correct track number
+            if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
+                // a) Add the offset to our unique set
+                const char *offset_part = strchr(track_str, '-');
+                if (offset_part) {
+                    long current_offset = atol(offset_part + 1);
+                    char offset_key_str[32];
+                    snprintf(offset_key_str, 32, "%ld", current_offset);
+                    dictionary_appendlong(unique_offsets_dict, gensym(offset_key_str), 0); // Value doesn't matter
+                }
+            }
+
+            // Check if it's the specific track-offset we are interested in
+            if (strcmp(track_str, track_offset_sym->s_name) == 0) {
+                // c) Collect this key for potential deletion
+                keys_to_delete[delete_count++] = keys[i];
+
+                // b) Find the oldest absolute time
+                if (strcmp(prop_str, "absolutes") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
+                    long ac;
+                    t_atom *av;
+                    atomarray_getatoms(absolutes, &ac, &av);
+                    for (long k = 0; k < ac; k++) {
+                        double current_time = atom_getfloat(av + k);
+                        if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {
+                            oldest_absolute_time = current_time;
+                        }
+                    }
+                }
+            }
+
+            sysmem_freeptr(track_str);
+            sysmem_freeptr(bar_str);
+            sysmem_freeptr(prop_str);
+        }
+    }
+
+    // --- Process Collected Data ---
+
+    // 2. Find the next chronological offset from our unique set.
+    long num_unique_offsets;
+    t_symbol **offset_keys;
+    dictionary_getkeys(unique_offsets_dict, &num_unique_offsets, &offset_keys);
+    long *offsets = (long *)sysmem_newptr(num_unique_offsets * sizeof(long));
+    for(long i = 0; i < num_unique_offsets; i++) {
+        offsets[i] = atol(offset_keys[i]->s_name);
+    }
+
+    qsort(offsets, num_unique_offsets, sizeof(long), compare_longs);
+
+    long next_offset_time = -1;
+    for (long i = 0; i < num_unique_offsets; i++) {
+        if (offsets[i] > offset_val_to_check) {
+            next_offset_time = offsets[i];
+            break;
+        }
+    }
+
+    sysmem_freeptr(offsets);
+    if(offset_keys) sysmem_freeptr(offset_keys);
+    object_free(unique_offsets_dict);
+
+    if (next_offset_time == -1) {
+        buildspans_verbose_log(x, "Cleanup: No subsequent offset found for track %ld. No action taken.", track_num_to_check);
+        goto cleanup;
+    }
+    buildspans_verbose_log(x, "Cleanup: Next offset for track %ld is %ld.", track_num_to_check, next_offset_time);
+
+    if (oldest_absolute_time == -1.0) {
+        buildspans_verbose_log(x, "Cleanup: No absolute timestamps found for %s. No action taken.", track_offset_sym->s_name);
+        goto cleanup;
+    }
+    buildspans_verbose_log(x, "Cleanup: Oldest absolute time for %s is %.2f.", track_offset_sym->s_name, oldest_absolute_time);
+
+    // 3. Compare and potentially delete.
+    if (oldest_absolute_time >= next_offset_time) {
+        buildspans_verbose_log(x, "Cleanup: Condition met (%.2f >= %ld). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
+
+        for (long i = 0; i < delete_count; i++) {
+            dictionary_deleteentry(x->building, keys_to_delete[i]);
+        }
+        buildspans_visualize_memory(x);
+    } else {
+        buildspans_verbose_log(x, "Cleanup: Condition not met (%.2f < %ld). No action taken.", oldest_absolute_time, next_offset_time);
+    }
+
+cleanup:
+    sysmem_freeptr(keys_to_delete);
+    if(keys) sysmem_freeptr(keys);
 }
