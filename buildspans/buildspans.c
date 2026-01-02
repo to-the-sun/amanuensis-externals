@@ -127,6 +127,7 @@ int compare_notepairs(const void *a, const void *b) {
 typedef struct _buildspans {
     t_object s_obj;
     t_dictionary *building;
+    t_dictionary *tracks_ended_in_current_event;
     long current_track;
     long current_offset;
     long bar_length;
@@ -348,6 +349,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
     t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
     if (x) {
         x->building = dictionary_new();
+        x->tracks_ended_in_current_event = dictionary_new();
         buildspans_verbose_log(x, "NEW: Created building dictionary: %p", x->building);
         x->current_track = 0;
         x->current_offset = 0;
@@ -384,6 +386,9 @@ void buildspans_free(t_buildspans *x) {
         buildspans_verbose_log(x, "FREE: Freeing building dictionary: %p", x->building);
         object_free(x->building);
     }
+    if (x->tracks_ended_in_current_event) {
+        object_free(x->tracks_ended_in_current_event);
+    }
 }
 
 void buildspans_clear(t_buildspans *x) {
@@ -391,7 +396,11 @@ void buildspans_clear(t_buildspans *x) {
         buildspans_verbose_log(x, "CLEAR: Freeing building dictionary: %p", x->building);
         object_free(x->building);
     }
+    if (x->tracks_ended_in_current_event) {
+        object_free(x->tracks_ended_in_current_event);
+    }
     x->building = dictionary_new();
+    x->tracks_ended_in_current_event = dictionary_new();
     buildspans_verbose_log(x, "CLEAR: Created new building dictionary: %p", x->building);
     x->current_track = 0;
     x->current_offset = 0;
@@ -644,6 +653,18 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     sysmem_freeptr(unique_track_syms);
+
+    // --- Deferred Cleanup ---
+    long num_ended_tracks;
+    t_symbol **ended_track_keys;
+    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
+    if (ended_track_keys) {
+        for (long i = 0; i < num_ended_tracks; i++) {
+            buildspans_cleanup_track_offset_if_needed(x, ended_track_keys[i]);
+        }
+        sysmem_freeptr(ended_track_keys);
+    }
+    dictionary_clear(x->tracks_ended_in_current_event);
 }
 
 
@@ -1020,7 +1041,8 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
     }
 
     buildspans_visualize_memory(x);
-    buildspans_cleanup_track_offset_if_needed(x, track_sym);
+    // Defer the cleanup check by adding the track to a temporary dictionary.
+    dictionary_appendsym(x->tracks_ended_in_current_event, track_sym, 0);
 }
 
 
@@ -1087,6 +1109,18 @@ void buildspans_flush(t_buildspans *x) {
 
     sysmem_freeptr(track_syms);
     sysmem_freeptr(keys);
+
+    // --- Deferred Cleanup ---
+    long num_ended_tracks;
+    t_symbol **ended_track_keys;
+    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
+    if (ended_track_keys) {
+        for (long i = 0; i < num_ended_tracks; i++) {
+            buildspans_cleanup_track_offset_if_needed(x, ended_track_keys[i]);
+        }
+        sysmem_freeptr(ended_track_keys);
+    }
+    dictionary_clear(x->tracks_ended_in_current_event);
 }
 
 
