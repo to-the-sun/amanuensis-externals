@@ -1172,9 +1172,9 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
     dictionary_getkeys(x->building, &num_keys, &keys);
     if (!keys) return;
 
-    // 1. Identify all bars to flush.
-    long flush_count = 0;
-    long *bars_to_flush_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
+    // 1. Identify all bars to end.
+    long end_count = 0;
+    long *bars_to_end_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
 
     for (long i = 0; i < num_keys; i++) {
         char *key_track, *key_bar, *key_prop;
@@ -1182,7 +1182,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
             if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
                 long bar_val = atol(key_bar);
                 if (bar_val != bar_to_keep) {
-                    bars_to_flush_vals[flush_count++] = bar_val;
+                    bars_to_end_vals[end_count++] = bar_val;
                 }
             }
             sysmem_freeptr(key_track);
@@ -1191,38 +1191,38 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         }
     }
 
-    // 2. Output the flushed span.
-    if (flush_count > 0) {
+    // 2. Output the ended span.
+    if (end_count > 0) {
         buildspans_verbose_log(x, "Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
-        qsort(bars_to_flush_vals, flush_count, sizeof(long), compare_longs);
-        t_atom *output_atoms = (t_atom *)sysmem_newptr(flush_count * sizeof(t_atom));
-        for(long i=0; i<flush_count; ++i) atom_setlong(output_atoms + i, bars_to_flush_vals[i]);
+        qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
+        t_atom *output_atoms = (t_atom *)sysmem_newptr(end_count * sizeof(t_atom));
+        for(long i=0; i<end_count; ++i) atom_setlong(output_atoms + i, bars_to_end_vals[i]);
         long track_num_to_output;
         sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
         outlet_int(x->track_outlet, track_num_to_output);
-        outlet_list(x->span_outlet, NULL, flush_count, output_atoms);
+        outlet_list(x->span_outlet, NULL, end_count, output_atoms);
         sysmem_freeptr(output_atoms);
     }
     
-    // 3. Finalize the state of the flushed bars.
-    if (flush_count > 0) {
-        buildspans_verbose_log(x, "Finalizing flushed span...");
-        t_atomarray *flushed_span_array = atomarray_new(0, NULL);
-        buildspans_verbose_log(x, "PRUNE: Created flushed_span_array: %p", flushed_span_array);
-        for(long i = 0; i < flush_count; ++i) {
-            t_atom a; atom_setlong(&a, bars_to_flush_vals[i]);
-            atomarray_appendatom(flushed_span_array, &a);
+    // 3. Finalize the state of the ended bars.
+    if (end_count > 0) {
+        buildspans_verbose_log(x, "Finalizing ended span...");
+        t_atomarray *ended_span_array = atomarray_new(0, NULL);
+        buildspans_verbose_log(x, "PRUNE: Created ended_span_array: %p", ended_span_array);
+        for(long i = 0; i < end_count; ++i) {
+            t_atom a; atom_setlong(&a, bars_to_end_vals[i]);
+            atomarray_appendatom(ended_span_array, &a);
         }
-        buildspans_finalize_and_log_span(x, track_sym, flushed_span_array);
-        object_free(flushed_span_array);
+        buildspans_finalize_and_log_span(x, track_sym, ended_span_array);
+        object_free(ended_span_array);
     }
 
-    // 4. Delete keys for flushed bars.
+    // 4. Delete keys for ended bars.
     t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
     long delete_count = 0;
-    for (long i = 0; i < flush_count; i++) {
+    for (long i = 0; i < end_count; i++) {
         char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bars_to_flush_vals[i]);
+        snprintf(bar_str, 32, "%ld", bars_to_end_vals[i]);
         for(long j=0; j<num_keys; ++j) {
             char *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_track, &key_bar, &key_prop)) {
@@ -1249,13 +1249,19 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
     }
 
     sysmem_freeptr(keys_to_delete);
-    sysmem_freeptr(bars_to_flush_vals);
+    sysmem_freeptr(bars_to_end_vals);
     sysmem_freeptr(keys);
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
     buildspans_verbose_log(x, "Resetting kept bar...");
     buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_to_keep_str));
+
+    // Since a span was ended, we need to schedule a cleanup check.
+    if (end_count > 0) {
+        dictionary_appendsym(x->tracks_ended_in_current_event, track_sym, 0);
+    }
+
     buildspans_visualize_memory(x);
 }
 
