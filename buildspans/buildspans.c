@@ -160,6 +160,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset);
+void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym);
 
 
 // Helper function to send verbose log messages
@@ -1019,6 +1020,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
     }
 
     buildspans_visualize_memory(x);
+    buildspans_cleanup_track_offset_if_needed(x, track_sym);
 }
 
 
@@ -1402,4 +1404,128 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
     
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
+}
+
+void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym) {
+    // 1. Parse the track and offset from the input symbol.
+    long track_num_to_check, offset_val_to_check;
+    if (sscanf(track_offset_sym->s_name, "%ld-%ld", &track_num_to_check, &offset_val_to_check) != 2) {
+        return; // Not a valid track-offset symbol
+    }
+    buildspans_verbose_log(x, "--- Cleanup Check for %s ---", track_offset_sym->s_name);
+
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
+
+    // --- Single Pass ---
+    // In one loop, we will:
+    // a) Collect all unique offsets for the given track number.
+    // b) Find the oldest absolute time for the specific track-offset we are checking.
+    // c) Collect all keys that belong to the track-offset to be checked.
+
+    t_dictionary *unique_offsets_dict = dictionary_new();
+    double oldest_absolute_time = -1.0;
+    t_symbol **keys_to_delete = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+    long delete_count = 0;
+
+    char track_prefix[32];
+    snprintf(track_prefix, 32, "%ld-", track_num_to_check);
+
+    for (long i = 0; i < num_keys; i++) {
+        char *track_str, *bar_str, *prop_str;
+        if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
+            // Check if it's the correct track number
+            if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
+                // a) Add the offset to our unique set
+                const char *offset_part = strchr(track_str, '-');
+                if (offset_part) {
+                    long current_offset = atol(offset_part + 1);
+                    char offset_key_str[32];
+                    snprintf(offset_key_str, 32, "%ld", current_offset);
+                    dictionary_appendlong(unique_offsets_dict, gensym(offset_key_str), 0); // Value doesn't matter
+                }
+            }
+
+            // Check if it's the specific track-offset we are interested in
+            if (strcmp(track_str, track_offset_sym->s_name) == 0) {
+                // c) Collect this key for potential deletion
+                keys_to_delete[delete_count++] = keys[i];
+
+                // b) Find the oldest absolute time
+                if (strcmp(prop_str, "absolutes") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
+                    long ac;
+                    t_atom *av;
+                    atomarray_getatoms(absolutes, &ac, &av);
+                    for (long k = 0; k < ac; k++) {
+                        double current_time = atom_getfloat(av + k);
+                        if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {
+                            oldest_absolute_time = current_time;
+                        }
+                    }
+                }
+            }
+
+            sysmem_freeptr(track_str);
+            sysmem_freeptr(bar_str);
+            sysmem_freeptr(prop_str);
+        }
+    }
+
+    // --- Process Collected Data ---
+
+    // 2. Find the next chronological offset from our unique set.
+    long num_unique_offsets;
+    t_symbol **offset_keys;
+    dictionary_getkeys(unique_offsets_dict, &num_unique_offsets, &offset_keys);
+    long *offsets = (long *)sysmem_newptr(num_unique_offsets * sizeof(long));
+    for(long i = 0; i < num_unique_offsets; i++) {
+        offsets[i] = atol(offset_keys[i]->s_name);
+    }
+
+    qsort(offsets, num_unique_offsets, sizeof(long), compare_longs);
+
+    long next_offset_time = -1;
+    for (long i = 0; i < num_unique_offsets; i++) {
+        if (offsets[i] > offset_val_to_check) {
+            next_offset_time = offsets[i];
+            break;
+        }
+    }
+
+    sysmem_freeptr(offsets);
+    if(offset_keys) sysmem_freeptr(offset_keys);
+    object_free(unique_offsets_dict);
+
+    if (next_offset_time == -1) {
+        buildspans_verbose_log(x, "Cleanup: No subsequent offset found for track %ld. No action taken.", track_num_to_check);
+        goto cleanup;
+    }
+    buildspans_verbose_log(x, "Cleanup: Next offset for track %ld is %ld.", track_num_to_check, next_offset_time);
+
+    if (oldest_absolute_time == -1.0) {
+        buildspans_verbose_log(x, "Cleanup: No absolute timestamps found for %s. No action taken.", track_offset_sym->s_name);
+        goto cleanup;
+    }
+    buildspans_verbose_log(x, "Cleanup: Oldest absolute time for %s is %.2f.", track_offset_sym->s_name, oldest_absolute_time);
+
+    // 3. Compare and potentially delete.
+    if (oldest_absolute_time >= next_offset_time) {
+        buildspans_verbose_log(x, "Cleanup: Condition met (%.2f >= %ld). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
+
+        for (long i = 0; i < delete_count; i++) {
+            dictionary_deleteentry(x->building, keys_to_delete[i]);
+        }
+        buildspans_visualize_memory(x);
+    } else {
+        buildspans_verbose_log(x, "Cleanup: Condition not met (%.2f < %ld). No action taken.", oldest_absolute_time, next_offset_time);
+    }
+
+cleanup:
+    sysmem_freeptr(keys_to_delete);
+    if(keys) sysmem_freeptr(keys);
 }
