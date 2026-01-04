@@ -40,16 +40,8 @@
     </inlet>
 
     <!-- Outlets -->
-    <outlet name="out" type="list">
-        <digest>Span of bar timestamps.</digest>
-        <description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
-    </outlet>
-    <outlet name="out" type="int">
-        <digest>Track number.</digest>
-        <description>Outputs the track number associated with the completed span.</description>
-    </outlet>
-    <outlet name="out" type="anything">
-        <digest>Log messages for dictionary updates.</digest>
-        <description>Outputs a log message whenever a key in the internal 'building' dictionary is modified. The message is a list where the first element is a symbol in the format 'track::bar::key' and the rest of the list is the new value(s).</description>
+    <outlet name="out" type="symbol">
+        <digest>Dictionary of ended span.</digest>
+        <description>Outputs the name of a dictionary containing all the bars of a completed span. The dictionary is structured with `track::bar::key` as the hierarchy.</description>
     </outlet>
 </c74object>
