@@ -1125,7 +1125,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         if (x->verbose) {
             switch (a) {
                 case 0: sprintf(s, "Dictionary name of ended span (symbol)"); break;
-                case 1: sprintf(s, "Verbose Logging & Visualization Outlet"); break;
+                case 1: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
             switch (a) {
@@ -1541,6 +1541,10 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym,
 
 void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output) {
     t_dictionary *output_dict = dictionary_new();
+    if (!output_dict) {
+        object_error((t_object *)x, "failed to create output dictionary");
+        return;
+    }
     long track_num;
     sscanf(track_sym->s_name, "%ld-", &track_num);
 
@@ -1586,9 +1590,8 @@ void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_a
     atom_setsym(&dict_name_atom, object_attr_getsym(output_dict, gensym("name")));
     outlet_anything(x->main_outlet, gensym("dictionary"), 1, &dict_name_atom);
 
-    // We created the dictionary, now we release it. The receiver of the 'dictionary' message
-    // is responsible for retaining it if they need to.
-    object_release((t_object *)output_dict);
+    // The receiver of the 'dictionary' message is responsible for freeing the dictionary
+    // after they are done with it. We do not release it here.
 }
 
 
