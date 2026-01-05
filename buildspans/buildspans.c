@@ -164,6 +164,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym);
 long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
+void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 
 
 // Helper function to send verbose log messages
@@ -1003,7 +1004,14 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
 
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
+
+            // Outlet 3: Detailed span data
+            buildspans_output_span_data(x, track_sym, span_to_output);
+
+            // Outlet 2: Track number
             outlet_int(x->track_outlet, track_num_to_output);
+
+            // Outlet 1: Span list
             outlet_list(x->span_outlet, NULL, span_size, span_atoms);
         }
 
@@ -1157,14 +1165,14 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
             switch (a) {
                 case 0: sprintf(s, "Span Data (list)"); break;
                 case 1: sprintf(s, "Track Number (int)"); break;
-                case 2: sprintf(s, "Sync Outlet (anything)"); break;
+                case 2: sprintf(s, "Bar Data for Ended Spans (anything)"); break;
                 case 3: sprintf(s, "Verbose Logging & Visualization Outlet"); break;
             }
         } else {
             switch (a) {
                 case 0: sprintf(s, "Span Data (list)"); break;
                 case 1: sprintf(s, "Track Number (int)"); break;
-                case 2: sprintf(s, "Sync Outlet (anything)"); break;
+                case 2: sprintf(s, "Bar Data for Ended Spans (anything)"); break;
             }
         }
     }
@@ -1213,7 +1221,14 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
+
+            // Outlet 3: Detailed span data
+            buildspans_output_span_data(x, track_sym, ended_span_array_for_validation);
+
+            // Outlet 2: Track number
             outlet_int(x->track_outlet, track_num_to_output);
+
+            // Outlet 1: Span list
             outlet_list(x->span_outlet, NULL, span_size, span_atoms);
         }
         object_free(ended_span_array_for_validation);
@@ -1579,6 +1594,69 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym,
 
     buildspans_verbose_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %ld, next_offset: %ld)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
     return 1;
+}
+
+void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array) {
+    if (!span_atom_array) return;
+
+    long track_num_to_output;
+    if (sscanf(track_sym->s_name, "%ld-", &track_num_to_output) != 1) {
+        return; // Failed to parse track number
+    }
+
+    long span_size;
+    t_atom *span_atoms;
+    atomarray_getatoms(span_atom_array, &span_size, &span_atoms);
+
+    const char* properties_to_output[] = {
+        "absolutes", "scores", "mean", "offset", "palette", "rating", "span"
+    };
+    int num_properties = sizeof(properties_to_output) / sizeof(properties_to_output[0]);
+
+    for (long i = 0; i < span_size; i++) {
+        long bar_ts = atom_getlong(&span_atoms[i]);
+        char bar_str[32];
+        snprintf(bar_str, 32, "%ld", bar_ts);
+        t_symbol *bar_sym = gensym(bar_str);
+
+        for (int j = 0; j < num_properties; j++) {
+            t_symbol *prop_sym = gensym(properties_to_output[j]);
+            t_symbol *hierarchical_key = generate_hierarchical_key(track_sym, bar_sym, prop_sym);
+
+            if (dictionary_hasentry(x->building, hierarchical_key)) {
+                char output_key_str[256];
+                snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
+                t_symbol *output_key_sym = gensym(output_key_str);
+
+                t_atom a;
+                dictionary_getatom(x->building, hierarchical_key, &a);
+                short type = atom_gettype(&a);
+
+                if (type == A_FLOAT) {
+                    t_atom out_atom;
+                    atom_setfloat(&out_atom, atom_getfloat(&a));
+                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                } else if (type == A_LONG) {
+                    t_atom out_atom;
+                    atom_setlong(&out_atom, atom_getlong(&a));
+                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                } else if (type == A_SYM) {
+                    t_atom out_atom;
+                    atom_setsym(&out_atom, atom_getsym(&a));
+                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                } else if (type == A_OBJ) {
+                    t_object *obj = atom_getobj(&a);
+                    if (object_classname(obj) == gensym("atomarray")) {
+                        t_atomarray *arr = (t_atomarray *)obj;
+                        long ac;
+                        t_atom *av;
+                        atomarray_getatoms(arr, &ac, &av);
+                        outlet_anything(x->log_outlet, output_key_sym, ac, av);
+                    }
+                }
+            }
+        }
+    }
 }
 
 
