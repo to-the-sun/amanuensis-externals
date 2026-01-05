@@ -1592,19 +1592,13 @@ cleanup:
 }
 
 void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output) {
-    if (!span_to_output) {
-        return;
-    }
+    if (!span_to_output) return;
 
     long span_size;
     t_atom *span_atoms;
     atomarray_getatoms(span_to_output, &span_size, &span_atoms);
+    if (span_size == 0) return;
 
-    if (span_size == 0) {
-        return;
-    }
-
-    // Create a new dictionary to hold the span data
     t_dictionary *span_dict = dictionary_new();
     if (!span_dict) {
         object_error((t_object *)x, "Failed to create dictionary for span output.");
@@ -1612,7 +1606,6 @@ void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_a
     }
     buildspans_verbose_log(x, "Assembling output dictionary...");
 
-    // Get the base track number (e.g., '1' from '1-100')
     long track_num;
     if (sscanf(track_sym->s_name, "%ld-", &track_num) != 1) {
         object_error((t_object *)x, "Could not parse track number from track symbol: %s", track_sym->s_name);
@@ -1623,63 +1616,45 @@ void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_a
     snprintf(track_num_str, 32, "%ld", track_num);
     t_symbol *track_num_sym = gensym(track_num_str);
 
-    // Iterate over each bar in the span
+    const char* props_to_copy[] = {"scores", "palette", "mean", "rating", "offset", "absolutes", "span"};
+    int num_props = sizeof(props_to_copy) / sizeof(props_to_copy[0]);
+
     for (long i = 0; i < span_size; i++) {
         long bar_ts = atom_getlong(span_atoms + i);
         char bar_ts_str[32];
         snprintf(bar_ts_str, 32, "%ld", bar_ts);
         t_symbol *bar_ts_sym = gensym(bar_ts_str);
 
-        // Find all keys in the building dictionary for this bar
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long j = 0; j < num_keys; j++) {
-                char *key_track, *key_bar, *key_prop;
-                if (parse_hierarchical_key(keys[j], &key_track, &key_bar, &key_prop)) {
-                    if (strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_bar, bar_ts_str) == 0) {
-                        t_symbol *new_key = generate_hierarchical_key(track_num_sym, bar_ts_sym, gensym(key_prop));
+        for (int j = 0; j < num_props; j++) {
+            t_symbol *prop_sym = gensym(props_to_copy[j]);
+            t_symbol *source_key = generate_hierarchical_key(track_sym, bar_ts_sym, prop_sym);
 
-                        t_atom a;
-                        dictionary_getatom(x->building, keys[j], &a);
+            if (dictionary_hasentry(x->building, source_key)) {
+                t_symbol *dest_key = generate_hierarchical_key(track_num_sym, bar_ts_sym, prop_sym);
+                t_atom a;
+                dictionary_getatom(x->building, source_key, &a);
 
-                        // Deep copy atomarrays, otherwise just copy the atom
-                        if (atom_gettype(&a) == A_OBJ) {
-                             t_atomarray *source_array = (t_atomarray *)atom_getobj(&a);
-                             if (source_array) {
-                                 t_atomarray *copy_array = atomarray_deep_copy(source_array);
-                                 t_atom copy_atom;
-                                 atom_setobj(&copy_atom, (t_object *)copy_array);
-                                 dictionary_appendatom(span_dict, new_key, &copy_atom);
-                                 buildspans_verbose_log(x, "Copied array for key: %s", new_key->s_name);
-                             }
-                        } else {
-                            dictionary_appendatom(span_dict, new_key, &a);
-                            buildspans_verbose_log(x, "Copied value for key: %s", new_key->s_name);
-                        }
+                if (atom_gettype(&a) == A_OBJ) {
+                    t_atomarray *source_array = (t_atomarray *)atom_getobj(&a);
+                    if (source_array) {
+                        t_atomarray *copy_array = atomarray_deep_copy(source_array);
+                        t_atom copy_atom;
+                        atom_setobj(&copy_atom, (t_object *)copy_array);
+                        dictionary_appendatom(span_dict, dest_key, &copy_atom);
+                        buildspans_verbose_log(x, "Copied array for key: %s", dest_key->s_name);
                     }
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
+                } else {
+                    dictionary_appendatom(span_dict, dest_key, &a);
+                     buildspans_verbose_log(x, "Copied value for key: %s", dest_key->s_name);
                 }
             }
-            sysmem_freeptr(keys);
         }
     }
 
-    // Register the dictionary to make it accessible globally by name
-    dictobj_register(span_dict, NULL); // NULL lets Max generate a unique name
-
-    // Get the dictionary's name
+    dictobj_register(span_dict, NULL);
     t_symbol *dict_name = object_attr_getsym(span_dict, gensym("name"));
-
-    // Output the dictionary name
     t_atom dict_name_atom;
     atom_setsym(&dict_name_atom, dict_name);
     outlet_anything(x->main_outlet, gensym("dictionary"), 1, &dict_name_atom);
     buildspans_verbose_log(x, "Output dictionary %s.", dict_name->s_name);
-
-    // The dictionary is now registered and its lifecycle is managed by Max.
-    // The receiving object is responsible for freeing it when it's no longer needed.
 }
