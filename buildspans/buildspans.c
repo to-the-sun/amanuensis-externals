@@ -990,7 +990,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
             outlet_int(x->track_outlet, track_num_to_output);
 
             // Outlet 1: Span list
-            outlet_list(x->span_outlet, NULL, span_size, span_atoms);
+            outlet_list(x->span_outlet, NULL, (short)span_size, span_atoms);
         }
 
         if (local_span_created) {
@@ -1207,7 +1207,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
             outlet_int(x->track_outlet, track_num_to_output);
 
             // Outlet 1: Span list
-            outlet_list(x->span_outlet, NULL, span_size, span_atoms);
+            outlet_list(x->span_outlet, NULL, (short)span_size, span_atoms);
         }
         object_free(ended_span_array_for_validation);
     }
@@ -1607,15 +1607,15 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarr
                 if (type == A_FLOAT) {
                     t_atom out_atom;
                     atom_setfloat(&out_atom, atom_getfloat(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_LONG) {
                     t_atom out_atom;
                     atom_setlong(&out_atom, atom_getlong(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_SYM) {
                     t_atom out_atom;
                     atom_setsym(&out_atom, atom_getsym(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, 1, &out_atom);
+                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_OBJ) {
                     t_object *obj = atom_getobj(&a);
                     if (object_classname(obj) == gensym("atomarray")) {
@@ -1623,7 +1623,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarr
                         long ac;
                         t_atom *av;
                         atomarray_getatoms(arr, &ac, &av);
-                        outlet_anything(x->log_outlet, output_key_sym, ac, av);
+                        outlet_anything(x->log_outlet, output_key_sym, (short)ac, av);
                     }
                 }
             }
