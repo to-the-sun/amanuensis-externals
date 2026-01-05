@@ -1668,12 +1668,18 @@ void buildspans_output_span_dictionary(t_buildspans *x, t_symbol *track_sym, t_a
         }
     }
 
-    // Output the dictionary
-    t_atom dict_atom;
-    atom_setobj(&dict_atom, (t_object *)span_dict);
-    outlet_anything(x->main_outlet, gensym("dictionary"), 1, &dict_atom);
-    buildspans_verbose_log(x, "Output dictionary %s.", object_attr_getsym(span_dict, gensym("name"))->s_name);
+    // Register the dictionary to make it accessible globally by name
+    dictobj_register(span_dict, NULL); // NULL lets Max generate a unique name
 
-    // Release the dictionary (Max will retain it as needed)
-    object_release((t_object *)span_dict);
+    // Get the dictionary's name
+    t_symbol *dict_name = object_attr_getsym(span_dict, gensym("name"));
+
+    // Output the dictionary name
+    t_atom dict_name_atom;
+    atom_setsym(&dict_name_atom, dict_name);
+    outlet_anything(x->main_outlet, gensym("dictionary"), 1, &dict_name_atom);
+    buildspans_verbose_log(x, "Output dictionary %s.", dict_name->s_name);
+
+    // The dictionary is now registered and its lifecycle is managed by Max.
+    // The receiving object is responsible for freeing it when it's no longer needed.
 }
