@@ -1181,27 +1181,34 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         }
     }
 
-    // 2. Output the ended span.
+    // 2. Finalize the state of the ended bars and then output.
     if (end_count > 0) {
         buildspans_verbose_log(x, "Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
         qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
 
-        t_atomarray *ended_span_array_for_validation = atomarray_new(0, NULL);
+        // Create the list of ended bars
+        t_atomarray *ended_span_array = atomarray_new(0, NULL);
+        buildspans_verbose_log(x, "PRUNE: Created ended_span_array: %p", ended_span_array);
         for(long i = 0; i < end_count; ++i) {
             t_atom a; atom_setlong(&a, bars_to_end_vals[i]);
-            atomarray_appendatom(ended_span_array_for_validation, &a);
+            atomarray_appendatom(ended_span_array, &a);
         }
-        
-        if (buildspans_validate_span_before_output(x, track_sym, ended_span_array_for_validation)) {
+
+        // Finalize the span data *before* outputting
+        buildspans_verbose_log(x, "Finalizing ended span...");
+        buildspans_finalize_and_log_span(x, track_sym, ended_span_array);
+
+        // Validate and output the finalized data
+        if (buildspans_validate_span_before_output(x, track_sym, ended_span_array)) {
             long span_size;
             t_atom *span_atoms;
-            atomarray_getatoms(ended_span_array_for_validation, &span_size, &span_atoms);
+            atomarray_getatoms(ended_span_array, &span_size, &span_atoms);
 
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
 
             // Outlet 3: Detailed span data
-            buildspans_output_span_data(x, track_sym, ended_span_array_for_validation);
+            buildspans_output_span_data(x, track_sym, ended_span_array);
 
             // Outlet 2: Track number
             outlet_int(x->track_outlet, track_num_to_output);
@@ -1209,19 +1216,6 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
             // Outlet 1: Span list
             outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
         }
-        object_free(ended_span_array_for_validation);
-    }
-    
-    // 3. Finalize the state of the ended bars.
-    if (end_count > 0) {
-        buildspans_verbose_log(x, "Finalizing ended span...");
-        t_atomarray *ended_span_array = atomarray_new(0, NULL);
-        buildspans_verbose_log(x, "PRUNE: Created ended_span_array: %p", ended_span_array);
-        for(long i = 0; i < end_count; ++i) {
-            t_atom a; atom_setlong(&a, bars_to_end_vals[i]);
-            atomarray_appendatom(ended_span_array, &a);
-        }
-        buildspans_finalize_and_log_span(x, track_sym, ended_span_array);
         object_free(ended_span_array);
     }
 
