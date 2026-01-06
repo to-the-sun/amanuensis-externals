@@ -49,7 +49,7 @@
         <description>Outputs the track number associated with the completed span.</description>
     </outlet>
     <outlet name="out" type="anything">
-        <digest>Log messages for dictionary updates.</digest>
-        <description>Outputs a log message whenever a key in the internal 'building' dictionary is modified. The message is a list where the first element is a symbol in the format 'track::bar::key' and the rest of the list is the new value(s).</description>
+        <digest>Detailed bar data for a completed span.</digest>
+        <description>When a span completes, this outlet outputs all the data for all the bars in that span. The output is a series of messages, each with a selector in the format `track::bar::key` followed by the value(s). This output happens immediately before the track number is sent from the second outlet.</description>
     </outlet>
 </c74object>
