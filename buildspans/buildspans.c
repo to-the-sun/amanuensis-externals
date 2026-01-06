@@ -367,7 +367,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
-        x->span_outlet = listout((t_object *)x);
+        x->span_outlet = outlet_new((t_object *)x, "list");
     }
     return (x);
 }
@@ -990,7 +990,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
             outlet_int(x->track_outlet, track_num_to_output);
 
             // Outlet 1: Span list
-            outlet_list(x->span_outlet, NULL, (short)span_size, span_atoms);
+            outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
         }
 
         if (local_span_created) {
@@ -1207,7 +1207,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
             outlet_int(x->track_outlet, track_num_to_output);
 
             // Outlet 1: Span list
-            outlet_list(x->span_outlet, NULL, (short)span_size, span_atoms);
+            outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
         }
         object_free(ended_span_array_for_validation);
     }
