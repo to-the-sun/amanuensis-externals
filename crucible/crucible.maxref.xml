@@ -1,15 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <c74object name="crucible">
-    <digest>Parses specific key-value pairs from a dictionary.</digest>
+    <digest>Parses a stream of messages from the buildspans object.</digest>
     <description>
-        The `crucible` object is designed to extract specific pieces of information from a Max dictionary. It takes the name of a dictionary as an argument and, upon receiving a `bang` or a `dictionary` message, it looks up the specified dictionary and sends out the values associated with the keys `palette`, `bar`, and `span`.
+        The `crucible` object is designed to parse the output stream from the third outlet of the `buildspans` object. It listens for messages with selectors in the format `track::bar::key` and extracts specific values to send to its outlets.
     </description>
-
-    <!-- Arguments -->
-    <arg name="dictionary-name" type="symbol" optional="1">
-        <digest>The name of the dictionary to reference.</digest>
-        <description>The initial argument sets the name of the external `dict` object that `crucible` will look for when it receives a `bang`.</description>
-    </arg>
 
     <!-- Attributes -->
     <attribute name="verbose" type="int" optional="1" size="1">
@@ -17,33 +11,23 @@
         <description>When set to 1, a rightmost outlet is created for verbose logging messages, which can be helpful for debugging.</description>
     </attribute>
 
-    <!-- Methods -->
-    <method name="bang">
-        <digest>Triggers the dictionary parsing process.</digest>
-        <description>When a `bang` is received, the object will look up the dictionary specified by the initial argument and output the relevant data.</description>
-    </method>
-    <method name="dictionary">
-        <digest>Specifies a dictionary to parse.</digest>
-        <description>Receives a message in the format `dictionary <name>`, where `<name>` is the name of a `dict` object. This allows for dynamically specifying which dictionary to parse, overriding the initial argument.</description>
-    </method>
-
     <!-- Inlets -->
     <inlet name="in" type="anything">
-        <digest>Input for `bang` or `dictionary` messages.</digest>
+        <digest>Input for the message stream from buildspans.</digest>
         <description>The main inlet for receiving messages to trigger the object's parsing functionality.</description>
     </inlet>
 
     <!-- Outlets -->
     <outlet name="out" type="symbol">
         <digest>Palette value.</digest>
-        <description>Outputs the value associated with the `palette` key in the dictionary.</description>
+        <description>Outputs the value associated with the `palette` key from an incoming message.</description>
     </outlet>
     <outlet name="out" type="int">
         <digest>Bar value.</digest>
-        <description>Outputs the value associated with the `bar` key in the dictionary.</description>
+        <description>When a message with a `span` key is received, this outlet outputs the `bar` part of the selector as an integer.</description>
     </outlet>
     <outlet name="out" type="int">
         <digest>Largest value in the span.</digest>
-        <description>Outputs the largest integer value found in the atom array associated with the `span` key in the dictionary.</description>
+        <description>Outputs the largest integer value found in the arguments of a message with a `span` key.</description>
     </outlet>
 </c74object>

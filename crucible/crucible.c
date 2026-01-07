@@ -1,11 +1,10 @@
 #include "ext.h"
 #include "ext_obex.h"
-#include "ext_dictobj.h"
+#include <string.h> // For strcmp, strstr, etc.
 
 // Struct for the crucible object
 typedef struct _crucible {
     t_object s_obj;
-    t_symbol *dict_name;
     void *outlet_palette;
     void *outlet_bar;
     void *outlet_span_max;
@@ -18,9 +17,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv);
 void crucible_free(t_crucible *x);
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
-void crucible_bang(t_crucible *x);
-void crucible_process_dictionary(t_crucible *x, t_symbol *dict_name);
 void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
+int parse_selector(const char *selector_str, char **bar, char **key);
 
 // Global class pointer
 t_class *crucible_class;
@@ -37,16 +35,39 @@ void crucible_verbose_log(t_crucible *x, const char *fmt, ...) {
     }
 }
 
+// Helper to parse selectors like "track::bar::key"
+int parse_selector(const char *selector_str, char **bar, char **key) {
+    const char *first_delim = strstr(selector_str, "::");
+    if (!first_delim) return 0;
+
+    const char *second_delim = strstr(first_delim + 2, "::");
+    if (!second_delim) return 0;
+
+    size_t bar_len = second_delim - (first_delim + 2);
+    *bar = (char *)sysmem_newptr(bar_len + 1);
+    if (!*bar) return 0;
+    strncpy(*bar, first_delim + 2, bar_len);
+    (*bar)[bar_len] = '\0';
+
+    *key = (char *)sysmem_newptr(strlen(second_delim + 2) + 1);
+    if (!*key) {
+        sysmem_freeptr(*bar);
+        return 0;
+    }
+    strcpy(*key, second_delim + 2);
+
+    return 1;
+}
+
+
 void ext_main(void *r) {
     t_class *c;
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
-    class_addmethod(c, (method)crucible_bang, "bang", 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
-    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
     class_register(CLASS_BOX, c);
     crucible_class = c;
@@ -55,13 +76,7 @@ void ext_main(void *r) {
 void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     t_crucible *x = (t_crucible *)object_alloc(crucible_class);
     if (x) {
-        x->dict_name = gensym("");
         x->verbose_log_outlet = NULL;
-
-        // Process arguments: first is dictionary name
-        if (argc > 0 && atom_gettype(argv) == A_SYM) {
-            x->dict_name = atom_getsym(argv);
-        }
 
         // Process attributes
         attr_args_process(x, argc, argv);
@@ -82,51 +97,35 @@ void crucible_free(t_crucible *x) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    if (s == gensym("dictionary") && argc > 0 && atom_gettype(argv) == A_SYM) {
-        crucible_process_dictionary(x, atom_getsym(argv));
-    }
-}
+    char *bar_str = NULL;
+    char *key_str = NULL;
 
-void crucible_bang(t_crucible *x) {
-    if (x->dict_name && x->dict_name->s_name[0]) {
-        crucible_process_dictionary(x, x->dict_name);
-    }
-}
+    if (parse_selector(s->s_name, &bar_str, &key_str)) {
+        crucible_verbose_log(x, "Parsed selector: bar='%s', key='%s'", bar_str, key_str);
 
-void crucible_process_dictionary(t_crucible *x, t_symbol *dict_name) {
-    t_dictionary *d = dictobj_findregistered_retain(dict_name);
-    if (!d) {
-        object_error((t_object *)x, "could not find dictionary %s", dict_name->s_name);
-        return;
-    }
+        if (strcmp(key_str, "palette") == 0) {
+            if (argc > 0 && atom_gettype(argv) == A_SYM) {
+                outlet_anything(x->outlet_palette, atom_getsym(argv), 0, NULL);
+            }
+        } else if (strcmp(key_str, "span") == 0) {
+            long bar_val = atol(bar_str);
+            outlet_int(x->outlet_bar, bar_val);
 
-    t_atom palette_atom;
-    if (dictionary_hasentry(d, gensym("palette"))) {
-        dictionary_getatom(d, gensym("palette"), &palette_atom);
-        outlet_anything(x->outlet_palette, atom_getsym(&palette_atom), 0, NULL);
-    }
+            if (argc > 0) {
+                long max_val = 0;
+                if (atom_gettype(argv) == A_LONG) {
+                    max_val = atom_getlong(argv);
+                } else if (atom_gettype(argv) == A_FLOAT) {
+                    max_val = (long)atom_getfloat(argv);
+                }
 
-    t_atom bar_atom;
-    if (dictionary_hasentry(d, gensym("bar"))) {
-        dictionary_getatom(d, gensym("bar"), &bar_atom);
-        outlet_int(x->outlet_bar, atom_getlong(&bar_atom));
-    }
-
-    if (dictionary_hasentry(d, gensym("span"))) {
-        t_atom span_atom_ref;
-        dictionary_getatom(d, gensym("span"), &span_atom_ref);
-
-        t_object *obj = atom_getobj(&span_atom_ref);
-        if (object_classname(obj) == gensym("atomarray")) {
-            t_atomarray *span_array = (t_atomarray *)obj;
-            long count;
-            t_atom *atoms;
-            atomarray_getatoms(span_array, &count, &atoms);
-
-            if (count > 0) {
-                long max_val = atom_getlong(atoms);
-                for (long i = 1; i < count; i++) {
-                    long current_val = atom_getlong(atoms + i);
+                for (long i = 1; i < argc; i++) {
+                    long current_val = 0;
+                     if (atom_gettype(argv+i) == A_LONG) {
+                        current_val = atom_getlong(argv+i);
+                    } else if (atom_gettype(argv+i) == A_FLOAT) {
+                        current_val = (long)atom_getfloat(argv+i);
+                    }
                     if (current_val > max_val) {
                         max_val = current_val;
                     }
@@ -134,14 +133,17 @@ void crucible_process_dictionary(t_crucible *x, t_symbol *dict_name) {
                 outlet_int(x->outlet_span_max, max_val);
             }
         }
-    }
 
-    object_release((t_object *)d);
+        sysmem_freeptr(bar_str);
+        sysmem_freeptr(key_str);
+    } else {
+        crucible_verbose_log(x, "Unparsable message selector: %s", s->s_name);
+    }
 }
 
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "dictionary <name>, bang");
+        sprintf(s, "(anything) Message Stream from buildspans");
     } else { // ASSIST_OUTLET
         if (x->verbose) {
             switch (a) {
