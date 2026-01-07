@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<c74object name="crucible">
+    <digest>Parses a stream of messages from the buildspans object.</digest>
+    <description>
+        The `crucible` object is designed to parse the output stream from the third outlet of the `buildspans` object. It listens for messages with selectors in the format `track::bar::key` and extracts specific values to send to its outlets.
+    </description>
+
+    <!-- Attributes -->
+    <attribute name="verbose" type="int" optional="1" size="1">
+        <digest>Enable verbose logging.</digest>
+        <description>When set to 1, a rightmost outlet is created for verbose logging messages, which can be helpful for debugging.</description>
+    </attribute>
+
+    <!-- Inlets -->
+    <inlet name="in" type="anything">
+        <digest>Input for the message stream from buildspans.</digest>
+        <description>The main inlet for receiving messages to trigger the object's parsing functionality.</description>
+    </inlet>
+    <inlet name="in" type="int">
+        <digest>Sets the bar length.</digest>
+        <description>Receives an integer that sets the `bar_length` in milliseconds. This value is used to calculate the "reach" output.</description>
+    </inlet>
+
+    <!-- Outlets -->
+    <outlet name="out" type="int">
+        <digest>Reach value.</digest>
+        <description>Outputs the "reach" of a span, calculated as the largest bar timestamp in the span plus the current `bar_length`.</description>
+    </outlet>
+    <outlet name="out" type="symbol">
+        <digest>Palette value.</digest>
+        <description>Outputs the value associated with the `palette` key from an incoming message.</description>
+    </outlet>
+    <outlet name="out" type="int">
+        <digest>Bar value.</digest>
+        <description>When a message with a `span` key is received, this outlet outputs the `bar` part of the selector as an integer.</description>
+    </outlet>
+    <outlet name="out" type="int">
+        <digest>Offset value.</digest>
+        <description>Outputs the value associated with the `offset` key from an incoming message.</description>
+    </outlet>
+</c74object>
