@@ -1,6 +1,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_dictionary.h"
+#include "ext_dictobj.h"
 #include <string.h>
 
 typedef struct _crucible {
@@ -144,7 +145,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         snprintf(challenger_rating_key, 256, "%s::%ld::rating", track_sym->s_name, bar_ts);
 
         t_atomarray *challenger_rating_atomarray = NULL;
-        dictionary_getatomarray(x->challenger_dict, gensym(challenger_rating_key), &challenger_rating_atomarray);
+        dictionary_getatomarray(x->challenger_dict, gensym(challenger_rating_key), (t_object **)&challenger_rating_atomarray);
 
         if (!challenger_rating_atomarray) continue;
 
@@ -160,7 +161,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         if (dictionary_hasentry(incumbent_dict, gensym(incumbent_rating_key))) {
             t_atomarray *incumbent_rating_atomarray = NULL;
-            dictionary_getatomarray(incumbent_dict, gensym(incumbent_rating_key), &incumbent_rating_atomarray);
+            dictionary_getatomarray(incumbent_dict, gensym(incumbent_rating_key), (t_object **)&incumbent_rating_atomarray);
 
             long incumbent_rating_len = 0;
             t_atom *incumbent_rating_atoms = NULL;
@@ -171,21 +172,21 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
-            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent rating %.2f.", bar_ts, challenger_rating, incumbent_rating);
+            post("Bar %ld: Challenger rating %.2f vs Incumbent rating %.2f.", bar_ts, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
-                crucible_verbose_log(x, "-> Challenger loses bar. Span comparison failed.");
+                post("-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
             } else {
-                crucible_verbose_log(x, "-> Challenger wins bar.");
+                post("-> Challenger wins bar.");
             }
         } else {
-            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts, challenger_rating);
+            post("Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts, challenger_rating);
         }
     }
 
     if (challenger_wins) {
-        crucible_verbose_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
+        post("Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
         t_symbol **challenger_keys;
         long num_keys;
         dictionary_getkeys(x->challenger_dict, &num_keys, &challenger_keys);
@@ -198,8 +199,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                         dictionary_deleteentry(incumbent_dict, challenger_keys[i]);
                     }
                     t_atomarray *value = NULL;
-                    dictionary_getatomarray(x->challenger_dict, challenger_keys[i], &value);
-                    dictionary_appendatomarray(incumbent_dict, challenger_keys[i], value);
+                     dictionary_getatomarray(x->challenger_dict, challenger_keys[i], (t_object **)&value);
+                     dictionary_appendatomarray(incumbent_dict, challenger_keys[i], (t_object *)value);
                     crucible_verbose_log(x, "  -> Wrote key to incumbent: %s", challenger_keys[i]->s_name);
                  }
                  sysmem_freeptr(track_str);
@@ -219,9 +220,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
              t_atomarray *offset_atomarray, *palette_atomarray, *bar_span_atomarray;
 
-             dictionary_getatomarray(x->challenger_dict, gensym(offset_key), &offset_atomarray);
-             dictionary_getatomarray(x->challenger_dict, gensym(palette_key), &palette_atomarray);
-             dictionary_getatomarray(x->challenger_dict, gensym(span_key), &bar_span_atomarray);
+             dictionary_getatomarray(x->challenger_dict, gensym(offset_key), (t_object **)&offset_atomarray);
+             dictionary_getatomarray(x->challenger_dict, gensym(palette_key), (t_object **)&palette_atomarray);
+             dictionary_getatomarray(x->challenger_dict, gensym(span_key), (t_object **)&bar_span_atomarray);
 
              if(offset_atomarray){
                 long len; t_atom *atoms;
@@ -283,7 +284,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (parse_selector(s->s_name, &track_str, &bar_str, &key_str)) {
         t_symbol *track_sym = gensym(track_str);
 
-        dictionary_appendatomarray(x->challenger_dict, s, atomarray_new(argc, argv));
+        dictionary_appendatomarray(x->challenger_dict, s, (t_object *)atomarray_new(argc, argv));
 
         t_dictionary *tracker;
         if (!dictionary_hasentry(x->span_tracker_dict, track_sym)) {
@@ -291,11 +292,11 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             dictionary_appenddictionary(x->span_tracker_dict, track_sym, (t_object *)tracker);
             dictionary_appendlong(tracker, gensym("received_keys"), 0);
         } else {
-            dictionary_getdictionary(x->span_tracker_dict, track_sym, &tracker);
+            dictionary_getdictionary(x->span_tracker_dict, track_sym, (t_object **)&tracker);
         }
 
         long received_keys = 0;
-        dictionary_getlong(tracker, gensym("received_keys"), &received_keys);
+        dictionary_getlong(tracker, gensym("received_keys"), (t_atom_long *)&received_keys);
         received_keys++;
         dictionary_appendlong(tracker, gensym("received_keys"), received_keys);
 
@@ -303,16 +304,16 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             long num_bars = argc;
             long expected_keys = num_bars * 7;
             dictionary_appendlong(tracker, gensym("expected_keys"), expected_keys);
-            dictionary_appendatomarray(tracker, gensym("span_bars"), atomarray_new(argc, argv));
+            dictionary_appendatomarray(tracker, gensym("span_bars"), (t_object *)atomarray_new(argc, argv));
         }
 
         if (dictionary_hasentry(tracker, gensym("expected_keys"))) {
             long expected_keys = 0;
-            dictionary_getlong(tracker, gensym("expected_keys"), &expected_keys);
+            dictionary_getlong(tracker, gensym("expected_keys"), (t_atom_long *)&expected_keys);
 
             if (received_keys >= expected_keys) {
                 t_atomarray *span_atomarray = NULL;
-                dictionary_getatomarray(tracker, gensym("span_bars"), &span_atomarray);
+                dictionary_getatomarray(tracker, gensym("span_bars"), (t_object **)&span_atomarray);
                 crucible_process_span(x, track_sym, span_atomarray);
                 dictionary_deleteentry(x->span_tracker_dict, track_sym);
             }
