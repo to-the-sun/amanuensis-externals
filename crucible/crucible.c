@@ -165,18 +165,27 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             long incumbent_rating_len = 0;
             t_atom *incumbent_rating_atoms = NULL;
             atomarray_getatoms(incumbent_rating_atomarray, &incumbent_rating_len, &incumbent_rating_atoms);
-            if(incumbent_rating_len == 0) continue;
+            if(incumbent_rating_len == 0) { // Should not happen, but good practice
+                crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (empty atomarray). Challenger wins bar.", bar_ts, challenger_rating);
+                continue;
+            }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
+            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent rating %.2f.", bar_ts, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
+                crucible_verbose_log(x, "-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
+            } else {
+                crucible_verbose_log(x, "-> Challenger wins bar.");
             }
+        } else {
+            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no entry). Challenger wins bar.", bar_ts, challenger_rating);
         }
     }
 
     if (challenger_wins) {
-        crucible_verbose_log(x, "Challenger span for track %s won.", track_sym->s_name);
+        crucible_verbose_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
         t_symbol **challenger_keys;
         long num_keys;
         dictionary_getkeys(x->challenger_dict, &num_keys, &challenger_keys);
@@ -191,6 +200,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                     t_atomarray *value = NULL;
                     dictionary_getatomarray(x->challenger_dict, challenger_keys[i], &value);
                     dictionary_appendatomarray(incumbent_dict, challenger_keys[i], value);
+                    crucible_verbose_log(x, "  -> Wrote key to incumbent: %s", challenger_keys[i]->s_name);
                  }
                  sysmem_freeptr(track_str);
                  sysmem_freeptr(bar_str);
