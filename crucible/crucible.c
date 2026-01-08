@@ -99,8 +99,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        intin((t_object *)x, 1);
-
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
         }
@@ -108,6 +106,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet_bar = outlet_new((t_object *)x, NULL);
         x->outlet_palette = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
+
+        intin((t_object *)x, 1);
     }
     return (x);
 }
