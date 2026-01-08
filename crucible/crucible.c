@@ -165,8 +165,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             long incumbent_rating_len = 0;
             t_atom *incumbent_rating_atoms = NULL;
             atomarray_getatoms(incumbent_rating_atomarray, &incumbent_rating_len, &incumbent_rating_atoms);
-            if(incumbent_rating_len == 0) { // Should not happen, but good practice
-                crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (empty atomarray). Challenger wins bar.", bar_ts, challenger_rating);
+            if(incumbent_rating_len == 0) {
+                crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", bar_ts, challenger_rating);
                 continue;
             }
 
@@ -180,7 +180,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_verbose_log(x, "-> Challenger wins bar.");
             }
         } else {
-            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no entry). Challenger wins bar.", bar_ts, challenger_rating);
+            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts, challenger_rating);
         }
     }
 
@@ -274,6 +274,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    crucible_verbose_log(x, "Received message (new): %s", s->s_name);
+
     char *track_str = NULL;
     char *bar_str = NULL;
     char *key_str = NULL;
@@ -320,7 +322,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         sysmem_freeptr(bar_str);
         sysmem_freeptr(key_str);
     } else {
-        crucible_verbose_log(x, "Unparsable message selector: %s", s->s_name);
+        crucible_verbose_log(x, "Unparsable message selector (new): %s", s->s_name);
     }
 }
 
