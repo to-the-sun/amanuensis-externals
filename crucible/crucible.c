@@ -194,25 +194,20 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             atomarray_getatoms(incumbent_rating_atomarray, &incumbent_rating_len, &incumbent_rating_atoms);
             if(incumbent_rating_len == 0) {
                 crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", bar_ts_long, challenger_rating);
-                post("Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", bar_ts_long, challenger_rating);
                 continue;
             }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
             crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent rating %.2f.", bar_ts_long, challenger_rating, incumbent_rating);
-            post("Bar %ld: Challenger rating %.2f vs Incumbent rating %.2f.", bar_ts_long, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
                 crucible_verbose_log(x, "-> Challenger loses bar. Span comparison failed.");
-                post("-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
             } else {
                 crucible_verbose_log(x, "-> Challenger wins bar.");
-                post("-> Challenger wins bar.");
             }
         } else {
             crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts_long, challenger_rating);
-            post("Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts_long, challenger_rating);
         }
     }
 
