@@ -386,6 +386,14 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
+        // After attributes, the first argument is the buffer name.
+        // If no argument is provided, default to "bar".
+        if (argc > 0 && atom_gettype(argv) == A_SYM) {
+            buildspans_set_buffer(x, atom_getsym(argv));
+        } else {
+            buildspans_set_buffer(x, gensym("bar"));
+        }
+
         // Inlets are created from right to left.
         proxy_new((t_object *)x, 3, NULL); // Palette
         intin((t_object *)x, 2);    // Track Number

@@ -11,6 +11,12 @@
         A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
     </description>
 
+    <!-- Arguments -->
+    <argument name="buffer_name" optional="1" type="symbol">
+        <digest>The name of the buffer~ to read the bar length from.</digest>
+        <description>If provided, the object will use this buffer~ to read the bar length. If not provided, it will default to "bar".</description>
+    </argument>
+
     <!-- Methods -->
     <method name="clear">
         <digest>Resets the object's internal state.</digest>
