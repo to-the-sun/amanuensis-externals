@@ -11,20 +11,14 @@
         A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
     </description>
 
-    <!-- Arguments -->
-    <argument name="buffer_name" optional="1" type="symbol">
-        <digest>The name of the buffer~ to read the bar length from.</digest>
-        <description>If provided, the object will use this buffer~ to read the bar length. If not provided, it will default to "bar".</description>
-    </argument>
-
     <!-- Methods -->
     <method name="clear">
         <digest>Resets the object's internal state.</digest>
         <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
     </method>
-    <method name="set_buffer">
+    <method name="set_bar_buffer">
         <digest>Sets the buffer~ to read the bar length from.</digest>
-        <description>The `set_buffer` message sets the buffer~ object to read the bar length from. The buffer~ should contain a single float value representing the bar length in milliseconds.</description>
+        <description>The `set_bar_buffer` message sets the buffer~ object to read the bar length from. The buffer~ should contain a single float value representing the bar length in milliseconds.</description>
     </method>
 
     <!-- Inlets -->

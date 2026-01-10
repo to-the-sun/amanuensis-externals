@@ -165,7 +165,7 @@ long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
-void buildspans_set_buffer(t_buildspans *x, t_symbol *s);
+void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 
 
 // Helper function to send verbose log messages
@@ -184,7 +184,7 @@ t_class *buildspans_class;
 
 long buildspans_get_bar_length(t_buildspans *x) {
     if (!x->buffer_ref) {
-        object_error((t_object *)x, "Buffer name not set. Use 'set_buffer <name>' message.");
+        object_error((t_object *)x, "Buffer name not set. Use 'set_bar_buffer <name>' message.");
         return -1; // Return -1 to indicate an error
     }
 
@@ -360,7 +360,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
-    class_addmethod(c, (method)buildspans_set_buffer, "set_buffer", A_SYM, 0);
+    class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
     
     CLASS_ATTR_LONG(c, "verbose", 0, t_buildspans, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -386,13 +386,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
-        // After attributes, the first argument is the buffer name.
-        // If no argument is provided, default to "bar".
-        if (argc > 0 && atom_gettype(argv) == A_SYM) {
-            buildspans_set_buffer(x, atom_getsym(argv));
-        } else {
-            buildspans_set_buffer(x, gensym("bar"));
-        }
+        // Hardcode the default buffer name to "bar".
+        buildspans_set_bar_buffer(x, gensym("bar"));
 
         // Inlets are created from right to left.
         proxy_new((t_object *)x, 3, NULL); // Palette
@@ -1152,7 +1147,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(list) Timestamp-Score Pair, (bang) Flush, (clear) Clear, (set_buffer) Set Buffer Name");
+                sprintf(s, "(list) Timestamp-Score Pair, (bang) Flush, (clear) Clear, (set_bar_buffer) Set Buffer Name");
                 break;
             case 1:
                 sprintf(s, "(float) Offset Timestamp");
@@ -1182,7 +1177,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     }
 }
 
-void buildspans_set_buffer(t_buildspans *x, t_symbol *s) {
+void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     if (s && s->s_name) {
         x->s_buffer_name = s;
         if (x->buffer_ref) {
@@ -1192,7 +1187,7 @@ void buildspans_set_buffer(t_buildspans *x, t_symbol *s) {
         }
         buildspans_verbose_log(x, "Buffer set to: %s", s->s_name);
     } else {
-        object_error((t_object *)x, "set_buffer requires a valid buffer name.");
+        object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
 }
 
