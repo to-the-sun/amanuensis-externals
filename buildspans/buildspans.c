@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "ext_proto.h"
+#include "ext_buffer.h"
 #include "../shared/visualize.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
@@ -130,7 +131,7 @@ typedef struct _buildspans {
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
     long current_offset;
-    long bar_length;
+    t_buffer_ref *buffer_ref;
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
@@ -146,7 +147,6 @@ void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_int(t_buildspans *x, long n);
 void buildspans_offset(t_buildspans *x, double f);
-void buildspans_bar_length(t_buildspans *x, long n);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
@@ -164,6 +164,7 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_
 long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
+long buildspans_get_bar_length(t_buildspans *x);
 
 
 // Helper function to send verbose log messages
@@ -179,6 +180,30 @@ void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...) {
 }
 
 t_class *buildspans_class;
+
+long buildspans_get_bar_length(t_buildspans *x) {
+    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+    if (!b) {
+        object_warn((t_object *)x, "bar buffer~ not found, using default bar length of 125");
+        return 125;
+    }
+
+    long bar_length = 125; // Default value
+    float *samples = buffer_locksamples(b);
+    if (samples) {
+        if (buffer_getframecount(b) > 0) {
+            bar_length = (long)samples[0];
+        }
+        buffer_unlocksamples(b);
+    }
+
+    if (bar_length <= 0) {
+        object_warn((t_object *)x, "bar length is %ld, must be positive. using 125.", bar_length);
+        return 125;
+    }
+
+    return bar_length;
+}
 
 void buildspans_visualize_memory(t_buildspans *x) {
     long num_keys;
@@ -303,7 +328,8 @@ void buildspans_visualize_memory(t_buildspans *x) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
         sysmem_freeptr(bar_timestamps);
     }
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%ld,\"bar_length\":%ld}", x->current_offset, x->bar_length);
+    long bar_length = buildspans_get_bar_length(x);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%ld,\"bar_length\":%ld}", x->current_offset, bar_length);
 
     if (x->verbose && x->verbose_log_outlet) {
         visualize(json_buffer);
@@ -326,7 +352,6 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
-    class_addmethod(c, (method)buildspans_bar_length, "in3", A_LONG, 0);
     class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
@@ -347,16 +372,15 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         buildspans_verbose_log(x, "NEW: Created building dictionary: %p", x->building);
         x->current_track = 0;
         x->current_offset = 0;
-        x->bar_length = 125; // Default bar length
         x->current_palette = gensym("");
         x->verbose_log_outlet = NULL;
+        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
         // Inlets are created from right to left.
-        proxy_new((t_object *)x, 4, NULL); // Palette
-        intin((t_object *)x, 3);    // Bar Length
+        proxy_new((t_object *)x, 3, NULL); // Palette
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
@@ -383,6 +407,9 @@ void buildspans_free(t_buildspans *x) {
     if (x->tracks_ended_in_current_event) {
         object_free(x->tracks_ended_in_current_event);
     }
+    if (x->buffer_ref) {
+        object_free(x->buffer_ref);
+    }
 }
 
 void buildspans_clear(t_buildspans *x) {
@@ -398,7 +425,6 @@ void buildspans_clear(t_buildspans *x) {
     buildspans_verbose_log(x, "CLEAR: Created new building dictionary: %p", x->building);
     x->current_track = 0;
     x->current_offset = 0;
-    x->bar_length = 125; // Default bar length
     x->current_palette = gensym("");
     buildspans_verbose_log(x, "buildspans cleared.");
     buildspans_visualize_memory(x);
@@ -538,12 +564,6 @@ void buildspans_offset(t_buildspans *x, double f) {
     buildspans_visualize_memory(x);
 }
 
-// Handler for int messages on the 4th inlet (proxy #3, bar length)
-void buildspans_bar_length(t_buildspans *x, long n) {
-    x->bar_length = n;
-    buildspans_verbose_log(x, "Bar length updated to: %ld", n);
-}
-
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
 void buildspans_track(t_buildspans *x, long n) {
     x->current_track = n;
@@ -554,8 +574,8 @@ void buildspans_track(t_buildspans *x, long n) {
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    // Inlet 4 is the palette symbol inlet
-    if (inlet_num == 4) {
+    // Inlet 3 is the palette symbol inlet
+    if (inlet_num == 3) {
         // A standalone symbol is a message with argc=0
         if (argc == 0) {
             x->current_palette = s;
@@ -573,7 +593,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for list messages on the main inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->bar_length <= 0) {
+    if (buildspans_get_bar_length(x) <= 0) {
         object_warn((t_object *)x, "Bar length is not set. Ignoring input.");
         return;
     }
@@ -667,12 +687,13 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, offset);
     t_symbol *track_sym = gensym(track_str);
+    long bar_length = buildspans_get_bar_length(x);
 
     // Calculate bar timestamp
     double relative_timestamp = timestamp - offset;
     buildspans_verbose_log(x, "Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
-    long bar_timestamp_val = floor(relative_timestamp / x->bar_length) * x->bar_length;
-    buildspans_verbose_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", x->bar_length, bar_timestamp_val);
+    long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
+    buildspans_verbose_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
     // --- Find the most recent bar for the current track to see if this is a new bar ---
     long last_bar_timestamp = -1;
@@ -725,8 +746,8 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             sysmem_freeptr(keys);
         }
 
-        if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + x->bar_length) {
-            buildspans_verbose_log(x, "Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, x->bar_length, most_recent_bar_after_rating_check);
+        if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + bar_length) {
+            buildspans_verbose_log(x, "Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, bar_length, most_recent_bar_after_rating_check);
             buildspans_end_track_span(x, track_sym);
         }
     }
@@ -887,7 +908,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             dictionary_appendfloat(x->building, rating_key, final_rating);
             buildspans_verbose_log(x, "%s %.2f", rating_key->s_name, final_rating);
             t_atom rating_atom;
-            atom_setfloat(&rating_atom, final_rating);
+            atom_setfloat(&atom, final_rating);
         }
         buildspans_verbose_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
@@ -1132,9 +1153,6 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 sprintf(s, "(int) Track Number");
                 break;
             case 3:
-                sprintf(s, "(int) Bar Length");
-                break;
-            case 4:
                 sprintf(s, "(symbol) Palette");
                 break;
         }

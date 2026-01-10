@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
+#include "ext_buffer.h"
 #include <string.h>
 
 typedef struct _crucible {
@@ -14,7 +15,7 @@ typedef struct _crucible {
     void *outlet_bar;
     void *outlet_offset;
     void *verbose_log_outlet;
-    long bar_length;
+    t_buffer_ref *buffer_ref;
     long verbose;
 } t_crucible;
 
@@ -23,7 +24,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv);
 void crucible_free(t_crucible *x);
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
-void crucible_in1(t_crucible *x, long n);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
 void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
@@ -79,7 +79,6 @@ void ext_main(void *r) {
     t_class *c;
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
-    class_addmethod(c, (method)crucible_in1, "in1", A_LONG, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
@@ -95,8 +94,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->challenger_dict = dictionary_new();
         x->span_tracker_dict = dictionary_new();
         x->verbose_log_outlet = NULL;
-        x->bar_length = 125;
         x->incumbent_dict_name = gensym("");
+        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -113,8 +112,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet_bar = outlet_new((t_object *)x, NULL);
         x->outlet_palette = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
-
-        intin((t_object *)x, 1);
     }
     return (x);
 }
@@ -126,11 +123,9 @@ void crucible_free(t_crucible *x) {
     if (x->span_tracker_dict) {
         object_release((t_object *)x->span_tracker_dict);
     }
-}
-
-void crucible_in1(t_crucible *x, long n) {
-    x->bar_length = n;
-    crucible_verbose_log(x, "Bar length set to: %ld", n);
+    if (x->buffer_ref) {
+        object_free(x->buffer_ref);
+    }
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
@@ -266,7 +261,21 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                         if(current_val > max_val) max_val = current_val;
                     }
                     outlet_int(x->outlet_bar, bar_ts_long);
-                    outlet_int(x->outlet_reach, max_val + x->bar_length);
+
+                    long bar_length = 0; // Default value
+                    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+                    if (b) {
+                        float *samples = buffer_locksamples(b);
+                        if (samples) {
+                            if (buffer_getframecount(b) > 0) {
+                                bar_length = (long)samples[0];
+                            }
+                            buffer_unlocksamples(b);
+                        }
+                    } else {
+                        object_error((t_object *)x, "bar buffer~ not found");
+                    }
+                    outlet_int(x->outlet_reach, max_val + bar_length);
                 }
             }
         }
@@ -421,7 +430,6 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
-            case 1: sprintf(s, "(int) Bar Length in ms"); break;
         }
     } else { // ASSIST_OUTLET
         if (x->verbose) {
