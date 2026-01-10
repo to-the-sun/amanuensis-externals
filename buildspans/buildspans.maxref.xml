@@ -16,6 +16,10 @@
         <digest>Resets the object's internal state.</digest>
         <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
     </method>
+    <method name="set_buffer">
+        <digest>Sets the buffer~ to read the bar length from.</digest>
+        <description>The `set_buffer` message sets the buffer~ object to read the bar length from. The buffer~ should contain a single float value representing the bar length in milliseconds.</description>
+    </method>
 
     <!-- Inlets -->
     <inlet name="in" type="list">
@@ -29,10 +33,6 @@
     <inlet name="in" type="int">
         <digest>Track number.</digest>
         <description>Receives an integer that sets the current track for incoming notes and offsets.</description>
-    </inlet>
-    <inlet name="in" type="int">
-        <digest>Bar length in milliseconds.</digest>
-        <description>Receives an integer that sets the bar length in milliseconds.</description>
     </inlet>
     <inlet name="in" type="symbol">
         <digest>Palette name.</digest>

@@ -132,6 +132,7 @@ typedef struct _buildspans {
     long current_track;
     long current_offset;
     t_buffer_ref *buffer_ref;
+    t_symbol *s_buffer_name;
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
@@ -145,7 +146,6 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
-void buildspans_int(t_buildspans *x, long n);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
@@ -165,6 +165,7 @@ long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
+void buildspans_set_buffer(t_buildspans *x, t_symbol *s);
 
 
 // Helper function to send verbose log messages
@@ -182,13 +183,18 @@ void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...) {
 t_class *buildspans_class;
 
 long buildspans_get_bar_length(t_buildspans *x) {
-    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-    if (!b) {
-        object_warn((t_object *)x, "bar buffer~ not found, using default bar length of 125");
-        return 125;
+    if (!x->buffer_ref) {
+        object_error((t_object *)x, "Buffer name not set. Use 'set_buffer <name>' message.");
+        return -1; // Return -1 to indicate an error
     }
 
-    long bar_length = 125; // Default value
+    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+    if (!b) {
+        object_error((t_object *)x, "bar buffer~ '%s' not found.", x->s_buffer_name->s_name);
+        return -1;
+    }
+
+    long bar_length = -1; // Default value
     float *samples = buffer_locksamples(b);
     if (samples) {
         if (buffer_getframecount(b) > 0) {
@@ -349,12 +355,12 @@ void ext_main(void *r) {
     c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, (short)sizeof(t_buildspans), 0L, A_GIMME, 0);
     class_addmethod(c, (method)buildspans_clear, "clear", 0);
     class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)buildspans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
     class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
+    class_addmethod(c, (method)buildspans_set_buffer, "set_buffer", A_SYM, 0);
     
     CLASS_ATTR_LONG(c, "verbose", 0, t_buildspans, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -374,7 +380,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_offset = 0;
         x->current_palette = gensym("");
         x->verbose_log_outlet = NULL;
-        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+        x->buffer_ref = NULL;
+        x->s_buffer_name = NULL;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -907,8 +914,6 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
             dictionary_appendfloat(x->building, rating_key, final_rating);
             buildspans_verbose_log(x, "%s %.2f", rating_key->s_name, final_rating);
-            t_atom rating_atom;
-            atom_setfloat(&atom, final_rating);
         }
         buildspans_verbose_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
@@ -1135,16 +1140,11 @@ void buildspans_flush(t_buildspans *x) {
 }
 
 
-// Handler for int messages on the main inlet
-void buildspans_int(t_buildspans *x, long n) {
-    object_error((t_object *)x, "Invalid input: main inlet expects a list of two floats.");
-}
-
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(list) Timestamp-Score Pair, (bang) Flush, (clear) Clear");
+                sprintf(s, "(list) Timestamp-Score Pair, (bang) Flush, (clear) Clear, (set_buffer) Set Buffer Name");
                 break;
             case 1:
                 sprintf(s, "(float) Offset Timestamp");
@@ -1171,6 +1171,20 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 case 2: sprintf(s, "Bar Data for Ended Spans (anything)"); break;
             }
         }
+    }
+}
+
+void buildspans_set_buffer(t_buildspans *x, t_symbol *s) {
+    if (s && s->s_name) {
+        x->s_buffer_name = s;
+        if (x->buffer_ref) {
+            buffer_ref_set(x->buffer_ref, s);
+        } else {
+            x->buffer_ref = buffer_ref_new((t_object *)x, s);
+        }
+        buildspans_verbose_log(x, "Buffer set to: %s", s->s_name);
+    } else {
+        object_error((t_object *)x, "set_buffer requires a valid buffer name.");
     }
 }
 
