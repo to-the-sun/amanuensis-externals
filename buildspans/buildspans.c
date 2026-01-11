@@ -159,7 +159,7 @@ void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset);
+void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset, long bar_length);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym);
 long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
@@ -184,17 +184,17 @@ t_class *buildspans_class;
 
 long buildspans_get_bar_length(t_buildspans *x) {
     if (!x->buffer_ref) {
-        object_error((t_object *)x, "Buffer name not set. Use 'set_bar_buffer <name>' message.");
-        return -1; // Return -1 to indicate an error
+        buildspans_verbose_log(x, "Buffer name not set.");
+        return 0;
     }
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        object_error((t_object *)x, "bar buffer~ '%s' not found.", x->s_buffer_name->s_name);
-        return -1;
+        buildspans_verbose_log(x, "bar buffer~ '%s' not found.", x->s_buffer_name->s_name);
+        return 0;
     }
 
-    long bar_length = -1; // Default value
+    long bar_length = 0;
     float *samples = buffer_locksamples(b);
     if (samples) {
         if (buffer_getframecount(b) > 0) {
@@ -204,8 +204,8 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     if (bar_length <= 0) {
-        object_warn((t_object *)x, "bar length is %ld, must be positive. using 125.", bar_length);
-        return 125;
+        buildspans_verbose_log(x, "bar length is %ld, must be positive.", bar_length);
+        return 0;
     }
 
     return bar_length;
@@ -454,6 +454,12 @@ void buildspans_offset(t_buildspans *x, double f) {
     x->current_offset = new_offset;
     buildspans_verbose_log(x, "Global offset updated to: %ld. Duplicating one span for each active track.", new_offset);
 
+    long bar_length = buildspans_get_bar_length(x);
+    if (bar_length <= 0) {
+        buildspans_verbose_log(x, "Bar length not positive, cannot duplicate spans.");
+        return;
+    }
+
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -561,7 +567,7 @@ void buildspans_offset(t_buildspans *x, double f) {
             x->current_track = track_num_to_process;
 
             for (long k = 0; k < notes_count; k++) {
-                buildspans_process_and_add_note(x, notes[k].timestamp, notes[k].score, new_offset);
+                buildspans_process_and_add_note(x, notes[k].timestamp, notes[k].score, new_offset, bar_length);
             }
 
             x->current_track = original_track;
@@ -603,8 +609,9 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for list messages on the main inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (buildspans_get_bar_length(x) <= 0) {
-        object_warn((t_object *)x, "Bar length is not set. Ignoring input.");
+    long bar_length = buildspans_get_bar_length(x);
+    if (bar_length <= 0) {
+        buildspans_verbose_log(x, "Bar length is not positive. Ignoring input.");
         return;
     }
     if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
@@ -672,7 +679,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         const char *offset_part = strchr(unique_track_syms[i]->s_name, '-');
         if (offset_part) {
             long offset = atol(offset_part + 1);
-            buildspans_process_and_add_note(x, timestamp, score, offset);
+            buildspans_process_and_add_note(x, timestamp, score, offset, bar_length);
         }
     }
 
@@ -692,12 +699,11 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset) {
+void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset, long bar_length) {
     // Get current track symbol
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, offset);
     t_symbol *track_sym = gensym(track_str);
-    long bar_length = buildspans_get_bar_length(x);
 
     // Calculate bar timestamp
     double relative_timestamp = timestamp - offset;
