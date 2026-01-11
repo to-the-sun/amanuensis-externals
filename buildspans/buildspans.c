@@ -611,7 +611,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long bar_length = buildspans_get_bar_length(x);
     if (bar_length <= 0) {
-        buildspans_verbose_log(x, "Bar length is not positive. Ignoring input.");
+        object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
         return;
     }
     if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
