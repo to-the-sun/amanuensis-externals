@@ -182,16 +182,17 @@ void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...) {
 
 t_class *buildspans_class;
 
+// A single, consolidated function to get the bar length from the buffer.
+// It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
+// It does not post any messages to the console. The caller is responsible for that.
 long buildspans_get_bar_length(t_buildspans *x) {
     if (!x->buffer_ref) {
-        buildspans_verbose_log(x, "Buffer name not set.");
-        return 0;
+        return -1; // Buffer name not set.
     }
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        buildspans_verbose_log(x, "bar buffer~ '%s' not found.", x->s_buffer_name->s_name);
-        return 0;
+        return -1; // Buffer object not found.
     }
 
     long bar_length = 0;
@@ -204,8 +205,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     if (bar_length <= 0) {
-        buildspans_verbose_log(x, "bar length is %ld, must be positive.", bar_length);
-        return 0;
+        return -1; // Value in buffer is not positive.
     }
 
     return bar_length;
@@ -454,12 +454,6 @@ void buildspans_offset(t_buildspans *x, double f) {
     x->current_offset = new_offset;
     buildspans_verbose_log(x, "Global offset updated to: %ld. Duplicating one span for each active track.", new_offset);
 
-    long bar_length = buildspans_get_bar_length(x);
-    if (bar_length <= 0) {
-        buildspans_verbose_log(x, "Bar length not positive, cannot duplicate spans.");
-        return;
-    }
-
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -563,6 +557,7 @@ void buildspans_offset(t_buildspans *x, double f) {
         if (notes_count > 0) {
             qsort(notes, notes_count, sizeof(NotePair), compare_notepairs);
 
+            long bar_length = buildspans_get_bar_length(x);
             long original_track = x->current_track;
             x->current_track = track_num_to_process;
 
