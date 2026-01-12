@@ -10,6 +10,8 @@ typedef struct _crucible {
     t_dictionary *challenger_dict;
     t_dictionary *span_tracker_dict;
     t_symbol *incumbent_dict_name;
+    long song_reach;
+    void *outlet_song_reach;
     void *outlet_reach;
     void *outlet_palette;
     void *outlet_bar;
@@ -112,6 +114,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet_bar = outlet_new((t_object *)x, NULL);
         x->outlet_palette = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
+        x->outlet_song_reach = outlet_new((t_object *)x, NULL);
+        x->song_reach = 0;
     }
     return (x);
 }
@@ -275,7 +279,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                     } else {
                         object_error((t_object *)x, "bar buffer~ not found");
                     }
-                    outlet_int(x->outlet_reach, max_val + bar_length);
+                    long current_reach = max_val + bar_length;
+                    outlet_int(x->outlet_reach, current_reach);
+
+                    if (current_reach > x->song_reach) {
+                        x->song_reach = current_reach;
+                        outlet_int(x->outlet_song_reach, x->song_reach);
+                    }
                 }
             }
         }
@@ -434,18 +444,20 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     } else { // ASSIST_OUTLET
         if (x->verbose) {
             switch (a) {
-                case 0: sprintf(s, "Reach (int)"); break;
-                case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (int)"); break;
-                case 4: sprintf(s, "Verbose Logging Outlet"); break;
+                case 0: sprintf(s, "Song Reach (int)"); break;
+                case 1: sprintf(s, "Reach (int)"); break;
+                case 2: sprintf(s, "Palette (symbol)"); break;
+                case 3: sprintf(s, "Bar (int)"); break;
+                case 4: sprintf(s, "Offset (int)"); break;
+                case 5: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
              switch (a) {
-                case 0: sprintf(s, "Reach (int)"); break;
-                case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (int)"); break;
+                case 0: sprintf(s, "Song Reach (int)"); break;
+                case 1: sprintf(s, "Reach (int)"); break;
+                case 2: sprintf(s, "Palette (symbol)"); break;
+                case 3: sprintf(s, "Bar (int)"); break;
+                case 4: sprintf(s, "Offset (int)"); break;
             }
         }
     }
