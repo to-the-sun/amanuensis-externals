@@ -383,8 +383,23 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                                 t_atom *absolutes_atoms = NULL;
                                                 atomarray_getatoms(absolutes_atomarray, &absolutes_len, &absolutes_atoms);
                                                 for (long k = 0; k < absolutes_len; k++) {
-                                                    long old_absolute = atom_getlong(absolutes_atoms + k);
-                                                    atom_setlong(absolutes_atoms + k, old_absolute + old_song_reach);
+                                                    double old_absolute = atom_getfloat(absolutes_atoms + k);
+                                                    atom_setfloat(absolutes_atoms + k, old_absolute + old_song_reach);
+                                                }
+                                            }
+                                        }
+
+                                        // Adjust span in the copied bar
+                                        t_atomarray *span_atomarray = NULL;
+                                        if (dictionary_hasentry(copied_bar_dict, gensym("span"))) {
+                                            dictionary_getatomarray(copied_bar_dict, gensym("span"), (t_object **)&span_atomarray);
+                                            if (span_atomarray) {
+                                                long span_len = 0;
+                                                t_atom *span_atoms = NULL;
+                                                atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
+                                                for (long k = 0; k < span_len; k++) {
+                                                    long old_span_val = atom_getlong(span_atoms + k);
+                                                    atom_setlong(span_atoms + k, old_span_val + old_song_reach);
                                                 }
                                             }
                                         }
