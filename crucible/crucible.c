@@ -373,6 +373,22 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                             dictionary_deleteentry(other_track_dict, target_ts_sym);
                                         }
                                         t_dictionary *copied_bar_dict = dictionary_deep_copy(source_bar_dict);
+
+                                        // Adjust absolutes in the copied bar
+                                        t_atomarray *absolutes_atomarray = NULL;
+                                        if (dictionary_hasentry(copied_bar_dict, gensym("absolutes"))) {
+                                            dictionary_getatomarray(copied_bar_dict, gensym("absolutes"), (t_object **)&absolutes_atomarray);
+                                            if (absolutes_atomarray) {
+                                                long absolutes_len = 0;
+                                                t_atom *absolutes_atoms = NULL;
+                                                atomarray_getatoms(absolutes_atomarray, &absolutes_len, &absolutes_atoms);
+                                                for (long k = 0; k < absolutes_len; k++) {
+                                                    long old_absolute = atom_getlong(absolutes_atoms + k);
+                                                    atom_setlong(absolutes_atoms + k, old_absolute + old_song_reach);
+                                                }
+                                            }
+                                        }
+
                                         dictionary_appenddictionary(other_track_dict, target_ts_sym, (t_object *)copied_bar_dict);
                                         crucible_verbose_log(x, "Duplicated bar %s from track %s to %s",
                                                              source_ts_sym->s_name, track_keys[i]->s_name, target_ts_sym->s_name);
