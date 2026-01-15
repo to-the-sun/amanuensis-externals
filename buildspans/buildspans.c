@@ -156,6 +156,7 @@ typedef struct _buildspans {
     void *log_outlet;
     void *verbose_log_outlet;
     long verbose;
+    double local_bar_length;
 } t_buildspans;
 
 // Function prototypes
@@ -183,6 +184,7 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym,
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
+void buildspans_local_bar_length(t_buildspans *x, double f);
 
 
 // Helper function to send verbose log messages
@@ -203,6 +205,9 @@ t_class *buildspans_class;
 // It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
 // It does not post any messages to the console. The caller is responsible for that.
 long buildspans_get_bar_length(t_buildspans *x) {
+    if (x->local_bar_length > 0) {
+        return (long)x->local_bar_length;
+    }
     if (!x->buffer_ref) {
         return -1; // Buffer name not set.
     }
@@ -378,6 +383,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
+    class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
     
     CLASS_ATTR_LONG(c, "verbose", 0, t_buildspans, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -399,6 +405,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->verbose_log_outlet = NULL;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
+        x->local_bar_length = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -407,6 +414,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         buildspans_set_bar_buffer(x, gensym("bar"));
 
         // Inlets are created from right to left.
+        floatin((t_object *)x, 4);  // Local bar length
         proxy_new((t_object *)x, 3, NULL); // Palette
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
@@ -1180,6 +1188,9 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
             case 3:
                 sprintf(s, "(symbol) Palette");
                 break;
+            case 4:
+                sprintf(s, "(float) Local Bar Length");
+                break;
         }
     } else { // ASSIST_OUTLET
         if (x->verbose) {
@@ -1211,6 +1222,11 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
+}
+
+void buildspans_local_bar_length(t_buildspans *x, double f) {
+    x->local_bar_length = f;
+    buildspans_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep) {

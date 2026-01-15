@@ -38,6 +38,10 @@
         <digest>Palette name.</digest>
         <description>Receives a symbol that sets the current palette.</description>
     </inlet>
+	<inlet name="in" type="float">
+        <digest>Local Bar Length</digest>
+        <description>Receives a float that sets a local bar length, which will override the one specified by the bar buffer. A value of zero or less will cause the object to revert to using the bar buffer.</description>
+    </inlet>
 
     <!-- Outlets -->
     <outlet name="out" type="list">

@@ -19,6 +19,7 @@ typedef struct _crucible {
     long verbose;
     long fill;
     long song_reach;
+    double local_bar_length;
 } t_crucible;
 
 // Function prototypes
@@ -31,6 +32,8 @@ void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long);
+void crucible_local_bar_length(t_crucible *x, double f);
+long crucible_get_bar_length(t_crucible *x);
 
 
 t_class *crucible_class;
@@ -82,6 +85,7 @@ void ext_main(void *r) {
     t_class *c;
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
@@ -103,6 +107,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->incumbent_dict_name = gensym("");
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->song_reach = 0;
+        x->local_bar_length = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -119,6 +124,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet_bar = outlet_new((t_object *)x, NULL);
         x->outlet_palette = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
+
+        floatin((t_object *)x, 1);
     }
     return (x);
 }
@@ -165,19 +172,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         }
         outlet_int(x->outlet_bar, bar_ts_long);
 
-        long bar_length = 0; // Default value
-        t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-        if (b) {
-            float *samples = buffer_locksamples(b);
-            if (samples) {
-                if (buffer_getframecount(b) > 0) {
-                    bar_length = (long)samples[0];
-                }
-                buffer_unlocksamples(b);
-            }
-        } else {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
+        long bar_length = crucible_get_bar_length(x);
         long current_reach = max_val + bar_length;
         outlet_int(x->outlet_reach, current_reach);
     }
@@ -290,19 +285,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                         if (current_val > max_val) max_val = current_val;
                     }
 
-                    long bar_length = 0; // Default value
-                    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-                    if (b) {
-                        float *samples = buffer_locksamples(b);
-                        if (samples) {
-                            if (buffer_getframecount(b) > 0) {
-                                bar_length = (long)samples[0];
-                            }
-                            buffer_unlocksamples(b);
-                        }
-                    } else {
-                        object_error((t_object *)x, "bar buffer~ not found");
-                    }
+                    long bar_length = crucible_get_bar_length(x);
                     long current_reach = max_val + bar_length;
                     if (current_reach > max_reach) {
                         max_reach = current_reach;
@@ -430,6 +413,33 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     }
 
     object_release((t_object *)incumbent_dict);
+}
+
+long crucible_get_bar_length(t_crucible *x) {
+    if (x->local_bar_length > 0) {
+        return (long)x->local_bar_length;
+    }
+
+    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+    if (!b) {
+        object_error((t_object *)x, "bar buffer~ not found");
+        return 0;
+    }
+
+    long bar_length = 0;
+    float *samples = buffer_locksamples(b);
+    if (samples) {
+        if (buffer_getframecount(b) > 0) {
+            bar_length = (long)samples[0];
+        }
+        buffer_unlocksamples(b);
+    }
+    return bar_length;
+}
+
+void crucible_local_bar_length(t_crucible *x, double f) {
+    x->local_bar_length = f;
+    crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
@@ -569,6 +579,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
+            case 1: sprintf(s, "(float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
         if (x->verbose) {
