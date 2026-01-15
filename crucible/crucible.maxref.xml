@@ -22,9 +22,9 @@
 		<digest>Input for the message stream from buildspans.</digest>
 		<description>The main inlet for receiving messages to trigger the object's parsing and comparison functionality.</description>
 	</inlet>
-	<inlet name="in" type="int">
-		<digest>Sets the bar length.</digest>
-		<description>Receives an integer that sets the `bar_length` in milliseconds. This value is used to calculate the "reach" output for winning spans.</description>
+	<inlet name="in" type="float">
+		<digest>Local Bar Length</digest>
+		<description>Receives a float that sets a local bar length, which will override the one specified by the bar buffer. A value of zero or less will cause the object to revert to using the bar buffer.</description>
 	</inlet>
 
 	<!-- Outlets -->
