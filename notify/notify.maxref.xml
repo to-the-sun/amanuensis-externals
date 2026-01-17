@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="notify" module="max" category="Dictionary">
+	<digest>
+		Dump all notes from a dictionary ordered by absolute timestamp
+	</digest>
+	<description>
+		The notify object accepts a dictionary name as an argument and, when it receives a bang, it extracts all notes (timestamped events) from the dictionary, sorts them chronologically by absolute timestamp, clears the original dictionary, and outputs the notes sequentially from its outlets.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Dictionary</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="bang">
+			<digest>
+				bang to trigger the dump
+			</digest>
+			<description>
+				A bang message triggers the gathering of all notes from the referenced dictionary. The notes are then sorted, the dictionary is cleared, and the notes are output sequentially.
+			</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="list">
+			<digest>
+				Absolute Timestamp and Score
+			</digest>
+			<description>
+				A 2-item list consisting of the absolute timestamp (float) and the score (float).
+			</description>
+		</outlet>
+		<outlet id="1" type="float">
+			<digest>
+				Offset
+			</digest>
+			<description>
+				The offset associated with the bar containing the note.
+			</description>
+		</outlet>
+		<outlet id="2" type="symbol">
+			<digest>
+				Track Name
+			</digest>
+			<description>
+				The name of the track where the note was found.
+			</description>
+		</outlet>
+		<outlet id="3" type="symbol">
+			<digest>
+				Palette
+			</digest>
+			<description>
+				The palette name associated with the bar containing the note.
+			</description>
+		</outlet>
+		<outlet id="4" type="symbol">
+			<digest>
+				Verbose Logging (Optional)
+			</digest>
+			<description>
+				If the verbose attribute is enabled, this outlet provides status messages.
+			</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="dictionary-name" optional="0" type="symbol">
+			<digest>
+				Name of the dictionary to reference
+			</digest>
+			<description>
+				The name of the external dict object that notify will read from and clear.
+			</description>
+		</objarg>
+	</objarglist>
+	<!--ATTRIBUTES-->
+	<attrlist>
+		<attr name="verbose" get="1" set="1" type="long" size="1">
+			<digest>
+				Enable Verbose Logging
+			</digest>
+			<description>
+				When enabled (1), adds a rightmost outlet for verbose logging messages and outputs status information to it.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attr>
+	</attrlist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="crucible" />
+		<seealso name="buildspans" />
+		<seealso name="dict" />
+	</seealsolist>
+</c74object>
