@@ -1,28 +1,47 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<c74object name="stemversion">
-    <digest>Generates a version symbol based on the current timestamp.</digest>
-    <description>
-        The `stemversion` object is a simple utility that, upon receiving a `bang`, outputs a symbol representing the current date and time. This is useful for creating unique version identifiers for files or projects.
-    </description>
-    
-    <!-- Messages -->
-    <method name="bang">
-        <digest>Output the current timestamp as a symbol.</digest>
-        <description>
-            When the object receives a `bang`, it gets the current system time and formats it into a symbol with the structure `[year-month-day-hour-minute-second]`. The year is four digits, while all other numbers are one or two digits (no leading zeros).
-        </description>
-    </method>
-    
-    <!-- Inlets -->
-    <inlet name="in" type="bang">
-        <digest>Input for the `bang` message.</digest>
-        <description>Sends a `bang` to trigger the timestamp generation.</description>
-    </inlet>
-    
-    <!-- Outlets -->
-    <outlet name="out" type="symbol">
-        <digest>The generated timestamp symbol.</digest>
-        <description>Outputs a symbol formatted with surrounding square brackets, e.g., `[2025-12-8-15-19-15]`.</description>
-    </outlet>
-    
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="stemversion" module="max" category="Utility">
+	<digest>Generates a version symbol based on the current timestamp</digest>
+	<description>
+		The `stemversion` object outputs a symbol representing the current date and time upon receiving a bang. The format is `[year-month-day-hour-minute-second]`.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="bang">
+			<digest>Trigger timestamp generation</digest>
+			<description>Sends a bang to trigger the output of the current system time as a symbol.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="symbol">
+			<digest>Current timestamp symbol</digest>
+			<description>Outputs the formatted timestamp, e.g., `[2025-12-8-15-19-15]`.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist />
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="bang">
+			<digest>Output current timestamp</digest>
+			<description>Triggers the formatting and output of the current date and time.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attrlist />
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="notify" />
+		<seealso name="whichoffset" />
+		<seealso name="stemversion" />
+		<seealso name="createproject" />
+	</seealsolist>
 </c74object>

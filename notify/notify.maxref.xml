@@ -77,6 +77,17 @@
 			</description>
 		</objarg>
 	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="bang">
+			<digest>
+				Trigger the dump process
+			</digest>
+			<description>
+				In the leftmost inlet, a bang triggers the gathering of all notes from the referenced dictionary. The notes are then sorted, the dictionary is cleared, and the notes are output sequentially from the outlets.
+			</description>
+		</method>
+	</methodlist>
 	<!--ATTRIBUTES-->
 	<attrlist>
 		<attr name="verbose" get="1" set="1" type="long" size="1">
@@ -93,8 +104,12 @@
 	</attrlist>
 	<!--SEEALSO-->
 	<seealsolist>
-		<seealso name="crucible" />
 		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="notify" />
+		<seealso name="whichoffset" />
+		<seealso name="stemversion" />
+		<seealso name="createproject" />
 		<seealso name="dict" />
 	</seealsolist>
 </c74object>

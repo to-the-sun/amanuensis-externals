@@ -1,59 +1,114 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<c74object name="buildspans">
-    <digest>Assembles spans of notes and offsets for a music transcript.</digest>
-    <description>
-        The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
-        1.  **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This check happens *after* the deferred rating check.
-        2.  **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a *new* bar is started. The object evaluates the *previous* bar against the span and will end the span before that previous bar if either of these two conditions are met:
-            a. Including the previous bar would have decreased the span's overall rating.
-            b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
-        The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
-        A `bang` to the first inlet will flush (end and output) all currently open spans for all tracks.
-    </description>
-
-    <!-- Methods -->
-    <method name="clear">
-        <digest>Resets the object's internal state.</digest>
-        <description>The `clear` message clears the object's working memory, resetting it to its initial state. This includes deleting all stored track data, and resetting the current track, bar length, and palette to their default values.</description>
-    </method>
-    <method name="set_bar_buffer">
-        <digest>Sets the buffer~ to read the bar length from.</digest>
-        <description>The `set_bar_buffer` message sets the buffer~ object to read the bar length from. The buffer~ should contain a single float value representing the bar length in milliseconds.</description>
-    </method>
-
-    <!-- Inlets -->
-    <inlet name="in" type="list">
-        <digest>Timestamp-score pair for a single note.</digest>
-        <description>Receives a list of two floats: the absolute millisecond timestamp of a single note and its corresponding score.</description>
-    </inlet>
-    <inlet name="in" type="float">
-        <digest>Global offset timestamp.</digest>
-        <description>Receives a float representing a global offset in milliseconds. This value is stored as a global setting for the object. When a new bar is created, a copy of this global offset is stored in the bar's dictionary. The global offset value persists even when spans are flushed. If there is any span in the progress of being built on the current track, it will be duplicated with the new offset applied.</description>
-    </inlet>
-    <inlet name="in" type="int">
-        <digest>Track number.</digest>
-        <description>Receives an integer that sets the current track for incoming notes and offsets.</description>
-    </inlet>
-    <inlet name="in" type="symbol">
-        <digest>Palette name.</digest>
-        <description>Receives a symbol that sets the current palette.</description>
-    </inlet>
-	<inlet name="in" type="float">
-        <digest>Local Bar Length</digest>
-        <description>Receives a float that sets a local bar length, which will override the one specified by the bar buffer. A value of zero or less will cause the object to revert to using the bar buffer.</description>
-    </inlet>
-
-    <!-- Outlets -->
-    <outlet name="out" type="list">
-        <digest>Span of bar timestamps.</digest>
-        <description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
-    </outlet>
-    <outlet name="out" type="int">
-        <digest>Track number.</digest>
-        <description>Outputs the track number associated with the completed span.</description>
-    </outlet>
-    <outlet name="out" type="anything">
-        <digest>Detailed bar data for a completed span.</digest>
-        <description>When a span completes, this outlet outputs all the data for all the bars in that span. The output is a series of messages, each with a selector in the format `track::bar::key` followed by the value(s). This output happens immediately before the track number is sent from the second outlet.</description>
-    </outlet>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="buildspans" module="max" category="Analysis">
+	<digest>Assembles spans of notes and offsets for a music transcript</digest>
+	<description>
+		The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
+		1. **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This check happens after the deferred rating check.
+		2. **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a new bar is started. The object evaluates the previous bar against the span and will end the span before that previous bar if either of these two conditions are met:
+		a. Including the previous bar would have decreased the span's overall rating.
+		b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
+		The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
+		A bang to the first inlet will flush (end and output) all currently open spans for all tracks.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Analysis</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="list/bang/clear">
+			<digest>Timestamp-score pair, bang to flush, or clear</digest>
+			<description>
+				Receives note data as a list of two floats (absolute timestamp and score).
+				A bang message triggers a flush of all currently open spans.
+				A clear message resets the internal state.
+				The set_bar_buffer message sets the buffer to read bar length from.
+			</description>
+		</inlet>
+		<inlet id="1" type="float">
+			<digest>Global offset timestamp</digest>
+			<description>Receives a float representing a global offset in milliseconds. This value is used for new bars.</description>
+		</inlet>
+		<inlet id="2" type="int">
+			<digest>Track number</digest>
+			<description>Receives an integer that sets the current track for incoming notes.</description>
+		</inlet>
+		<inlet id="3" type="symbol">
+			<digest>Palette name</digest>
+			<description>Receives a symbol that sets the current palette.</description>
+		</inlet>
+		<inlet id="4" type="float">
+			<digest>Local Bar Length</digest>
+			<description>Sets a local bar length that overrides the buffer value. A value &lt;= 0 reverts to using the buffer.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="list">
+			<digest>Span of bar timestamps</digest>
+			<description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+		</outlet>
+		<outlet id="1" type="int">
+			<digest>Track number</digest>
+			<description>Outputs the track number associated with the completed span.</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Detailed bar data</digest>
+			<description>When a span completes, this outlet outputs detailed data for all bars in that span using selectors in the format track::bar::key.</description>
+		</outlet>
+		<outlet id="3" type="anything">
+			<digest>Verbose Logging (Optional)</digest>
+			<description>If the verbose attribute is enabled, this outlet provides status messages and visualization data.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist />
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="list">
+			<arglist>
+				<arg name="timestamp" type="float" optional="0" />
+				<arg name="score" type="float" optional="0" />
+			</arglist>
+			<digest>Process a single note</digest>
+			<description>Receives a list containing the absolute millisecond timestamp of a note and its score.</description>
+		</method>
+		<method name="bang">
+			<digest>Flush all spans</digest>
+			<description>Immediately ends and outputs all currently open spans for all tracks.</description>
+		</method>
+		<method name="clear">
+			<digest>Reset internal state</digest>
+			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults.</description>
+		</method>
+		<method name="set_bar_buffer">
+			<arglist>
+				<arg name="buffer-name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the buffer for bar length</digest>
+			<description>Sets the buffer~ object to read the bar length from (defaults to "bar").</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attrlist>
+		<attr name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information and visualization.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attr>
+	</attrlist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="notify" />
+		<seealso name="whichoffset" />
+		<seealso name="stemversion" />
+		<seealso name="createproject" />
+		<seealso name="dict" />
+	</seealsolist>
 </c74object>
