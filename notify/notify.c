@@ -264,13 +264,16 @@ void notify_bang(t_notify *x) {
 
         // Outlet 3: track
         if (all_notes[i].track == NULL) {
-            notify_verbose_log(x, "Note %ld: Outputting track (NULL!!)", i);
+            notify_verbose_log(x, "Note %ld: Outputting track (NULL!!), using 0", i);
+            outlet_int(x->out_track, 0);
         } else if (all_notes[i].track == gensym("")) {
-            notify_verbose_log(x, "Note %ld: Outputting track (EMPTY STRING)", i);
+            notify_verbose_log(x, "Note %ld: Outputting track (EMPTY STRING), using 0", i);
+            outlet_int(x->out_track, 0);
         } else {
-            notify_verbose_log(x, "Note %ld: Outputting track %s", i, all_notes[i].track->s_name);
+            long track_val = atol(all_notes[i].track->s_name);
+            notify_verbose_log(x, "Note %ld: Outputting track %ld (from symbol %s)", i, track_val, all_notes[i].track->s_name);
+            outlet_int(x->out_track, track_val);
         }
-        outlet_anything(x->out_track, all_notes[i].track, 0, NULL);
 
         // Outlet 2: offset
         outlet_float(x->out_offset, all_notes[i].offset);
@@ -296,7 +299,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Abs Timestamp and Score (list)"); break;
             case 1: sprintf(s, "Offset (float)"); break;
-            case 2: sprintf(s, "Track (symbol)"); break;
+            case 2: sprintf(s, "Track (int)"); break;
             case 3: sprintf(s, "Palette (symbol)"); break;
             case 4: if (x->verbose) sprintf(s, "Verbose Logging"); break;
         }
