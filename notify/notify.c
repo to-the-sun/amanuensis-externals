@@ -129,6 +129,12 @@ void notify_bang(t_notify *x) {
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
+        if (track_sym == gensym("")) {
+            notify_verbose_log(x, "Processing track: (EMPTY STRING)");
+        } else {
+            notify_verbose_log(x, "Processing track: %s", track_sym->s_name);
+        }
+
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
         if (!track_dict) continue;
@@ -139,6 +145,8 @@ void notify_bang(t_notify *x) {
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
+            notify_verbose_log(x, "  Processing bar: %s", bar_sym->s_name);
+
             t_dictionary *bar_dict = NULL;
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
             if (!bar_dict) continue;
@@ -170,6 +178,7 @@ void notify_bang(t_notify *x) {
                     atomarray_getatoms(scores_aa_check, &scores_len, &scores_atoms);
 
                     num_entries = aa_len < scores_len ? aa_len : scores_len; // Safety
+                    notify_verbose_log(x, "    Adding %ld notes from array (track: %s, bar: %s)", num_entries, track_sym->s_name, bar_sym->s_name);
 
                     for (long k = 0; k < num_entries; k++) {
                         if (total_notes >= notes_capacity) {
@@ -186,6 +195,8 @@ void notify_bang(t_notify *x) {
                 }
             } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
                 // Scalar case
+                notify_verbose_log(x, "    Adding 1 note from scalar (track: %s, bar: %s)", track_sym->s_name, bar_sym->s_name);
+
                 if (total_notes >= notes_capacity) {
                     notes_capacity *= 2;
                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
