@@ -160,12 +160,25 @@ void notify_bang(t_notify *x) {
             }
 
             t_symbol *palette = gensym("");
-            if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+            t_atomarray *palette_aa = NULL;
+            if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                t_atom p_atom;
+                if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) {
+                    palette = atom_getsym(&p_atom);
+                    if (palette == gensym("")) {
+                        notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from array in bar %s", bar_sym->s_name);
+                    } else {
+                        notify_verbose_log(x, "    Retrieved palette: %s from array in bar %s", palette->s_name, bar_sym->s_name);
+                    }
+                } else {
+                    notify_verbose_log(x, "    Palette array found but empty in bar %s", bar_sym->s_name);
+                }
+            } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
                 if (palette == gensym("")) {
-                    notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from bar %s", bar_sym->s_name);
+                    notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from atom in bar %s", bar_sym->s_name);
                 } else {
-                    notify_verbose_log(x, "    Retrieved palette: %s from bar %s", palette->s_name, bar_sym->s_name);
+                    notify_verbose_log(x, "    Retrieved palette: %s from atom in bar %s", palette->s_name, bar_sym->s_name);
                 }
             } else {
                 notify_verbose_log(x, "    No palette entry found in bar %s, using default (EMPTY STRING)", bar_sym->s_name);
