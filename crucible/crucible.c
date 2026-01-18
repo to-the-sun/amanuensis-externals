@@ -34,6 +34,7 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long);
 void crucible_local_bar_length(t_crucible *x, double f);
 long crucible_get_bar_length(t_crucible *x);
+void crucible_set_bar_buffer(t_crucible *x, t_symbol *s);
 
 
 t_class *crucible_class;
@@ -87,6 +88,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)crucible_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -148,18 +150,16 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
     dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
     dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
+    // Outlet 3: Offset (Rightmost)
     if (offset_atomarray) {
         long len;
         t_atom *atoms;
         atomarray_getatoms(offset_atomarray, &len, &atoms);
         if (len > 0) outlet_int(x->outlet_offset, atom_getlong(atoms));
     }
-    if (palette_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(palette_atomarray, &len, &atoms);
-        if (len > 0) outlet_anything(x->outlet_palette, atom_getsym(atoms), 0, NULL);
-    }
+
+    long current_reach = 0;
+    int has_span = 0;
     if (bar_span_atomarray) {
         long bar_span_len = 0;
         t_atom *bar_span_atoms = NULL;
@@ -170,10 +170,26 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
             long current_val = atom_getlong(bar_span_atoms + j);
             if (current_val > max_val) max_val = current_val;
         }
-        outlet_int(x->outlet_bar, bar_ts_long);
-
         long bar_length = crucible_get_bar_length(x);
-        long current_reach = max_val + bar_length;
+        current_reach = max_val + bar_length;
+        has_span = 1;
+    }
+
+    // Outlet 2: Bar
+    if (has_span) {
+        outlet_int(x->outlet_bar, bar_ts_long);
+    }
+
+    // Outlet 1: Palette
+    if (palette_atomarray) {
+        long len;
+        t_atom *atoms;
+        atomarray_getatoms(palette_atomarray, &len, &atoms);
+        if (len > 0) outlet_anything(x->outlet_palette, atom_getsym(atoms), 0, NULL);
+    }
+
+    // Outlet 0: Reach (Leftmost)
+    if (has_span) {
         outlet_int(x->outlet_reach, current_reach);
     }
 }
@@ -442,6 +458,17 @@ void crucible_local_bar_length(t_crucible *x, double f) {
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
+void crucible_set_bar_buffer(t_crucible *x, t_symbol *s) {
+    if (s && s->s_name) {
+        if (x->buffer_ref) {
+            buffer_ref_set(x->buffer_ref, s);
+        } else {
+            x->buffer_ref = buffer_ref_new((t_object *)x, s);
+        }
+        crucible_verbose_log(x, "Buffer set to: %s", s->s_name);
+    }
+}
+
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
    if (!src) return NULL;
 
@@ -494,6 +521,30 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *track_sym = gensym(track_str);
         t_symbol *bar_sym = gensym(bar_str);
         t_symbol *key_sym = gensym(key_str);
+
+        // If no incumbent dictionary is specified, bypass comparison and output immediately
+        if (!x->incumbent_dict_name || !x->incumbent_dict_name->s_name[0]) {
+            if (strcmp(key_str, "offset") == 0) {
+                if (argc > 0) outlet_int(x->outlet_offset, atom_getlong(argv));
+            } else if (strcmp(key_str, "palette") == 0) {
+                if (argc > 0) outlet_anything(x->outlet_palette, atom_getsym(argv), 0, NULL);
+            } else if (strcmp(key_str, "span") == 0) {
+                long bar_ts_long = atol(bar_str);
+                long max_val = 0;
+                for (long j = 0; j < argc; j++) {
+                    long current_val = atom_getlong(argv + j);
+                    if (current_val > max_val) max_val = current_val;
+                }
+                outlet_int(x->outlet_bar, bar_ts_long);
+                long bar_length = crucible_get_bar_length(x);
+                long current_reach = max_val + bar_length;
+                outlet_int(x->outlet_reach, current_reach);
+            }
+            sysmem_freeptr(track_str);
+            sysmem_freeptr(bar_str);
+            sysmem_freeptr(key_str);
+            return;
+        }
 
         // Get or create track dictionary
         t_dictionary *track_dict = NULL;
@@ -578,7 +629,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
+            case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name, (set_bar_buffer) Set Buffer Name"); break;
             case 1: sprintf(s, "(float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET

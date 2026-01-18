@@ -13,8 +13,8 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="0" type="anything">
-			<digest>Message stream from buildspans</digest>
-			<description>Receives messages describing bars and spans (track::bar::key value or span list).</description>
+			<digest>Message stream from buildspans or configuration messages</digest>
+			<description>Receives messages describing bars and spans (track::bar::key value or span list). Also accepts (set_bar_buffer) to set the buffer used for bar length.</description>
 		</inlet>
 		<inlet id="1" type="float">
 			<digest>Local Bar Length</digest>
@@ -55,7 +55,11 @@
 	<methodlist>
 		<method name="anything">
 			<digest>Process input data</digest>
-			<description>Handles the hierarchical key/value messages and span lists from buildspans.</description>
+			<description>Handles the hierarchical key/value messages and span lists from buildspans. If no incumbent dictionary was specified as an argument, it operates in bypass mode, sending incoming data directly to outlets.</description>
+		</method>
+		<method name="set_bar_buffer">
+			<digest>Set the bar length buffer</digest>
+			<description>Specifies the name of the buffer~ to use for retrieving the bar length (read from the first sample).</description>
 		</method>
 		<method name="ft1">
 			<digest>Set local bar length</digest>
