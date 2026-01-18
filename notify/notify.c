@@ -116,8 +116,6 @@ void notify_bang(t_notify *x) {
         return;
     }
 
-    notify_verbose_log(x, "Processing dictionary %s", x->dict_name->s_name);
-
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -129,11 +127,6 @@ void notify_bang(t_notify *x) {
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
-        if (track_sym == gensym("")) {
-            notify_verbose_log(x, "Processing track: (EMPTY STRING)");
-        } else {
-            notify_verbose_log(x, "Processing track: %s", track_sym->s_name);
-        }
 
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
@@ -145,7 +138,6 @@ void notify_bang(t_notify *x) {
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
-            notify_verbose_log(x, "  Processing bar: %s", bar_sym->s_name);
 
             t_dictionary *bar_dict = NULL;
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -165,23 +157,9 @@ void notify_bang(t_notify *x) {
                 t_atom p_atom;
                 if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) {
                     palette = atom_getsym(&p_atom);
-                    if (palette == gensym("")) {
-                        notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from array in bar %s", bar_sym->s_name);
-                    } else {
-                        notify_verbose_log(x, "    Retrieved palette: %s from array in bar %s", palette->s_name, bar_sym->s_name);
-                    }
-                } else {
-                    notify_verbose_log(x, "    Palette array found but empty in bar %s", bar_sym->s_name);
                 }
             } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
-                if (palette == gensym("")) {
-                    notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from atom in bar %s", bar_sym->s_name);
-                } else {
-                    notify_verbose_log(x, "    Retrieved palette: %s from atom in bar %s", palette->s_name, bar_sym->s_name);
-                }
-            } else {
-                notify_verbose_log(x, "    No palette entry found in bar %s, using default (EMPTY STRING)", bar_sym->s_name);
             }
 
             // Get absolutes and scores
@@ -198,7 +176,6 @@ void notify_bang(t_notify *x) {
                     atomarray_getatoms(scores_aa_check, &scores_len, &scores_atoms);
 
                     num_entries = aa_len < scores_len ? aa_len : scores_len; // Safety
-                    notify_verbose_log(x, "    Adding %ld notes from array (track: %s, bar: %s)", num_entries, track_sym->s_name, bar_sym->s_name);
 
                     for (long k = 0; k < num_entries; k++) {
                         if (total_notes >= notes_capacity) {
@@ -215,8 +192,6 @@ void notify_bang(t_notify *x) {
                 }
             } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
                 // Scalar case
-                notify_verbose_log(x, "    Adding 1 note from scalar (track: %s, bar: %s)", track_sym->s_name, bar_sym->s_name);
-
                 if (total_notes >= notes_capacity) {
                     notes_capacity *= 2;
                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
@@ -244,34 +219,32 @@ void notify_bang(t_notify *x) {
         qsort(all_notes, total_notes, sizeof(t_note), note_compare);
     }
 
+    // Report ordered notes
+    for (long i = 0; i < total_notes; i++) {
+        notify_verbose_log(x, "Ordered Note %ld: abs=%.2f, score=%.2f, offset=%.2f, track=%s, palette=%s",
+                           i, all_notes[i].absolute, all_notes[i].score, all_notes[i].offset,
+                           all_notes[i].track ? all_notes[i].track->s_name : "NULL",
+                           all_notes[i].palette ? all_notes[i].palette->s_name : "NULL");
+    }
+
     // Clear dictionary
     dictionary_clear(dict);
-    notify_verbose_log(x, "Cleared dictionary %s", x->dict_name->s_name);
+    notify_verbose_log(x, "Dictionary cleared.");
 
     // Output notes
     for (long i = 0; i < total_notes; i++) {
         // Right-to-left firing order (rightmost outlet first)
 
         // Outlet 4: palette (Rightmost non-verbose)
-        if (all_notes[i].palette == NULL) {
-            notify_verbose_log(x, "Note %ld: Outputting palette (NULL!!)", i);
-        } else if (all_notes[i].palette == gensym("")) {
-            notify_verbose_log(x, "Note %ld: Outputting palette (EMPTY STRING)", i);
-        } else {
-            notify_verbose_log(x, "Note %ld: Outputting palette %s", i, all_notes[i].palette->s_name);
-        }
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
 
         // Outlet 3: track
         if (all_notes[i].track == NULL) {
-            notify_verbose_log(x, "Note %ld: Outputting track (NULL!!), using 0", i);
             outlet_int(x->out_track, 0);
         } else if (all_notes[i].track == gensym("")) {
-            notify_verbose_log(x, "Note %ld: Outputting track (EMPTY STRING), using 0", i);
             outlet_int(x->out_track, 0);
         } else {
             long track_val = atol(all_notes[i].track->s_name);
-            notify_verbose_log(x, "Note %ld: Outputting track %ld (from symbol %s)", i, track_val, all_notes[i].track->s_name);
             outlet_int(x->out_track, track_val);
         }
 
@@ -287,8 +260,6 @@ void notify_bang(t_notify *x) {
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
-
-    notify_verbose_log(x, "Dumped %ld notes", total_notes);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
