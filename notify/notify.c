@@ -236,6 +236,13 @@ void notify_bang(t_notify *x) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
 
         // Outlet 3: track
+        if (all_notes[i].track == NULL) {
+            notify_verbose_log(x, "Note %ld: Outputting track (NULL!!)", i);
+        } else if (all_notes[i].track == gensym("")) {
+            notify_verbose_log(x, "Note %ld: Outputting track (EMPTY STRING)", i);
+        } else {
+            notify_verbose_log(x, "Note %ld: Outputting track %s", i, all_notes[i].track->s_name);
+        }
         outlet_anything(x->out_track, all_notes[i].track, 0, NULL);
 
         // Outlet 2: offset
