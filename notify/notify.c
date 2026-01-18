@@ -162,6 +162,13 @@ void notify_bang(t_notify *x) {
             t_symbol *palette = gensym("");
             if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
+                if (palette == gensym("")) {
+                    notify_verbose_log(x, "    Retrieved palette: (EMPTY STRING) from bar %s", bar_sym->s_name);
+                } else {
+                    notify_verbose_log(x, "    Retrieved palette: %s from bar %s", palette->s_name, bar_sym->s_name);
+                }
+            } else {
+                notify_verbose_log(x, "    No palette entry found in bar %s, using default (EMPTY STRING)", bar_sym->s_name);
             }
 
             // Get absolutes and scores
@@ -233,6 +240,13 @@ void notify_bang(t_notify *x) {
         // Right-to-left firing order (rightmost outlet first)
 
         // Outlet 4: palette (Rightmost non-verbose)
+        if (all_notes[i].palette == NULL) {
+            notify_verbose_log(x, "Note %ld: Outputting palette (NULL!!)", i);
+        } else if (all_notes[i].palette == gensym("")) {
+            notify_verbose_log(x, "Note %ld: Outputting palette (EMPTY STRING)", i);
+        } else {
+            notify_verbose_log(x, "Note %ld: Outputting palette %s", i, all_notes[i].palette->s_name);
+        }
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
 
         // Outlet 3: track
