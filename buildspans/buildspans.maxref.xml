@@ -41,7 +41,7 @@
 		</inlet>
 		<inlet id="4" type="float">
 			<digest>Local Bar Length</digest>
-			<description>Sets a local bar length that overrides the buffer value. A value &lt;= 0 reverts to using the buffer.</description>
+			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message or after a flush triggered by a 'bang'.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
