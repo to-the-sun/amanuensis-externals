@@ -116,8 +116,6 @@ void notify_bang(t_notify *x) {
         return;
     }
 
-    notify_verbose_log(x, "Processing dictionary %s", x->dict_name->s_name);
-
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -129,6 +127,7 @@ void notify_bang(t_notify *x) {
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
+
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
         if (!track_dict) continue;
@@ -139,6 +138,7 @@ void notify_bang(t_notify *x) {
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
+
             t_dictionary *bar_dict = NULL;
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
             if (!bar_dict) continue;
@@ -152,7 +152,13 @@ void notify_bang(t_notify *x) {
             }
 
             t_symbol *palette = gensym("");
-            if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+            t_atomarray *palette_aa = NULL;
+            if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                t_atom p_atom;
+                if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) {
+                    palette = atom_getsym(&p_atom);
+                }
+            } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
             }
 
@@ -213,9 +219,17 @@ void notify_bang(t_notify *x) {
         qsort(all_notes, total_notes, sizeof(t_note), note_compare);
     }
 
+    // Report ordered notes
+    for (long i = 0; i < total_notes; i++) {
+        notify_verbose_log(x, "Ordered Note %ld: abs=%.2f, score=%.2f, offset=%.2f, track=%s, palette=%s",
+                           i, all_notes[i].absolute, all_notes[i].score, all_notes[i].offset,
+                           all_notes[i].track ? all_notes[i].track->s_name : "NULL",
+                           all_notes[i].palette ? all_notes[i].palette->s_name : "NULL");
+    }
+
     // Clear dictionary
     dictionary_clear(dict);
-    notify_verbose_log(x, "Cleared dictionary %s", x->dict_name->s_name);
+    notify_verbose_log(x, "Dictionary cleared.");
 
     // Output notes
     for (long i = 0; i < total_notes; i++) {
@@ -225,7 +239,14 @@ void notify_bang(t_notify *x) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
 
         // Outlet 3: track
-        outlet_anything(x->out_track, all_notes[i].track, 0, NULL);
+        if (all_notes[i].track == NULL) {
+            outlet_int(x->out_track, 0);
+        } else if (all_notes[i].track == gensym("")) {
+            outlet_int(x->out_track, 0);
+        } else {
+            long track_val = atol(all_notes[i].track->s_name);
+            outlet_int(x->out_track, track_val);
+        }
 
         // Outlet 2: offset
         outlet_float(x->out_offset, all_notes[i].offset);
@@ -239,8 +260,6 @@ void notify_bang(t_notify *x) {
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
-
-    notify_verbose_log(x, "Dumped %ld notes", total_notes);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
@@ -251,7 +270,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Abs Timestamp and Score (list)"); break;
             case 1: sprintf(s, "Offset (float)"); break;
-            case 2: sprintf(s, "Track (symbol)"); break;
+            case 2: sprintf(s, "Track (int)"); break;
             case 3: sprintf(s, "Palette (symbol)"); break;
             case 4: if (x->verbose) sprintf(s, "Verbose Logging"); break;
         }
