@@ -31,15 +31,19 @@
 			<digest>Palette value</digest>
 			<description>For a winning span, outputs the associated palette.</description>
 		</outlet>
-		<outlet id="2" type="int">
+		<outlet id="2" type="symbol">
+			<digest>Track value</digest>
+			<description>For a winning span, outputs the associated track.</description>
+		</outlet>
+		<outlet id="3" type="int">
 			<digest>Bar value</digest>
 			<description>For a winning span, outputs each bar timestamp in the span.</description>
 		</outlet>
-		<outlet id="3" type="int">
+		<outlet id="4" type="int">
 			<digest>Offset value</digest>
 			<description>For a winning span, outputs the associated offset.</description>
 		</outlet>
-		<outlet id="4" type="anything">
+		<outlet id="5" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
 			<description>Status messages when verbose attribute is enabled.</description>
 		</outlet>
