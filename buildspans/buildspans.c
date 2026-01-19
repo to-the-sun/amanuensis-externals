@@ -230,6 +230,9 @@ long buildspans_get_bar_length(t_buildspans *x) {
         return -1; // Value in buffer is not positive.
     }
 
+    x->local_bar_length = (double)bar_length; // Cache retrieved bar length
+    buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+
     return bar_length;
 }
 
@@ -461,6 +464,7 @@ void buildspans_clear(t_buildspans *x) {
     x->current_track = 0;
     x->current_offset = 0;
     x->current_palette = gensym("");
+    x->local_bar_length = 0;
     buildspans_verbose_log(x, "buildspans cleared.");
     buildspans_visualize_memory(x);
 }
@@ -1098,6 +1102,8 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
 void buildspans_bang(t_buildspans *x) {
     buildspans_verbose_log(x, "Flush triggered by bang.");
     buildspans_flush(x);
+    x->local_bar_length = 0;
+    buildspans_verbose_log(x, "Bar length reset to zero after flush.");
 }
 
 void buildspans_flush(t_buildspans *x) {
@@ -1225,8 +1231,12 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
-    x->local_bar_length = f;
-    buildspans_verbose_log(x, "Local bar length set to: %.2f", f);
+    if (f <= 0) {
+        x->local_bar_length = 0;
+    } else {
+        x->local_bar_length = f;
+    }
+    buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep) {
