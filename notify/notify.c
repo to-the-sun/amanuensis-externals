@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
+#include "ext_atomarray.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -147,7 +148,13 @@ void notify_bang(t_notify *x) {
             t_atomarray *absolutes_aa = NULL;
 
             double offset = 0;
-            if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+            t_atomarray *offset_aa = NULL;
+            if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+                t_atom o_atom;
+                if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) {
+                    offset = atom_getfloat(&o_atom);
+                }
+            } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
                 offset = atom_getfloat(&offset_atom);
             }
 
