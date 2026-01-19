@@ -164,7 +164,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
     outlet_int(x->outlet_bar, bar_ts_long);
 
     // 3. Track
-    outlet_anything(x->outlet_track, track_sym, 0, NULL);
+    outlet_int(x->outlet_track, atol(track_sym->s_name));
 
     // 4. Palette
     if (palette_atomarray) {
@@ -600,7 +600,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             switch (a) {
                 case 0: sprintf(s, "Reach (int)"); break;
                 case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Track (symbol)"); break;
+                case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
                 case 4: sprintf(s, "Offset (int)"); break;
                 case 5: sprintf(s, "Verbose Logging Outlet"); break;
@@ -609,7 +609,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
              switch (a) {
                 case 0: sprintf(s, "Reach (int)"); break;
                 case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Track (symbol)"); break;
+                case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
                 case 4: sprintf(s, "Offset (int)"); break;
             }
