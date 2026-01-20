@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<entry name="varibuffer~">
+	<digest>Manage multiple buffer~ objects</digest>
+	<description>
+		<o>varibuffer~</o> lets you operate with a group of <o>buffer~</o> objects.
+		Each <o>buffer~</o> will be named after <o>varibuffer~</o> first argument and
+		an index (e.g. for a <o>varibuffer~</o> toto object, each <o>buffer~</o> will be
+		named toto.N where N is the index). This is an emulation of the <o>polybuffer~</o> object.
+	</description>
+
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">MSP</metadata>
+		<metadata name="tag">Analysis</metadata>
+	</metadatalist>
+
+	<inletlist>
+		<inlet id="0" type="anything">
+			<digest>Messages</digest>
+			<description>The following messages are supported: append, appendempty, clear, dump, getbufferlist, getcount, getshortname, getsize, open, readfolder, send, wclose, writetofolder.</description>
+		</inlet>
+	</inletlist>
+
+	<outletlist>
+		<outlet id="0" type="anything">
+			<digest>Dump / Info Output</digest>
+			<description>Outputs results of dump, getcount, getbufferlist, etc.</description>
+		</outlet>
+	</outletlist>
+
+	<objarglist>
+		<objarg name="name" optional="0" type="symbol">
+			<digest>Name of the varibuffer~</digest>
+			<description>Sets the name of the <o>varibuffer~</o> and defines the names of the <o>buffer~</o> objects.</description>
+		</objarg>
+	</objarglist>
+
+	<methodlist>
+		<method name="append">
+			<arglist>
+				<arg name="filename" optional="1" type="symbol" />
+			</arglist>
+			<digest>Add a sound file to the varibuffer~</digest>
+			<description>Adds a sound file to the <o>varibuffer~</o>. If no filename is provided, a dialog will appear.</description>
+		</method>
+		<method name="appendempty">
+			<arglist>
+				<arg name="length" optional="1" type="float" />
+				<arg name="channels" optional="1" type="int" />
+			</arglist>
+			<digest>Add an empty buffer~</digest>
+			<description>Adds an empty <o>buffer~</o> with the specified length (in ms) and channels.</description>
+		</method>
+		<method name="clear">
+			<digest>Delete every buffer~</digest>
+			<description>Deletes all <o>buffer~</o> objects managed by this <o>varibuffer~</o>.</description>
+		</method>
+		<method name="dump">
+			<digest>Output info about all buffers</digest>
+			<description>Outputs a list for each buffer: index, name, path, duration, channels, samplerate.</description>
+		</method>
+		<method name="getbufferlist">
+			<digest>Output list of buffer names</digest>
+			<description>Outputs each buffer name followed by a 'done' message.</description>
+		</method>
+		<method name="getcount">
+			<digest>Output number of buffers</digest>
+			<description>Outputs the message 'count' followed by the number of buffers.</description>
+		</method>
+		<method name="getshortname">
+			<digest>Output buffer names and short filenames</digest>
+			<description>Outputs each buffer name and its filename without extension, followed by 'done'.</description>
+		</method>
+		<method name="getsize">
+			<digest>Output total memory size</digest>
+			<description>Outputs the total memory size used by the buffers in bytes.</description>
+		</method>
+		<method name="open">
+			<digest>Open the buffer view window</digest>
+			<description>Opens a window to see information about the buffers.</description>
+		</method>
+		<method name="readfolder">
+			<arglist>
+				<arg name="path" optional="1" type="symbol" />
+			</arglist>
+			<digest>Load all files from a folder</digest>
+			<description>Loads multiple sound files from the specified folder.</description>
+		</method>
+		<method name="send">
+			<arglist>
+				<arg name="index" optional="0" type="int" />
+				<arg name="message" optional="0" type="anything" />
+			</arglist>
+			<digest>Send message to buffers</digest>
+			<description>Sends a message to the specified buffer index (0 for all).</description>
+		</method>
+		<method name="wclose">
+			<digest>Close the buffer view window</digest>
+			<description>Closes the buffer view window.</description>
+		</method>
+		<method name="writetofolder">
+			<arglist>
+				<arg name="path" optional="1" type="symbol" />
+			</arglist>
+			<digest>Write all buffers to a folder</digest>
+			<description>Writes every buffer to a folder.</description>
+		</method>
+	</methodlist>
+
+	<attrlist>
+		<attribute name="embed" get="1" set="1" type="int" size="1">
+			<digest>Save buffer references in patcher</digest>
+			<description>If enabled, buffer references are saved in the patcher.</description>
+		</attribute>
+		<attribute name="quiet" get="1" set="1" type="int" size="1">
+			<digest>Suppress warnings</digest>
+			<description>If enabled, suppresses warnings when loading multiple patches with the same name.</description>
+		</attribute>
+	</attrlist>
+
+	<seealsolist>
+		<seealso name="buffer~" />
+		<seealso name="polybuffer~" />
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="notify" />
+		<seealso name="whichoffset" />
+	</seealsolist>
+</entry>
