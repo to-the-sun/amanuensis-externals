@@ -472,17 +472,19 @@ void buildspans_clear(t_buildspans *x) {
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset(t_buildspans *x, double f) {
     long new_rounded_offset = (long)round(f);
-    long current_rounded_offset = (long)round(x->current_offset);
+    long old_rounded_offset = (long)round(x->current_offset);
     // Only duplicate if the new rounded offset is different and the old rounded offset was not the initial default.
-    if (new_rounded_offset == current_rounded_offset || x->current_offset == 0.0) {
+    if (new_rounded_offset == old_rounded_offset || x->current_offset == 0.0) {
         x->current_offset = f;
         buildspans_verbose_log(x, "Global offset updated to: %.2f. No duplication.", f);
         return;
     }
 
+    buildspans_verbose_log(x, "Global offset updating from %.2f to %.2f (rounded: %ld -> %ld).",
+                           x->current_offset, f, old_rounded_offset, new_rounded_offset);
+
     // Update the global offset first
     x->current_offset = f;
-    buildspans_verbose_log(x, "Global offset updated to: %.2f. Duplicating one span for each active track.", f);
 
     long num_keys;
     t_symbol **keys;
@@ -497,23 +499,37 @@ void buildspans_offset(t_buildspans *x, double f) {
     long manifest_count = 0;
     t_duplication_manifest_item *manifest = (t_duplication_manifest_item *)sysmem_newptr(manifest_capacity * sizeof(t_duplication_manifest_item));
 
-    // 1. Identify all unique track numbers (the integer part of the track-offset key)
-    long unique_track_num_count = 0;
-    long *unique_track_nums = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
+    // Identify and gather notes from spans matching the old_rounded_offset.
     for (long i = 0; i < num_keys; i++) {
         char *track_str, *bar_str, *prop_str;
         if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
-            long current_track_num;
-            if (sscanf(track_str, "%ld-", &current_track_num) == 1) {
-                int found = 0;
-                for (long j = 0; j < unique_track_num_count; j++) {
-                    if (unique_track_nums[j] == current_track_num) {
-                        found = 1;
-                        break;
+            long track_num, offset_val;
+            if (sscanf(track_str, "%ld-%ld", &track_num, &offset_val) == 2 && offset_val == old_rounded_offset) {
+                if (strcmp(prop_str, "absolutes") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
+
+                    t_symbol *scores_key = generate_hierarchical_key(gensym(track_str), gensym(bar_str), gensym("scores"));
+                    if (dictionary_getatom(x->building, scores_key, &a) == MAX_ERR_NONE) {
+                        t_atomarray *scores = (t_atomarray *)atom_getobj(&a);
+
+                        long abs_count; t_atom *abs_atoms;
+                        atomarray_getatoms(absolutes, &abs_count, &abs_atoms);
+                        long scores_count; t_atom *scores_atoms;
+                        atomarray_getatoms(scores, &scores_count, &scores_atoms);
+
+                        for (long k = 0; k < abs_count; k++) {
+                            if (manifest_count >= manifest_capacity) {
+                                manifest_capacity *= 2;
+                                manifest = (t_duplication_manifest_item *)sysmem_resizeptr(manifest, manifest_capacity * sizeof(t_duplication_manifest_item));
+                            }
+                            manifest[manifest_count].track_number = track_num;
+                            manifest[manifest_count].timestamp = atom_getfloat(abs_atoms + k);
+                            manifest[manifest_count].score = atom_getfloat(scores_atoms + k);
+                            manifest_count++;
+                        }
                     }
-                }
-                if (!found) {
-                    unique_track_nums[unique_track_num_count++] = current_track_num;
                 }
             }
             sysmem_freeptr(track_str);
@@ -521,68 +537,6 @@ void buildspans_offset(t_buildspans *x, double f) {
             sysmem_freeptr(prop_str);
         }
     }
-
-    // 2. For each unique track, find one representative span and add its notes to the manifest.
-    for (long i = 0; i < unique_track_num_count; i++) {
-        long track_num_to_process = unique_track_nums[i];
-        t_symbol *source_track_sym = NULL;
-
-        // Find the first track-offset symbol that matches the current track number.
-        for (long j = 0; j < num_keys; j++) {
-            char *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[j], &track_str, &bar_str, &prop_str)) {
-                long current_key_track_num;
-                if (sscanf(track_str, "%ld-", &current_key_track_num) == 1 && current_key_track_num == track_num_to_process) {
-                    source_track_sym = gensym(track_str);
-                    sysmem_freeptr(track_str);
-                    sysmem_freeptr(bar_str);
-                    sysmem_freeptr(prop_str);
-                    break; // Found our representative
-                }
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-
-        if (!source_track_sym) continue; // Should not happen, but a safe guard.
-
-        // Now iterate through all keys again to find notes belonging to the source span
-        for (long j = 0; j < num_keys; j++) {
-            char *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[j], &track_str, &bar_str, &prop_str)) {
-                if (strcmp(track_str, source_track_sym->s_name) == 0 && strcmp(prop_str, "absolutes") == 0) {
-                    t_atom a;
-                    dictionary_getatom(x->building, keys[j], &a);
-                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
-
-                    t_symbol *scores_key = generate_hierarchical_key(source_track_sym, gensym(bar_str), gensym("scores"));
-                    dictionary_getatom(x->building, scores_key, &a);
-                    t_atomarray *scores = (t_atomarray *)atom_getobj(&a);
-
-                    long abs_count; t_atom *abs_atoms;
-                    atomarray_getatoms(absolutes, &abs_count, &abs_atoms);
-                    long scores_count; t_atom *scores_atoms;
-                    atomarray_getatoms(scores, &scores_count, &scores_atoms);
-
-                    for (long k = 0; k < abs_count; k++) {
-                        if (manifest_count >= manifest_capacity) {
-                            manifest_capacity *= 2;
-                            manifest = (t_duplication_manifest_item *)sysmem_resizeptr(manifest, manifest_capacity * sizeof(t_duplication_manifest_item));
-                        }
-                        manifest[manifest_count].track_number = track_num_to_process;
-                        manifest[manifest_count].timestamp = atom_getfloat(abs_atoms + k);
-                        manifest[manifest_count].score = atom_getfloat(scores_atoms + k);
-                        manifest_count++;
-                    }
-                }
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-    }
-    sysmem_freeptr(unique_track_nums);
 
     // --- PROCESSING PHASE ---
     buildspans_verbose_log(x, "Processing %ld notes from duplication manifest.", manifest_count);
