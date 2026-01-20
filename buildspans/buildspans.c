@@ -147,7 +147,7 @@ typedef struct _buildspans {
     t_dictionary *building;
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
-    long current_offset;
+    double current_offset;
     t_buffer_ref *buffer_ref;
     t_symbol *s_buffer_name;
     t_symbol *current_palette;
@@ -177,9 +177,9 @@ void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset, long bar_length);
+void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset, long bar_length);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_offset_sym);
-long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check);
+double find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
@@ -325,7 +325,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
                  first_offset = 0;
                  t_atom a;
                  dictionary_getatom(x->building, offset_key, &a);
-                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%ld", atom_getlong(&a));
+                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&a));
              }
         }
         offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"span\":[");
@@ -360,7 +360,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
         sysmem_freeptr(bar_timestamps);
     }
     long bar_length = buildspans_get_bar_length(x);
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%ld,\"bar_length\":%ld}", x->current_offset, bar_length);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld}", x->current_offset, bar_length);
 
     if (x->verbose && x->verbose_log_outlet) {
         visualize(json_buffer);
@@ -403,7 +403,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->tracks_ended_in_current_event = dictionary_new();
         buildspans_verbose_log(x, "NEW: Created building dictionary: %p", x->building);
         x->current_track = 0;
-        x->current_offset = 0;
+        x->current_offset = 0.0;
         x->current_palette = gensym("");
         x->verbose_log_outlet = NULL;
         x->buffer_ref = NULL;
@@ -462,7 +462,7 @@ void buildspans_clear(t_buildspans *x) {
     x->tracks_ended_in_current_event = dictionary_new();
     buildspans_verbose_log(x, "CLEAR: Created new building dictionary: %p", x->building);
     x->current_track = 0;
-    x->current_offset = 0;
+    x->current_offset = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     buildspans_verbose_log(x, "buildspans cleared.");
@@ -471,17 +471,18 @@ void buildspans_clear(t_buildspans *x) {
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset(t_buildspans *x, double f) {
-    long new_offset = (long)round(f);
-    // Only duplicate if the new offset is different and the old offset was not the initial default.
-    if (new_offset == x->current_offset || x->current_offset == 0) {
-        x->current_offset = new_offset;
-        buildspans_verbose_log(x, "Global offset updated to: %ld. No duplication.", new_offset);
+    long new_rounded_offset = (long)round(f);
+    long current_rounded_offset = (long)round(x->current_offset);
+    // Only duplicate if the new rounded offset is different and the old rounded offset was not the initial default.
+    if (new_rounded_offset == current_rounded_offset || x->current_offset == 0.0) {
+        x->current_offset = f;
+        buildspans_verbose_log(x, "Global offset updated to: %.2f. No duplication.", f);
         return;
     }
 
     // Update the global offset first
-    x->current_offset = new_offset;
-    buildspans_verbose_log(x, "Global offset updated to: %ld. Duplicating one span for each active track.", new_offset);
+    x->current_offset = f;
+    buildspans_verbose_log(x, "Global offset updated to: %.2f. Duplicating one span for each active track.", f);
 
     long num_keys;
     t_symbol **keys;
@@ -594,7 +595,7 @@ void buildspans_offset(t_buildspans *x, double f) {
 
             for (long k = 0; k < manifest_count; k++) {
                 x->current_track = manifest[k].track_number;
-                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].score, new_offset, bar_length);
+                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].score, f, bar_length);
             }
 
             x->current_track = original_track;
@@ -651,13 +652,19 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     buildspans_verbose_log(x, "--- New Timestamp-Score Pair Received ---");
     buildspans_verbose_log(x, "Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
 
-    // 1. Find all unique track symbols for the current track.
+    // 1. Find all unique track symbols for the current track AND their offsets.
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
 
+    typedef struct {
+        t_symbol *track_sym;
+        double offset;
+        int offset_found;
+    } t_track_info;
+
     long unique_tracks_count = 0;
-    t_symbol **unique_track_syms = (t_symbol **)sysmem_newptr((num_keys + 1) * sizeof(t_symbol *));
+    t_track_info *unique_tracks = (t_track_info *)sysmem_newptr((num_keys + 1) * sizeof(t_track_info));
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", x->current_track);
 
@@ -666,16 +673,26 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             char *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
                 if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                    t_symbol *current_track_sym = gensym(track_str);
-                    int found = 0;
+                    t_symbol *track_sym = gensym(track_str);
+                    int index = -1;
                     for (long j = 0; j < unique_tracks_count; j++) {
-                        if (unique_track_syms[j] == current_track_sym) {
-                            found = 1;
+                        if (unique_tracks[j].track_sym == track_sym) {
+                            index = j;
                             break;
                         }
                     }
-                    if (!found) {
-                        unique_track_syms[unique_tracks_count++] = current_track_sym;
+                    if (index == -1) {
+                        index = unique_tracks_count++;
+                        unique_tracks[index].track_sym = track_sym;
+                        unique_tracks[index].offset = 0.0;
+                        unique_tracks[index].offset_found = 0;
+                    }
+
+                    if (strcmp(prop_str, "offset") == 0 && !unique_tracks[index].offset_found) {
+                        t_atom a;
+                        dictionary_getatom(x->building, keys[i], &a);
+                        unique_tracks[index].offset = atom_getfloat(&a);
+                        unique_tracks[index].offset_found = 1;
                     }
                 }
                 sysmem_freeptr(track_str);
@@ -692,26 +709,41 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     t_symbol *current_track_sym = gensym(current_track_str);
     int global_offset_found = 0;
     for (long i = 0; i < unique_tracks_count; i++) {
-        if (unique_track_syms[i] == current_track_sym) {
+        if (unique_tracks[i].track_sym == current_track_sym) {
             global_offset_found = 1;
+            // If the global offset matches an existing span, we want to make sure
+            // we use the current_offset from state if it's more up to date?
+            // Actually, if it's an existing span, it should already have an offset.
+            // But if for some reason offset_found is false, we should use current_offset.
+            if (!unique_tracks[i].offset_found) {
+                unique_tracks[i].offset = x->current_offset;
+                unique_tracks[i].offset_found = 1;
+            }
             break;
         }
     }
     if (!global_offset_found) {
-        unique_track_syms[unique_tracks_count++] = current_track_sym;
+        unique_tracks[unique_tracks_count].track_sym = current_track_sym;
+        unique_tracks[unique_tracks_count].offset = x->current_offset;
+        unique_tracks[unique_tracks_count].offset_found = 1;
+        unique_tracks_count++;
     }
 
     // 3. Add the note to each span (identified by its unique track symbol)
     buildspans_verbose_log(x, "Adding note to %ld span(s) on track %ld", unique_tracks_count, x->current_track);
     for (long i = 0; i < unique_tracks_count; i++) {
-        const char *offset_part = strchr(unique_track_syms[i]->s_name, '-');
-        if (offset_part) {
-            long offset = atol(offset_part + 1);
-            buildspans_process_and_add_note(x, timestamp, score, offset, bar_length);
+        double offset = unique_tracks[i].offset;
+        if (!unique_tracks[i].offset_found) {
+            // Fallback: this should ideally not happen if bars exist
+            const char *offset_part = strchr(unique_tracks[i].track_sym->s_name, '-');
+            if (offset_part) {
+                offset = atof(offset_part + 1);
+            }
         }
+        buildspans_process_and_add_note(x, timestamp, score, offset, bar_length);
     }
 
-    sysmem_freeptr(unique_track_syms);
+    sysmem_freeptr(unique_tracks);
 
     // --- Deferred Cleanup ---
     long num_ended_tracks;
@@ -727,10 +759,10 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, long offset, long bar_length) {
+void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset, long bar_length) {
     // Get current track symbol
     char track_str[64];
-    snprintf(track_str, 64, "%ld-%ld", x->current_track, offset);
+    snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
@@ -804,10 +836,10 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     // Update offset
     t_symbol *offset_key = generate_hierarchical_key(track_sym, bar_sym, gensym("offset"));
     if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
-    dictionary_appendlong(x->building, offset_key, offset);
-    buildspans_verbose_log(x, "%s %ld", offset_key->s_name, offset);
+    dictionary_appendfloat(x->building, offset_key, offset);
+    buildspans_verbose_log(x, "%s %.2f", offset_key->s_name, offset);
     t_atom offset_atom;
-    atom_setlong(&offset_atom, offset);
+    atom_setfloat(&offset_atom, offset);
 
     // Update palette
     t_symbol *palette_key = generate_hierarchical_key(track_sym, bar_sym, gensym("palette"));
@@ -1525,13 +1557,21 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
     sysmem_freeptr(keys);
 }
 
-long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check) {
+double find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_to_check) {
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return -1;
+    if (!keys) return -1.0;
 
-    t_dictionary *unique_offsets_dict = dictionary_new();
+    typedef struct {
+        t_symbol *track_sym;
+        long rounded_offset;
+        double actual_offset;
+        int offset_found;
+    } t_track_offset_info;
+
+    long unique_tracks_count = 0;
+    t_track_offset_info *unique_tracks = (t_track_offset_info *)sysmem_newptr(num_keys * sizeof(t_track_offset_info));
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", track_num_to_check);
 
@@ -1539,12 +1579,27 @@ long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_
         char *track_str, *bar_str, *prop_str;
         if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
             if (strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                const char *offset_part = strchr(track_str, '-');
-                if (offset_part) {
-                    long current_offset = atol(offset_part + 1);
-                    char offset_key_str[32];
-                    snprintf(offset_key_str, 32, "%ld", current_offset);
-                    dictionary_appendlong(unique_offsets_dict, gensym(offset_key_str), 0);
+                t_symbol *track_sym = gensym(track_str);
+                int index = -1;
+                for (long j = 0; j < unique_tracks_count; j++) {
+                    if (unique_tracks[j].track_sym == track_sym) {
+                        index = j;
+                        break;
+                    }
+                }
+                if (index == -1) {
+                    index = unique_tracks_count++;
+                    unique_tracks[index].track_sym = track_sym;
+                    unique_tracks[index].rounded_offset = atol(strchr(track_str, '-') + 1);
+                    unique_tracks[index].actual_offset = 0.0;
+                    unique_tracks[index].offset_found = 0;
+                }
+
+                if (strcmp(prop_str, "offset") == 0 && !unique_tracks[index].offset_found) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    unique_tracks[index].actual_offset = atom_getfloat(&a);
+                    unique_tracks[index].offset_found = 1;
                 }
             }
             sysmem_freeptr(track_str);
@@ -1554,43 +1609,62 @@ long find_next_offset(t_buildspans *x, long track_num_to_check, long offset_val_
     }
     sysmem_freeptr(keys);
 
-    long num_unique_offsets;
-    t_symbol **offset_keys;
-    dictionary_getkeys(unique_offsets_dict, &num_unique_offsets, &offset_keys);
-    if (!offset_keys) {
-        object_free(unique_offsets_dict);
-        return -1;
-    }
+    double next_offset_val = -1.0;
+    long next_rounded_offset = -1;
 
-    long *offsets = (long *)sysmem_newptr(num_unique_offsets * sizeof(long));
-    for(long i = 0; i < num_unique_offsets; i++) {
-        offsets[i] = atol(offset_keys[i]->s_name);
-    }
-    
-    qsort(offsets, num_unique_offsets, sizeof(long), compare_longs);
-    
-    long next_offset_time = -1;
-    for (long i = 0; i < num_unique_offsets; i++) {
-        if (offsets[i] > offset_val_to_check) {
-            next_offset_time = offsets[i];
-            break;
+    for (long i = 0; i < unique_tracks_count; i++) {
+        if (unique_tracks[i].rounded_offset > offset_val_to_check) {
+            if (next_rounded_offset == -1 || unique_tracks[i].rounded_offset < next_rounded_offset) {
+                next_rounded_offset = unique_tracks[i].rounded_offset;
+                next_offset_val = unique_tracks[i].actual_offset;
+                // If offset_found was false, we fallback to rounded value (shouldn't happen)
+                if (!unique_tracks[i].offset_found) {
+                    next_offset_val = (double)unique_tracks[i].rounded_offset;
+                }
+            }
         }
     }
 
-    sysmem_freeptr(offsets);
-    sysmem_freeptr(offset_keys);
-    object_free(unique_offsets_dict);
-
-    return next_offset_time;
+    sysmem_freeptr(unique_tracks);
+    return next_offset_val;
 }
 
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output) {
-    long track_num, offset_val;
-    if (sscanf(track_sym->s_name, "%ld-%ld", &track_num, &offset_val) != 2) {
+    long track_num, rounded_offset_val;
+    if (sscanf(track_sym->s_name, "%ld-%ld", &track_num, &rounded_offset_val) != 2) {
         return 0; // Should not happen
     }
 
-    long next_offset = find_next_offset(x, track_num, offset_val);
+    // We need the ACTUAL offset of the current span for validation
+    double current_offset = 0.0;
+    int current_offset_found = 0;
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (keys) {
+        for (long i = 0; i < num_keys; i++) {
+            char *track_str, *bar_str, *prop_str;
+            if (parse_hierarchical_key(keys[i], &track_str, &bar_str, &prop_str)) {
+                if (strcmp(track_str, track_sym->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
+                    t_atom a;
+                    dictionary_getatom(x->building, keys[i], &a);
+                    current_offset = atom_getfloat(&a);
+                    current_offset_found = 1;
+                    sysmem_freeptr(track_str);
+                    sysmem_freeptr(bar_str);
+                    sysmem_freeptr(prop_str);
+                    break;
+                }
+                sysmem_freeptr(track_str);
+                sysmem_freeptr(bar_str);
+                sysmem_freeptr(prop_str);
+            }
+        }
+        sysmem_freeptr(keys);
+    }
+    if (!current_offset_found) current_offset = (double)rounded_offset_val;
+
+    double next_offset = find_next_offset(x, track_num, rounded_offset_val);
 
     double earliest_absolute = -1.0;
     double latest_absolute = -1.0;
@@ -1631,17 +1705,17 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym,
         return 0;
     }
 
-    if (latest_absolute < offset_val) {
-        buildspans_verbose_log(x, "Validation failed for %s: latest absolute (%.2f) is before its own offset (%ld). Aborting.", track_sym->s_name, latest_absolute, offset_val);
+    if (latest_absolute < current_offset) {
+        buildspans_verbose_log(x, "Validation failed for %s: latest absolute (%.2f) is before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, current_offset);
         return 0;
     }
 
-    if (next_offset != -1 && earliest_absolute > next_offset) {
-        buildspans_verbose_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%ld). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
+    if (next_offset != -1.0 && earliest_absolute > next_offset) {
+        buildspans_verbose_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
         return 0;
     }
 
-    buildspans_verbose_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %ld, next_offset: %ld)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
+    buildspans_verbose_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, current_offset, next_offset);
     return 1;
 }
 
@@ -1764,13 +1838,13 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_
     // --- Process Collected Data ---
     
     // 2. Find the next chronological offset from our unique set.
-    long next_offset_time = find_next_offset(x, track_num_to_check, offset_val_to_check);
+    double next_offset_time = find_next_offset(x, track_num_to_check, offset_val_to_check);
 
-    if (next_offset_time == -1) {
+    if (next_offset_time == -1.0) {
         buildspans_verbose_log(x, "Cleanup: No subsequent offset found for track %ld. No action taken.", track_num_to_check);
         goto cleanup;
     }
-    buildspans_verbose_log(x, "Cleanup: Next offset for track %ld is %ld.", track_num_to_check, next_offset_time);
+    buildspans_verbose_log(x, "Cleanup: Next offset for track %ld is %.2f.", track_num_to_check, next_offset_time);
 
     if (oldest_absolute_time == -1.0) {
         buildspans_verbose_log(x, "Cleanup: No absolute timestamps found for %s. No action taken.", track_offset_sym->s_name);
@@ -1780,14 +1854,14 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_
 
     // 3. Compare and potentially delete.
     if (oldest_absolute_time >= next_offset_time) {
-        buildspans_verbose_log(x, "Cleanup: Condition met (%.2f >= %ld). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
+        buildspans_verbose_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
 
         for (long i = 0; i < delete_count; i++) {
             dictionary_deleteentry(x->building, keys_to_delete[i]);
         }
         buildspans_visualize_memory(x);
     } else {
-        buildspans_verbose_log(x, "Cleanup: Condition not met (%.2f < %ld). No action taken.", oldest_absolute_time, next_offset_time);
+        buildspans_verbose_log(x, "Cleanup: Condition not met (%.2f < %.2f). No action taken.", oldest_absolute_time, next_offset_time);
     }
 
 cleanup:
