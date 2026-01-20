@@ -655,6 +655,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
         }
         sysmem_freeptr(keys);
+        keys = NULL; // Prevent double free
     }
 
     // 2. Also consider the global current offset as a potential new span
@@ -697,6 +698,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         buildspans_process_and_add_note(x, timestamp, score, offset, bar_length);
     }
 
+    if (keys) sysmem_freeptr(keys);
     sysmem_freeptr(unique_tracks);
 
     // --- Deferred Cleanup ---
