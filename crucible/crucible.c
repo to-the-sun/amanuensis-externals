@@ -313,6 +313,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         if (!dictionary_hasentry(incumbent_dict, track_sym)) {
             incumbent_track_dict = dictionary_new();
             dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
+            object_free(incumbent_track_dict);
+            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         } else {
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
@@ -334,6 +336,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
                 crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
                 crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym);
+                object_free(copied_bar_dict);
             }
         }
         if (x->fill && max_reach > x->song_reach) {
@@ -371,47 +374,36 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                         }
                                         t_dictionary *copied_bar_dict = dictionary_deep_copy(source_bar_dict);
 
+                                        long delta_ts = t - source_ts;
+
                                         // Adjust absolutes in the copied bar
-                                        t_atomarray *absolutes_atomarray = NULL;
+                                        t_atomarray *absolutes_atomarray_dup = NULL;
                                         if (dictionary_hasentry(copied_bar_dict, gensym("absolutes"))) {
-                                            dictionary_getatomarray(copied_bar_dict, gensym("absolutes"), (t_object **)&absolutes_atomarray);
-                                            if (absolutes_atomarray) {
+                                            dictionary_getatomarray(copied_bar_dict, gensym("absolutes"), (t_object **)&absolutes_atomarray_dup);
+                                            if (absolutes_atomarray_dup) {
                                                 long absolutes_len = 0;
                                                 t_atom *absolutes_atoms = NULL;
-                                                atomarray_getatoms(absolutes_atomarray, &absolutes_len, &absolutes_atoms);
+                                                atomarray_getatoms(absolutes_atomarray_dup, &absolutes_len, &absolutes_atoms);
                                                 for (long k = 0; k < absolutes_len; k++) {
                                                     double old_absolute = atom_getfloat(absolutes_atoms + k);
-                                                    atom_setfloat(absolutes_atoms + k, old_absolute + old_song_reach);
+                                                    atom_setfloat(absolutes_atoms + k, old_absolute + delta_ts);
                                                 }
                                             }
                                         }
 
-                                        // Adjust offset in the copied bar
-                                        t_atomarray *offset_atomarray_dup = NULL;
-                                        if (dictionary_hasentry(copied_bar_dict, gensym("offset"))) {
-                                            dictionary_getatomarray(copied_bar_dict, gensym("offset"), (t_object **)&offset_atomarray_dup);
-                                            if (offset_atomarray_dup) {
-                                                long offset_len = 0;
-                                                t_atom *offset_atoms = NULL;
-                                                atomarray_getatoms(offset_atomarray_dup, &offset_len, &offset_atoms);
-                                                for (long k = 0; k < offset_len; k++) {
-                                                    double old_offset = atom_getfloat(offset_atoms + k);
-                                                    atom_setfloat(offset_atoms + k, old_offset + old_song_reach);
-                                                }
-                                            }
-                                        }
+                                        // Note: offset is NOT adjusted during duplication per user request.
 
                                         // Adjust span in the copied bar
-                                        t_atomarray *span_atomarray = NULL;
+                                        t_atomarray *span_atomarray_dup = NULL;
                                         if (dictionary_hasentry(copied_bar_dict, gensym("span"))) {
-                                            dictionary_getatomarray(copied_bar_dict, gensym("span"), (t_object **)&span_atomarray);
-                                            if (span_atomarray) {
+                                            dictionary_getatomarray(copied_bar_dict, gensym("span"), (t_object **)&span_atomarray_dup);
+                                            if (span_atomarray_dup) {
                                                 long span_len = 0;
                                                 t_atom *span_atoms = NULL;
-                                                atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
+                                                atomarray_getatoms(span_atomarray_dup, &span_len, &span_atoms);
                                                 for (long k = 0; k < span_len; k++) {
                                                     long old_span_val = atom_getlong(span_atoms + k);
-                                                    atom_setlong(span_atoms + k, old_span_val + old_song_reach);
+                                                    atom_setlong(span_atoms + k, old_span_val + delta_ts);
                                                 }
                                             }
                                         }
@@ -420,6 +412,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                         crucible_verbose_log(x, "Duplicated bar %s from track %s to %s",
                                                              source_ts_sym->s_name, track_keys[i]->s_name, target_ts_sym->s_name);
                                         crucible_output_bar_data(x, copied_bar_dict, t, track_keys[i]);
+                                        object_free(copied_bar_dict);
                                     }
                                 }
                             }
@@ -488,17 +481,19 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 
        if (atom_gettype(&value) == A_OBJ) {
            t_object *obj = atom_getobj(&value);
-           if (object_classname_compare(obj, gensym("dictionary"))) {
+           if (object_classname(obj) == gensym("dictionary")) {
                t_dictionary *nested_src = (t_dictionary *)obj;
                t_dictionary *nested_dest = dictionary_deep_copy(nested_src);
                dictionary_appenddictionary(dest, key, (t_object *)nested_dest);
-           } else if (object_classname_compare(obj, gensym("atomarray"))) {
+               object_free(nested_dest);
+           } else if (object_classname(obj) == gensym("atomarray")) {
                t_atomarray *aa_src = (t_atomarray *)obj;
                long aa_len = 0;
                t_atom *aa_atoms = NULL;
                atomarray_getatoms(aa_src, &aa_len, &aa_atoms);
                t_atomarray *aa_dest = atomarray_new(aa_len, aa_atoms);
                dictionary_appendatomarray(dest, key, (t_object *)aa_dest);
+               object_free(aa_dest);
            }
        } else {
            dictionary_appendatom(dest, key, &value);
@@ -543,7 +538,13 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         }
 
         // Add data to bar dictionary
-        dictionary_appendatomarray(bar_dict, key_sym, (t_object *)atomarray_new(argc, argv));
+        if (argc == 1) {
+            dictionary_appendatom(bar_dict, key_sym, argv);
+        } else {
+            t_atomarray *aa = atomarray_new(argc, argv);
+            dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
+            object_free(aa);
+        }
 
         // Use span_tracker_dict to know when a span is complete
         char received_keys_key_str[256];
@@ -566,7 +567,9 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
             char span_bars_key_str[256];
             snprintf(span_bars_key_str, 256, "%s::span_bars", track_sym->s_name);
-            dictionary_appendatomarray(x->span_tracker_dict, gensym(span_bars_key_str), (t_object *)atomarray_new(argc, argv));
+            t_atomarray *aa = atomarray_new(argc, argv);
+            dictionary_appendatomarray(x->span_tracker_dict, gensym(span_bars_key_str), (t_object *)aa);
+            object_free(aa);
         }
 
         char expected_keys_key_str[256];
