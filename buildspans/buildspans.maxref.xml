@@ -29,7 +29,7 @@
 		</inlet>
 		<inlet id="1" type="float">
 			<digest>Global offset timestamp</digest>
-			<description>Receives a float representing a global offset in milliseconds. This value is used for new bars.</description>
+			<description>Receives a high-precision float representing a global offset in milliseconds. This value is used for new bars and is stored with full precision in the dictionary.</description>
 		</inlet>
 		<inlet id="2" type="int">
 			<digest>Track number</digest>
