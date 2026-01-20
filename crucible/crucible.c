@@ -157,7 +157,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         long len;
         t_atom *atoms;
         atomarray_getatoms(offset_atomarray, &len, &atoms);
-        if (len > 0) outlet_int(x->outlet_offset, atom_getlong(atoms));
+        if (len > 0) outlet_float(x->outlet_offset, atom_getfloat(atoms));
     }
 
     // 2. Bar
@@ -386,6 +386,21 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                             }
                                         }
 
+                                        // Adjust offset in the copied bar
+                                        t_atomarray *offset_atomarray_dup = NULL;
+                                        if (dictionary_hasentry(copied_bar_dict, gensym("offset"))) {
+                                            dictionary_getatomarray(copied_bar_dict, gensym("offset"), (t_object **)&offset_atomarray_dup);
+                                            if (offset_atomarray_dup) {
+                                                long offset_len = 0;
+                                                t_atom *offset_atoms = NULL;
+                                                atomarray_getatoms(offset_atomarray_dup, &offset_len, &offset_atoms);
+                                                for (long k = 0; k < offset_len; k++) {
+                                                    double old_offset = atom_getfloat(offset_atoms + k);
+                                                    atom_setfloat(offset_atoms + k, old_offset + old_song_reach);
+                                                }
+                                            }
+                                        }
+
                                         // Adjust span in the copied bar
                                         t_atomarray *span_atomarray = NULL;
                                         if (dictionary_hasentry(copied_bar_dict, gensym("span"))) {
@@ -602,7 +617,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Palette (symbol)"); break;
                 case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (int)"); break;
+                case 4: sprintf(s, "Offset (float)"); break;
                 case 5: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
@@ -611,7 +626,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Palette (symbol)"); break;
                 case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (int)"); break;
+                case 4: sprintf(s, "Offset (float)"); break;
             }
         }
     }

@@ -39,9 +39,9 @@
 			<digest>Bar value</digest>
 			<description>For a winning span, outputs each bar timestamp in the span.</description>
 		</outlet>
-		<outlet id="4" type="int">
+		<outlet id="4" type="float">
 			<digest>Offset value</digest>
-			<description>For a winning span, outputs the associated offset.</description>
+			<description>For a winning span, outputs the associated offset as a high-precision float.</description>
 		</outlet>
 		<outlet id="5" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
