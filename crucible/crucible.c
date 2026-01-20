@@ -157,7 +157,13 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         long len;
         t_atom *atoms;
         atomarray_getatoms(offset_atomarray, &len, &atoms);
-        if (len > 0) outlet_int(x->outlet_offset, atom_getlong(atoms));
+        if (len > 0) {
+            if (atom_gettype(atoms) == A_FLOAT) {
+                outlet_float(x->outlet_offset, atom_getfloat(atoms));
+            } else {
+                outlet_int(x->outlet_offset, atom_getlong(atoms));
+            }
+        }
     }
 
     // 2. Bar
