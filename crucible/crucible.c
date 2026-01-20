@@ -608,7 +608,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Palette (symbol)"); break;
                 case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (int)"); break;
+                case 4: sprintf(s, "Offset (float)"); break;
                 case 5: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
@@ -617,7 +617,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Palette (symbol)"); break;
                 case 2: sprintf(s, "Track (int)"); break;
                 case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (int)"); break;
+                case 4: sprintf(s, "Offset (float)"); break;
             }
         }
     }
