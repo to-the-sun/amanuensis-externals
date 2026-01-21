@@ -1,6 +1,5 @@
 #include "ext.h"
 #include "ext_obex.h"
-#include "ext_common.h"
 #include "ext_buffer.h"
 #include "ext_sysfile.h"
 #include "ext_path.h"
@@ -33,15 +32,18 @@ void varibuffer_wclose(t_varibuffer *x);
 void varibuffer_readfolder(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv);
 void varibuffer_writetofolder(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv);
 void varibuffer_dblclick(t_varibuffer *x);
-void varibuffer_readfolder_deferred(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv);
+void varibuffer_readfolder_deferred(t_varibuffer *x, t_symbol *s, short argc, t_atom *argv);
 
 // Helpers
 long varibuffer_find_next_index(t_varibuffer *x);
 void varibuffer_do_append(t_varibuffer *x, t_symbol *filename);
 void varibuffer_do_appendempty(t_varibuffer *x, double duration, long channels);
+void varibuffer_do_clear(t_varibuffer *x);
 
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c = class_new("varibuffer~", (method)varibuffer_new, (method)varibuffer_free, sizeof(t_varibuffer), 0L, A_GIMME, 0);
+    varibuffer_class = c;
 
     class_addmethod(c, (method)varibuffer_append, "append", A_GIMME, 0);
     class_addmethod(c, (method)varibuffer_appendempty, "appendempty", A_GIMME, 0);
@@ -66,25 +68,24 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "quiet", 0, "onoff", "Suppress warnings");
 
     class_register(CLASS_BOX, c);
-    varibuffer_class = c;
 }
 
 void *varibuffer_new(t_symbol *s, long argc, t_atom *argv) {
     t_varibuffer *x = (t_varibuffer *)object_alloc(varibuffer_class);
     if (x) {
-        x->b_name = (argc > 0 && atom_gettype(argv) == A_SYM) ? atom_getsym(argv) : gensym("varibuf");
+        x->b_name = (argc > 0 && argv && atom_gettype(argv) == A_SYM) ? atom_getsym(argv) : gensym("varibuf");
         x->b_embed = 0;
         x->b_quiet = 0;
 
-        attr_args_process(x, argc, argv);
+        attr_args_process(x, (short)argc, argv);
 
-        x->b_outlet = outlet_new(x, NULL);
+        x->b_outlet = outlet_new((t_object *)x, NULL);
     }
     return x;
 }
 
 void varibuffer_free(t_varibuffer *x) {
-    // Basic cleanup
+    varibuffer_do_clear(x);
 }
 
 void varibuffer_assist(t_varibuffer *x, void *b, long m, long a, char *s) {
@@ -132,7 +133,7 @@ void varibuffer_do_append(t_varibuffer *x, t_symbol *filename) {
 }
 
 void varibuffer_append(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
-    t_symbol *filename = (argc > 0 && atom_gettype(argv) == A_SYM) ? atom_getsym(argv) : NULL;
+    t_symbol *filename = (argc > 0 && argv && atom_gettype(argv) == A_SYM) ? atom_getsym(argv) : NULL;
 
     if (!filename) {
         char name[MAX_FILENAME_CHARS];
@@ -171,8 +172,8 @@ void varibuffer_do_appendempty(t_varibuffer *x, double duration, long channels) 
 }
 
 void varibuffer_appendempty(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
-    double duration = (argc > 0) ? atom_getfloat(argv) : 0.0;
-    long channels = (argc > 1) ? atom_getlong(argv+1) : 1;
+    double duration = (argc > 0 && argv) ? atom_getfloat(argv) : 0.0;
+    long channels = (argc > 1 && argv) ? atom_getlong(argv+1) : 1;
     varibuffer_do_appendempty(x, duration, channels);
 }
 
@@ -272,7 +273,7 @@ void varibuffer_getshortname(t_varibuffer *x) {
                 atom_setsym(&out[0], s_name);
                 t_symbol *fname = buffer_getfilename(b);
                 char nameonly[256];
-                strncpy(nameonly, fname->s_name, 256);
+                strncpy_zero(nameonly, fname->s_name, 256);
                 char *dot = strrchr(nameonly, '.');
                 if (dot) *dot = '\0';
                 atom_setsym(&out[1], gensym(nameonly));
@@ -317,7 +318,7 @@ void varibuffer_getsize(t_varibuffer *x) {
 }
 
 void varibuffer_send(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
-    if (argc < 2) return;
+    if (argc < 2 || !argv) return;
     long index = atom_getlong(argv);
     t_symbol *msg = atom_getsym(argv+1);
 
@@ -331,7 +332,7 @@ void varibuffer_send(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
             if (buffer_ref_exists(ref)) {
                 consecutive_missing = 0;
                 t_buffer_obj *b = buffer_ref_getobject(ref);
-                if (b) object_method_typed(b, msg, argc-2, argv+2, NULL);
+                if (b) object_method_typed(b, msg, (short)(argc-2), argv+2, NULL);
             } else {
                 consecutive_missing++;
             }
@@ -345,7 +346,7 @@ void varibuffer_send(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
         t_buffer_ref *ref = buffer_ref_new((t_object *)x, gensym(bufname));
         if (buffer_ref_exists(ref)) {
             t_buffer_obj *b = buffer_ref_getobject(ref);
-            if (b) object_method_typed(b, msg, argc-2, argv+2, NULL);
+            if (b) object_method_typed(b, msg, (short)(argc-2), argv+2, NULL);
         }
         object_free(ref);
     }
@@ -371,11 +372,11 @@ void varibuffer_readfolder(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv
     defer_low(x, (method)varibuffer_readfolder_deferred, s, (short)argc, argv);
 }
 
-void varibuffer_readfolder_deferred(t_varibuffer *x, t_symbol *s, long argc, t_atom *argv) {
+void varibuffer_readfolder_deferred(t_varibuffer *x, t_symbol *s, short argc, t_atom *argv) {
     char path[MAX_PATH_CHARS];
     short vol = 0;
 
-    if (argc > 0 && atom_gettype(argv) == A_SYM) {
+    if (argc > 0 && argv && atom_gettype(argv) == A_SYM) {
         strncpy_zero(path, atom_getsym(argv)->s_name, MAX_PATH_CHARS);
         if (path_frompathname(path, &vol, NULL)) {
             object_error((t_object *)x, "readfolder: invalid path %s", path);
@@ -390,8 +391,6 @@ void varibuffer_readfolder_deferred(t_varibuffer *x, t_symbol *s, long argc, t_a
         t_fourcc type;
         char name[MAX_FILENAME_CHARS];
         while (path_foldernextfile(fd, &type, name, 0) == 0) {
-            // We should ideally check if it's an audio file.
-            // For now, try to append it.
             char fullpath[MAX_PATH_CHARS];
             path_topathname(vol, name, fullpath);
             varibuffer_do_append(x, gensym(fullpath));
@@ -408,7 +407,7 @@ void varibuffer_dblclick(t_varibuffer *x) {
     varibuffer_open(x);
 }
 
-void varibuffer_clear(t_varibuffer *x) {
+void varibuffer_do_clear(t_varibuffer *x) {
     long i = 1;
     long consecutive_missing = 0;
     while (consecutive_missing < 10) {
@@ -426,5 +425,9 @@ void varibuffer_clear(t_varibuffer *x) {
         i++;
         if (i > 10000) break;
     }
+}
+
+void varibuffer_clear(t_varibuffer *x) {
+    varibuffer_do_clear(x);
     outlet_bang(x->b_outlet);
 }

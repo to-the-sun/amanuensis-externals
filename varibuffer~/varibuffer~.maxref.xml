@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
-
-<entry name="varibuffer~">
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="varibuffer~" module="msp" category="Analysis">
 	<digest>Manage multiple buffer~ objects</digest>
 	<description>
 		<o>varibuffer~</o> lets you operate with a group of <o>buffer~</o> objects.
 		Each <o>buffer~</o> will be named after <o>varibuffer~</o> first argument and
 		an index (e.g. for a <o>varibuffer~</o> toto object, each <o>buffer~</o> will be
-		named toto.N where N is the index). This is an emulation of the <o>polybuffer~</o> object.
+		named toto.1, toto.2, toto.3 ...). This is an emulation of the standard <o>polybuffer~</o> object.
 	</description>
 
 	<metadatalist>
@@ -86,7 +85,7 @@
 				<arg name="path" optional="1" type="symbol" />
 			</arglist>
 			<digest>Load all files from a folder</digest>
-			<description>Loads multiple sound files from the specified folder.</description>
+			<description>Loads multiple sound files from the specified folder. If no argument is provided, a dialog will appear.</description>
 		</method>
 		<method name="send">
 			<arglist>
@@ -110,14 +109,20 @@
 	</methodlist>
 
 	<attrlist>
-		<attribute name="embed" get="1" set="1" type="int" size="1">
+		<attr name="embed" get="1" set="1" type="long" size="1">
 			<digest>Save buffer references in patcher</digest>
 			<description>If enabled, buffer references are saved in the patcher.</description>
-		</attribute>
-		<attribute name="quiet" get="1" set="1" type="int" size="1">
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attr>
+		<attr name="quiet" get="1" set="1" type="long" size="1">
 			<digest>Suppress warnings</digest>
 			<description>If enabled, suppresses warnings when loading multiple patches with the same name.</description>
-		</attribute>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attr>
 	</attrlist>
 
 	<seealsolist>
@@ -128,4 +133,4 @@
 		<seealso name="notify" />
 		<seealso name="whichoffset" />
 	</seealsolist>
-</entry>
+</c74object>
