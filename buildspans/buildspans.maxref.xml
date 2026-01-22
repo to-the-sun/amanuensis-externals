@@ -107,6 +107,7 @@
 		<seealso name="crucible" />
 		<seealso name="notify" />
 		<seealso name="whichoffset" />
+		<seealso name="growbuffer~" />
 		<seealso name="stemversion" />
 		<seealso name="createproject" />
 		<seealso name="dict" />

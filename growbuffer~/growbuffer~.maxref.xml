@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="growbuffer~" module="msp" category="Utility">
+	<digest>
+		Reference and potentially grow an external buffer
+	</digest>
+	<description>
+		The `growbuffer~` object allows referencing an external buffer~ by name and performing operations on it.
+	</description>
+
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+
+	<inletlist>
+		<inlet id="0" type="anything">
+			<digest>
+				(bang) report length, (set) set buffer name
+			</digest>
+			<description>
+				Sending a bang will post the length of the referenced buffer in milliseconds to the Max console. Sending the message set followed by a symbol will change the referenced buffer.
+			</description>
+		</inlet>
+		<inlet id="1" type="symbol">
+			<digest>
+				(symbol) set buffer name
+			</digest>
+			<description>
+				Sending a symbol to the second inlet will change the referenced buffer.
+			</description>
+		</inlet>
+	</inletlist>
+
+	<objarglist>
+		<objarg name="buffer-name" optional="0" type="symbol">
+			<digest>
+				Name of the buffer~ to reference
+			</digest>
+			<description>
+				The first argument specifies the name of an external buffer~ object to reference.
+			</description>
+		</objarg>
+	</objarglist>
+
+	<methodlist>
+		<method name="bang">
+			<arglist />
+			<digest>
+				Report buffer length
+			</digest>
+			<description>
+				Posts the length of the currently referenced buffer in milliseconds to the Max console.
+			</description>
+		</method>
+		<method name="set">
+			<arglist>
+				<arg name="buffer-name" optional="0" type="symbol" />
+			</arglist>
+			<digest>
+				Set the referenced buffer
+			</digest>
+			<description>
+				Changes the referenced buffer~ object to the one specified by the symbol argument.
+			</description>
+		</method>
+	</methodlist>
+
+	<seealsolist>
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="notify" />
+		<seealso name="whichoffset" />
+		<seealso name="stemversion" />
+		<seealso name="createproject" />
+	</seealsolist>
+</c74object>
