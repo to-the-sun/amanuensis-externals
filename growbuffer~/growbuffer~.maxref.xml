@@ -20,7 +20,7 @@
 				(bang) report length, (number) resize, (set) set buffer name
 			</digest>
 			<description>
-				Sending a bang will post the length of the referenced buffer in milliseconds to the Max console. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content. Sending the message set followed by a symbol will change the referenced buffer. If a `polybuffer~` is detected (via indexed names like `name.1`), operations are applied to all members.
+				Sending a bang will report the length of the referenced buffer in milliseconds via the status outlet. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content, and report the result via the status outlet. Sending the message set followed by a symbol will change the referenced buffer. If a `polybuffer~` is detected (via indexed names like `name.1`), operations are applied to all members.
 			</description>
 		</inlet>
 		<inlet id="1" type="symbol">
@@ -32,6 +32,17 @@
 			</description>
 		</inlet>
 	</inletlist>
+
+	<outletlist>
+		<outlet id="0" type="anything">
+			<digest>
+				Status and Error Messages
+			</digest>
+			<description>
+				Outputs status information and error messages related to buffer operations.
+			</description>
+		</outlet>
+	</outletlist>
 
 	<objarglist>
 		<objarg name="buffer-name" optional="0" type="symbol">
@@ -51,7 +62,7 @@
 				Report buffer length
 			</digest>
 			<description>
-				Posts the length of the currently referenced buffer in milliseconds to the Max console.
+				Outputs the length of the currently referenced buffer in milliseconds to the status outlet.
 			</description>
 		</method>
 		<method name="int">
@@ -62,7 +73,7 @@
 				Resize the buffer (ms)
 			</digest>
 			<description>
-				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved.
+				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved. The result is reported to the status outlet.
 			</description>
 		</method>
 		<method name="float">
@@ -73,7 +84,7 @@
 				Resize the buffer (ms)
 			</digest>
 			<description>
-				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved.
+				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved. The result is reported to the status outlet.
 			</description>
 		</method>
 		<method name="set">
@@ -84,7 +95,7 @@
 				Set the referenced buffer
 			</digest>
 			<description>
-				Changes the referenced buffer~ object to the one specified by the symbol argument.
+				Changes the referenced buffer~ object to the one specified by the symbol argument. A confirmation message is sent to the status outlet.
 			</description>
 		</method>
 	</methodlist>

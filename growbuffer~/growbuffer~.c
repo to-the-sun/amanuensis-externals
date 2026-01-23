@@ -10,6 +10,7 @@ typedef struct _growbuffer {
 	t_buffer_ref *b_ref;
 	void *b_proxy;
 	long b_inletnum;
+	void *b_outlet;
 } t_growbuffer;
 
 void *growbuffer_new(t_symbol *s, long argc, t_atom *argv);
@@ -56,6 +57,7 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 		}
 
 		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
+		x->b_outlet = outlet_new(x, NULL);
 
 		x->b_ref = buffer_ref_new((t_object *)x, x->b_name);
 	}
@@ -70,7 +72,11 @@ void growbuffer_free(t_growbuffer *x) {
 void growbuffer_set(t_growbuffer *x, t_symbol *s) {
 	x->b_name = s;
 	buffer_ref_set(x->b_ref, x->b_name);
-	post("growbuffer~: buffer set to %s", s->s_name);
+
+	t_atom av[2];
+	atom_setsym(&av[0], gensym("set"));
+	atom_setsym(&av[1], s);
+	outlet_anything(x->b_outlet, gensym("buffer"), 2, av);
 }
 
 void growbuffer_symbol(t_growbuffer *x, t_symbol *s) {
@@ -101,7 +107,11 @@ void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv) 
 	if (proxy_getinlet((t_object *)x) == 1) {
 		growbuffer_set(x, s);
 	} else {
-		object_error((t_object *)x, "growbuffer~: %s: message not understood", s->s_name);
+		t_atom av[3];
+		atom_setsym(&av[0], gensym("error"));
+		atom_setsym(&av[1], s);
+		atom_setsym(&av[2], gensym("message_not_understood"));
+		outlet_anything(x->b_outlet, gensym("buffer"), 3, av);
 	}
 }
 
@@ -109,13 +119,22 @@ void growbuffer_do_bang(t_growbuffer *x, t_buffer_obj *b, t_symbol *name) {
 	double frames = (double)buffer_getframecount(b);
 	double sr = buffer_getsamplerate(b);
 	double ms = (sr > 0) ? (frames * 1000.0 / sr) : 0;
-	post("growbuffer~: buffer %s length is %f ms", name->s_name, ms);
+
+	t_atom av[3];
+	atom_setsym(&av[0], name);
+	atom_setsym(&av[1], gensym("length"));
+	atom_setfloat(&av[2], ms);
+	outlet_anything(x->b_outlet, gensym("buffer"), 3, av);
 }
 
 void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, double ms) {
 	double sr = buffer_getsamplerate(b);
 	if (sr <= 0) {
-		object_error((t_object *)x, "growbuffer~: buffer %s has invalid sample rate", name->s_name);
+		t_atom av[3];
+		atom_setsym(&av[0], name);
+		atom_setsym(&av[1], gensym("error"));
+		atom_setsym(&av[2], gensym("invalid_sample_rate"));
+		outlet_anything(x->b_outlet, gensym("buffer"), 3, av);
 		return;
 	}
 
@@ -166,7 +185,13 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 	buffer_edit_end(b, 1);
 
 	buffer_setdirty(b);
-	post("growbuffer~: resized %s to %f ms (%ld frames)", name->s_name, ms, new_frames);
+
+	t_atom av_out[4];
+	atom_setsym(&av_out[0], name);
+	atom_setsym(&av_out[1], gensym("resized"));
+	atom_setfloat(&av_out[2], ms);
+	atom_setlong(&av_out[3], new_frames);
+	outlet_anything(x->b_outlet, gensym("buffer"), 4, av_out);
 }
 
 void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
@@ -196,7 +221,10 @@ void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
 				b_member = buffer_ref_getobject(temp_ref);
 			}
 		} else {
-			object_error((t_object *)x, "growbuffer~: no buffer %s found", x->b_name->s_name);
+			t_atom av[2];
+			atom_setsym(&av[0], gensym("buffer"));
+			atom_setsym(&av[1], gensym("found"));
+			outlet_anything(x->b_outlet, gensym("no"), 2, av);
 		}
 		object_free(temp_ref);
 	}
@@ -212,5 +240,7 @@ void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
 				sprintf(s, "(symbol) set buffer name");
 				break;
 		}
+	} else {
+		sprintf(s, "Status and Error Messages");
 	}
 }
