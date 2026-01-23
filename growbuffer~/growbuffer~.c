@@ -222,9 +222,9 @@ void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
 			}
 		} else {
 			t_atom av[2];
-			atom_setsym(&av[0], gensym("not"));
+			atom_setsym(&av[0], gensym("buffer"));
 			atom_setsym(&av[1], gensym("found"));
-			outlet_anything(x->b_outlet, gensym("buffer"), 2, av);
+			outlet_anything(x->b_outlet, gensym("no"), 2, av);
 		}
 		object_free(temp_ref);
 	}
