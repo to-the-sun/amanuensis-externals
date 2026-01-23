@@ -6,7 +6,7 @@
 		Reference and potentially grow an external buffer
 	</digest>
 	<description>
-		The `growbuffer~` object allows referencing an external buffer~ by name and performing operations on it.
+		The `growbuffer~` object allows referencing an external buffer~ by name and performing operations on it. It also supports `polybuffer~` objects by automatically iterating through all numbered members (e.g., `name.1`, `name.2`, etc.) if a single buffer with the given name is not found.
 	</description>
 
 	<metadatalist>
@@ -20,7 +20,7 @@
 				(bang) report length, (number) resize, (set) set buffer name
 			</digest>
 			<description>
-				Sending a bang will post the length of the referenced buffer in milliseconds to the Max console. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content. Sending the message set followed by a symbol will change the referenced buffer.
+				Sending a bang will post the length of the referenced buffer in milliseconds to the Max console. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content. Sending the message set followed by a symbol will change the referenced buffer. If a `polybuffer~` is detected (via indexed names like `name.1`), operations are applied to all members.
 			</description>
 		</inlet>
 		<inlet id="1" type="symbol">

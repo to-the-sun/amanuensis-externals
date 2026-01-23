@@ -17,7 +17,11 @@ void growbuffer_free(t_growbuffer *x);
 void growbuffer_bang(t_growbuffer *x);
 void growbuffer_int(t_growbuffer *x, long n);
 void growbuffer_float(t_growbuffer *x, double f);
-void growbuffer_resize(t_growbuffer *x, double ms);
+
+void growbuffer_do_bang(t_growbuffer *x, t_buffer_obj *b, t_symbol *name);
+void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, double ms);
+void growbuffer_execute(t_growbuffer *x, double ms, int is_resize);
+
 void growbuffer_set(t_growbuffer *x, t_symbol *s);
 void growbuffer_symbol(t_growbuffer *x, t_symbol *s);
 void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv);
@@ -76,28 +80,20 @@ void growbuffer_symbol(t_growbuffer *x, t_symbol *s) {
 }
 
 void growbuffer_bang(t_growbuffer *x) {
-	if (proxy_getinlet((t_object *)x) != 0) return;
-
-	t_buffer_obj *b = buffer_ref_getobject(x->b_ref);
-	if (b) {
-		double frames = (double)buffer_getframecount(b);
-		double sr = buffer_getsamplerate(b);
-		double ms = (sr > 0) ? (frames * 1000.0 / sr) : 0;
-		post("growbuffer~: buffer %s length is %f ms", x->b_name->s_name, ms);
-	} else {
-		post("growbuffer~: no buffer %s found", x->b_name->s_name);
+	if (proxy_getinlet((t_object *)x) == 0) {
+		growbuffer_execute(x, 0, 0);
 	}
 }
 
 void growbuffer_int(t_growbuffer *x, long n) {
 	if (proxy_getinlet((t_object *)x) == 0) {
-		growbuffer_resize(x, (double)n);
+		growbuffer_execute(x, (double)n, 1);
 	}
 }
 
 void growbuffer_float(t_growbuffer *x, double f) {
 	if (proxy_getinlet((t_object *)x) == 0) {
-		growbuffer_resize(x, f);
+		growbuffer_execute(x, f, 1);
 	}
 }
 
@@ -109,16 +105,17 @@ void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv) 
 	}
 }
 
-void growbuffer_resize(t_growbuffer *x, double ms) {
-	t_buffer_obj *b = buffer_ref_getobject(x->b_ref);
-	if (!b) {
-		object_error((t_object *)x, "growbuffer~: no buffer %s found", x->b_name->s_name);
-		return;
-	}
+void growbuffer_do_bang(t_growbuffer *x, t_buffer_obj *b, t_symbol *name) {
+	double frames = (double)buffer_getframecount(b);
+	double sr = buffer_getsamplerate(b);
+	double ms = (sr > 0) ? (frames * 1000.0 / sr) : 0;
+	post("growbuffer~: buffer %s length is %f ms", name->s_name, ms);
+}
 
+void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, double ms) {
 	double sr = buffer_getsamplerate(b);
 	if (sr <= 0) {
-		object_error((t_object *)x, "growbuffer~: buffer %s has invalid sample rate", x->b_name->s_name);
+		object_error((t_object *)x, "growbuffer~: buffer %s has invalid sample rate", name->s_name);
 		return;
 	}
 
@@ -149,15 +146,11 @@ void growbuffer_resize(t_growbuffer *x, double ms) {
 		}
 	}
 
-	// Begin edit
 	buffer_edit_begin(b);
-
-	// Resize
 	t_atom av;
 	atom_setlong(&av, new_frames);
 	object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
 
-	// Restore
 	if (backup) {
 		float *samples = buffer_locksamples(b);
 		if (samples) {
@@ -170,12 +163,43 @@ void growbuffer_resize(t_growbuffer *x, double ms) {
 		}
 		sysmem_freeptr(backup);
 	}
-
-	// End edit
 	buffer_edit_end(b, 1);
 
 	buffer_setdirty(b);
-	post("growbuffer~: resized %s to %f ms (%ld frames)", x->b_name->s_name, ms, new_frames);
+	post("growbuffer~: resized %s to %f ms (%ld frames)", name->s_name, ms, new_frames);
+}
+
+void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
+	t_buffer_obj *b = buffer_ref_getobject(x->b_ref);
+	if (b) {
+		if (is_resize) growbuffer_do_resize(x, b, x->b_name, ms);
+		else growbuffer_do_bang(x, b, x->b_name);
+	} else {
+		// Try polybuffer logic
+		char bufname[256];
+		snprintf(bufname, 256, "%s.1", x->b_name->s_name);
+		t_symbol *s_member = gensym(bufname);
+
+		t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, s_member);
+		t_buffer_obj *b_member = buffer_ref_getobject(temp_ref);
+
+		if (b_member) {
+			int i = 1;
+			while (b_member) {
+				if (is_resize) growbuffer_do_resize(x, b_member, s_member, ms);
+				else growbuffer_do_bang(x, b_member, s_member);
+
+				i++;
+				snprintf(bufname, 256, "%s.%d", x->b_name->s_name, i);
+				s_member = gensym(bufname);
+				buffer_ref_set(temp_ref, s_member);
+				b_member = buffer_ref_getobject(temp_ref);
+			}
+		} else {
+			object_error((t_object *)x, "growbuffer~: no buffer %s found", x->b_name->s_name);
+		}
+		object_free(temp_ref);
+	}
 }
 
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
