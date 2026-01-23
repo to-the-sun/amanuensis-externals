@@ -20,11 +20,14 @@ void growbuffer_float(t_growbuffer *x, double f);
 void growbuffer_resize(t_growbuffer *x, double ms);
 void growbuffer_set(t_growbuffer *x, t_symbol *s);
 void growbuffer_symbol(t_growbuffer *x, t_symbol *s);
+void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv);
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s);
 
 static t_class *growbuffer_class;
 
 void ext_main(void *r) {
+	common_symbols_init();
+
 	t_class *c = class_new("growbuffer~", (method)growbuffer_new, (method)growbuffer_free, sizeof(t_growbuffer), 0L, A_GIMME, 0);
 
 	class_addmethod(c, (method)growbuffer_bang, "bang", 0);
@@ -32,11 +35,11 @@ void ext_main(void *r) {
 	class_addmethod(c, (method)growbuffer_float, "float", A_FLOAT, 0);
 	class_addmethod(c, (method)growbuffer_set, "set", A_SYM, 0);
 	class_addmethod(c, (method)growbuffer_symbol, "symbol", A_SYM, 0);
+	class_addmethod(c, (method)growbuffer_anything, "anything", A_GIMME, 0);
 	class_addmethod(c, (method)growbuffer_assist, "assist", A_CANT, 0);
 
 	class_register(CLASS_BOX, c);
 	growbuffer_class = c;
-	common_symbols_init();
 }
 
 void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
@@ -73,6 +76,8 @@ void growbuffer_symbol(t_growbuffer *x, t_symbol *s) {
 }
 
 void growbuffer_bang(t_growbuffer *x) {
+	if (proxy_getinlet((t_object *)x) != 0) return;
+
 	t_buffer_obj *b = buffer_ref_getobject(x->b_ref);
 	if (b) {
 		double frames = (double)buffer_getframecount(b);
@@ -93,6 +98,14 @@ void growbuffer_int(t_growbuffer *x, long n) {
 void growbuffer_float(t_growbuffer *x, double f) {
 	if (proxy_getinlet((t_object *)x) == 0) {
 		growbuffer_resize(x, f);
+	}
+}
+
+void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv) {
+	if (proxy_getinlet((t_object *)x) == 1) {
+		growbuffer_set(x, s);
+	} else {
+		object_error((t_object *)x, "growbuffer~: %s: message not understood", s->s_name);
 	}
 }
 
