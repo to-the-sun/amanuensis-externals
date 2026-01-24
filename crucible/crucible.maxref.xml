@@ -23,25 +23,25 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="int">
-			<digest>Reach value</digest>
-			<description>For a winning span, outputs the reach (largest bar timestamp + bar_length).</description>
-		</outlet>
-		<outlet id="1" type="symbol">
+		<outlet id="0" type="symbol">
 			<digest>Palette value</digest>
 			<description>For a winning span, outputs the associated palette.</description>
 		</outlet>
-		<outlet id="2" type="int">
+		<outlet id="1" type="int">
 			<digest>Track value</digest>
 			<description>For a winning span, outputs the associated track.</description>
 		</outlet>
-		<outlet id="3" type="int">
+		<outlet id="2" type="int">
 			<digest>Bar value</digest>
 			<description>For a winning span, outputs each bar timestamp in the span.</description>
 		</outlet>
-		<outlet id="4" type="float">
+		<outlet id="3" type="float">
 			<digest>Offset value</digest>
 			<description>For a winning span, outputs the associated high-precision offset.</description>
+		</outlet>
+		<outlet id="4" type="int">
+			<digest>Reach value</digest>
+			<description>For a winning span, outputs the reach (largest bar timestamp + bar_length).</description>
 		</outlet>
 		<outlet id="5" type="anything">
 			<digest>Verbose Logging (Optional)</digest>

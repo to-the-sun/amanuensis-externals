@@ -121,11 +121,11 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
         }
+        x->outlet_reach = outlet_new((t_object *)x, NULL);
         x->outlet_offset = outlet_new((t_object *)x, NULL);
         x->outlet_bar = outlet_new((t_object *)x, NULL);
         x->outlet_track = outlet_new((t_object *)x, NULL);
         x->outlet_palette = outlet_new((t_object *)x, NULL);
-        x->outlet_reach = outlet_new((t_object *)x, NULL);
 
         floatin((t_object *)x, 1);
     }
@@ -150,37 +150,9 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
     dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
     dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
-    // Right-to-Left execution order: Offset, Bar, Track, Palette, Reach
+    // Right-to-Left execution order: Reach, Offset, Bar, Track, Palette
 
-    // 1. Offset
-    if (offset_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(offset_atomarray, &len, &atoms);
-        if (len > 0) {
-            if (atom_gettype(atoms) == A_FLOAT) {
-                outlet_float(x->outlet_offset, atom_getfloat(atoms));
-            } else {
-                outlet_int(x->outlet_offset, atom_getlong(atoms));
-            }
-        }
-    }
-
-    // 2. Bar
-    outlet_int(x->outlet_bar, bar_ts_long);
-
-    // 3. Track
-    outlet_int(x->outlet_track, atol(track_sym->s_name));
-
-    // 4. Palette
-    if (palette_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(palette_atomarray, &len, &atoms);
-        if (len > 0) outlet_anything(x->outlet_palette, atom_getsym(atoms), 0, NULL);
-    }
-
-    // 5. Reach
+    // 1. Reach
     if (bar_span_atomarray) {
         long bar_span_len = 0;
         t_atom *bar_span_atoms = NULL;
@@ -195,6 +167,34 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         long bar_length = crucible_get_bar_length(x);
         long current_reach = max_val + bar_length;
         outlet_int(x->outlet_reach, current_reach);
+    }
+
+    // 2. Offset
+    if (offset_atomarray) {
+        long len;
+        t_atom *atoms;
+        atomarray_getatoms(offset_atomarray, &len, &atoms);
+        if (len > 0) {
+            if (atom_gettype(atoms) == A_FLOAT) {
+                outlet_float(x->outlet_offset, atom_getfloat(atoms));
+            } else {
+                outlet_int(x->outlet_offset, atom_getlong(atoms));
+            }
+        }
+    }
+
+    // 3. Bar
+    outlet_int(x->outlet_bar, bar_ts_long);
+
+    // 4. Track
+    outlet_int(x->outlet_track, atol(track_sym->s_name));
+
+    // 5. Palette
+    if (palette_atomarray) {
+        long len;
+        t_atom *atoms;
+        atomarray_getatoms(palette_atomarray, &len, &atoms);
+        if (len > 0) outlet_anything(x->outlet_palette, atom_getsym(atoms), 0, NULL);
     }
 }
 
@@ -604,20 +604,20 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     } else { // ASSIST_OUTLET
         if (x->verbose) {
             switch (a) {
-                case 0: sprintf(s, "Reach (int)"); break;
-                case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Track (int)"); break;
-                case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (float)"); break;
+                case 0: sprintf(s, "Palette (symbol)"); break;
+                case 1: sprintf(s, "Track (int)"); break;
+                case 2: sprintf(s, "Bar (int)"); break;
+                case 3: sprintf(s, "Offset (float)"); break;
+                case 4: sprintf(s, "Reach (int)"); break;
                 case 5: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
              switch (a) {
-                case 0: sprintf(s, "Reach (int)"); break;
-                case 1: sprintf(s, "Palette (symbol)"); break;
-                case 2: sprintf(s, "Track (int)"); break;
-                case 3: sprintf(s, "Bar (int)"); break;
-                case 4: sprintf(s, "Offset (float)"); break;
+                case 0: sprintf(s, "Palette (symbol)"); break;
+                case 1: sprintf(s, "Track (int)"); break;
+                case 2: sprintf(s, "Bar (int)"); break;
+                case 3: sprintf(s, "Offset (float)"); break;
+                case 4: sprintf(s, "Reach (int)"); break;
             }
         }
     }
