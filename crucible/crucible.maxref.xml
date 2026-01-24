@@ -41,7 +41,7 @@
 		</outlet>
 		<outlet id="4" type="int">
 			<digest>Reach value</digest>
-			<description>For a winning span, outputs the reach (largest bar timestamp + bar_length).</description>
+			<description>For a winning span, outputs the reach (largest bar timestamp + bar_length). The reach value is only output if there is no existing entry for that timestamp in the track.</description>
 		</outlet>
 		<outlet id="5" type="anything">
 			<digest>Verbose Logging (Optional)</digest>

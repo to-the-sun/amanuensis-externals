@@ -32,7 +32,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
 void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
-void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long, t_symbol *track_sym);
+void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict);
 void crucible_local_bar_length(t_crucible *x, double f);
 long crucible_get_bar_length(t_crucible *x);
 
@@ -144,7 +144,7 @@ void crucible_free(t_crucible *x) {
     }
 }
 
-void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long, t_symbol *track_sym) {
+void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict) {
     t_atomarray *offset_atomarray = NULL, *palette_atomarray = NULL, *bar_span_atomarray = NULL;
     dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_atomarray);
     dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
@@ -166,7 +166,12 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
 
         long bar_length = crucible_get_bar_length(x);
         long current_reach = max_val + bar_length;
-        outlet_int(x->outlet_reach, current_reach);
+
+        char reach_str[32];
+        snprintf(reach_str, 32, "%ld", current_reach);
+        if (incumbent_track_dict && !dictionary_hasentry(incumbent_track_dict, gensym(reach_str))) {
+            outlet_int(x->outlet_reach, current_reach);
+        }
     }
 
     // 2. Offset
@@ -339,7 +344,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 t_dictionary *copied_bar_dict = dictionary_deep_copy(challenger_bar_dict);
                 dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
                 crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-                crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym);
+                crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
         if (x->fill && max_reach > x->song_reach) {
@@ -410,7 +415,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                         dictionary_appenddictionary(other_track_dict, target_ts_sym, (t_object *)copied_bar_dict);
                                         crucible_verbose_log(x, "Duplicated bar %s from track %s to %s",
                                                              source_ts_sym->s_name, track_keys[i]->s_name, target_ts_sym->s_name);
-                                        crucible_output_bar_data(x, copied_bar_dict, t, track_keys[i]);
+                                        crucible_output_bar_data(x, copied_bar_dict, t, track_keys[i], other_track_dict);
                                     }
                                 }
                             }
