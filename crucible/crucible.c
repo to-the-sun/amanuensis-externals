@@ -150,6 +150,20 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
     dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
     dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
+    double offset_val = 0;
+    if (offset_atomarray) {
+        long len;
+        t_atom *atoms;
+        atomarray_getatoms(offset_atomarray, &len, &atoms);
+        if (len > 0) {
+            if (atom_gettype(atoms) == A_FLOAT) {
+                offset_val = atom_getfloat(atoms);
+            } else {
+                offset_val = (double)atom_getlong(atoms);
+            }
+        }
+    }
+
     // Right-to-Left execution order: Reach, Offset, Bar, Track, Palette
 
     // 1. Reach
@@ -170,7 +184,11 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         char reach_str[32];
         snprintf(reach_str, 32, "%ld", current_reach);
         if (incumbent_track_dict && !dictionary_hasentry(incumbent_track_dict, gensym(reach_str))) {
-            outlet_int(x->outlet_reach, current_reach);
+            t_atom reach_list[3];
+            atom_setlong(reach_list, atol(track_sym->s_name));
+            atom_setlong(reach_list + 1, current_reach);
+            atom_setfloat(reach_list + 2, offset_val);
+            outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
         }
     }
 
@@ -613,7 +631,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Track (int)"); break;
                 case 2: sprintf(s, "Bar (int)"); break;
                 case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach (int)"); break;
+                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
                 case 5: sprintf(s, "Verbose Logging Outlet"); break;
             }
         } else {
@@ -622,7 +640,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Track (int)"); break;
                 case 2: sprintf(s, "Bar (int)"); break;
                 case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach (int)"); break;
+                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
             }
         }
     }
