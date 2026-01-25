@@ -183,12 +183,21 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
 
         char reach_str[32];
         snprintf(reach_str, 32, "%ld", current_reach);
+
+        crucible_verbose_log(x, "Checking reach %ld for track %s", current_reach, track_sym->s_name);
         if (incumbent_track_dict && !dictionary_hasentry(incumbent_track_dict, gensym(reach_str))) {
+            crucible_verbose_log(x, "  -> Reach %ld not found in incumbent. Sending reach message.", current_reach);
             t_atom reach_list[3];
             atom_setlong(reach_list, atol(track_sym->s_name));
             atom_setlong(reach_list + 1, current_reach);
             atom_setfloat(reach_list + 2, offset_val);
             outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
+        } else {
+            if (incumbent_track_dict) {
+                crucible_verbose_log(x, "  -> Reach %ld already exists in incumbent. Suppressing reach message.", current_reach);
+            } else {
+                crucible_verbose_log(x, "  -> No incumbent track dict. Suppressing reach message.");
+            }
         }
     }
 
