@@ -150,20 +150,6 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
     dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
     dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
-    double offset_val = 0;
-    if (offset_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(offset_atomarray, &len, &atoms);
-        if (len > 0) {
-            if (atom_gettype(atoms) == A_FLOAT) {
-                offset_val = atom_getfloat(atoms);
-            } else {
-                offset_val = (double)atom_getlong(atoms);
-            }
-        }
-    }
-
     // Right-to-Left execution order: Reach, Offset, Bar, Track, Palette
 
     // 1. Reach
@@ -190,7 +176,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
             t_atom reach_list[3];
             atom_setlong(reach_list, atol(track_sym->s_name));
             atom_setlong(reach_list + 1, current_reach);
-            atom_setfloat(reach_list + 2, offset_val);
+            atom_setfloat(reach_list + 2, -999999.0);
             outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
         } else {
             if (incumbent_track_dict) {
