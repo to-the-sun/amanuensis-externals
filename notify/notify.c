@@ -11,6 +11,7 @@ typedef struct _note {
     double absolute;
     double score;
     double offset;
+    double bar_ts;
     t_symbol *track;
     t_symbol *palette;
 } t_note;
@@ -19,11 +20,12 @@ typedef struct _notify {
     t_object s_obj;
     t_symbol *dict_name;
     long verbose;
-    void *out_abs_score; // Outlet 1 (Leftmost)
-    void *out_offset;    // Outlet 2
-    void *out_track;     // Outlet 3
-    void *out_palette;   // Outlet 4
-    void *out_verbose;   // Outlet 5 (Rightmost, optional)
+    void *out_abs_score; // Outlet 1 (Leftmost, Index 0)
+    void *out_offset;    // Outlet 2 (Index 1)
+    void *out_track;     // Outlet 3 (Index 2)
+    void *out_palette;   // Outlet 4 (Index 3)
+    void *out_descript;  // Outlet 5 (Index 4)
+    void *out_verbose;   // Outlet 6 (Rightmost, optional, Index 5)
 } t_notify;
 
 t_class *notify_class;
@@ -73,21 +75,27 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         // Max SDK outlet_new prepends outlets (right-to-left).
         // To have Outlet 1 on the left and Outlet 4 on the right, create them in reverse.
 
+        // Max SDK outlet_new prepends outlets (right-to-left).
+        // First created is rightmost.
+
         // Rightmost is Verbose (if enabled)
         if (x->verbose) {
             x->out_verbose = outlet_new((t_object *)x, NULL);
         }
 
-        // Next to the left: Palette (Outlet 4)
+        // Next to the left: Descript (Outlet 5, Index 4)
+        x->out_descript = outlet_new((t_object *)x, NULL);
+
+        // Next to the left: Palette (Outlet 4, Index 3)
         x->out_palette = outlet_new((t_object *)x, NULL);
 
-        // Next to the left: Track (Outlet 3)
+        // Next to the left: Track (Outlet 3, Index 2)
         x->out_track = outlet_new((t_object *)x, NULL);
 
-        // Next to the left: Offset (Outlet 2)
+        // Next to the left: Offset (Outlet 2, Index 1)
         x->out_offset = outlet_new((t_object *)x, NULL);
 
-        // Leftmost: Abs/Score (Outlet 1)
+        // Leftmost: Abs/Score (Outlet 1, Index 0)
         x->out_abs_score = outlet_new((t_object *)x, NULL);
 
         // Re-process dict_name if it was a positional argument
@@ -139,6 +147,7 @@ void notify_bang(t_notify *x) {
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
+            double bar_ts = atof(bar_sym->s_name);
 
             t_dictionary *bar_dict = NULL;
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -192,6 +201,7 @@ void notify_bang(t_notify *x) {
                         all_notes[total_notes].absolute = atom_getfloat(&aa_atoms[k]);
                         all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                         all_notes[total_notes].offset = offset;
+                        all_notes[total_notes].bar_ts = bar_ts;
                         all_notes[total_notes].track = track_sym;
                         all_notes[total_notes].palette = palette;
                         total_notes++;
@@ -212,6 +222,7 @@ void notify_bang(t_notify *x) {
                 }
 
                 all_notes[total_notes].offset = offset;
+                all_notes[total_notes].bar_ts = bar_ts;
                 all_notes[total_notes].track = track_sym;
                 all_notes[total_notes].palette = palette;
                 total_notes++;
@@ -242,10 +253,21 @@ void notify_bang(t_notify *x) {
     for (long i = 0; i < total_notes; i++) {
         // Right-to-left firing order (rightmost outlet first)
 
-        // Outlet 4: palette (Rightmost non-verbose)
+        // Outlet 5: Descript (Rightmost non-verbose, Index 4)
+        t_atom descript_list[3];
+        if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
+            atom_setlong(descript_list, 0);
+        } else {
+            atom_setlong(descript_list, atol(all_notes[i].track->s_name));
+        }
+        atom_setfloat(descript_list + 1, all_notes[i].bar_ts);
+        atom_setfloat(descript_list + 2, -999999.0);
+        outlet_anything(x->out_descript, gensym("-"), 3, descript_list);
+
+        // Outlet 4: palette (Index 3)
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
 
-        // Outlet 3: track
+        // Outlet 3: track (Index 2)
         if (all_notes[i].track == NULL) {
             outlet_int(x->out_track, 0);
         } else if (all_notes[i].track == gensym("")) {
@@ -279,7 +301,8 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Offset (float)"); break;
             case 2: sprintf(s, "Track (int)"); break;
             case 3: sprintf(s, "Palette (symbol)"); break;
-            case 4: if (x->verbose) sprintf(s, "Verbose Logging"); break;
+            case 4: sprintf(s, "Descript List: - <track> <bar_ts> -999999.0"); break;
+            case 5: if (x->verbose) sprintf(s, "Verbose Logging"); break;
         }
     }
 }
