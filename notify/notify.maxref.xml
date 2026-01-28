@@ -41,12 +41,12 @@
 				The offset associated with the bar containing the note.
 			</description>
 		</outlet>
-		<outlet id="2" type="symbol">
+		<outlet id="2" type="int">
 			<digest>
-				Track Name
+				Track
 			</digest>
 			<description>
-				The name of the track where the note was found.
+				The track number (integer) where the note was found.
 			</description>
 		</outlet>
 		<outlet id="3" type="symbol">
@@ -57,7 +57,15 @@
 				The palette name associated with the bar containing the note.
 			</description>
 		</outlet>
-		<outlet id="4" type="symbol">
+		<outlet id="4" type="list">
+			<digest>
+				Descript
+			</digest>
+			<description>
+				A 4-item list formatted as: - &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. This message is output immediately before each note's data.
+			</description>
+		</outlet>
+		<outlet id="5" type="symbol">
 			<digest>
 				Verbose Logging (Optional)
 			</digest>
