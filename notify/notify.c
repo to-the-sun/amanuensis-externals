@@ -261,7 +261,7 @@ void notify_bang(t_notify *x) {
             atom_setlong(descript_list, atol(all_notes[i].track->s_name));
         }
         atom_setfloat(descript_list + 1, all_notes[i].bar_ts);
-        atom_setfloat(descript_list + 2, -999999.0);
+        atom_setfloat(descript_list + 2, 0.0);
         outlet_anything(x->out_descript, gensym("-"), 3, descript_list);
 
         // Outlet 4: palette (Index 3)
@@ -301,7 +301,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Offset (float)"); break;
             case 2: sprintf(s, "Track (int)"); break;
             case 3: sprintf(s, "Palette (symbol)"); break;
-            case 4: sprintf(s, "Descript List: - <track> <bar_ts> -999999.0"); break;
+            case 4: sprintf(s, "Descript List: - <track> <bar_ts> 0.0"); break;
             case 5: if (x->verbose) sprintf(s, "Verbose Logging"); break;
         }
     }
