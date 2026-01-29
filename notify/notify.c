@@ -204,6 +204,15 @@ void notify_bang(t_notify *x) {
                         all_notes[total_notes].bar_ts = bar_ts;
                         all_notes[total_notes].track = track_sym;
                         all_notes[total_notes].palette = palette;
+
+                        // Output descript message at the very beginning
+                        t_atom descript_list[3];
+                        long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
+                        atom_setlong(&descript_list[0], track_val);
+                        atom_setfloat(&descript_list[1], bar_ts);
+                        atom_setfloat(&descript_list[2], 0.0);
+                        outlet_anything(x->out_descript, palette, 3, descript_list);
+
                         total_notes++;
                     }
                 }
@@ -225,6 +234,15 @@ void notify_bang(t_notify *x) {
                 all_notes[total_notes].bar_ts = bar_ts;
                 all_notes[total_notes].track = track_sym;
                 all_notes[total_notes].palette = palette;
+
+                // Output descript message at the very beginning
+                t_atom descript_list[3];
+                long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
+                atom_setlong(&descript_list[0], track_val);
+                atom_setfloat(&descript_list[1], bar_ts);
+                atom_setfloat(&descript_list[2], 0.0);
+                outlet_anything(x->out_descript, palette, 3, descript_list);
+
                 total_notes++;
             }
         }
@@ -252,14 +270,6 @@ void notify_bang(t_notify *x) {
     // Output notes
     for (long i = 0; i < total_notes; i++) {
         // Right-to-left firing order (rightmost outlet first)
-
-        // Outlet 5: Descript (Rightmost non-verbose, Index 4)
-        t_atom descript_list[3];
-        long track_val = (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name);
-        atom_setlong(&descript_list[0], track_val);
-        atom_setfloat(&descript_list[1], all_notes[i].bar_ts);
-        atom_setfloat(&descript_list[2], 0.0);
-        outlet_anything(x->out_descript, all_notes[i].palette, 3, descript_list);
 
         // Outlet 4: palette (Index 3)
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
@@ -298,7 +308,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Offset (float)"); break;
             case 2: sprintf(s, "Track (int)"); break;
             case 3: sprintf(s, "Palette (symbol)"); break;
-            case 4: sprintf(s, "Descript List: <palette> <track> <bar_ts> 0.0"); break;
+            case 4: sprintf(s, "Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
             case 5: if (x->verbose) sprintf(s, "Verbose Logging"); break;
         }
     }

@@ -62,7 +62,7 @@
 				Descript
 			</digest>
 			<description>
-				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. This message is output immediately before each note's data.
+				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. These messages are output as a batch at the very beginning of the dump process.
 			</description>
 		</outlet>
 		<outlet id="5" type="symbol">
