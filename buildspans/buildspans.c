@@ -230,6 +230,9 @@ long buildspans_get_bar_length(t_buildspans *x) {
         return -1; // Value in buffer is not positive.
     }
 
+    if (x->local_bar_length != (double)bar_length) {
+        post("buildspans: bar_length changed (retrieved from buffer) from %.2f to %ld.00", x->local_bar_length, bar_length);
+    }
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
     buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
@@ -1235,10 +1238,14 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
+    double old_val = x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
+    }
+    if (x->local_bar_length != old_val) {
+        post("buildspans: bar_length changed from %.2f to %.2f", old_val, x->local_bar_length);
     }
     buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }

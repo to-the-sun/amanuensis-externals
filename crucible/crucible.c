@@ -472,11 +472,23 @@ long crucible_get_bar_length(t_crucible *x) {
         }
         buffer_unlocksamples(b);
     }
+
+    if (bar_length > 0) {
+        if (x->local_bar_length != (double)bar_length) {
+            post("crucible: bar_length changed (retrieved from buffer) from %.2f to %ld.00", x->local_bar_length, bar_length);
+        }
+        x->local_bar_length = (double)bar_length;
+    }
+
     return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
+    double old_val = x->local_bar_length;
     x->local_bar_length = f;
+    if (x->local_bar_length != old_val) {
+        post("crucible: bar_length changed from %.2f to %.2f", old_val, x->local_bar_length);
+    }
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
