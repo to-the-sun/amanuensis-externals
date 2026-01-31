@@ -4,6 +4,7 @@
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
 #include <string.h>
+#include <stdlib.h>
 
 typedef struct _crucible {
     t_object s_obj;
@@ -21,6 +22,7 @@ typedef struct _crucible {
     long fill;
     long song_reach;
     double local_bar_length;
+    int uid;
 } t_crucible;
 
 // Function prototypes
@@ -109,6 +111,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->song_reach = 0;
         x->local_bar_length = 0;
+        x->uid = 1000 + (rand() % 9000);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -472,11 +475,23 @@ long crucible_get_bar_length(t_crucible *x) {
         }
         buffer_unlocksamples(b);
     }
+
+    if (bar_length > 0) {
+        if (x->local_bar_length != (double)bar_length) {
+            post("thread %d crucible: bar_length changed (retrieved from buffer) from %.2f to %ld.00", x->uid, x->local_bar_length, bar_length);
+        }
+        x->local_bar_length = (double)bar_length;
+    }
+
     return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
+    double old_val = x->local_bar_length;
     x->local_bar_length = f;
+    if (x->local_bar_length != old_val) {
+        post("thread %d crucible: bar_length changed from %.2f to %.2f", x->uid, old_val, x->local_bar_length);
+    }
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 

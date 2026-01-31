@@ -157,6 +157,7 @@ typedef struct _buildspans {
     void *verbose_log_outlet;
     long verbose;
     double local_bar_length;
+    int uid;
 } t_buildspans;
 
 // Function prototypes
@@ -230,6 +231,9 @@ long buildspans_get_bar_length(t_buildspans *x) {
         return -1; // Value in buffer is not positive.
     }
 
+    if (x->local_bar_length != (double)bar_length) {
+        post("thread %d buildspans: bar_length changed (retrieved from buffer) from %.2f to %ld.00", x->uid, x->local_bar_length, bar_length);
+    }
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
     buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
@@ -408,6 +412,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
+        x->uid = 1000 + (rand() % 9000);
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -1235,10 +1240,14 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
+    double old_val = x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
+    }
+    if (x->local_bar_length != old_val) {
+        post("thread %d buildspans: bar_length changed from %.2f to %.2f", x->uid, old_val, x->local_bar_length);
     }
     buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
