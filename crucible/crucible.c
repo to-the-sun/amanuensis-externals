@@ -31,6 +31,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
 void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
+char *crucible_atoms_to_string(long argc, t_atom *argv);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict);
@@ -49,6 +50,47 @@ void crucible_verbose_log(t_crucible *x, const char *fmt, ...) {
         va_end(args);
         outlet_anything(x->verbose_log_outlet, gensym(buf), 0, NULL);
     }
+}
+
+char *crucible_atoms_to_string(long argc, t_atom *argv) {
+    if (argc == 0 || !argv) {
+        char *empty_str = (char *)sysmem_newptr(3);
+        strcpy(empty_str, "[]");
+        return empty_str;
+    }
+
+    long buffer_size = 256;
+    char *buffer = (char *)sysmem_newptr(buffer_size);
+    long offset = 0;
+
+    offset += snprintf(buffer + offset, buffer_size - offset, "[");
+
+    for (long i = 0; i < argc; i++) {
+        char temp_str[128];
+        if (atom_gettype(argv + i) == A_FLOAT) {
+            snprintf(temp_str, 128, "%.2f", atom_getfloat(argv + i));
+        } else if (atom_gettype(argv + i) == A_LONG) {
+            snprintf(temp_str, 128, "%lld", (long long)atom_getlong(argv + i));
+        } else if (atom_gettype(argv + i) == A_SYM) {
+            snprintf(temp_str, 128, "%s", atom_getsym(argv + i)->s_name);
+        } else {
+            snprintf(temp_str, 128, "?");
+        }
+
+        if (buffer_size - offset < (long)strlen(temp_str) + 4) {
+            buffer_size *= 2;
+            buffer = (char *)sysmem_resizeptr(buffer, buffer_size);
+            if (!buffer) return NULL;
+        }
+
+        offset += snprintf(buffer + offset, buffer_size - offset, "%s", temp_str);
+        if (i < argc - 1) {
+            offset += snprintf(buffer + offset, buffer_size - offset, ", ");
+        }
+    }
+
+    snprintf(buffer + offset, buffer_size - offset, "]");
+    return buffer;
 }
 
 int parse_selector(const char *selector_str, char **track, char **bar, char **key) {
@@ -477,7 +519,7 @@ long crucible_get_bar_length(t_crucible *x) {
 
     if (bar_length > 0) {
         x->local_bar_length = (double)bar_length;
-        object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+        crucible_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
     }
 
     return bar_length;
@@ -489,7 +531,7 @@ void crucible_local_bar_length(t_crucible *x, double f) {
     } else {
         x->local_bar_length = f;
     }
-    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    crucible_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
@@ -535,7 +577,11 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    crucible_verbose_log(x, "Received message: %s", s->s_name);
+    if (x->verbose) {
+        char *val_str = crucible_atoms_to_string(argc, argv);
+        crucible_verbose_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
+        if (val_str) sysmem_freeptr(val_str);
+    }
 
     char *track_str = NULL;
     char *bar_str = NULL;
