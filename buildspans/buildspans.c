@@ -157,6 +157,7 @@ typedef struct _buildspans {
     void *verbose_log_outlet;
     long verbose;
     double local_bar_length;
+    long instance_id;
 } t_buildspans;
 
 // Function prototypes
@@ -231,6 +232,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
+    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
     buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
@@ -408,6 +410,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
+        x->instance_id = 1000 + (rand() % 9000);
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -1240,6 +1243,7 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
     } else {
         x->local_bar_length = f;
     }
+    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
     buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 

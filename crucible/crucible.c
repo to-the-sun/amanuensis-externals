@@ -21,6 +21,7 @@ typedef struct _crucible {
     long fill;
     long song_reach;
     double local_bar_length;
+    long instance_id;
 } t_crucible;
 
 // Function prototypes
@@ -109,6 +110,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->song_reach = 0;
         x->local_bar_length = 0;
+        x->instance_id = 1000 + (rand() % 9000);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -472,11 +474,18 @@ long crucible_get_bar_length(t_crucible *x) {
         }
         buffer_unlocksamples(b);
     }
+
+    if (bar_length > 0) {
+        x->local_bar_length = (double)bar_length;
+        object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    }
+
     return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
     x->local_bar_length = f;
+    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)f);
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
