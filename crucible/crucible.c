@@ -484,8 +484,12 @@ long crucible_get_bar_length(t_crucible *x) {
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
-    x->local_bar_length = f;
-    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)f);
+    if (f <= 0) {
+        x->local_bar_length = 0;
+    } else {
+        x->local_bar_length = f;
+    }
+    object_post((t_object *)x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
     crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
