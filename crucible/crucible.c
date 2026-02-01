@@ -10,12 +10,9 @@ typedef struct _crucible {
     t_dictionary *challenger_dict;
     t_dictionary *span_tracker_dict;
     t_symbol *incumbent_dict_name;
+    void *outlet_data;
     void *outlet_reach;
     void *outlet_fill;
-    void *outlet_palette;
-    void *outlet_track;
-    void *outlet_bar;
-    void *outlet_offset;
     void *verbose_log_outlet;
     t_buffer_ref *buffer_ref;
     long verbose;
@@ -168,10 +165,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->outlet_fill = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
-        x->outlet_offset = outlet_new((t_object *)x, NULL);
-        x->outlet_bar = outlet_new((t_object *)x, NULL);
-        x->outlet_track = outlet_new((t_object *)x, NULL);
-        x->outlet_palette = outlet_new((t_object *)x, NULL);
+        x->outlet_data = outlet_new((t_object *)x, NULL);
 
         floatin((t_object *)x, 1);
     }
@@ -233,33 +227,37 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, long bar_ts
         }
     }
 
-    // 2. Offset
+    // 2. Data List: [palette, track, bar, offset]
+    t_atom list[4];
+    t_symbol *palette_sym = _sym_nothing;
+    double offset_val = 0.0;
+
+    if (palette_atomarray) {
+        long len;
+        t_atom *atoms;
+        atomarray_getatoms(palette_atomarray, &len, &atoms);
+        if (len > 0) palette_sym = atom_getsym(atoms);
+    }
+
     if (offset_atomarray) {
         long len;
         t_atom *atoms;
         atomarray_getatoms(offset_atomarray, &len, &atoms);
         if (len > 0) {
             if (atom_gettype(atoms) == A_FLOAT) {
-                outlet_float(x->outlet_offset, atom_getfloat(atoms));
+                offset_val = atom_getfloat(atoms);
             } else {
-                outlet_int(x->outlet_offset, atom_getlong(atoms));
+                offset_val = (double)atom_getlong(atoms);
             }
         }
     }
 
-    // 3. Bar
-    outlet_int(x->outlet_bar, bar_ts_long);
+    atom_setsym(list, palette_sym);
+    atom_setlong(list + 1, atol(track_sym->s_name));
+    atom_setlong(list + 2, bar_ts_long);
+    atom_setfloat(list + 3, offset_val);
 
-    // 4. Track
-    outlet_int(x->outlet_track, atol(track_sym->s_name));
-
-    // 5. Palette
-    if (palette_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(palette_atomarray, &len, &atoms);
-        if (len > 0) outlet_anything(x->outlet_palette, atom_getsym(atoms), 0, NULL);
-    }
+    outlet_list(x->outlet_data, NULL, 4, list);
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
@@ -682,13 +680,10 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Palette (symbol)"); break;
-            case 1: sprintf(s, "Track (int)"); break;
-            case 2: sprintf(s, "Bar (int)"); break;
-            case 3: sprintf(s, "Offset (float)"); break;
-            case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-            case 5: sprintf(s, "Fill (symbol)"); break;
-            case 6: sprintf(s, "Verbose Logging Outlet"); break;
+            case 0: sprintf(s, "Data List: [palette, track, bar, offset]"); break;
+            case 1: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
+            case 2: sprintf(s, "Fill (symbol)"); break;
+            case 3: sprintf(s, "Verbose Logging Outlet"); break;
         }
     }
 }
