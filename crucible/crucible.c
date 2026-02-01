@@ -11,6 +11,7 @@ typedef struct _crucible {
     t_dictionary *span_tracker_dict;
     t_symbol *incumbent_dict_name;
     void *outlet_reach;
+    void *outlet_fill;
     void *outlet_palette;
     void *outlet_track;
     void *outlet_bar;
@@ -165,6 +166,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
         }
+        x->outlet_fill = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
         x->outlet_offset = outlet_new((t_object *)x, NULL);
         x->outlet_bar = outlet_new((t_object *)x, NULL);
@@ -342,36 +344,34 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         crucible_verbose_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
 
         long max_reach = 0;
-        if (x->fill) {
-            for (long i = 0; i < span_len; i++) {
-                long bar_ts_long = atom_getlong(&span_atoms[i]);
-                char bar_ts_str[32];
-                snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
-                t_symbol *bar_sym = gensym(bar_ts_str);
+        for (long i = 0; i < span_len; i++) {
+            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            char bar_ts_str[32];
+            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            t_symbol *bar_sym = gensym(bar_ts_str);
 
-                t_dictionary *challenger_bar_dict = NULL;
-                dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
-                if (!challenger_bar_dict) continue;
+            t_dictionary *challenger_bar_dict = NULL;
+            dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
+            if (!challenger_bar_dict) continue;
 
-                t_atomarray *bar_span_atomarray = NULL;
-                dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
+            t_atomarray *bar_span_atomarray = NULL;
+            dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
-                if (bar_span_atomarray) {
-                    long bar_span_len = 0;
-                    t_atom *bar_span_atoms = NULL;
-                    atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
+            if (bar_span_atomarray) {
+                long bar_span_len = 0;
+                t_atom *bar_span_atoms = NULL;
+                atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
 
-                    long max_val = 0;
-                    for (long j = 0; j < bar_span_len; j++) {
-                        long current_val = atom_getlong(bar_span_atoms + j);
-                        if (current_val > max_val) max_val = current_val;
-                    }
+                long max_val = 0;
+                for (long j = 0; j < bar_span_len; j++) {
+                    long current_val = atom_getlong(bar_span_atoms + j);
+                    if (current_val > max_val) max_val = current_val;
+                }
 
-                    long bar_length = crucible_get_bar_length(x);
-                    long current_reach = max_val + bar_length;
-                    if (current_reach > max_reach) {
-                        max_reach = current_reach;
-                    }
+                long bar_length = crucible_get_bar_length(x);
+                long current_reach = max_val + bar_length;
+                if (current_reach > max_reach) {
+                    max_reach = current_reach;
                 }
             }
         }
@@ -404,12 +404,14 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
-        if (x->fill && max_reach > x->song_reach) {
+        if (max_reach > x->song_reach) {
             long old_song_reach = x->song_reach;
             x->song_reach = max_reach;
             crucible_verbose_log(x, "Song has grown. New reach is %ld (previously %ld).", x->song_reach, old_song_reach);
 
-            if (old_song_reach > 0) {
+            outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+
+            if (x->fill && old_song_reach > 0) {
                 t_symbol **track_keys = NULL;
                 long num_tracks = 0;
                 dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
@@ -679,23 +681,14 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "(float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
-            switch (a) {
-                case 0: sprintf(s, "Palette (symbol)"); break;
-                case 1: sprintf(s, "Track (int)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-                case 5: sprintf(s, "Verbose Logging Outlet"); break;
-            }
-        } else {
-             switch (a) {
-                case 0: sprintf(s, "Palette (symbol)"); break;
-                case 1: sprintf(s, "Track (int)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Palette (symbol)"); break;
+            case 1: sprintf(s, "Track (int)"); break;
+            case 2: sprintf(s, "Bar (int)"); break;
+            case 3: sprintf(s, "Offset (float)"); break;
+            case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
+            case 5: sprintf(s, "Fill (symbol)"); break;
+            case 6: sprintf(s, "Verbose Logging Outlet"); break;
         }
     }
 }

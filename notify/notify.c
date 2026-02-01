@@ -34,6 +34,7 @@ t_class *notify_class;
 void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
+void notify_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_verbose_log(t_notify *x, const char *fmt, ...);
@@ -42,6 +43,7 @@ void ext_main(void *r) {
     t_class *c;
     c = class_new("notify", (method)notify_new, (method)notify_free, (short)sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
+    class_addmethod(c, (method)notify_fill, "fill", 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_notify, verbose);
@@ -116,6 +118,182 @@ int note_compare(const void *a, const void *b) {
     if (noteA->absolute < noteB->absolute) return -1;
     if (noteA->absolute > noteB->absolute) return 1;
     return 0;
+}
+
+void notify_fill(t_notify *x) {
+    t_dictionary *dict = dictobj_findregistered_retain(x->dict_name);
+    if (!dict) {
+        object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
+        return;
+    }
+
+    long num_tracks = 0;
+    t_symbol **track_keys = NULL;
+    dictionary_getkeys(dict, &num_tracks, &track_keys);
+
+    // 1. Find max_bar_all
+    double max_bar_all = -1.0;
+    for (long i = 0; i < num_tracks; i++) {
+        t_dictionary *track_dict = NULL;
+        dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict);
+        if (!track_dict) continue;
+
+        long num_bars = 0;
+        t_symbol **bar_keys = NULL;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        for (long j = 0; j < num_bars; j++) {
+            double bar_ts = atof(bar_keys[j]->s_name);
+            if (bar_ts > max_bar_all) max_bar_all = bar_ts;
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+
+    if (max_bar_all < 0) {
+        if (track_keys) sysmem_freeptr(track_keys);
+        object_release((t_object *)dict);
+        return;
+    }
+
+    t_note *all_notes = NULL;
+    long total_notes = 0;
+    long notes_capacity = 100;
+    all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
+
+    // 2. Identify shorter tracks and generate synthetic notes
+    for (long i = 0; i < num_tracks; i++) {
+        t_symbol *track_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
+        if (!track_dict) continue;
+
+        double max_bar_this = -1.0;
+        long num_bars = 0;
+        t_symbol **bar_keys = NULL;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        for (long j = 0; j < num_bars; j++) {
+            double bar_ts = atof(bar_keys[j]->s_name);
+            if (bar_ts > max_bar_this) max_bar_this = bar_ts;
+        }
+
+        if (max_bar_this < max_bar_all && max_bar_this > 0) {
+            // Shorter track. Generate synthetic notes.
+            for (long n = 1; ; n++) {
+                int notes_added_this_pass = 0;
+                for (long j = 0; j < num_bars; j++) {
+                    t_symbol *bar_sym = bar_keys[j];
+                    double bar_ts = atof(bar_sym->s_name);
+                    double synth_bar_ts = bar_ts + n * max_bar_this;
+
+                    t_dictionary *bar_dict = NULL;
+                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                    if (!bar_dict) continue;
+
+                    double offset = 0;
+                    t_atomarray *offset_aa = NULL;
+                    t_atom offset_atom;
+                    if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+                        t_atom o_atom;
+                        if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+                        offset = atom_getfloat(&offset_atom);
+                    }
+
+                    t_symbol *palette = gensym("");
+                    t_atomarray *palette_aa = NULL;
+                    t_atom palette_atom;
+                    if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                        t_atom p_atom;
+                        if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+                        palette = atom_getsym(&palette_atom);
+                    }
+
+                    t_atomarray *absolutes_aa = NULL;
+                    if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
+                        long aa_len = 0;
+                        t_atom *aa_atoms = NULL;
+                        atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
+
+                        t_atomarray *scores_aa = NULL;
+                        long scores_len = 0;
+                        t_atom *scores_atoms = NULL;
+                        if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
+                            atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
+                        }
+
+                        long num_entries = aa_len < scores_len ? aa_len : scores_len;
+                        for (long k = 0; k < num_entries; k++) {
+                            double orig_abs = atom_getfloat(&aa_atoms[k]);
+                            double synth_abs = orig_abs + n * max_bar_this;
+                            if (synth_abs < max_bar_all) {
+                                if (total_notes >= notes_capacity) {
+                                    notes_capacity *= 2;
+                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+                                }
+                                all_notes[total_notes].absolute = synth_abs;
+                                all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
+                                all_notes[total_notes].offset = offset;
+                                all_notes[total_notes].bar_ts = synth_bar_ts;
+                                all_notes[total_notes].track = track_sym;
+                                all_notes[total_notes].palette = palette;
+
+                                total_notes++;
+                                notes_added_this_pass++;
+                            }
+                        }
+                    } else {
+                        t_atom absolute_atom;
+                        if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+                            double orig_abs = atom_getfloat(&absolute_atom);
+                            double synth_abs = orig_abs + n * max_bar_this;
+                            if (synth_abs < max_bar_all) {
+                                if (total_notes >= notes_capacity) {
+                                    notes_capacity *= 2;
+                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+                                }
+                                all_notes[total_notes].absolute = synth_abs;
+                                t_atom score_atom;
+                                if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                                    all_notes[total_notes].score = atom_getfloat(&score_atom);
+                                } else {
+                                    all_notes[total_notes].score = 0;
+                                }
+                                all_notes[total_notes].offset = offset;
+                                all_notes[total_notes].bar_ts = synth_bar_ts;
+                                all_notes[total_notes].track = track_sym;
+                                all_notes[total_notes].palette = palette;
+
+                                total_notes++;
+                                notes_added_this_pass++;
+                            }
+                        }
+                    }
+                }
+                if (notes_added_this_pass == 0) break;
+            }
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+    if (track_keys) sysmem_freeptr(track_keys);
+
+    if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
+
+    for (long i = 0; i < total_notes; i++) {
+        outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
+        if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
+            outlet_int(x->out_track, 0);
+        } else {
+            outlet_int(x->out_track, atol(all_notes[i].track->s_name));
+        }
+        outlet_float(x->out_offset, all_notes[i].offset);
+        t_atom list_atoms[2];
+        atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+        atom_setfloat(&list_atoms[1], all_notes[i].score);
+        outlet_list(x->out_abs_score, NULL, 2, list_atoms);
+    }
+
+    if (all_notes) sysmem_freeptr(all_notes);
+    object_release((t_object *)dict);
 }
 
 void notify_bang(t_notify *x) {
@@ -300,7 +478,7 @@ void notify_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "bang to dump dictionary");
+        sprintf(s, "bang to dump dictionary, fill for specialized dump");
     } else {
         // Outlet indices are 0-indexed from LEFT to RIGHT
         switch (a) {
