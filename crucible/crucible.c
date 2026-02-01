@@ -11,6 +11,7 @@ typedef struct _crucible {
     t_dictionary *span_tracker_dict;
     t_symbol *incumbent_dict_name;
     void *outlet_reach;
+    void *outlet_fill;
     void *outlet_palette;
     void *outlet_track;
     void *outlet_bar;
@@ -165,6 +166,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
         }
+        x->outlet_fill = outlet_new((t_object *)x, NULL);
         x->outlet_reach = outlet_new((t_object *)x, NULL);
         x->outlet_offset = outlet_new((t_object *)x, NULL);
         x->outlet_bar = outlet_new((t_object *)x, NULL);
@@ -408,6 +410,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             long old_song_reach = x->song_reach;
             x->song_reach = max_reach;
             crucible_verbose_log(x, "Song has grown. New reach is %ld (previously %ld).", x->song_reach, old_song_reach);
+
+            outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
 
             if (old_song_reach > 0) {
                 t_symbol **track_keys = NULL;
@@ -679,23 +683,14 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "(float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
-            switch (a) {
-                case 0: sprintf(s, "Palette (symbol)"); break;
-                case 1: sprintf(s, "Track (int)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-                case 5: sprintf(s, "Verbose Logging Outlet"); break;
-            }
-        } else {
-             switch (a) {
-                case 0: sprintf(s, "Palette (symbol)"); break;
-                case 1: sprintf(s, "Track (int)"); break;
-                case 2: sprintf(s, "Bar (int)"); break;
-                case 3: sprintf(s, "Offset (float)"); break;
-                case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Palette (symbol)"); break;
+            case 1: sprintf(s, "Track (int)"); break;
+            case 2: sprintf(s, "Bar (int)"); break;
+            case 3: sprintf(s, "Offset (float)"); break;
+            case 4: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
+            case 5: sprintf(s, "Fill (symbol)"); break;
+            case 6: sprintf(s, "Verbose Logging Outlet"); break;
         }
     }
 }

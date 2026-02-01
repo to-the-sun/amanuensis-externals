@@ -43,7 +43,11 @@
 			<digest>Reach list</digest>
 			<description>For a winning span, outputs a 4-item list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
 		</outlet>
-		<outlet id="5" type="anything">
+		<outlet id="5" type="symbol">
+			<digest>Fill signal</digest>
+			<description>Outputs the symbol 'fill' whenever the song grows in reach.</description>
+		</outlet>
+		<outlet id="6" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
 			<description>Status messages when verbose attribute is enabled.</description>
 		</outlet>
