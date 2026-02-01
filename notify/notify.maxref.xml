@@ -14,12 +14,12 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="bang">
+		<inlet id="0" type="anything">
 			<digest>
-				bang to trigger the dump
+				bang to trigger dump, fill for specialized dump
 			</digest>
 			<description>
-				A bang message triggers the gathering of all notes from the referenced dictionary. The notes are then sorted, the dictionary is cleared, and the notes are output sequentially.
+				A bang message triggers a standard dump. A fill message triggers a specialized dump that fills in gaps in shorter tracks relative to the longest track.
 			</description>
 		</inlet>
 	</inletlist>
@@ -93,6 +93,14 @@
 			</digest>
 			<description>
 				In the leftmost inlet, a bang triggers the gathering of all notes from the referenced dictionary. The notes are then sorted, the dictionary is cleared, and the notes are output sequentially from the outlets.
+			</description>
+		</method>
+		<method name="fill">
+			<digest>
+				Trigger the specialized fill dump
+			</digest>
+			<description>
+				Triggers a specialized dump that identifies the longest track and fills the gaps in all other tracks by looping their content until they match the reach of the longest track. This dump does NOT clear the dictionary and does NOT send descript messages.
 			</description>
 		</method>
 	</methodlist>

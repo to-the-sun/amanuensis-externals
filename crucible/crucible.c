@@ -344,36 +344,34 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         crucible_verbose_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
 
         long max_reach = 0;
-        if (x->fill) {
-            for (long i = 0; i < span_len; i++) {
-                long bar_ts_long = atom_getlong(&span_atoms[i]);
-                char bar_ts_str[32];
-                snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
-                t_symbol *bar_sym = gensym(bar_ts_str);
+        for (long i = 0; i < span_len; i++) {
+            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            char bar_ts_str[32];
+            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            t_symbol *bar_sym = gensym(bar_ts_str);
 
-                t_dictionary *challenger_bar_dict = NULL;
-                dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
-                if (!challenger_bar_dict) continue;
+            t_dictionary *challenger_bar_dict = NULL;
+            dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
+            if (!challenger_bar_dict) continue;
 
-                t_atomarray *bar_span_atomarray = NULL;
-                dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
+            t_atomarray *bar_span_atomarray = NULL;
+            dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
 
-                if (bar_span_atomarray) {
-                    long bar_span_len = 0;
-                    t_atom *bar_span_atoms = NULL;
-                    atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
+            if (bar_span_atomarray) {
+                long bar_span_len = 0;
+                t_atom *bar_span_atoms = NULL;
+                atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
 
-                    long max_val = 0;
-                    for (long j = 0; j < bar_span_len; j++) {
-                        long current_val = atom_getlong(bar_span_atoms + j);
-                        if (current_val > max_val) max_val = current_val;
-                    }
+                long max_val = 0;
+                for (long j = 0; j < bar_span_len; j++) {
+                    long current_val = atom_getlong(bar_span_atoms + j);
+                    if (current_val > max_val) max_val = current_val;
+                }
 
-                    long bar_length = crucible_get_bar_length(x);
-                    long current_reach = max_val + bar_length;
-                    if (current_reach > max_reach) {
-                        max_reach = current_reach;
-                    }
+                long bar_length = crucible_get_bar_length(x);
+                long current_reach = max_val + bar_length;
+                if (current_reach > max_reach) {
+                    max_reach = current_reach;
                 }
             }
         }
@@ -406,14 +404,14 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
-        if (x->fill && max_reach > x->song_reach) {
+        if (max_reach > x->song_reach) {
             long old_song_reach = x->song_reach;
             x->song_reach = max_reach;
             crucible_verbose_log(x, "Song has grown. New reach is %ld (previously %ld).", x->song_reach, old_song_reach);
 
             outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
 
-            if (old_song_reach > 0) {
+            if (x->fill && old_song_reach > 0) {
                 t_symbol **track_keys = NULL;
                 long num_tracks = 0;
                 dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
