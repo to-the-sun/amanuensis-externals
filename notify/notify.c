@@ -3,6 +3,7 @@
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
 #include "ext_atomarray.h"
+#include "ext_buffer.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -26,6 +27,9 @@ typedef struct _notify {
     void *out_palette;   // Outlet 4 (Index 3)
     void *out_descript;  // Outlet 5 (Index 4)
     void *out_verbose;   // Outlet 6 (Rightmost, optional, Index 5)
+    t_buffer_ref *buffer_ref;
+    double local_bar_length;
+    long instance_id;
 } t_notify;
 
 t_class *notify_class;
@@ -38,12 +42,15 @@ void notify_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_verbose_log(t_notify *x, const char *fmt, ...);
+void notify_local_bar_length(t_notify *x, double f);
+long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
     t_class *c;
     c = class_new("notify", (method)notify_new, (method)notify_free, (short)sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
+    class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_notify, verbose);
@@ -64,52 +71,78 @@ void notify_verbose_log(t_notify *x, const char *fmt, ...) {
     }
 }
 
+long notify_get_bar_length(t_notify *x) {
+    if (x->local_bar_length > 0) {
+        return (long)x->local_bar_length;
+    }
+
+    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+    if (!b) {
+        object_error((t_object *)x, "bar buffer~ not found");
+        return 0;
+    }
+
+    long bar_length = 0;
+    float *samples = buffer_locksamples(b);
+    if (samples) {
+        if (buffer_getframecount(b) > 0) {
+            bar_length = (long)samples[0];
+        }
+        buffer_unlocksamples(b);
+    }
+
+    if (bar_length > 0) {
+        x->local_bar_length = (double)bar_length;
+        notify_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    }
+
+    return bar_length;
+}
+
+void notify_local_bar_length(t_notify *x, double f) {
+    if (f <= 0) {
+        x->local_bar_length = 0;
+    } else {
+        x->local_bar_length = f;
+    }
+    notify_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    notify_verbose_log(x, "Local bar length set to: %.2f", f);
+}
+
 void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     t_notify *x = (t_notify *)object_alloc(notify_class);
     if (x) {
         x->dict_name = gensym("");
         x->verbose = 0;
         x->out_verbose = NULL;
+        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+        x->local_bar_length = 0;
+        x->instance_id = 1000 + (rand() % 9000);
 
-        // Attributes need to be processed before outlet creation if they affect it
         attr_args_process(x, argc, argv);
 
-        // Max SDK outlet_new prepends outlets (right-to-left).
-        // To have Outlet 1 on the left and Outlet 4 on the right, create them in reverse.
-
-        // Max SDK outlet_new prepends outlets (right-to-left).
-        // First created is rightmost.
-
-        // Rightmost is Verbose (if enabled)
         if (x->verbose) {
             x->out_verbose = outlet_new((t_object *)x, NULL);
         }
-
-        // Next to the left: Descript (Outlet 5, Index 4)
         x->out_descript = outlet_new((t_object *)x, NULL);
-
-        // Next to the left: Palette (Outlet 4, Index 3)
         x->out_palette = outlet_new((t_object *)x, NULL);
-
-        // Next to the left: Track (Outlet 3, Index 2)
         x->out_track = outlet_new((t_object *)x, NULL);
-
-        // Next to the left: Offset (Outlet 2, Index 1)
         x->out_offset = outlet_new((t_object *)x, NULL);
-
-        // Leftmost: Abs/Score (Outlet 1, Index 0)
         x->out_abs_score = outlet_new((t_object *)x, NULL);
 
-        // Re-process dict_name if it was a positional argument
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
         }
+
+        floatin((t_object *)x, 1);
     }
     return (x);
 }
 
 void notify_free(t_notify *x) {
-    // Nothing special to free
+    if (x->buffer_ref) {
+        object_free(x->buffer_ref);
+    }
 }
 
 int note_compare(const void *a, const void *b) {
@@ -131,7 +164,6 @@ void notify_fill(t_notify *x) {
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
 
-    // 1. Find max_bar_all
     double max_bar_all = -1.0;
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -159,7 +191,6 @@ void notify_fill(t_notify *x) {
     long notes_capacity = 100;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    // 2. Identify shorter tracks and generate synthetic notes
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
         t_dictionary *track_dict = NULL;
@@ -176,7 +207,6 @@ void notify_fill(t_notify *x) {
         }
 
         if (max_bar_this < max_bar_all && max_bar_this > 0) {
-            // Shorter track. Generate synthetic notes.
             for (long n = 1; ; n++) {
                 int notes_added_this_pass = 0;
                 for (long j = 0; j < num_bars; j++) {
@@ -213,14 +243,12 @@ void notify_fill(t_notify *x) {
                         long aa_len = 0;
                         t_atom *aa_atoms = NULL;
                         atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-
                         t_atomarray *scores_aa = NULL;
                         long scores_len = 0;
                         t_atom *scores_atoms = NULL;
                         if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
                             atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
                         }
-
                         long num_entries = aa_len < scores_len ? aa_len : scores_len;
                         for (long k = 0; k < num_entries; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
@@ -236,7 +264,6 @@ void notify_fill(t_notify *x) {
                                 all_notes[total_notes].bar_ts = synth_bar_ts;
                                 all_notes[total_notes].track = track_sym;
                                 all_notes[total_notes].palette = palette;
-
                                 total_notes++;
                                 notes_added_this_pass++;
                             }
@@ -262,7 +289,6 @@ void notify_fill(t_notify *x) {
                                 all_notes[total_notes].bar_ts = synth_bar_ts;
                                 all_notes[total_notes].track = track_sym;
                                 all_notes[total_notes].palette = palette;
-
                                 total_notes++;
                                 notes_added_this_pass++;
                             }
@@ -293,6 +319,8 @@ void notify_fill(t_notify *x) {
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
+    x->local_bar_length = 0;
+    notify_verbose_log(x, "Bar length reset to zero after fill.");
     object_release((t_object *)dict);
 }
 
@@ -314,7 +342,6 @@ void notify_bang(t_notify *x) {
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
-
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
         if (!track_dict) continue;
@@ -331,46 +358,58 @@ void notify_bang(t_notify *x) {
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
             if (!bar_dict) continue;
 
-            t_atom absolute_atom, score_atom, offset_atom, palette_atom;
-            t_atomarray *absolutes_aa = NULL;
-
             double offset = 0;
             t_atomarray *offset_aa = NULL;
+            t_atom offset_atom;
             if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
                 t_atom o_atom;
-                if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) {
-                    offset = atom_getfloat(&o_atom);
-                }
+                if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
             } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
                 offset = atom_getfloat(&offset_atom);
             }
 
             t_symbol *palette = gensym("");
             t_atomarray *palette_aa = NULL;
+            t_atom palette_atom;
             if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
                 t_atom p_atom;
-                if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) {
-                    palette = atom_getsym(&p_atom);
-                }
+                if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
             } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
             }
 
-            // Get absolutes and scores
+            // Output descript message for THIS bar
+            t_atom descript_list[3];
+            long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
+            atom_setlong(&descript_list[0], track_val);
+            atom_setfloat(&descript_list[1], bar_ts);
+            atom_setfloat(&descript_list[2], 0.0);
+            outlet_anything(x->out_descript, palette, 3, descript_list);
+
+            // Handle NEXT bar descript
+            long bar_length = notify_get_bar_length(x);
+            if (bar_length > 0) {
+                double next_bar_ts = bar_ts + bar_length;
+                char next_bar_str[64];
+                snprintf(next_bar_str, 64, "%ld", (long)next_bar_ts);
+                if (!dictionary_hasentry(track_dict, gensym(next_bar_str))) {
+                    atom_setfloat(&descript_list[1], next_bar_ts);
+                    outlet_anything(x->out_descript, palette, 3, descript_list);
+                }
+            }
+
             long num_entries = 0;
+            t_atomarray *absolutes_aa = NULL;
             if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
                 long aa_len = 0;
                 t_atom *aa_atoms = NULL;
                 atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-
                 t_atomarray *scores_aa_check = NULL;
                 if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa_check) == MAX_ERR_NONE && scores_aa_check) {
                     long scores_len = 0;
                     t_atom *scores_atoms = NULL;
                     atomarray_getatoms(scores_aa_check, &scores_len, &scores_atoms);
-
-                    num_entries = aa_len < scores_len ? aa_len : scores_len; // Safety
-
+                    num_entries = aa_len < scores_len ? aa_len : scores_len;
                     for (long k = 0; k < num_entries; k++) {
                         if (total_notes >= notes_capacity) {
                             notes_capacity *= 2;
@@ -382,105 +421,64 @@ void notify_bang(t_notify *x) {
                         all_notes[total_notes].bar_ts = bar_ts;
                         all_notes[total_notes].track = track_sym;
                         all_notes[total_notes].palette = palette;
-
-                        // Output descript message at the very beginning
-                        t_atom descript_list[3];
-                        long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
-                        atom_setlong(&descript_list[0], track_val);
-                        atom_setfloat(&descript_list[1], bar_ts);
-                        atom_setfloat(&descript_list[2], 0.0);
-                        outlet_anything(x->out_descript, palette, 3, descript_list);
-
                         total_notes++;
                     }
                 }
-            } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
-                // Scalar case
-                if (total_notes >= notes_capacity) {
-                    notes_capacity *= 2;
-                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+            } else {
+                t_atom absolute_atom;
+                if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+                    if (total_notes >= notes_capacity) {
+                        notes_capacity *= 2;
+                        all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+                    }
+                    all_notes[total_notes].absolute = atom_getfloat(&absolute_atom);
+                    t_atom score_atom;
+                    if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                        all_notes[total_notes].score = atom_getfloat(&score_atom);
+                    } else {
+                        all_notes[total_notes].score = 0;
+                    }
+                    all_notes[total_notes].offset = offset;
+                    all_notes[total_notes].bar_ts = bar_ts;
+                    all_notes[total_notes].track = track_sym;
+                    all_notes[total_notes].palette = palette;
+                    total_notes++;
                 }
-                all_notes[total_notes].absolute = atom_getfloat(&absolute_atom);
-
-                if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                    all_notes[total_notes].score = atom_getfloat(&score_atom);
-                } else {
-                    all_notes[total_notes].score = 0;
-                }
-
-                all_notes[total_notes].offset = offset;
-                all_notes[total_notes].bar_ts = bar_ts;
-                all_notes[total_notes].track = track_sym;
-                all_notes[total_notes].palette = palette;
-
-                // Output descript message at the very beginning
-                t_atom descript_list[3];
-                long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
-                atom_setlong(&descript_list[0], track_val);
-                atom_setfloat(&descript_list[1], bar_ts);
-                atom_setfloat(&descript_list[2], 0.0);
-                outlet_anything(x->out_descript, palette, 3, descript_list);
-
-                total_notes++;
             }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
     if (track_keys) sysmem_freeptr(track_keys);
 
-    // Sort notes chronologically
-    if (total_notes > 1) {
-        qsort(all_notes, total_notes, sizeof(t_note), note_compare);
-    }
+    if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
-    // Report ordered notes
     for (long i = 0; i < total_notes; i++) {
-        notify_verbose_log(x, "Ordered Note %ld: abs=%.2f, score=%.2f, offset=%.2f, track=%s, palette=%s",
-                           i, all_notes[i].absolute, all_notes[i].score, all_notes[i].offset,
-                           all_notes[i].track ? all_notes[i].track->s_name : "NULL",
-                           all_notes[i].palette ? all_notes[i].palette->s_name : "NULL");
-    }
-
-    // Clear dictionary
-    dictionary_clear(dict);
-    notify_verbose_log(x, "Dictionary cleared.");
-
-    // Output notes
-    for (long i = 0; i < total_notes; i++) {
-        // Right-to-left firing order (rightmost outlet first)
-
-        // Outlet 4: palette (Index 3)
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
-
-        // Outlet 3: track (Index 2)
-        if (all_notes[i].track == NULL) {
-            outlet_int(x->out_track, 0);
-        } else if (all_notes[i].track == gensym("")) {
+        if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
             outlet_int(x->out_track, 0);
         } else {
-            long track_val = atol(all_notes[i].track->s_name);
-            outlet_int(x->out_track, track_val);
+            outlet_int(x->out_track, atol(all_notes[i].track->s_name));
         }
-
-        // Outlet 2: offset
         outlet_float(x->out_offset, all_notes[i].offset);
-
-        // Outlet 1: [absolute, score] (Leftmost)
         t_atom list_atoms[2];
         atom_setfloat(&list_atoms[0], all_notes[i].absolute);
         atom_setfloat(&list_atoms[1], all_notes[i].score);
         outlet_list(x->out_abs_score, NULL, 2, list_atoms);
     }
 
+    dictionary_clear(dict);
+    notify_verbose_log(x, "Dictionary cleared.");
     if (all_notes) sysmem_freeptr(all_notes);
+    x->local_bar_length = 0;
+    notify_verbose_log(x, "Bar length reset to zero after dump.");
     object_release((t_object *)dict);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "bang to dump dictionary, fill for specialized dump");
+        if (a == 0) sprintf(s, "bang to dump dictionary, fill for specialized dump");
+        else if (a == 1) sprintf(s, "(float) Local Bar Length");
     } else {
-        // Outlet indices are 0-indexed from LEFT to RIGHT
         switch (a) {
             case 0: sprintf(s, "Abs Timestamp and Score (list)"); break;
             case 1: sprintf(s, "Offset (float)"); break;

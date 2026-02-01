@@ -5,7 +5,7 @@
 		Dump all notes from a dictionary ordered by absolute timestamp
 	</digest>
 	<description>
-		The notify object accepts a dictionary name as an argument and, when it receives a bang, it extracts all notes (timestamped events) from the dictionary, sorts them chronologically by absolute timestamp, clears the original dictionary, and outputs the notes sequentially from its outlets.
+		The notify object accepts a dictionary name as an argument and, when it receives a bang, it extracts all notes (timestamped events) from the dictionary, sorts them chronologically by absolute timestamp, clears the original dictionary, and outputs the notes sequentially from its outlets. It also references an external buffer~ named 'bar' to determine the current bar length for reporting upcoming bars.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -20,6 +20,14 @@
 			</digest>
 			<description>
 				A bang message triggers a standard dump. A fill message triggers a specialized dump that fills in gaps in shorter tracks relative to the longest track.
+			</description>
+		</inlet>
+		<inlet id="1" type="float">
+			<digest>
+				Local Bar Length
+			</digest>
+			<description>
+				Sets a local override for the bar length. If set to 0 (default), the object will instead read the bar length from the first sample of a buffer~ named 'bar'.
 			</description>
 		</inlet>
 	</inletlist>
@@ -62,7 +70,7 @@
 				Descript
 			</digest>
 			<description>
-				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. These messages are output as a batch at the very beginning of the dump process.
+				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. These messages are output as a batch at the very beginning of the dump process. For each bar found in the dictionary, a second descript message is sent for the subsequent bar (current + bar_length) if that bar does not already exist in the dictionary.
 			</description>
 		</outlet>
 		<outlet id="5" type="symbol">
@@ -101,6 +109,14 @@
 			</digest>
 			<description>
 				Triggers a specialized dump that identifies the longest track and fills the gaps in all other tracks by looping their content until they match the reach of the longest track. This dump does NOT clear the dictionary and does NOT send descript messages.
+			</description>
+		</method>
+		<method name="ft1">
+			<digest>
+				Set local bar length
+			</digest>
+			<description>
+				In the second inlet, a float sets the local bar length override. Values &lt;= 0 disable the override and resume reading from the 'bar' buffer~.
 			</description>
 		</method>
 	</methodlist>
