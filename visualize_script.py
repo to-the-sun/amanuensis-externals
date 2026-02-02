@@ -5,6 +5,7 @@ import json
 import time
 import math
 import os
+import sys
 
 # Set dummy video driver for headless environments
 if os.environ.get('HEADLESS'):
@@ -23,76 +24,72 @@ state_lock = threading.Lock()
 
 def udp_listener():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # Allow address reuse
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # Set timeout to allow thread to check for exit
     sock.settimeout(1.0)
     try:
         sock.bind(("", UDP_PORT))
     except Exception as e:
-        print(f"Failed to bind to port {UDP_PORT}: {e}")
-        return
+        print(f"ERROR: Failed to bind to port {UDP_PORT}: {e}")
+        print("Maybe another visualizer is running?")
+        sys.exit(1)
 
-    print("Visualizer: Listening on port", UDP_PORT)
+    print(f"Visualizer: Listening on UDP port {UDP_PORT}")
     while True:
         try:
             data, addr = sock.recvfrom(65536)
-            print(f"UDP Received {len(data)} bytes from {addr}")
+            # print(f"UDP Received {len(data)} bytes from {addr}")
             try:
                 text = data.decode("utf-8", errors="replace").strip()
-                print(f"  Decoded text: {text}")
             except Exception as e:
-                print(f"  Decode error: {e}. Hex: {data.hex()}")
                 continue
 
             if not text:
                 continue
 
-            # Handle potential multiple JSON objects in one packet or trailing commas
-            if text.endswith(','):
-                text = text[:-1]
+            # Robust parsing for potentially multiple or concatenated JSON objects
+            text = text.replace("} {", "}\n{")
+            text = text.replace("}{", "}\n{")
 
-            # Robust check: find the first '{' or '['
-            start_idx = -1
-            for i, char in enumerate(text):
-                if char in '{[':
-                    start_idx = i
-                    break
+            lines = text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                # Handle leading/trailing junk
+                start = line.find('{')
+                end = line.rfind('}')
+                if start == -1 or end == -1: continue
+                line = line[start:end+1]
 
-            if start_idx == -1:
-                print(f"  Skipping (no JSON start found): {text}")
-                continue
+                try:
+                    pkt = json.loads(line)
+                    # print(f"  Parsed: {pkt}")
+                    if not isinstance(pkt, dict): continue
 
-            text = text[start_idx:]
-
-            try:
-                # Try to handle multiple objects in one packet if they are not properly separated
-                # by newlines but are like {"a":1}{"b":2} or {"a":1} {"b":2}
-                text = text.replace("} {", "}\n{")
-                text = text.replace("}{", "}\n{")
-
-                lines = text.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if not line: continue
-                    try:
-                        pkt = json.loads(line)
-                        if not isinstance(pkt, dict):
-                            print(f"  Skipping (not a dict): {line}")
-                            continue
-
-                        # Validate expected keys to filter out other visualizers' data
-                        if all(k in pkt for k in ["track", "channel", "ms", "val"]):
-                            print(f"  Parsed JSON point: track={pkt['track']}, ch={pkt['channel']}, ms={pkt['ms']}, val={pkt['val']}")
-                            with state_lock:
-                                if pkt.get("val") == 0.0:
-                                    # Remove existing points at this track, channel, and ms
-                                    data_points[:] = [p for p in data_points if not (p["track"] == pkt["track"] and p["channel"] == pkt["channel"] and p["ms"] == pkt["ms"])]
-                                else:
+                    if all(k in pkt for k in ["track", "channel", "ms", "val"]):
+                        with state_lock:
+                            if pkt.get("val") == 0.0:
+                                # Remove existing points at this track, channel, and ms
+                                # Tolerance for float comparison of ms
+                                data_points[:] = [p for p in data_points if not (
+                                    p["track"] == pkt["track"] and
+                                    p["channel"] == pkt["channel"] and
+                                    abs(p["ms"] - pkt["ms"]) < 0.001
+                                )]
+                            else:
+                                # Update existing point if it matches track/chan/ms, else append
+                                found = False
+                                for p in data_points:
+                                    if p["track"] == pkt["track"] and p["channel"] == pkt["channel"] and abs(p["ms"] - pkt["ms"]) < 0.001:
+                                        p["val"] = pkt["val"]
+                                        found = True
+                                        break
+                                if not found:
                                     data_points.append(pkt)
-                    except json.JSONDecodeError:
-                        continue
+                except json.JSONDecodeError:
+                    continue
 
-            except Exception as e:
-                print(f"Parse error from {addr}: {e}. Data: {text[:100]}...")
         except socket.timeout:
             continue
         except Exception as e:
@@ -103,19 +100,34 @@ def run_gui():
     screen = pygame.display.set_mode(WINDOW_SIZE)
     pygame.display.set_caption("Threads~ Visualizer")
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont("Arial", 10)
-    label_font = pygame.font.SysFont("Arial", 14)
+
+    try:
+        font = pygame.font.SysFont("Arial", 10)
+        label_font = pygame.font.SysFont("Arial", 14)
+        status_font = pygame.font.SysFont("Arial", 16)
+    except:
+        font = pygame.font.Font(None, 20)
+        label_font = pygame.font.Font(None, 24)
+        status_font = pygame.font.Font(None, 28)
 
     running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_c:
+                    with state_lock:
+                        data_points.clear()
 
         screen.fill(BACKGROUND)
 
         with state_lock:
             points = list(data_points)
+
+        # Status text
+        status_text = status_font.render(f"Points: {len(points)}  [Press 'C' to clear]", True, (150, 150, 150))
+        screen.blit(status_text, (WINDOW_SIZE[0] - status_text.get_width() - 20, 20))
 
         if points:
             # Determine tracks and channels
@@ -135,7 +147,7 @@ def run_gui():
             num_rows = len(all_rows)
             min_ms = min(p["ms"] for p in points)
             max_ms = max(p["ms"] for p in points)
-            # Add a small buffer to the domain
+
             span_ms = max_ms - min_ms
             if span_ms <= 0:
                 span_ms = 1000.0
@@ -147,7 +159,7 @@ def run_gui():
             # Padding
             left_pad = 120
             right_pad = 50
-            top_pad = 50
+            top_pad = 80
             bottom_pad = 80
 
             graph_w = WINDOW_SIZE[0] - left_pad - right_pad
@@ -182,22 +194,27 @@ def run_gui():
                 y_center = top_pad + row_idx * row_h + row_h / 2
 
                 # Tick color
-                # Positive: Greenish, Negative: Reddish
                 if val > 0:
-                    color = (100, 255, 100)
-                    dir = 1 # up
+                    color = (100, 255, 100) # Greenish
+                    direction = 1 # up
                 else:
-                    color = (255, 100, 100)
-                    dir = -1 # down
+                    color = (255, 100, 100) # Reddish
+                    direction = -1 # down
+
+                # Special value -999999.0
+                if val == -999999.0:
+                    color = (100, 100, 150) # Muted blue/gray
 
                 # Draw the tick
-                pygame.draw.line(screen, color, (int(x), int(y_center)), (int(x), int(y_center - dir * row_h * 0.4)), 2)
+                tick_len = row_h * 0.4
+                pygame.draw.line(screen, color, (int(x), int(y_center)), (int(x), int(y_center - direction * tick_len)), 2)
 
                 # Label with MS
-                ms_text = f"{ms:.0f}"
-                ms_label = font.render(ms_text, True, (180, 180, 180))
-                label_y = y_center - dir * row_h * 0.4 - (12 if dir > 0 else -2)
-                screen.blit(ms_label, (int(x) + 2, int(label_y)))
+                if val != -999999.0:
+                    ms_text = f"{ms:.0f}"
+                    ms_label = font.render(ms_text, True, (180, 180, 180))
+                    label_y = y_center - direction * tick_len - (12 if direction > 0 else -2)
+                    screen.blit(ms_label, (int(x) + 2, int(label_y)))
 
             # Draw time axis at the bottom
             axis_y = top_pad + graph_h
@@ -218,6 +235,6 @@ def run_gui():
     pygame.quit()
 
 if __name__ == "__main__":
-    t = threading.Thread(target=udp_listener, daemon=True)
-    t.start()
+    listener_thread = threading.Thread(target=udp_listener, daemon=True)
+    listener_thread.start()
     run_gui()

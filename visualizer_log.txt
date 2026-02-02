@@ -1,0 +1,14 @@
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.12)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Visualizer: Listening on UDP port 9999
+UDP Received 54 bytes from ('127.0.0.1', 54792)
+  Parsed: {'track': 1, 'channel': 0, 'ms': 1000.0, 'val': 250.0}
+UDP Received 58 bytes from ('127.0.0.1', 54792)
+  Parsed: {'track': 1, 'channel': 1, 'ms': 2000.0, 'val': -999999.0}
+UDP Received 110 bytes from ('127.0.0.1', 54792)
+  Parsed: {'track': 2, 'channel': 0, 'ms': 500.0, 'val': 100.0}
+  Parsed: {'track': 2, 'channel': 1, 'ms': 500.0, 'val': -999999.0}
+UDP Received 54 bytes from ('127.0.0.1', 54792)
+  Parsed: {'track': 1, 'channel': 0, 'ms': 1000.0, 'val': 500.0}
+UDP Received 51 bytes from ('127.0.0.1', 54792)
+  Parsed: {'track': 2, 'channel': 0, 'ms': 500.0, 'val': 0.0}

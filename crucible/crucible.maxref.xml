@@ -3,7 +3,7 @@
 <c74object name="crucible" module="max" category="Analysis">
 	<digest>Selectively updates a dictionary by comparing incoming spans</digest>
 	<description>
-		The `crucible` object implements a challenger/incumbent system for updating a dictionary. It receives streams of messages representing musical spans (typically from `buildspans`) and stores them as a "challenger". When a complete span is received, it compares the rating of each bar in the challenger to the corresponding bar in an "incumbent" dictionary. The challenger only overwrites the incumbent if every bar rating is strictly higher. It also supports a "song fill" feature to expand tracks to match the longest reach.
+		The `crucible` object implements a challenger/incumbent system for updating a dictionary. It receives streams of messages representing musical spans (typically from `buildspans`) and stores them as a "challenger". When a complete span is received, it compares the rating of each bar in the challenger to the corresponding bar in an "incumbent" dictionary. The challenger only overwrites the incumbent if every bar rating is strictly higher.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -28,8 +28,8 @@
 			<description>For a winning span, outputs a 4-item list: [palette:symbol, track:int, bar:int, offset:float].</description>
 		</outlet>
 		<outlet id="1" type="anything">
-			<digest>Reach list</digest>
-			<description>For a winning span, outputs a 3-item list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
+			<digest>Reach List</digest>
+			<description>For a winning span, outputs a list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
 		</outlet>
 		<outlet id="2" type="symbol">
 			<digest>Fill signal</digest>
@@ -71,11 +71,11 @@
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />
-		<seealso name="crucible" />
+		<seealso name="threads~" />
 		<seealso name="notify" />
 		<seealso name="whichoffset" />
 		<seealso name="stemversion" />
 		<seealso name="createproject" />
-		<seealso name="dict" />
+		<seealso name="growbuffer~" />
 	</seealsolist>
 </c74object>

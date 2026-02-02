@@ -142,7 +142,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->challenger_dict = dictionary_new();
         x->span_tracker_dict = dictionary_new();
-        x->verbose_log_outlet = NULL;
         x->incumbent_dict_name = gensym("");
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->song_reach = 0;
@@ -157,12 +156,11 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-        }
-        x->outlet_fill = outlet_new((t_object *)x, NULL);
-        x->outlet_reach = outlet_new((t_object *)x, NULL);
-        x->outlet_data = outlet_new((t_object *)x, NULL);
+        // Unconditionally create outlets in right-to-left order
+        x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3
+        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 2
+        x->outlet_reach = outlet_new((t_object *)x, NULL);       // Index 1
+        x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
 
         floatin((t_object *)x, 1);
     }
@@ -217,15 +215,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
             atom_setfloat(reach_list + 2, -999999.0);
 
             if (x->outlet_reach) {
-                crucible_verbose_log(x, "  -> Calling outlet_anything for reach...");
                 outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
-                crucible_verbose_log(x, "  -> Finished outlet_anything for reach.");
-            }
-        } else {
-            if (incumbent_track_dict) {
-                crucible_verbose_log(x, "  -> Reach %ld already exists in incumbent. Suppressing reach message.", current_reach);
-            } else {
-                crucible_verbose_log(x, "  -> No incumbent track dict. Suppressing reach message.");
             }
         }
     }
@@ -261,10 +251,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     atom_setfloat(list + 3, offset_val);
 
     if (x->outlet_data) {
-        crucible_verbose_log(x, "  -> Calling outlet_anything for data list: palette=%s track=%lld bar=%lld offset=%.2f",
-                             palette_sym->s_name, (long long)atom_getlong(list+1), (long long)bar_ts_long, offset_val);
-        outlet_anything(x->outlet_data, _sym_list, 4, list);
-        crucible_verbose_log(x, "  -> Finished outlet_anything for data list.");
+        outlet_list(x->outlet_data, NULL, 4, list);
     }
 }
 
@@ -278,6 +265,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     long span_len = 0;
     t_atom *span_atoms = NULL;
     atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
+
+    crucible_verbose_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
 
     int challenger_wins = 1;
 
@@ -474,7 +463,6 @@ void crucible_local_bar_length(t_crucible *x, double f) {
         x->local_bar_length = f;
     }
     crucible_verbose_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
-    crucible_verbose_log(x, "Local bar length set to: %.2f", f);
 }
 
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
