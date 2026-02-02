@@ -79,7 +79,7 @@ void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc < 4) return;
 
     t_symbol *palette = atom_getsym(argv);
-    long track = atom_getlong(argv + 1);
+    t_atom_long track = atom_getlong(argv + 1);
     double bar_ms = atom_getfloat(argv + 2);
     double offset_ms = atom_getfloat(argv + 3);
 
@@ -151,7 +151,7 @@ void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     val_to_send = (c == chan_index) ? offset_ms : -999999.0;
                 }
                 char json[256];
-                snprintf(json, 256, "{\"track\": %ld, \"channel\": %ld, \"ms\": %.2f, \"val\": %.2f}", track, c, bar_ms, val_to_send);
+                snprintf(json, 256, "{\"track\": %lld, \"channel\": %lld, \"ms\": %.2f, \"val\": %.2f}", (long long)track, (long long)c, bar_ms, val_to_send);
                 visualize(json);
             }
         }

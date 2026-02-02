@@ -29,32 +29,51 @@ def udp_listener():
     while True:
         try:
             data, addr = sock.recvfrom(65536)
-            text = data.decode("utf-8").strip()
+            try:
+                text = data.decode("utf-8", errors="replace").strip()
+            except Exception as e:
+                print(f"Decode error from {addr}: {e}. Hex: {data.hex()}")
+                continue
+
+            if not text:
+                continue
+
             # Handle potential multiple JSON objects in one packet or trailing commas
             if text.endswith(','):
                 text = text[:-1]
 
+            # Simple check if it looks like JSON
+            if not text.startswith('{') and not text.startswith('['):
+                # Probably not JSON, ignore or log
+                continue
+
             try:
-                pkt = json.loads(text)
-                with state_lock:
-                    if pkt.get("val") == 0.0:
-                        # Remove existing points at this track, channel, and ms
-                        data_points[:] = [p for p in data_points if not (p["track"] == pkt["track"] and p["channel"] == pkt["channel"] and p["ms"] == pkt["ms"])]
-                    else:
-                        data_points.append(pkt)
-            except json.JSONDecodeError:
-                # Try splitting by }{ if multiple objects were sent
-                parts = text.replace("}{", "}\n{").split("\n")
-                for p in parts:
+                # Try to handle multiple objects in one packet if they are not properly separated
+                # by newlines but are like {"a":1}{"b":2}
+                if "}{" in text:
+                    text = text.replace("}{", "}\n{")
+
+                lines = text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line: continue
                     try:
-                        pkt = json.loads(p)
-                        with state_lock:
-                            if pkt.get("val") == 0.0:
-                                data_points[:] = [p for p in data_points if not (p["track"] == pkt["track"] and p["channel"] == pkt["channel"] and p["ms"] == pkt["ms"])]
-                            else:
-                                data_points.append(pkt)
-                    except:
-                        pass
+                        pkt = json.loads(line)
+                        if not isinstance(pkt, dict): continue
+
+                        # Validate expected keys to filter out other visualizers' data
+                        if all(k in pkt for k in ["track", "channel", "ms", "val"]):
+                            with state_lock:
+                                if pkt.get("val") == 0.0:
+                                    # Remove existing points at this track, channel, and ms
+                                    data_points[:] = [p for p in data_points if not (p["track"] == pkt["track"] and p["channel"] == pkt["channel"] and p["ms"] == pkt["ms"])]
+                                else:
+                                    data_points.append(pkt)
+                    except json.JSONDecodeError:
+                        continue
+
+            except Exception as e:
+                print(f"Parse error from {addr}: {e}. Data: {text[:100]}...")
         except socket.timeout:
             continue
         except Exception as e:
