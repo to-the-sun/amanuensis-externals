@@ -13,6 +13,7 @@ typedef struct _threads {
     t_hashtab *palette_map;
     void *proxy;
     long inlet_num;
+    long verbose;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -29,6 +30,9 @@ void ext_main(void *r) {
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)threads_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)threads_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
 
     class_register(CLASS_BOX, c);
     threads_class = c;
@@ -52,6 +56,9 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         hashtab_flags(x->palette_map, OBJ_FLAG_REF);
 
         x->proxy = proxy_new(x, 1, &x->inlet_num);
+        x->verbose = 0;
+
+        attr_args_process(x, argc, argv);
     }
     return x;
 }
@@ -160,6 +167,9 @@ void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                 char json[256];
                 snprintf(json, 256, "{\"track\": %lld, \"channel\": %lld, \"ms\": %.2f, \"val\": %.2f}", (long long)track, (long long)c, bar_ms, val_to_send);
                 visualize(json);
+                if (x->verbose) {
+                    object_post((t_object *)x, "Sent to visualizer: %s", json);
+                }
             }
         }
     }

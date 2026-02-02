@@ -4,6 +4,12 @@ import socket
 import json
 import time
 import math
+import os
+
+# Set dummy video driver for headless environments
+if os.environ.get('HEADLESS'):
+    os.environ['SDL_VIDEODRIVER'] = 'dummy'
+    os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
 # Configuration
 UDP_PORT = 9999
@@ -29,10 +35,12 @@ def udp_listener():
     while True:
         try:
             data, addr = sock.recvfrom(65536)
+            print(f"UDP Received {len(data)} bytes from {addr}")
             try:
                 text = data.decode("utf-8", errors="replace").strip()
+                print(f"  Decoded text: {text}")
             except Exception as e:
-                print(f"Decode error from {addr}: {e}. Hex: {data.hex()}")
+                print(f"  Decode error: {e}. Hex: {data.hex()}")
                 continue
 
             if not text:
@@ -42,16 +50,24 @@ def udp_listener():
             if text.endswith(','):
                 text = text[:-1]
 
-            # Simple check if it looks like JSON
-            if not text.startswith('{') and not text.startswith('['):
-                # Probably not JSON, ignore or log
+            # Robust check: find the first '{' or '['
+            start_idx = -1
+            for i, char in enumerate(text):
+                if char in '{[':
+                    start_idx = i
+                    break
+
+            if start_idx == -1:
+                print(f"  Skipping (no JSON start found): {text}")
                 continue
+
+            text = text[start_idx:]
 
             try:
                 # Try to handle multiple objects in one packet if they are not properly separated
-                # by newlines but are like {"a":1}{"b":2}
-                if "}{" in text:
-                    text = text.replace("}{", "}\n{")
+                # by newlines but are like {"a":1}{"b":2} or {"a":1} {"b":2}
+                text = text.replace("} {", "}\n{")
+                text = text.replace("}{", "}\n{")
 
                 lines = text.split('\n')
                 for line in lines:
@@ -59,10 +75,13 @@ def udp_listener():
                     if not line: continue
                     try:
                         pkt = json.loads(line)
-                        if not isinstance(pkt, dict): continue
+                        if not isinstance(pkt, dict):
+                            print(f"  Skipping (not a dict): {line}")
+                            continue
 
                         # Validate expected keys to filter out other visualizers' data
                         if all(k in pkt for k in ["track", "channel", "ms", "val"]):
+                            print(f"  Parsed JSON point: track={pkt['track']}, ch={pkt['channel']}, ms={pkt['ms']}, val={pkt['val']}")
                             with state_lock:
                                 if pkt.get("val") == 0.0:
                                     # Remove existing points at this track, channel, and ms

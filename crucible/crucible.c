@@ -261,7 +261,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     atom_setfloat(list + 3, offset_val);
 
     if (x->outlet_data) {
-        crucible_verbose_log(x, "  -> Calling outlet_anything for data list...");
+        crucible_verbose_log(x, "  -> Calling outlet_anything for data list: palette=%s track=%lld bar=%lld offset=%.2f",
+                             palette_sym->s_name, (long long)atom_getlong(list+1), (long long)bar_ts_long, offset_val);
         outlet_anything(x->outlet_data, _sym_list, 4, list);
         crucible_verbose_log(x, "  -> Finished outlet_anything for data list.");
     }
