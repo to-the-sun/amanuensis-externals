@@ -117,16 +117,12 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     t_atom_long chan_index = -1;
     hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
-    // If palette not found and it's not a clear operation (0.0), skip writing to buffer
-    // But we might still want to visualize reach messages (offset -999999.0) if we knew the channel.
-    // However, if we don't know the channel, we can't write to the buffer.
     if (chan_index == -1 && offset_ms != 0.0) {
         threads_verbose_log(x, "Palette '%s' not mapped to any channel. Skipping buffer write.", palette->s_name);
-        // Special case: if it's a reach message, we might still want to visualize it for track activity.
-        // We'll send it to visualizer on channel -1 (script will handle it as a global track tick or ignore)
         if (offset_ms == -999999.0) {
              char json[256];
              snprintf(json, 256, "{\"track\": %lld, \"channel\": -1, \"ms\": %.2f, \"val\": %.2f}", (long long)track, bar_ms, offset_ms);
+             threads_verbose_log(x, "Sending reach visualization: %s", json);
              visualize(json);
         }
         return;
@@ -167,6 +163,8 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     long num_chans = buffer_getchannelcount(b);
     long num_frames = buffer_getframecount(b);
 
+    threads_verbose_log(x, "Sample index: %ld, num_frames: %ld, num_chans: %ld", sample_index, num_frames, num_chans);
+
     if (sample_index >= 0 && sample_index < num_frames) {
         float *samples = buffer_locksamples(b);
         if (samples) {
@@ -198,9 +196,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
                 }
                 char json[256];
                 snprintf(json, 256, "{\"track\": %lld, \"channel\": %ld, \"ms\": %.2f, \"val\": %.2f}", (long long)track, c, bar_ms, val_to_send);
+                threads_verbose_log(x, "Visualizing: %s", json);
                 visualize(json);
             }
+        } else {
+            threads_verbose_log(x, "Error: could not lock buffer samples for %s", s_bufname->s_name);
         }
+    } else {
+        threads_verbose_log(x, "Warning: sample index %ld out of bounds (0-%ld) for %s", sample_index, num_frames - 1, s_bufname->s_name);
     }
 
     object_free(buf_ref);

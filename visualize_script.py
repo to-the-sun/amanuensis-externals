@@ -36,13 +36,19 @@ def udp_listener():
         sys.exit(1)
 
     print(f"Visualizer: Listening on UDP port {UDP_PORT}")
+    sys.stdout.flush()
+
     while True:
         try:
             data, addr = sock.recvfrom(65536)
-            # print(f"UDP Received {len(data)} bytes from {addr}")
             try:
                 text = data.decode("utf-8", errors="replace").strip()
+                # Print all received data for debugging
+                print(f"UDP REC: {text}")
+                sys.stdout.flush()
             except Exception as e:
+                print(f"DECODE ERROR: {e}")
+                sys.stdout.flush()
                 continue
 
             if not text:
@@ -64,14 +70,14 @@ def udp_listener():
 
                 try:
                     pkt = json.loads(line)
-                    # print(f"  Parsed: {pkt}")
                     if not isinstance(pkt, dict): continue
 
                     if all(k in pkt for k in ["track", "channel", "ms", "val"]):
+                        print(f"PARSED: track={pkt['track']}, ch={pkt['channel']}, ms={pkt['ms']}, val={pkt['val']}")
+                        sys.stdout.flush()
                         with state_lock:
                             if pkt.get("val") == 0.0:
                                 # Remove existing points at this track, channel, and ms
-                                # Tolerance for float comparison of ms
                                 data_points[:] = [p for p in data_points if not (
                                     p["track"] == pkt["track"] and
                                     p["channel"] == pkt["channel"] and
@@ -87,6 +93,10 @@ def udp_listener():
                                         break
                                 if not found:
                                     data_points.append(pkt)
+                    else:
+                        # Ignore messages meant for other visualizers but maybe log them once in a while?
+                        # For now, just skip silently if it doesn't match our schema.
+                        pass
                 except json.JSONDecodeError:
                     continue
 
@@ -94,6 +104,7 @@ def udp_listener():
             continue
         except Exception as e:
             print("UDP Listener error:", e)
+            sys.stdout.flush()
 
 def run_gui():
     pygame.init()
