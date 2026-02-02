@@ -76,8 +76,15 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
 // Placeholder for other methods to be implemented in next steps
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
-    if (argc < 4) return;
+    if (argc < 4) {
+        object_error((t_object *)x, "threads~ expects a list of 4 items: [palette:sym, track:int, bar:int, offset:float]");
+        return;
+    }
 
+    if (atom_gettype(argv) != A_SYM) {
+        object_error((t_object *)x, "threads~ first item in list must be a palette name (symbol)");
+        return;
+    }
     t_symbol *palette = atom_getsym(argv);
     t_atom_long track = atom_getlong(argv + 1);
     double bar_ms = atom_getfloat(argv + 2);
