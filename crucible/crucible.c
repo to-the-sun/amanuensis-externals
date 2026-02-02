@@ -16,7 +16,6 @@ typedef struct _crucible {
     void *verbose_log_outlet;
     t_buffer_ref *buffer_ref;
     long verbose;
-    long fill;
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
@@ -124,6 +123,7 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
 }
 
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c;
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
@@ -132,9 +132,6 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
-
-    CLASS_ATTR_LONG(c, "fill", 0, t_crucible, fill);
-    CLASS_ATTR_STYLE_LABEL(c, "fill", 0, "onoff", "Enable Song Fill");
 
     class_register(CLASS_BOX, c);
     crucible_class = c;
@@ -213,12 +210,17 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 
         crucible_verbose_log(x, "Checking reach %lld for track %s", (long long)current_reach, track_sym->s_name);
         if (incumbent_track_dict && !dictionary_hasentry(incumbent_track_dict, gensym(reach_str))) {
-            crucible_verbose_log(x, "  -> Reach %ld not found in incumbent. Sending reach message.", current_reach);
+            crucible_verbose_log(x, "  -> Reach %lld not found in incumbent. Sending reach message.", (long long)current_reach);
             t_atom reach_list[3];
-            atom_setlong(reach_list, atol(track_sym->s_name));
+            atom_setlong(reach_list, (t_atom_long)atol(track_sym->s_name));
             atom_setlong(reach_list + 1, current_reach);
             atom_setfloat(reach_list + 2, -999999.0);
-            outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
+
+            if (x->outlet_reach) {
+                crucible_verbose_log(x, "  -> Calling outlet_anything for reach...");
+                outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
+                crucible_verbose_log(x, "  -> Finished outlet_anything for reach.");
+            }
         } else {
             if (incumbent_track_dict) {
                 crucible_verbose_log(x, "  -> Reach %ld already exists in incumbent. Suppressing reach message.", current_reach);
@@ -258,7 +260,11 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     atom_setlong(list + 2, bar_ts_long);
     atom_setfloat(list + 3, offset_val);
 
-    outlet_list(x->outlet_data, NULL, 4, list);
+    if (x->outlet_data) {
+        crucible_verbose_log(x, "  -> Calling outlet_anything for data list...");
+        outlet_anything(x->outlet_data, _sym_list, 4, list);
+        crucible_verbose_log(x, "  -> Finished outlet_anything for data list.");
+    }
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
@@ -399,13 +405,15 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
 
             if (challenger_bar_dict) {
-                if (dictionary_hasentry(incumbent_track_dict, bar_sym)) {
+                if (incumbent_track_dict && dictionary_hasentry(incumbent_track_dict, bar_sym)) {
                      dictionary_deleteentry(incumbent_track_dict, bar_sym);
                 }
                 t_dictionary *copied_bar_dict = dictionary_deep_copy(challenger_bar_dict);
-                dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
-                crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-                crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
+                if (copied_bar_dict && incumbent_track_dict) {
+                    dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
+                    crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
+                    crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
+                }
             }
         }
         if (max_reach > x->song_reach) {
@@ -413,81 +421,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             x->song_reach = max_reach;
             crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
 
-            outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
-
-            if (x->fill && old_song_reach > 0) {
-                t_symbol **track_keys = NULL;
-                long num_tracks = 0;
-                dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
-
-                for (long i = 0; i < num_tracks; i++) {
-                    if (track_keys[i] != track_sym) { // Not the track that grew the song
-                        t_dictionary *other_track_dict = NULL;
-                        dictionary_getdictionary(incumbent_dict, track_keys[i], (t_object **)&other_track_dict);
-
-                        if (other_track_dict) {
-                            for (t_atom_long t = old_song_reach; t < x->song_reach; t++) {
-                                t_atom_long source_ts = t % old_song_reach;
-                                char source_ts_str[64];
-                                snprintf(source_ts_str, 64, "%lld", (long long)source_ts);
-                                t_symbol *source_ts_sym = gensym(source_ts_str);
-
-                                if (dictionary_hasentry(other_track_dict, source_ts_sym)) {
-                                    t_dictionary *source_bar_dict = NULL;
-                                    dictionary_getdictionary(other_track_dict, source_ts_sym, (t_object **)&source_bar_dict);
-                                    if (source_bar_dict) {
-                                        char target_ts_str[64];
-                                        snprintf(target_ts_str, 64, "%lld", (long long)t);
-                                        t_symbol *target_ts_sym = gensym(target_ts_str);
-
-                                        if (dictionary_hasentry(other_track_dict, target_ts_sym)) {
-                                            dictionary_deleteentry(other_track_dict, target_ts_sym);
-                                        }
-                                        t_dictionary *copied_bar_dict = dictionary_deep_copy(source_bar_dict);
-
-                                        // Adjust absolutes in the copied bar
-                                        t_atomarray *absolutes_atomarray = NULL;
-                                        if (dictionary_hasentry(copied_bar_dict, gensym("absolutes"))) {
-                                            dictionary_getatomarray(copied_bar_dict, gensym("absolutes"), (t_object **)&absolutes_atomarray);
-                                            if (absolutes_atomarray) {
-                                                long absolutes_len = 0;
-                                                t_atom *absolutes_atoms = NULL;
-                                                atomarray_getatoms(absolutes_atomarray, &absolutes_len, &absolutes_atoms);
-                                                for (long k = 0; k < absolutes_len; k++) {
-                                                    double old_absolute = atom_getfloat(absolutes_atoms + k);
-                                                    atom_setfloat(absolutes_atoms + k, old_absolute + old_song_reach);
-                                                }
-                                            }
-                                        }
-
-                                        // Adjust span in the copied bar
-                                        t_atomarray *span_atomarray = NULL;
-                                        if (dictionary_hasentry(copied_bar_dict, gensym("span"))) {
-                                            dictionary_getatomarray(copied_bar_dict, gensym("span"), (t_object **)&span_atomarray);
-                                            if (span_atomarray) {
-                                                long span_len = 0;
-                                                t_atom *span_atoms = NULL;
-                                                atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
-                                                for (long k = 0; k < span_len; k++) {
-                                                    long old_span_val = atom_getlong(span_atoms + k);
-                                                    atom_setlong(span_atoms + k, old_span_val + old_song_reach);
-                                                }
-                                            }
-                                        }
-
-                                        dictionary_appenddictionary(other_track_dict, target_ts_sym, (t_object *)copied_bar_dict);
-                                        crucible_verbose_log(x, "Duplicated bar %s from track %s to %s",
-                                                             source_ts_sym->s_name, track_keys[i]->s_name, target_ts_sym->s_name);
-                                        crucible_output_bar_data(x, copied_bar_dict, t, track_keys[i], other_track_dict);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (track_keys) {
-                    sysmem_freeptr(track_keys);
-                }
+            if (x->outlet_fill) {
+                outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
             }
         }
     } else {

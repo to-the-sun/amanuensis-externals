@@ -67,13 +67,6 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attr>
-		<attr name="fill" get="1" set="1" type="long" size="1">
-			<digest>Enable Song Fill</digest>
-			<description>When enabled (1), automatically grows tracks to match the maximum reach by looping existing content.</description>
-			<attributelist>
-				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
-			</attributelist>
-		</attr>
 	</attrlist>
 	<!--SEEALSO-->
 	<seealsolist>
