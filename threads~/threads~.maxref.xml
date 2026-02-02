@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="threads~" module="msp" category="Utility">
+	<digest>Writes incoming track data into a polybuffer~</digest>
+	<description>
+		The `threads~` object receives 4-item lists (palette, track, bar, offset) and writes them into a named `polybuffer~`. It uses a palette-to-channel mapping to determine which channel of a buffer to write to. Special values like 0 and -999999 are handled according to a specific multi-channel writing protocol.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="list">
+			<digest>Data List [palette, track, bar, offset]</digest>
+			<description>The 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet.</description>
+		</inlet>
+		<inlet id="1" type="list">
+			<digest>Palette Configuration</digest>
+			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="anything">
+			<digest>Verbose Logging Outlet</digest>
+			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="polybuffer_prefix" type="symbol" optional="0">
+			<digest>Prefix for the polybuffer~ members</digest>
+			<description>The base name of the polybuffer~ (e.g., if prefix is 'script', it will look for 'script.1', 'script.2', etc.).</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="list">
+			<digest>Process data list</digest>
+			<description>Parses the 4-item list and writes data to the appropriate buffer and channel.</description>
+		</method>
+		<method name="anything">
+			<digest>Register palette or clear</digest>
+			<description>Used on the second inlet to map palette names to channel indices or clear the map. On the first inlet, handles formatted messages similar to the data list.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attrlist>
+		<attr name="verbose" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Verbose Logging</digest>
+			<description>When set to 1, the object outputs diagnostic information and sends data to the visualizer script.</description>
+		</attr>
+	</attrlist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="crucible" />
+		<seealso name="polybuffer~" />
+		<seealso name="buffer~" />
+		<seealso name="buildspans" />
+		<seealso name="whichoffset" />
+		<seealso name="notify" />
+		<seealso name="growbuffer~" />
+	</seealsolist>
+</c74object>

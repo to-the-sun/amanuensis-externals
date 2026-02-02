@@ -3,7 +3,7 @@
 <c74object name="crucible" module="max" category="Analysis">
 	<digest>Selectively updates a dictionary by comparing incoming spans</digest>
 	<description>
-		The `crucible` object implements a challenger/incumbent system for updating a dictionary. It receives streams of messages representing musical spans (typically from `buildspans`) and stores them as a "challenger". When a complete span is received, it compares the rating of each bar in the challenger to the corresponding bar in an "incumbent" dictionary. The challenger only overwrites the incumbent if every bar rating is strictly higher. It also supports a "song fill" feature to expand tracks to match the longest reach.
+		The `crucible` object implements a challenger/incumbent system for updating a dictionary. It receives streams of messages representing musical spans (typically from `buildspans`) and stores them as a "challenger". When a complete span is received, it compares the rating of each bar in the challenger to the corresponding bar in an "incumbent" dictionary. The challenger only overwrites the incumbent if every bar rating is strictly higher.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -23,31 +23,19 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="symbol">
-			<digest>Palette value</digest>
-			<description>For a winning span, outputs the associated palette.</description>
+		<outlet id="0" type="list">
+			<digest>Data List</digest>
+			<description>For a winning span, outputs a 4-item list: [palette:symbol, track:int, bar:int, offset:float].</description>
 		</outlet>
-		<outlet id="1" type="int">
-			<digest>Track value</digest>
-			<description>For a winning span, outputs the associated track.</description>
+		<outlet id="1" type="anything">
+			<digest>Reach List</digest>
+			<description>For a winning span, outputs a list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
 		</outlet>
-		<outlet id="2" type="int">
-			<digest>Bar value</digest>
-			<description>For a winning span, outputs each bar timestamp in the span.</description>
-		</outlet>
-		<outlet id="3" type="float">
-			<digest>Offset value</digest>
-			<description>For a winning span, outputs the associated high-precision offset.</description>
-		</outlet>
-		<outlet id="4" type="anything">
-			<digest>Reach list</digest>
-			<description>For a winning span, outputs a 4-item list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
-		</outlet>
-		<outlet id="5" type="symbol">
+		<outlet id="2" type="symbol">
 			<digest>Fill signal</digest>
 			<description>Outputs the symbol 'fill' whenever the song grows in reach.</description>
 		</outlet>
-		<outlet id="6" type="anything">
+		<outlet id="3" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
 			<description>Status messages when verbose attribute is enabled.</description>
 		</outlet>
@@ -79,22 +67,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attr>
-		<attr name="fill" get="1" set="1" type="long" size="1">
-			<digest>Enable Song Fill</digest>
-			<description>When enabled (1), automatically grows tracks to match the maximum reach by looping existing content.</description>
-			<attributelist>
-				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
-			</attributelist>
-		</attr>
 	</attrlist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />
-		<seealso name="crucible" />
+		<seealso name="threads~" />
 		<seealso name="notify" />
 		<seealso name="whichoffset" />
 		<seealso name="stemversion" />
 		<seealso name="createproject" />
-		<seealso name="dict" />
+		<seealso name="growbuffer~" />
 	</seealsolist>
 </c74object>
