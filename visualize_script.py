@@ -68,6 +68,17 @@ def udp_listener():
 
                 try:
                     pkt = json.loads(line)
+                    if "clear" in pkt:
+                        with state_lock:
+                            data_points.clear()
+                            track_chans.clear()
+                            first_point_received = False
+                            global_min_ms = 0.0
+                            global_max_ms = 1000.0
+                        print("Visualizer state cleared via UDP")
+                        sys.stdout.flush()
+                        continue
+
                     # Support both old and new protocol for now
                     if "num_chans" in pkt:
                         # New protocol
