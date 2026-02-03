@@ -319,8 +319,6 @@ void notify_fill(t_notify *x) {
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
-    x->local_bar_length = 0;
-    notify_verbose_log(x, "Bar length reset to zero after fill.");
     object_release((t_object *)dict);
 }
 
@@ -469,8 +467,6 @@ void notify_bang(t_notify *x) {
     dictionary_clear(dict);
     notify_verbose_log(x, "Dictionary cleared.");
     if (all_notes) sysmem_freeptr(all_notes);
-    x->local_bar_length = 0;
-    notify_verbose_log(x, "Bar length reset to zero after dump.");
     object_release((t_object *)dict);
 }
 
