@@ -27,7 +27,7 @@
 				Local Bar Length
 			</digest>
 			<description>
-				Sets a local override for the bar length. If set to 0 (default), the object will instead read the bar length from the first sample of a buffer~ named 'bar'.
+				Sets a local override for the bar length. If set to 0 (default), the object will instead read the bar length from the first sample of a buffer~ named 'bar'. This value persists across dump operations until manually changed or reset to 0.
 			</description>
 		</inlet>
 	</inletlist>
