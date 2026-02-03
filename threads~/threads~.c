@@ -237,8 +237,10 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         }
     } else if (inlet == 0) {
         if (s == gensym("clear") && argc == 0) {
+            object_post((t_object *)x, "threads~: received clear message on inlet 0");
             char bufname[256];
             int i = 1;
+            int cleared_count = 0;
             t_buffer_ref *temp_ref = NULL;
 
             while (1) {
@@ -262,12 +264,16 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
                     threads_verbose_log(x, "Cleared buffer: %s", bufname);
+                    cleared_count++;
                 }
                 i++;
             }
             if (temp_ref) object_free(temp_ref);
 
+            object_post((t_object *)x, "threads~: cleared %d buffers", cleared_count);
+
             visualize("{\"clear\": 1}");
+            object_post((t_object *)x, "threads~: sent clear command to visualizer");
             threads_verbose_log(x, "Sent clear command to visualizer");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
