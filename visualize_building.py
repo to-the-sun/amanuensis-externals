@@ -27,41 +27,56 @@ state_lock = threading.Lock()
 # Flash state per cell: key "track_measure" -> { flash_until, flash_color, x_until }
 flash_state = {}
 
-# UDP listener: receives JSON packets and merges into `state`
-def udp_listener():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", UDP_PORT))
-    print("GUI: Listening for UDP on port", UDP_PORT)
+def process_pkt(text):
+    if not text:
+        return
+    try:
+        pkt = json.loads(text)
+        with state_lock:
+            if "building" in pkt:
+                state["working_memory"] = pkt["building"]
+            if "current_offset" in pkt:
+                state["current_offset"] = float(pkt["current_offset"])
+            if "bar_length" in pkt:
+                state["bar_length"] = float(pkt["bar_length"])
+    except json.JSONDecodeError as e:
+        print(f"JSON parse error: {e}")
+
+def tcp_server():
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.bind(("", UDP_PORT))
+    except Exception as e:
+        print(f"ERROR: Failed to bind to port {UDP_PORT}: {e}")
+        return
+
+    server_sock.listen(5)
+    print("GUI: Listening for TCP on port", UDP_PORT)
     while True:
         try:
-            data, addr = sock.recvfrom(65536)
-            text = data.decode("utf-8", errors="ignore").rstrip(",").strip()
-            print("UDP recv from {}: {}".format(addr, text))
-            if not text:
-                continue
-
-            # The C code sends a single JSON object per UDP packet.
-            # It might have a trailing comma from a previous bug, so we strip it.
-            if text.endswith(','):
-                text = text[:-1]
-
-            try:
-                pkt = json.loads(text)
-            except json.JSONDecodeError as e:
-                print(f"UDP listener: JSON parse error: {e}")
-                continue
-
-            with state_lock:
-                if "building" in pkt:
-                    state["working_memory"] = pkt["building"]
-                if "current_offset" in pkt:
-                    state["current_offset"] = float(pkt["current_offset"])
-                if "bar_length" in pkt:
-                    state["bar_length"] = float(pkt["bar_length"])
-
+            client_sock, addr = server_sock.accept()
+            print(f"Accepted connection from {addr}")
+            threading.Thread(target=handle_client, args=(client_sock,), daemon=True).start()
         except Exception as e:
-            print(f"UDP listener: Unexpected error: {e}")
+            print(f"TCP Server error: {e}")
+
+def handle_client(sock):
+    buffer = ""
+    while True:
+        try:
+            data = sock.recv(4096)
+            if not data:
+                break
+            text = data.decode("utf-8", errors="ignore")
+            buffer += text
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                process_pkt(line.strip())
+        except Exception as e:
+            print(f"Client handler error: {e}")
+            break
+    sock.close()
 
 # Helper to prune flash_state when transcript replacement/deletion occurs.
 def _prune_flash_state_unlocked():
@@ -378,7 +393,7 @@ def run_gui():
     pygame.quit()
 
 if __name__ == "__main__":
-    # start UDP listener thread
-    t = threading.Thread(target=udp_listener, daemon=True)
+    # start TCP server thread
+    t = threading.Thread(target=tcp_server, daemon=True)
     t.start()
     run_gui()

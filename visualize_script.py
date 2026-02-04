@@ -27,114 +27,131 @@ first_point_received = False
 
 state_lock = threading.Lock()
 
-def udp_listener():
+def process_text(text):
     global global_min_ms, global_max_ms, first_point_received
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.settimeout(1.0)
+    if not text:
+        return
+
+    # Handle multiple JSON objects that might be in the text
+    text = text.replace("} {", "}\n{").replace("}{", "}\n{")
+
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        print(f"DEBUG: Processing line: {line}")
+        sys.stdout.flush()
+        start = line.find('{')
+        end = line.rfind('}')
+        if start == -1 or end == -1: continue
+        line = line[start:end+1]
+
+        try:
+            pkt = json.loads(line)
+            if "clear" in pkt:
+                with state_lock:
+                    data_points.clear()
+                    track_chans.clear()
+                    first_point_received = False
+                    global_min_ms = 0.0
+                    global_max_ms = 1000.0
+                print("!!! Visualizer state cleared via TCP !!!")
+                sys.stdout.flush()
+                continue
+
+            # Support both old and new protocol for now
+            if "num_chans" in pkt:
+                # New protocol
+                valid = all(k in pkt for k in ["track", "ms", "chan", "val", "num_chans"])
+            else:
+                # Fallback/Compat
+                valid = all(k in pkt for k in ["track", "channel", "ms", "val"])
+                if valid:
+                    pkt["chan"] = pkt["channel"]
+                    pkt["num_chans"] = -1 # indicates we don't know
+
+            if valid:
+                print(f"PARSED: track={pkt['track']}, ms={pkt['ms']}, chan={pkt['chan']}, val={pkt['val']}, num_chans={pkt['num_chans']}")
+                sys.stdout.flush()
+
+                with state_lock:
+                    # Update global domain
+                    if not first_point_received:
+                        global_min_ms = pkt['ms']
+                        global_max_ms = pkt['ms']
+                        first_point_received = True
+                    else:
+                        global_min_ms = min(global_min_ms, pkt['ms'])
+                        global_max_ms = max(global_max_ms, pkt['ms'])
+
+                    if pkt['num_chans'] > 0:
+                        track_chans[pkt['track']] = max(track_chans.get(pkt['track'], 0), pkt['num_chans'])
+
+                    if pkt['val'] == 0.0:
+                        # Remove all events at this track/ms (clearing all channels)
+                        data_points[:] = [p for p in data_points if not (
+                            p["track"] == pkt["track"] and
+                            abs(p["ms"] - pkt["ms"]) < 0.001
+                        )]
+                    else:
+                        # Replace existing event at this track/ms if found, else append
+                        found = False
+                        for p in data_points:
+                            if p["track"] == pkt["track"] and abs(p["ms"] - pkt["ms"]) < 0.001:
+                                p["chan"] = pkt["chan"]
+                                p["val"] = pkt["val"]
+                                p["num_chans"] = max(p["num_chans"], pkt["num_chans"])
+                                found = True
+                                break
+                        if not found:
+                            data_points.append(pkt)
+        except json.JSONDecodeError:
+            continue
+
+def tcp_server():
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        sock.bind(("", UDP_PORT))
+        server_sock.bind(("", UDP_PORT))
     except Exception as e:
         print(f"ERROR: Failed to bind to port {UDP_PORT}: {e}")
         sys.exit(1)
 
-    print(f"Visualizer: Listening on UDP port {UDP_PORT}")
+    server_sock.listen(5)
+    print(f"Visualizer: Listening on TCP port {UDP_PORT}")
     sys.stdout.flush()
 
     while True:
         try:
-            data, addr = sock.recvfrom(65536)
+            client_sock, addr = server_sock.accept()
+            print(f"Accepted connection from {addr}")
+            sys.stdout.flush()
+            threading.Thread(target=handle_client, args=(client_sock,), daemon=True).start()
+        except Exception as e:
+            print(f"TCP Server error: {e}")
+            sys.stdout.flush()
+
+def handle_client(sock):
+    buffer = ""
+    while True:
+        try:
+            data = sock.recv(4096)
+            if not data:
+                break
             try:
-                text = data.decode("utf-8", errors="replace").strip()
-                print(f"UDP REC: {text}")
-                sys.stdout.flush()
+                text = data.decode("utf-8", errors="replace")
+                buffer += text
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    process_text(line)
             except Exception as e:
                 print(f"DECODE ERROR: {e}")
                 sys.stdout.flush()
-                continue
-
-            if not text:
-                continue
-
-            text = text.replace("} {", "}\n{").replace("}{", "}\n{")
-
-            for line in text.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
-                print(f"DEBUG: Processing line: {line}")
-                sys.stdout.flush()
-                start = line.find('{')
-                end = line.rfind('}')
-                if start == -1 or end == -1: continue
-                line = line[start:end+1]
-
-                try:
-                    pkt = json.loads(line)
-                    if "clear" in pkt:
-                        with state_lock:
-                            data_points.clear()
-                            track_chans.clear()
-                            first_point_received = False
-                            global_min_ms = 0.0
-                            global_max_ms = 1000.0
-                        print("!!! Visualizer state cleared via UDP !!!")
-                        sys.stdout.flush()
-                        continue
-
-                    # Support both old and new protocol for now
-                    if "num_chans" in pkt:
-                        # New protocol
-                        valid = all(k in pkt for k in ["track", "ms", "chan", "val", "num_chans"])
-                    else:
-                        # Fallback/Compat
-                        valid = all(k in pkt for k in ["track", "channel", "ms", "val"])
-                        if valid:
-                            pkt["chan"] = pkt["channel"]
-                            pkt["num_chans"] = -1 # indicates we don't know
-
-                    if valid:
-                        print(f"PARSED: track={pkt['track']}, ms={pkt['ms']}, chan={pkt['chan']}, val={pkt['val']}, num_chans={pkt['num_chans']}")
-                        sys.stdout.flush()
-
-                        with state_lock:
-                            # Update global domain
-                            if not first_point_received:
-                                global_min_ms = pkt['ms']
-                                global_max_ms = pkt['ms']
-                                first_point_received = True
-                            else:
-                                global_min_ms = min(global_min_ms, pkt['ms'])
-                                global_max_ms = max(global_max_ms, pkt['ms'])
-
-                            if pkt['num_chans'] > 0:
-                                track_chans[pkt['track']] = max(track_chans.get(pkt['track'], 0), pkt['num_chans'])
-
-                            if pkt['val'] == 0.0:
-                                # Remove all events at this track/ms (clearing all channels)
-                                data_points[:] = [p for p in data_points if not (
-                                    p["track"] == pkt["track"] and
-                                    abs(p["ms"] - pkt["ms"]) < 0.001
-                                )]
-                            else:
-                                # Replace existing event at this track/ms if found, else append
-                                found = False
-                                for p in data_points:
-                                    if p["track"] == pkt["track"] and abs(p["ms"] - pkt["ms"]) < 0.001:
-                                        p["chan"] = pkt["chan"]
-                                        p["val"] = pkt["val"]
-                                        p["num_chans"] = max(p["num_chans"], pkt["num_chans"])
-                                        found = True
-                                        break
-                                if not found:
-                                    data_points.append(pkt)
-                except json.JSONDecodeError:
-                    continue
-        except socket.timeout:
-            continue
         except Exception as e:
-            print(f"UDP Listener error: {e}")
+            print(f"Client handler error: {e}")
             sys.stdout.flush()
+            break
+    sock.close()
 
 def run_gui():
     global global_min_ms, global_max_ms, first_point_received
@@ -283,6 +300,6 @@ def run_gui():
     pygame.quit()
 
 if __name__ == "__main__":
-    listener_thread = threading.Thread(target=udp_listener, daemon=True)
+    listener_thread = threading.Thread(target=tcp_server, daemon=True)
     listener_thread.start()
     run_gui()

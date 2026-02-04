@@ -1,13 +1,14 @@
 #include "visualize.h"
 #include <winsock2.h>
 #include <windows.h>
+#include <stdio.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define UDP_PORT 9999
+#define TCP_PORT 9999
 #define SERVER "127.0.0.1"
 
-static SOCKET sock;
+static SOCKET sock = INVALID_SOCKET;
 static struct sockaddr_in server_addr;
 
 int visualize_init() {
@@ -16,23 +17,50 @@ int visualize_init() {
         return 1;
     }
 
-    if ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
-        return 1;
-    }
-
     memset((char *) &server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(UDP_PORT);
+    server_addr.sin_port = htons(TCP_PORT);
     server_addr.sin_addr.S_un.S_addr = inet_addr(SERVER);
     
     return 0;
 }
 
 void visualize_cleanup() {
-    closesocket(sock);
+    if (sock != INVALID_SOCKET) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+    }
     WSACleanup();
 }
 
 void visualize(const char *message) {
-    sendto(sock, message, strlen(message), 0, (struct sockaddr *) &server_addr, sizeof(server_addr));
+    if (sock == INVALID_SOCKET) {
+        sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == INVALID_SOCKET) return;
+
+        if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return;
+        }
+    }
+
+    char buf[8192];
+    int n = snprintf(buf, sizeof(buf), "%s\n", message);
+    if (n < 0 || n >= (int)sizeof(buf)) {
+        // Message too long or error, skip for now
+        return;
+    }
+
+    int total_sent = 0;
+    int len = n;
+    while (total_sent < len) {
+        int sent = send(sock, buf + total_sent, len - total_sent, 0);
+        if (sent == SOCKET_ERROR) {
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return;
+        }
+        total_sent += sent;
+    }
 }
