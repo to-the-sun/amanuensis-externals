@@ -101,7 +101,7 @@ void threads_free(t_threads *x) {
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(list) [palette, track, bar, offset] Data from crucible"); break;
+            case 0: sprintf(s, "(list) [palette, track, bar, offset] Data from crucible, (symbol) clear"); break;
             case 1: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
@@ -236,8 +236,47 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             hashtab_storelong(x->palette_map, s, index);
         }
     } else if (inlet == 0) {
-        // Handle anything on inlet 0 (like the "-" reach message)
-        if (argc >= 3) {
+        if (s == gensym("clear") && argc == 0) {
+            object_post((t_object *)x, "threads~: received clear message on inlet 0");
+            char bufname[256];
+            int i = 1;
+            int cleared_count = 0;
+            t_buffer_ref *temp_ref = NULL;
+
+            while (1) {
+                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i);
+                t_symbol *s_member = gensym(bufname);
+
+                if (temp_ref == NULL) {
+                    temp_ref = buffer_ref_new((t_object *)x, s_member);
+                } else {
+                    buffer_ref_set(temp_ref, s_member);
+                }
+
+                t_buffer_obj *b = buffer_ref_getobject(temp_ref);
+                if (!b) break;
+
+                float *samples = buffer_locksamples(b);
+                if (samples) {
+                    long num_chans = buffer_getchannelcount(b);
+                    long num_frames = buffer_getframecount(b);
+                    memset(samples, 0, num_frames * num_chans * sizeof(float));
+                    buffer_unlocksamples(b);
+                    buffer_setdirty(b);
+                    threads_verbose_log(x, "Cleared buffer: %s", bufname);
+                    cleared_count++;
+                }
+                i++;
+            }
+            if (temp_ref) object_free(temp_ref);
+
+            object_post((t_object *)x, "threads~: cleared %d buffers", cleared_count);
+
+            visualize("{\"clear\": 1}");
+            object_post((t_object *)x, "threads~: sent clear command to visualizer");
+            threads_verbose_log(x, "Sent clear command to visualizer");
+        } else if (argc >= 3) {
+            // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
             t_atom_long track = atom_getlong(argv);
             double bar_ms = atom_getfloat(argv + 1);

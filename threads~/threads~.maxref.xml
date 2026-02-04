@@ -14,7 +14,7 @@
 	<inletlist>
 		<inlet id="0" type="list">
 			<digest>Data List [palette, track, bar, offset]</digest>
-			<description>The 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet.</description>
+			<description>The 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer.</description>
 		</inlet>
 		<inlet id="1" type="list">
 			<digest>Palette Configuration</digest>
@@ -43,7 +43,7 @@
 		</method>
 		<method name="anything">
 			<digest>Register palette or clear</digest>
-			<description>Used on the second inlet to map palette names to channel indices or clear the map. On the first inlet, handles formatted messages similar to the data list.</description>
+			<description>Used on the second inlet to map palette names to channel indices or clear the map. On the first inlet, handles formatted messages similar to the data list, or the symbol 'clear' to reset all buffers and the visualizer.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->

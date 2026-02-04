@@ -60,7 +60,10 @@ def udp_listener():
 
             for line in text.split('\n'):
                 line = line.strip()
-                if not line: continue
+                if not line:
+                    continue
+                print(f"DEBUG: Processing line: {line}")
+                sys.stdout.flush()
                 start = line.find('{')
                 end = line.rfind('}')
                 if start == -1 or end == -1: continue
@@ -68,6 +71,17 @@ def udp_listener():
 
                 try:
                     pkt = json.loads(line)
+                    if "clear" in pkt:
+                        with state_lock:
+                            data_points.clear()
+                            track_chans.clear()
+                            first_point_received = False
+                            global_min_ms = 0.0
+                            global_max_ms = 1000.0
+                        print("!!! Visualizer state cleared via UDP !!!")
+                        sys.stdout.flush()
+                        continue
+
                     # Support both old and new protocol for now
                     if "num_chans" in pkt:
                         # New protocol
