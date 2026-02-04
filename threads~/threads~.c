@@ -237,6 +237,8 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         }
     } else if (inlet == 0) {
         if (s == gensym("clear") && argc == 0) {
+            // Note: This operation is synchronous and blocks the message thread
+            // until all buffers in the polybuffer~ have been cleared.
             object_post((t_object *)x, "threads~: received clear message on inlet 0");
             char bufname[256];
             int i = 1;
