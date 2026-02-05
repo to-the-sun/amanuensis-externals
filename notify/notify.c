@@ -39,6 +39,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
 void notify_fill(t_notify *x);
+t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_verbose_log(t_notify *x, const char *fmt, ...);
@@ -47,9 +48,13 @@ long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
     t_class *c;
+
+    common_symbols_init();
+
     c = class_new("notify", (method)notify_new, (method)notify_free, (short)sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
+    class_addmethod(c, (method)notify_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
@@ -78,7 +83,7 @@ long notify_get_bar_length(t_notify *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        object_error((t_object *)x, "bar buffer~ not found");
+        notify_verbose_log(x, "bar buffer~ not found");
         return 0;
     }
 
@@ -143,6 +148,10 @@ void notify_free(t_notify *x) {
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
     }
+}
+
+t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
+    return buffer_ref_notify(x->buffer_ref, s, msg, sender, data);
 }
 
 int note_compare(const void *a, const void *b) {
