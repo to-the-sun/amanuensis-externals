@@ -329,6 +329,8 @@ void notify_bang(t_notify *x) {
         return;
     }
 
+    long bar_length = notify_get_bar_length(x);
+
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -385,7 +387,6 @@ void notify_bang(t_notify *x) {
             outlet_anything(x->out_descript, palette, 3, descript_list);
 
             // Handle NEXT bar descript
-            long bar_length = notify_get_bar_length(x);
             if (bar_length > 0) {
                 double next_bar_ts = bar_ts + bar_length;
                 char next_bar_str[64];
