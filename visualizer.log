@@ -1,7 +1,7 @@
 pygame 2.6.1 (SDL 2.28.4, Python 3.12.12)
 Hello from the pygame community. https://www.pygame.org/contribute.html
 Visualizer: Listening on TCP port 9999
-Accepted connection from ('127.0.0.1', 37250)
+Accepted connection from ('127.0.0.1', 41164)
 DEBUG: Processing line: {"track": 1, "ms": 1000.0, "chan": 0, "val": 250.0, "num_chans": 2}
 PARSED: track=1, ms=1000.0, chan=0, val=250.0, num_chans=2
 DEBUG: Processing line: {"track": 1, "ms": 2000.0, "chan": -1, "val": -999999.0, "num_chans": -1}
