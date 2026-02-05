@@ -450,6 +450,9 @@ void notify_bang(t_notify *x) {
 
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
+    dictionary_clear(dict);
+    notify_verbose_log(x, "Dictionary cleared.");
+
     for (long i = 0; i < total_notes; i++) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
         if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
@@ -464,8 +467,6 @@ void notify_bang(t_notify *x) {
         outlet_list(x->out_abs_score, NULL, 2, list_atoms);
     }
 
-    dictionary_clear(dict);
-    notify_verbose_log(x, "Dictionary cleared.");
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
 }
