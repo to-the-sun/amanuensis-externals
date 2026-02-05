@@ -44,6 +44,17 @@ void visualize_cleanup() {
     }
 }
 
+/**
+ * Sends a JSON message to the visualization script on port 9999.
+ *
+ * PERFORMANCE & THREADING:
+ * - This function is synchronous in terms of execution (it runs on the calling thread).
+ * - It uses NON-BLOCKING TCP sockets (FIONBIO). If a send would block or the connection
+ *   is not yet established, it returns immediately to avoid slowing down Max.
+ * - It implements a 2-second cooldown for connection attempts to minimize overhead
+ *   when the visualization script is not running.
+ * - While it uses non-blocking I/O, it does NOT operate on its own background thread.
+ */
 void visualize(const char *message) {
     if (sock == INVALID_SOCKET) {
         DWORD now = GetTickCount();
