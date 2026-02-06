@@ -3,6 +3,7 @@
 #include "ext_dictobj.h"
 #include "ext_proto.h"
 #include "ext_buffer.h"
+#include "ext_critical.h"
 #include "../shared/visualize.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
@@ -219,12 +220,16 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     long bar_length = 0;
+    critical_enter(0);
     float *samples = buffer_locksamples(b);
     if (samples) {
         if (buffer_getframecount(b) > 0) {
             bar_length = (long)samples[0];
         }
         buffer_unlocksamples(b);
+        critical_exit(0);
+    } else {
+        critical_exit(0);
     }
 
     if (bar_length <= 0) {

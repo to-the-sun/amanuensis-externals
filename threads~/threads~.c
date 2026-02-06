@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_hashtab.h"
 #include "ext_buffer.h"
+#include "ext_critical.h"
 #include "z_dsp.h"
 #include "../shared/visualize.h"
 #include <string.h>
@@ -15,12 +16,14 @@ typedef struct _threads {
     long inlet_num;
     long verbose;
     void *verbose_log_outlet;
+    t_hashtab *buffer_refs;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
 void threads_free(t_threads *x);
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
+t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
 void threads_verbose_log(t_threads *x, const char *fmt, ...);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
@@ -43,6 +46,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)threads_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)threads_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)threads_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
@@ -84,6 +88,8 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->palette_map = hashtab_new(0);
         hashtab_flags(x->palette_map, OBJ_FLAG_REF);
 
+        x->buffer_refs = hashtab_new(0);
+
         x->proxy = proxy_new(x, 1, &x->inlet_num);
     }
     return x;
@@ -95,7 +101,34 @@ void threads_free(t_threads *x) {
         hashtab_clear(x->palette_map);
         object_free(x->palette_map);
     }
+    if (x->buffer_refs) {
+        long num_items = 0;
+        t_symbol **keys = NULL;
+        hashtab_getkeys(x->buffer_refs, &num_items, &keys);
+        for (long i = 0; i < num_items; i++) {
+            t_buffer_ref *ref = NULL;
+            hashtab_lookup(x->buffer_refs, keys[i], (t_object **)&ref);
+            if (ref) object_free(ref);
+        }
+        if (keys) sysmem_freeptr(keys);
+        object_free(x->buffer_refs);
+    }
     visualize_cleanup();
+}
+
+t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
+    if (x->buffer_refs) {
+        long num_items = 0;
+        t_symbol **keys = NULL;
+        hashtab_getkeys(x->buffer_refs, &num_items, &keys);
+        for (long i = 0; i < num_items; i++) {
+            t_buffer_ref *ref = NULL;
+            hashtab_lookup(x->buffer_refs, keys[i], (t_object **)&ref);
+            if (ref) buffer_ref_notify(ref, s, msg, sender, data);
+        }
+        if (keys) sysmem_freeptr(keys);
+    }
+    return MAX_ERR_NONE;
 }
 
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
@@ -135,12 +168,16 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track);
     t_symbol *s_bufname = gensym(bufname);
 
-    t_buffer_ref *buf_ref = buffer_ref_new((t_object *)x, s_bufname);
+    t_buffer_ref *buf_ref = NULL;
+    hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&buf_ref);
+    if (!buf_ref) {
+        buf_ref = buffer_ref_new((t_object *)x, s_bufname);
+        hashtab_store(x->buffer_refs, s_bufname, (t_object *)buf_ref);
+    }
     t_buffer_obj *b = buffer_ref_getobject(buf_ref);
 
     if (!b) {
         threads_verbose_log(x, "Error: buffer %s not found", s_bufname->s_name);
-        object_free(buf_ref);
         return;
     }
 
@@ -163,9 +200,6 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
 
     // 5. Writing to buffer
     long num_chans = buffer_getchannelcount(b);
-    long num_frames = buffer_getframecount(b);
-
-    threads_verbose_log(x, "Sample index: %ld, num_frames: %ld, num_chans: %ld", sample_index, num_frames, num_chans);
 
     // Visualization: Send single packet regardless of buffer bounds (offload work to script)
     char json[256];
@@ -173,6 +207,10 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
              (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans);
     threads_verbose_log(x, "Visualization packet sent: %s", json);
     visualize(json);
+
+    critical_enter(0);
+    long num_frames = buffer_getframecount(b);
+    threads_verbose_log(x, "Sample index: %ld, num_frames: %ld, num_chans: %ld", sample_index, num_frames, num_chans);
 
     if (sample_index >= 0 && sample_index < num_frames) {
         float *samples = buffer_locksamples(b);
@@ -194,14 +232,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             }
             buffer_unlocksamples(b);
             buffer_setdirty(b);
+            critical_exit(0);
         } else {
+            critical_exit(0);
             threads_verbose_log(x, "Error: could not lock buffer samples for %s", s_bufname->s_name);
         }
     } else {
         threads_verbose_log(x, "Warning: sample index %ld out of bounds (0-%ld) for %s. Skipping buffer write.", sample_index, num_frames - 1, s_bufname->s_name);
     }
-
-    object_free(buf_ref);
 }
 
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
@@ -258,6 +296,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                 t_buffer_obj *b = buffer_ref_getobject(temp_ref);
                 if (!b) break;
 
+                critical_enter(0);
                 float *samples = buffer_locksamples(b);
                 if (samples) {
                     long num_chans = buffer_getchannelcount(b);
@@ -265,8 +304,11 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     memset(samples, 0, num_frames * num_chans * sizeof(float));
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
+                    critical_exit(0);
                     threads_verbose_log(x, "Cleared buffer: %s", bufname);
                     cleared_count++;
+                } else {
+                    critical_exit(0);
                 }
                 i++;
             }
