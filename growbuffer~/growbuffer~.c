@@ -1,6 +1,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_buffer.h"
+#include "ext_critical.h"
 #include <string.h>
 #include <math.h>
 
@@ -148,6 +149,8 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 
 	if (new_frames == old_frames) return;
 
+	critical_enter(0);
+
 	float *backup = NULL;
 	long frames_to_copy = (old_frames < new_frames) ? old_frames : new_frames;
 
@@ -171,18 +174,19 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 	object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
 
 	if (backup) {
-		float *samples = buffer_locksamples(b);
+		t_buffer_info new_info;
+		buffer_getinfo(b, &new_info);
+		float *samples = new_info.b_samples;
 		if (samples) {
-			t_buffer_info new_info;
-			buffer_getinfo(b, &new_info);
 			if (new_info.b_nchans == chans) {
 				memcpy(samples, backup, frames_to_copy * chans * sizeof(float));
 			}
-			buffer_unlocksamples(b);
 		}
 		sysmem_freeptr(backup);
 	}
 	buffer_edit_end(b, 1);
+
+	critical_exit(0);
 
 	buffer_setdirty(b);
 

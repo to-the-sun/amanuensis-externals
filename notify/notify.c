@@ -4,6 +4,7 @@
 #include "ext_dictobj.h"
 #include "ext_atomarray.h"
 #include "ext_buffer.h"
+#include "ext_critical.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -88,12 +89,16 @@ long notify_get_bar_length(t_notify *x) {
     }
 
     long bar_length = 0;
+    critical_enter(0);
     float *samples = buffer_locksamples(b);
     if (samples) {
         if (buffer_getframecount(b) > 0) {
             bar_length = (long)samples[0];
         }
         buffer_unlocksamples(b);
+        critical_exit(0);
+    } else {
+        critical_exit(0);
     }
 
     if (bar_length > 0) {

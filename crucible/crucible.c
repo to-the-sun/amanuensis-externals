@@ -3,6 +3,7 @@
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
+#include "ext_critical.h"
 #include <string.h>
 
 typedef struct _crucible {
@@ -440,12 +441,16 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
     }
 
     t_atom_long bar_length = 0;
+    critical_enter(0);
     float *samples = buffer_locksamples(b);
     if (samples) {
         if (buffer_getframecount(b) > 0) {
             bar_length = (t_atom_long)samples[0];
         }
         buffer_unlocksamples(b);
+        critical_exit(0);
+    } else {
+        critical_exit(0);
     }
 
     if (bar_length > 0) {
