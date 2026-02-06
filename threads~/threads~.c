@@ -199,17 +199,19 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     }
 
     // 5. Writing to buffer
-    long num_chans = buffer_getchannelcount(b);
 
     // Visualization: Send single packet regardless of buffer bounds (offload work to script)
     char json[256];
+    // We'll get num_chans here just for visualization, then again inside critical if needed
+    long num_chans_viz = buffer_getchannelcount(b);
     snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
-             (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans);
+             (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
     threads_verbose_log(x, "Visualization packet sent: %s", json);
     visualize(json);
 
     critical_enter(0);
     long num_frames = buffer_getframecount(b);
+    long num_chans = buffer_getchannelcount(b);
     threads_verbose_log(x, "Sample index: %ld, num_frames: %ld, num_chans: %ld", sample_index, num_frames, num_chans);
 
     if (sample_index >= 0 && sample_index < num_frames) {
@@ -238,6 +240,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             threads_verbose_log(x, "Error: could not lock buffer samples for %s", s_bufname->s_name);
         }
     } else {
+        critical_exit(0);
         threads_verbose_log(x, "Warning: sample index %ld out of bounds (0-%ld) for %s. Skipping buffer write.", sample_index, num_frames - 1, s_bufname->s_name);
     }
 }
