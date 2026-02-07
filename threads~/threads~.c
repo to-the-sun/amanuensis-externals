@@ -143,21 +143,17 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
 }
 
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
-    threads_verbose_log(x, "Processing: palette=%s track=%lld bar_ms=%.2f offset_ms=%.2f",
-                        palette->s_name, (long long)track, bar_ms, offset_ms);
-
     // 1. Palette mapping lookup
     t_atom_long chan_index = -1;
     hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
     if (chan_index == -1 && offset_ms != 0.0) {
-        threads_verbose_log(x, "Palette '%s' not mapped to any channel. Skipping buffer write.", palette->s_name);
+        threads_verbose_log(x, "[W] SKIP Unmapped: %s", palette->s_name);
         if (offset_ms == -999999.0) {
              char json[256];
              // Send with num_chans = -1 to indicate unmapped/reach event
              snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": -1, \"val\": %.2f, \"num_chans\": -1}",
                       (long long)track, bar_ms, offset_ms);
-             threads_verbose_log(x, "Sending reach visualization: %s", json);
              visualize(json);
         }
         return;
@@ -206,13 +202,11 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     long num_chans_viz = buffer_getchannelcount(b);
     snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
              (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
-    threads_verbose_log(x, "Visualization packet sent: %s", json);
     visualize(json);
 
     critical_enter(0);
     long num_frames = buffer_getframecount(b);
     long num_chans = buffer_getchannelcount(b);
-    threads_verbose_log(x, "Sample index: %ld, num_frames: %ld, num_chans: %ld", sample_index, num_frames, num_chans);
 
     if (sample_index >= 0 && sample_index < num_frames) {
         float *samples = buffer_locksamples(b);
@@ -235,13 +229,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_unlocksamples(b);
             buffer_setdirty(b);
             critical_exit(0);
+            threads_verbose_log(x, "[W] T%lld S%ld C%lld V%.2f (%s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
         } else {
             critical_exit(0);
-            threads_verbose_log(x, "Error: could not lock buffer samples for %s", s_bufname->s_name);
+            threads_verbose_log(x, "[W] FAIL Lock: %s", s_bufname->s_name);
         }
     } else {
         critical_exit(0);
-        threads_verbose_log(x, "Warning: sample index %ld out of bounds (0-%ld) for %s. Skipping buffer write.", sample_index, num_frames - 1, s_bufname->s_name);
+        threads_verbose_log(x, "[W] SKIP Bounds: %s @ %ld", s_bufname->s_name, sample_index);
     }
 }
 
@@ -281,7 +276,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
             object_post((t_object *)x, "threads~: received clear message on inlet 0");
-            threads_verbose_log(x, "Beginning clearing of samples for prefix '%s' on inlet 0", x->poly_prefix->s_name);
+            threads_verbose_log(x, "[CLR] Start: %s", x->poly_prefix->s_name);
             char bufname[256];
             int i = 1;
             int cleared_count = 0;
@@ -309,21 +304,21 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
                     critical_exit(0);
-                    threads_verbose_log(x, "Cleared buffer: %s", bufname);
+                    threads_verbose_log(x, "[CLR] %s", bufname);
                     cleared_count++;
                 } else {
                     critical_exit(0);
+                    threads_verbose_log(x, "[CLR] FAIL Lock: %s", bufname);
                 }
                 i++;
             }
             if (temp_ref) object_free(temp_ref);
 
             object_post((t_object *)x, "threads~: cleared %d buffers", cleared_count);
-            threads_verbose_log(x, "Finished clearing samples. Total buffers cleared: %d", cleared_count);
+            threads_verbose_log(x, "[CLR] End: %d cleared", cleared_count);
 
             visualize("{\"clear\": 1}");
             object_post((t_object *)x, "threads~: sent clear command to visualizer");
-            threads_verbose_log(x, "Sent clear command to visualizer");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
