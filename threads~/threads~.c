@@ -34,11 +34,13 @@ static t_class *threads_class;
 void threads_verbose_log(t_threads *x, const char *fmt, ...) {
     if (x->verbose && x->verbose_log_outlet) {
         char buf[1024];
+        char final_buf[1100];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->verbose_log_outlet, gensym(buf), 0, NULL);
+        snprintf(final_buf, 1100, "threads~: %s", buf);
+        outlet_anything(x->verbose_log_outlet, gensym(final_buf), 0, NULL);
     }
 }
 
@@ -238,9 +240,9 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_setdirty(b);
             critical_exit(0);
             if (retries > 0) {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s) [Retries: %d]", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name, retries);
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name, retries);
             } else {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name);
             }
         } else {
             critical_exit(0);
@@ -248,7 +250,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
         }
     } else {
         critical_exit(0);
-        threads_verbose_log(x, "WRITE SKIPPED: Sample index %ld out of bounds for buffer %s", sample_index, s_bufname->s_name);
+        threads_verbose_log(x, "WRITE SKIPPED: Position %.2f ms out of bounds for buffer %s", bar_ms, s_bufname->s_name);
     }
 }
 
