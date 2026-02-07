@@ -3,6 +3,7 @@
 #include "ext_hashtab.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "ext_systhread.h"
 #include "z_dsp.h"
 #include "../shared/visualize.h"
 #include <string.h>
@@ -209,7 +210,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     long num_chans = buffer_getchannelcount(b);
 
     if (sample_index >= 0 && sample_index < num_frames) {
-        float *samples = buffer_locksamples(b);
+        float *samples = NULL;
+        int retries = 0;
+        for (retries = 0; retries < 10; retries++) {
+            samples = buffer_locksamples(b);
+            if (samples) break;
+            systhread_sleep(1);
+        }
+
         if (samples) {
             if (offset_ms == 0.0) {
                 // Write 0 to all channels
@@ -229,7 +237,11 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_unlocksamples(b);
             buffer_setdirty(b);
             critical_exit(0);
-            threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
+            if (retries > 0) {
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s) [Retries: %d]", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name, retries);
+            } else {
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
+            }
         } else {
             critical_exit(0);
             threads_verbose_log(x, "WRITE FAILED: Could not lock samples for buffer %s", s_bufname->s_name);
@@ -296,7 +308,14 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                 if (!b) break;
 
                 critical_enter(0);
-                float *samples = buffer_locksamples(b);
+                float *samples = NULL;
+                int retries = 0;
+                for (retries = 0; retries < 10; retries++) {
+                    samples = buffer_locksamples(b);
+                    if (samples) break;
+                    systhread_sleep(1);
+                }
+
                 if (samples) {
                     long num_chans = buffer_getchannelcount(b);
                     long num_frames = buffer_getframecount(b);
@@ -304,7 +323,11 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
                     critical_exit(0);
-                    threads_verbose_log(x, "CLEARED BUFFER: %s", bufname);
+                    if (retries > 0) {
+                        threads_verbose_log(x, "CLEARED BUFFER: %s [Retries: %d]", bufname, retries);
+                    } else {
+                        threads_verbose_log(x, "CLEARED BUFFER: %s", bufname);
+                    }
                     cleared_count++;
                 } else {
                     critical_exit(0);
