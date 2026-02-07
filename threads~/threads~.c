@@ -148,7 +148,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
     if (chan_index == -1 && offset_ms != 0.0) {
-        threads_verbose_log(x, "[W] SKIP Unmapped: %s", palette->s_name);
+        threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
         if (offset_ms == -999999.0) {
              char json[256];
              // Send with num_chans = -1 to indicate unmapped/reach event
@@ -229,14 +229,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_unlocksamples(b);
             buffer_setdirty(b);
             critical_exit(0);
-            threads_verbose_log(x, "[W] T%lld S%ld C%lld V%.2f (%s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
+            threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Sample %ld, Channel %lld, Value %.2f (Palette: %s)", (long long)track, sample_index, (long long)chan_index, offset_ms, palette->s_name);
         } else {
             critical_exit(0);
-            threads_verbose_log(x, "[W] FAIL Lock: %s", s_bufname->s_name);
+            threads_verbose_log(x, "WRITE FAILED: Could not lock samples for buffer %s", s_bufname->s_name);
         }
     } else {
         critical_exit(0);
-        threads_verbose_log(x, "[W] SKIP Bounds: %s @ %ld", s_bufname->s_name, sample_index);
+        threads_verbose_log(x, "WRITE SKIPPED: Sample index %ld out of bounds for buffer %s", sample_index, s_bufname->s_name);
     }
 }
 
@@ -276,7 +276,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
             object_post((t_object *)x, "threads~: received clear message on inlet 0");
-            threads_verbose_log(x, "[CLR] Start: %s", x->poly_prefix->s_name);
+            threads_verbose_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
             char bufname[256];
             int i = 1;
             int cleared_count = 0;
@@ -304,18 +304,18 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
                     critical_exit(0);
-                    threads_verbose_log(x, "[CLR] %s", bufname);
+                    threads_verbose_log(x, "CLEARED BUFFER: %s", bufname);
                     cleared_count++;
                 } else {
                     critical_exit(0);
-                    threads_verbose_log(x, "[CLR] FAIL Lock: %s", bufname);
+                    threads_verbose_log(x, "CLEARING FAILED: Could not lock samples for buffer %s", bufname);
                 }
                 i++;
             }
             if (temp_ref) object_free(temp_ref);
 
             object_post((t_object *)x, "threads~: cleared %d buffers", cleared_count);
-            threads_verbose_log(x, "[CLR] End: %d cleared", cleared_count);
+            threads_verbose_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
 
             visualize("{\"clear\": 1}");
             object_post((t_object *)x, "threads~: sent clear command to visualizer");
