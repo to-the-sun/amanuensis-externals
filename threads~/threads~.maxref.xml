@@ -16,7 +16,11 @@
 			<digest>Data List [palette, track, bar, offset]</digest>
 			<description>The 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
 		</inlet>
-		<inlet id="1" type="list">
+		<inlet id="1" type="symbol">
+			<digest>Rescript dictionary name</digest>
+			<description>Accepts a symbol denoting an external dict to reference. This triggers processing of track data from that dictionary and automatically generates "silence caps" based on the 'bar' buffer's length.</description>
+		</inlet>
+		<inlet id="2" type="list">
 			<digest>Palette Configuration</digest>
 			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings.</description>
 		</inlet>
@@ -43,14 +47,14 @@
 		</method>
 		<method name="anything">
 			<digest>Register palette or clear</digest>
-			<description>Used on the second inlet to map palette names to channel indices or clear the map. On the first inlet, handles formatted messages similar to the data list, or the symbol 'clear' to reset all buffers and the visualizer (synchronously).</description>
+			<description>Used on the third inlet to map palette names to channel indices or clear the map. On the second inlet, a symbol triggers the rescript functionality. On the first inlet, handles formatted messages similar to the data list, or the symbol 'clear' to reset all buffers and the visualizer (synchronously).</description>
 		</method>
 		<method name="rescript">
 			<arglist>
 				<arg name="dictionary_name" type="symbol" optional="0" />
 			</arglist>
-			<digest>Process track data from an external dictionary</digest>
-			<description>Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
+			<digest>Process track data from an external dictionary (Inlet 1)</digest>
+			<description>Triggers when a symbol is received on the second inlet (Inlet 1). Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
