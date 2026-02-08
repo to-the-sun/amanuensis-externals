@@ -223,8 +223,18 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 		float *samples = new_info.b_samples;
 		if (samples) {
 			if (new_info.b_nchans == chans) {
-				memcpy(samples, backup, frames_to_copy * chans * sizeof(float));
-				growbuffer_verbose_log(x, "RESTORE SUCCESS: %lld frames copied back to resized buffer %s", (long long)frames_to_copy, name->s_name);
+				long long restore_count = 0;
+				for (long f = 0; f < frames_to_copy; f++) {
+					for (long c = 0; c < chans; c++) {
+						float val = backup[f * chans + c];
+						if (val != 0.0f) {
+							samples[f * chans + c] = val;
+							growbuffer_verbose_log(x, "RESTORE DATA: Buffer %s, Frame %lld, Channel %lld, Value %.2f", name->s_name, (long long)f, (long long)c, val);
+							restore_count++;
+						}
+					}
+				}
+				growbuffer_verbose_log(x, "RESTORE SUCCESS: %lld non-zero samples copied back to resized buffer %s", restore_count, name->s_name);
 			} else {
 				growbuffer_verbose_log(x, "RESTORE SKIPPED: Resized buffer %s has %lld channels (expected %lld)", name->s_name, (long long)new_info.b_nchans, (long long)chans);
 			}
