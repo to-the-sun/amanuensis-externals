@@ -386,6 +386,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
 
+        int song_grew = (max_reach > x->song_reach);
+        t_atom_long old_song_reach = x->song_reach;
+        if (song_grew) {
+            x->song_reach = max_reach;
+            crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
+        }
+
         for (long i = 0; i < span_len; i++) {
             long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[32];
@@ -403,20 +410,31 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (copied_bar_dict && incumbent_track_dict) {
                     dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
                     crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-                    crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
                 }
             }
         }
-        if (max_reach > x->song_reach) {
-            t_atom_long old_song_reach = x->song_reach;
-            x->song_reach = max_reach;
-            crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
 
+        // Standard Max right-to-left outlet firing order:
+        // Reach Int (Index 2) -> Fill (Index 1) -> Data (Index 0)
+        if (song_grew) {
+            if (x->outlet_reach_int) {
+                outlet_int(x->outlet_reach_int, (t_atom_long)x->song_reach);
+            }
             if (x->outlet_fill) {
                 outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
             }
-            if (x->outlet_reach_int) {
-                outlet_int(x->outlet_reach_int, (t_atom_long)x->song_reach);
+        }
+
+        for (long i = 0; i < span_len; i++) {
+            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            char bar_ts_str[32];
+            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            t_symbol *bar_sym = gensym(bar_ts_str);
+
+            t_dictionary *bar_dict = NULL;
+            dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&bar_dict);
+            if (bar_dict) {
+                crucible_output_bar_data(x, bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
     } else {
