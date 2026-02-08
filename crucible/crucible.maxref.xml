@@ -24,16 +24,16 @@
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="0" type="list">
-			<digest>Data List</digest>
-			<description>For a winning span, outputs a 4-item list: [palette:symbol, track:int, bar:int, offset:float].</description>
+			<digest>Data and Reach Lists</digest>
+			<description>For a winning span, outputs 4-item data lists: [palette:symbol, track:int, bar:int, offset:float] or reach lists: [- track reach offset].</description>
 		</outlet>
-		<outlet id="1" type="anything">
-			<digest>Reach List</digest>
-			<description>For a winning span, outputs a list in the format: - &lt;track&gt; &lt;reach&gt; &lt;offset&gt;. The reach value (largest bar timestamp + bar_length) is only output if there is no existing entry for that timestamp in the track.</description>
-		</outlet>
-		<outlet id="2" type="symbol">
+		<outlet id="1" type="symbol">
 			<digest>Fill signal</digest>
 			<description>Outputs the symbol 'fill' whenever the song grows in reach.</description>
+		</outlet>
+		<outlet id="2" type="int">
+			<digest>Reach</digest>
+			<description>Outputs the total song reach as an integer whenever the song grows.</description>
 		</outlet>
 		<outlet id="3" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
