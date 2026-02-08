@@ -45,6 +45,13 @@
 			<digest>Register palette or clear</digest>
 			<description>Used on the second inlet to map palette names to channel indices or clear the map. On the first inlet, handles formatted messages similar to the data list, or the symbol 'clear' to reset all buffers and the visualizer (synchronously).</description>
 		</method>
+		<method name="rescript">
+			<arglist>
+				<arg name="dictionary_name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Process track data from an external dictionary</digest>
+			<description>Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attrlist>
