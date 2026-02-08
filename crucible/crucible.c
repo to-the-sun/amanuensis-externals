@@ -12,8 +12,8 @@ typedef struct _crucible {
     t_dictionary *span_tracker_dict;
     t_symbol *incumbent_dict_name;
     void *outlet_data;
-    void *outlet_reach;
     void *outlet_fill;
+    void *outlet_reach_int;
     void *verbose_log_outlet;
     t_buffer_ref *buffer_ref;
     long verbose;
@@ -159,8 +159,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         // Unconditionally create outlets in right-to-left order
         x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3
-        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 2
-        x->outlet_reach = outlet_new((t_object *)x, NULL);       // Index 1
+        x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
+        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
         x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
 
         floatin((t_object *)x, 1);
@@ -215,8 +215,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
             atom_setlong(reach_list + 1, current_reach);
             atom_setfloat(reach_list + 2, -999999.0);
 
-            if (x->outlet_reach) {
-                outlet_anything(x->outlet_reach, gensym("-"), 3, reach_list);
+            if (x->outlet_data) {
+                outlet_anything(x->outlet_data, gensym("-"), 3, reach_list);
             }
         }
     }
@@ -386,6 +386,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
 
+        int song_grew = (max_reach > x->song_reach);
+        t_atom_long old_song_reach = x->song_reach;
+        if (song_grew) {
+            x->song_reach = max_reach;
+            crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
+        }
+
         for (long i = 0; i < span_len; i++) {
             long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[32];
@@ -403,17 +410,31 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (copied_bar_dict && incumbent_track_dict) {
                     dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
                     crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-                    crucible_output_bar_data(x, copied_bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
                 }
             }
         }
-        if (max_reach > x->song_reach) {
-            t_atom_long old_song_reach = x->song_reach;
-            x->song_reach = max_reach;
-            crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
 
+        // Standard Max right-to-left outlet firing order:
+        // Reach Int (Index 2) -> Fill (Index 1) -> Data (Index 0)
+        if (song_grew) {
+            if (x->outlet_reach_int) {
+                outlet_int(x->outlet_reach_int, (t_atom_long)x->song_reach);
+            }
             if (x->outlet_fill) {
                 outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+            }
+        }
+
+        for (long i = 0; i < span_len; i++) {
+            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            char bar_ts_str[32];
+            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            t_symbol *bar_sym = gensym(bar_ts_str);
+
+            t_dictionary *bar_dict = NULL;
+            dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&bar_dict);
+            if (bar_dict) {
+                crucible_output_bar_data(x, bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
     } else {
@@ -618,9 +639,9 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Data List: [palette, track, bar, offset]"); break;
-            case 1: sprintf(s, "Reach List: - <track> <reach> <offset>"); break;
-            case 2: sprintf(s, "Fill (symbol)"); break;
+            case 0: sprintf(s, "Data and Reach Lists: [palette, track, bar, offset] or [- track reach offset]"); break;
+            case 1: sprintf(s, "Fill (symbol)"); break;
+            case 2: sprintf(s, "Reach (int)"); break;
             case 3: sprintf(s, "Verbose Logging Outlet"); break;
         }
     }
