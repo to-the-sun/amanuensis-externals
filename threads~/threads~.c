@@ -384,6 +384,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         // Inlet 2: Palette Configuration
         if (s == gensym("clear")) {
             hashtab_clear(x->palette_map);
+            threads_verbose_log(x, "PALETTE MAP CLEARED: All mappings removed");
         } else if (argc >= 1 && (atom_gettype(argv) == A_LONG || atom_gettype(argv) == A_FLOAT)) {
             // Store palette (s) -> index (argv[0])
             t_atom_long index = atom_getlong(argv);
@@ -393,7 +394,6 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         if (s == gensym("clear") && argc == 0) {
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
-            object_post((t_object *)x, "threads~: received clear message on inlet 0");
             threads_verbose_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
             char bufname[256];
             int i = 1;
@@ -443,11 +443,10 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             }
             if (temp_ref) object_free(temp_ref);
 
-            object_post((t_object *)x, "threads~: cleared %d buffers", cleared_count);
             threads_verbose_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
 
             visualize("{\"clear\": 1}");
-            object_post((t_object *)x, "threads~: sent clear command to visualizer");
+            threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
