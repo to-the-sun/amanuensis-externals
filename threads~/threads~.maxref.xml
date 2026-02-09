@@ -18,7 +18,7 @@
 		</inlet>
 		<inlet id="1" type="list">
 			<digest>Palette Configuration</digest>
-			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings.</description>
+			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings. If channel_index is negative, the value will be written to all channels of the buffer.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->

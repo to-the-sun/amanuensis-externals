@@ -264,9 +264,9 @@ def run_gui():
 
                 # Protocol:
                 # If val != 0: target channel gets val, others get -999999
-                # If target_c == -1: we treat all channels as receiving the val (reach message)
+                # If target_c < 0: we treat all channels as receiving the val (reach message or special map)
 
-                if target_c == -1:
+                if target_c < 0:
                     disp_val = val
                 else:
                     disp_val = val if c == target_c else -999999.0

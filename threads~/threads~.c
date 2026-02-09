@@ -138,7 +138,7 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0: sprintf(s, "(list) [palette, track, bar, offset] Data from crucible, (symbol) clear"); break;
-            case 1: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
+            case 1: sprintf(s, "(list) palette-index pairs (negative index = all channels), (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
         sprintf(s, "Verbose Logging Outlet");
@@ -148,9 +148,9 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
     // 1. Palette mapping lookup
     t_atom_long chan_index = -1;
-    hashtab_lookuplong(x->palette_map, palette, &chan_index);
+    t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
-    if (chan_index == -1 && offset_ms != 0.0) {
+    if (err != MAX_ERR_NONE && offset_ms != 0.0) {
         threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
         if (offset_ms == -999999.0) {
              char json[256];
@@ -221,10 +221,10 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
         }
 
         if (samples) {
-            if (offset_ms == 0.0) {
-                // Write 0 to all channels
+            if (offset_ms == 0.0 || (long)chan_index < 0) {
+                // Write write_val to all channels
                 for (long c = 0; c < num_chans; c++) {
-                    samples[sample_index * num_chans + c] = 0.0f;
+                    samples[sample_index * num_chans + c] = (float)write_val;
                 }
             } else {
                 // Write write_val to chan_index, -999999 to others
@@ -239,10 +239,18 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_unlocksamples(b);
             buffer_setdirty(b);
             critical_exit(0);
-            if (retries > 0) {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name, retries);
+
+            char chan_desc[64];
+            if ((long)chan_index < 0) {
+                snprintf(chan_desc, 64, "All (%lld)", (long long)chan_index);
             } else {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name);
+                snprintf(chan_desc, 64, "%lld", (long long)chan_index);
+            }
+
+            if (retries > 0) {
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %s, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, chan_desc, offset_ms, palette->s_name, retries);
+            } else {
+                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %s, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, chan_desc, offset_ms, palette->s_name);
             }
         } else {
             critical_exit(0);
