@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "ext_systhread.h"
 #include <string.h>
 #include <math.h>
 
@@ -12,6 +13,8 @@ typedef struct _growbuffer {
 	void *b_proxy;
 	long b_inletnum;
 	void *b_outlet;
+	long verbose;
+	void *verbose_log_outlet;
 } t_growbuffer;
 
 void *growbuffer_new(t_symbol *s, long argc, t_atom *argv);
@@ -20,8 +23,22 @@ void growbuffer_bang(t_growbuffer *x);
 void growbuffer_int(t_growbuffer *x, long n);
 void growbuffer_float(t_growbuffer *x, double f);
 
+void growbuffer_verbose_log(t_growbuffer *x, const char *fmt, ...);
 void growbuffer_do_bang(t_growbuffer *x, t_buffer_obj *b, t_symbol *name);
 void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, double ms);
+
+void growbuffer_verbose_log(t_growbuffer *x, const char *fmt, ...) {
+	if (x->verbose && x->verbose_log_outlet) {
+		char buf[1024];
+		char final_buf[1100];
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf(buf, 1024, fmt, args);
+		va_end(args);
+		snprintf(final_buf, 1100, "growbuffer~: %s", buf);
+		outlet_anything(x->verbose_log_outlet, gensym(final_buf), 0, NULL);
+	}
+}
 void growbuffer_execute(t_growbuffer *x, double ms, int is_resize);
 
 void growbuffer_set(t_growbuffer *x, t_symbol *s);
@@ -44,6 +61,9 @@ void ext_main(void *r) {
 	class_addmethod(c, (method)growbuffer_anything, "anything", A_GIMME, 0);
 	class_addmethod(c, (method)growbuffer_assist, "assist", A_CANT, 0);
 
+	CLASS_ATTR_LONG(c, "verbose", 0, t_growbuffer, verbose);
+	CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+
 	class_register(CLASS_BOX, c);
 	growbuffer_class = c;
 }
@@ -53,13 +73,20 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 
 	if (x) {
 		x->b_name = _sym_nothing;
-		if (argc > 0 && atom_gettype(argv) == A_SYM) {
+		x->verbose = 0;
+
+		x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+		x->b_outlet = outlet_new((t_object *)x, NULL);
+
+		if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
 			x->b_name = atom_getsym(argv);
+			argc--;
+			argv++;
 		}
 
-		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
-		x->b_outlet = outlet_new(x, NULL);
+		attr_args_process(x, argc, argv);
 
+		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
 		x->b_ref = buffer_ref_new((t_object *)x, x->b_name);
 	}
 	return x;
@@ -147,27 +174,44 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 	long old_frames = info.b_frames;
 	long chans = info.b_nchans;
 
-	if (new_frames == old_frames) return;
+	growbuffer_verbose_log(x, "RESIZE START: Buffer '%s', Current Frames: %lld, New Frames: %lld, Channels: %lld", name->s_name, (long long)old_frames, (long long)new_frames, (long long)chans);
+
+	if (new_frames == old_frames) {
+		growbuffer_verbose_log(x, "RESIZE SKIPPED: New size matches current size");
+		return;
+	}
 
 	critical_enter(0);
 
 	float *backup = NULL;
 	long frames_to_copy = (old_frames < new_frames) ? old_frames : new_frames;
+	int retries = 0;
 
 	if (frames_to_copy > 0 && chans > 0) {
 		backup = (float *)sysmem_newptr(frames_to_copy * chans * sizeof(float));
 		if (backup) {
-			float *samples = buffer_locksamples(b);
+			float *samples = NULL;
+			for (retries = 0; retries < 10; retries++) {
+				samples = buffer_locksamples(b);
+				if (samples) break;
+				systhread_sleep(1);
+			}
+
 			if (samples) {
 				memcpy(backup, samples, frames_to_copy * chans * sizeof(float));
 				buffer_unlocksamples(b);
+				growbuffer_verbose_log(x, "BACKUP SUCCESS: %lld frames backed up (Retries: %d)", (long long)frames_to_copy, retries);
 			} else {
 				sysmem_freeptr(backup);
 				backup = NULL;
+				growbuffer_verbose_log(x, "BACKUP FAILED: Could not lock samples for buffer %s after %d retries", name->s_name, retries);
 			}
+		} else {
+			growbuffer_verbose_log(x, "BACKUP FAILED: Could not allocate memory for backup");
 		}
 	}
 
+	growbuffer_verbose_log(x, "RESIZE CALL: Sending 'sizeinsamps' %lld to buffer %s", (long long)new_frames, name->s_name);
 	buffer_edit_begin(b);
 	t_atom av;
 	atom_setlong(&av, new_frames);
@@ -180,7 +224,12 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 		if (samples) {
 			if (new_info.b_nchans == chans) {
 				memcpy(samples, backup, frames_to_copy * chans * sizeof(float));
+				growbuffer_verbose_log(x, "RESTORE SUCCESS: %lld frames copied back to resized buffer %s", (long long)frames_to_copy, name->s_name);
+			} else {
+				growbuffer_verbose_log(x, "RESTORE SKIPPED: Resized buffer %s has %lld channels (expected %lld)", name->s_name, (long long)new_info.b_nchans, (long long)chans);
 			}
+		} else {
+			growbuffer_verbose_log(x, "RESTORE FAILED: Resized buffer %s has NULL samples pointer", name->s_name);
 		}
 		sysmem_freeptr(backup);
 	}
@@ -189,6 +238,8 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 	critical_exit(0);
 
 	buffer_setdirty(b);
+
+	growbuffer_verbose_log(x, "RESIZE END: Buffer '%s' resize complete", name->s_name);
 
 	t_atom av_out[4];
 	atom_setsym(&av_out[0], name);
@@ -245,6 +296,13 @@ void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
 				break;
 		}
 	} else {
-		sprintf(s, "Status and Error Messages");
+		switch (a) {
+			case 0:
+				sprintf(s, "Status and Error Messages");
+				break;
+			case 1:
+				sprintf(s, "Verbose Logging Outlet");
+				break;
+		}
 	}
 }

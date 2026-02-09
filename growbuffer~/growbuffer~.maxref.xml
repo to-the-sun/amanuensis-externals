@@ -42,6 +42,14 @@
 				Outputs status information and error messages related to buffer operations.
 			</description>
 		</outlet>
+		<outlet id="1" type="anything">
+			<digest>
+				Verbose Logging Outlet
+			</digest>
+			<description>
+				Outputs detailed diagnostic messages when the verbose attribute is enabled.
+			</description>
+		</outlet>
 	</outletlist>
 
 	<objarglist>
@@ -54,6 +62,15 @@
 			</description>
 		</objarg>
 	</objarglist>
+
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>
+				When enabled (1), the object will output detailed diagnostic information to the second outlet during buffer operations, particularly during resizing.
+			</description>
+		</attribute>
+	</attributelist>
 
 	<methodlist>
 		<method name="bang">
