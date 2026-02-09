@@ -7,14 +7,14 @@
 	<description>
 		The notify object accepts a dictionary name as an argument and, when it receives a bang, it extracts all notes (timestamped events) from the dictionary, sorts them chronologically by absolute timestamp, clears the original dictionary, and outputs the notes sequentially from its outlets. It also references an external buffer~ named 'bar' to determine the current bar length for reporting upcoming bars.
 	</description>
-	<!--METADATA-->
+
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Dictionary</metadata>
 	</metadatalist>
-	<!--INLETS-->
+
 	<inletlist>
-		<inlet id="0" type="anything">
+		<inlet id="1" type="anything">
 			<digest>
 				bang to trigger dump, fill for specialized dump
 			</digest>
@@ -22,7 +22,7 @@
 				A bang message triggers a standard dump. A fill message triggers a specialized dump that fills in gaps in shorter tracks relative to the longest track.
 			</description>
 		</inlet>
-		<inlet id="1" type="float">
+		<inlet id="2" type="float">
 			<digest>
 				Local Bar Length
 			</digest>
@@ -31,9 +31,9 @@
 			</description>
 		</inlet>
 	</inletlist>
-	<!--OUTLETS-->
+
 	<outletlist>
-		<outlet id="0" type="list">
+		<outlet id="1" type="list">
 			<digest>
 				Absolute Timestamp and Score
 			</digest>
@@ -41,7 +41,7 @@
 				A 2-item list consisting of the absolute timestamp (float) and the score (float).
 			</description>
 		</outlet>
-		<outlet id="1" type="float">
+		<outlet id="2" type="float">
 			<digest>
 				Offset
 			</digest>
@@ -49,7 +49,7 @@
 				The offset associated with the bar containing the note.
 			</description>
 		</outlet>
-		<outlet id="2" type="int">
+		<outlet id="3" type="int">
 			<digest>
 				Track
 			</digest>
@@ -57,7 +57,7 @@
 				The track number (integer) where the note was found.
 			</description>
 		</outlet>
-		<outlet id="3" type="symbol">
+		<outlet id="4" type="symbol">
 			<digest>
 				Palette
 			</digest>
@@ -65,7 +65,7 @@
 				The palette name associated with the bar containing the note.
 			</description>
 		</outlet>
-		<outlet id="4" type="list">
+		<outlet id="5" type="list">
 			<digest>
 				Descript
 			</digest>
@@ -73,7 +73,7 @@
 				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. These messages are output as a batch at the very beginning of the dump process. For each bar found in the dictionary, a second descript message is sent for the subsequent bar (current + bar_length) if that bar does not already exist in the dictionary.
 			</description>
 		</outlet>
-		<outlet id="5" type="symbol">
+		<outlet id="6" type="symbol">
 			<digest>
 				Verbose Logging (Optional)
 			</digest>
@@ -82,7 +82,7 @@
 			</description>
 		</outlet>
 	</outletlist>
-	<!--ARGUMENTS-->
+
 	<objarglist>
 		<objarg name="dictionary-name" optional="0" type="symbol">
 			<digest>
@@ -93,7 +93,21 @@
 			</description>
 		</objarg>
 	</objarglist>
-	<!--MESSAGES-->
+
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>
+				Enable Verbose Logging
+			</digest>
+			<description>
+				When enabled (1), adds a rightmost outlet for verbose logging messages and outputs status information to it.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+
 	<methodlist>
 		<method name="bang">
 			<digest>
@@ -120,21 +134,7 @@
 			</description>
 		</method>
 	</methodlist>
-	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" get="1" set="1" type="long" size="1">
-			<digest>
-				Enable Verbose Logging
-			</digest>
-			<description>
-				When enabled (1), adds a rightmost outlet for verbose logging messages and outputs status information to it.
-			</description>
-			<attributelist>
-				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
-			</attributelist>
-		</attr>
-	</attrlist>
-	<!--SEEALSO-->
+
 	<seealsolist>
 		<seealso name="buildspans" />
 		<seealso name="crucible" />
@@ -142,6 +142,7 @@
 		<seealso name="whichoffset" />
 		<seealso name="stemversion" />
 		<seealso name="createproject" />
+		<seealso name="growbuffer~" />
 		<seealso name="dict" />
 	</seealsolist>
 </c74object>

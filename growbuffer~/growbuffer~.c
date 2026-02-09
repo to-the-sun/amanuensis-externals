@@ -63,6 +63,7 @@ void ext_main(void *r) {
 
 	CLASS_ATTR_LONG(c, "verbose", 0, t_growbuffer, verbose);
 	CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+	CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
 	class_register(CLASS_BOX, c);
 	growbuffer_class = c;
@@ -75,9 +76,6 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 		x->b_name = _sym_nothing;
 		x->verbose = 0;
 
-		x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-		x->b_outlet = outlet_new((t_object *)x, NULL);
-
 		if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
 			x->b_name = atom_getsym(argv);
 			argc--;
@@ -85,6 +83,13 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 		}
 
 		attr_args_process(x, argc, argv);
+
+		x->b_outlet = outlet_new((t_object *)x, NULL);
+		if (x->verbose) {
+			x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+		} else {
+			x->verbose_log_outlet = NULL;
+		}
 
 		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
 		x->b_ref = buffer_ref_new((t_object *)x, x->b_name);

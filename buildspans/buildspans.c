@@ -429,14 +429,17 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from right to left
+        // Outlets are created from left-to-right (Index 0 to Index 3)
+        x->span_outlet = outlet_new((t_object *)x, "list"); // Index 0
+        x->track_outlet = intout((t_object *)x);             // Index 1
+        x->log_outlet = outlet_new((t_object *)x, NULL);    // Index 2
+
         if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (conditional)
             visualize_init();
+        } else {
+            x->verbose_log_outlet = NULL;
         }
-        x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
-        x->track_outlet = intout((t_object *)x);
-        x->span_outlet = outlet_new((t_object *)x, "list");
     }
     return (x);
 }
@@ -621,7 +624,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
         }
     } else {
         // Post an error for unhandled messages on other inlets to avoid silent failures.
-        object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
+        object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num + 1);
     }
 }
 

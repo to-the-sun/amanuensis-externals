@@ -4,9 +4,10 @@
 
 typedef struct _createproject {
     t_object s_obj;
+    long verbose;
 } t_createproject;
 
-void *createproject_new(void);
+void *createproject_new(t_symbol *s, long argc, t_atom *argv);
 void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
@@ -16,9 +17,14 @@ t_class *createproject_class;
 void ext_main(void *r) {
     t_class *c;
 
-    c = class_new("createproject", (method)createproject_new, (method)NULL, (short)sizeof(t_createproject), 0L, A_DEFSYM, 0);
+    c = class_new("createproject", (method)createproject_new, (method)NULL, (short)sizeof(t_createproject), 0L, A_GIMME, 0);
     class_addmethod(c, (method)createproject_create, "create", A_SYM, 0);
     class_addmethod(c, (method)createproject_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_createproject, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
+
     class_register(CLASS_BOX, c);
     createproject_class = c;
 }
@@ -37,6 +43,9 @@ void convert_path_to_windows(const char* max_path, char* win_path) {
 }
 
 void createproject_create(t_createproject *x, t_symbol *s) {
+    if (x->verbose) {
+        post("createproject: starting project creation for %s", s->s_name);
+    }
     const char *dest_path_max = s->s_name;
     char dest_path_win[MAX_PATH];
     const char *template_path = "D:\\\\[Library]\\\\[Audio]\\\\[Works]\\\\[Projects]\\\\[Template]";
@@ -87,8 +96,12 @@ void createproject_create(t_createproject *x, t_symbol *s) {
     post("createproject: Project creation complete.");
 }
 
-void *createproject_new(void) {
+void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
     t_createproject *x = (t_createproject *)object_alloc(createproject_class);
+    if (x) {
+        x->verbose = 0;
+        attr_args_process(x, argc, argv);
+    }
     return (x);
 }
 

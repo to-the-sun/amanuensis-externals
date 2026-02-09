@@ -60,6 +60,7 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
     class_register(CLASS_BOX, c);
     threads_class = c;
@@ -74,9 +75,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->poly_prefix = _sym_nothing;
         x->verbose = 0;
 
-        // Unconditionally create the outlet
-        x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->poly_prefix = atom_getsym(argv);
             argc--;
@@ -84,6 +82,12 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        } else {
+            x->verbose_log_outlet = NULL;
+        }
 
         if (x->poly_prefix == _sym_nothing) {
             object_error((t_object *)x, "missing polybuffer~ prefix argument");
@@ -378,10 +382,10 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet = proxy_getinlet((t_object *)x);
 
     if (inlet == 1) {
-        // Inlet 1: Rescript (dictionary name as symbol)
+        // Inlet 2: Rescript (dictionary name as symbol)
         threads_rescript(x, s);
     } else if (inlet == 2) {
-        // Inlet 2: Palette Configuration
+        // Inlet 3: Palette Configuration
         if (s == gensym("clear")) {
             hashtab_clear(x->palette_map);
             threads_verbose_log(x, "PALETTE MAP CLEARED: All mappings removed");
@@ -394,7 +398,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         if (s == gensym("clear") && argc == 0) {
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
-            threads_verbose_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
+            threads_verbose_log(x, "CLEARING START: Prefix '%s' on inlet 1", x->poly_prefix->s_name);
             char bufname[256];
             int i = 1;
             int cleared_count = 0;

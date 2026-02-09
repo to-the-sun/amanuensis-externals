@@ -7,10 +7,11 @@ typedef struct _whichoffset {
     t_object s_obj;
     t_symbol *dict_name;
     long track;
+    long verbose;
     void *outlet;
 } t_whichoffset;
 
-void *whichoffset_new(t_symbol *s);
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv);
 void whichoffset_free(t_whichoffset *x);
 void whichoffset_bang(t_whichoffset *x);
 void whichoffset_int(t_whichoffset *x, long n);
@@ -28,25 +29,42 @@ t_class *whichoffset_class;
 void ext_main(void *r) {
     t_class *c;
 
-    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, (short)sizeof(t_whichoffset), 0L, A_DEFSYM, 0);
+    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, (short)sizeof(t_whichoffset), 0L, A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_bang, "bang", 0);
     class_addmethod(c, (method)whichoffset_int, "int", A_LONG, 0);
     class_addmethod(c, (method)whichoffset_span, "span", A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_whichoffset, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
+
     class_register(CLASS_BOX, c);
     whichoffset_class = c;
 }
 
-void *whichoffset_new(t_symbol *s) {
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
     t_whichoffset *x = (t_whichoffset *)object_alloc(whichoffset_class);
     if (x) {
-        x->dict_name = s;
+        x->dict_name = _sym_nothing;
         x->track = 0;
+        x->verbose = 0;
         x->outlet = floatout((t_object *)x); // Create a float outlet
-        if (visualize_init() != 0) {
-            object_error((t_object *)x, "Failed to initialize UDP connection.");
-        } else {
-            post("UDP connection initialized for visualization.");
+
+        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
+            x->dict_name = atom_getsym(argv);
+            argc--;
+            argv++;
+        }
+
+        attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            if (visualize_init() != 0) {
+                object_error((t_object *)x, "Failed to initialize UDP connection.");
+            } else {
+                post("UDP connection initialized for visualization.");
+            }
         }
     }
     return (x);
@@ -60,8 +78,10 @@ void whichoffset_bang(t_whichoffset *x) {
     t_dictionary *d = dictobj_findregistered_clone(x->dict_name);
 
     if (d) {
-        //whichoffset_print_dict(d, 0);
-        whichoffset_send_dict_in_chunks(x, d);
+        if (x->verbose) {
+            //whichoffset_print_dict(d, 0);
+            whichoffset_send_dict_in_chunks(x, d);
+        }
         object_free(d);
     } else {
         object_error((t_object *)x, "could not find dictionary %s", x->dict_name->s_name);

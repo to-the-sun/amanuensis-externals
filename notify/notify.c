@@ -61,6 +61,7 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_notify, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
     class_register(CLASS_BOX, c);
     notify_class = c;
@@ -131,14 +132,17 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
+        x->out_abs_score = outlet_new((t_object *)x, NULL); // Index 0
+        x->out_offset = outlet_new((t_object *)x, NULL);    // Index 1
+        x->out_track = outlet_new((t_object *)x, NULL);     // Index 2
+        x->out_palette = outlet_new((t_object *)x, NULL);   // Index 3
+        x->out_descript = outlet_new((t_object *)x, NULL);  // Index 4
+
         if (x->verbose) {
-            x->out_verbose = outlet_new((t_object *)x, NULL);
+            x->out_verbose = outlet_new((t_object *)x, NULL); // Index 5 (conditional)
+        } else {
+            x->out_verbose = NULL;
         }
-        x->out_descript = outlet_new((t_object *)x, NULL);
-        x->out_palette = outlet_new((t_object *)x, NULL);
-        x->out_track = outlet_new((t_object *)x, NULL);
-        x->out_offset = outlet_new((t_object *)x, NULL);
-        x->out_abs_score = outlet_new((t_object *)x, NULL);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);

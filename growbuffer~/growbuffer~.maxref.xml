@@ -15,7 +15,7 @@
 	</metadatalist>
 
 	<inletlist>
-		<inlet id="0" type="anything">
+		<inlet id="1" type="anything">
 			<digest>
 				(bang) report length, (number) resize, (set) set buffer name
 			</digest>
@@ -23,7 +23,7 @@
 				Sending a bang will report the length of the referenced buffer in milliseconds via the status outlet. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content, and report the result via the status outlet. Sending the message set followed by a symbol will change the referenced buffer. If a `polybuffer~` is detected (via indexed names like `name.1`), operations are applied to all members.
 			</description>
 		</inlet>
-		<inlet id="1" type="symbol">
+		<inlet id="2" type="symbol">
 			<digest>
 				(symbol) set buffer name
 			</digest>
@@ -34,7 +34,7 @@
 	</inletlist>
 
 	<outletlist>
-		<outlet id="0" type="anything">
+		<outlet id="1" type="anything">
 			<digest>
 				Status and Error Messages
 			</digest>
@@ -42,7 +42,7 @@
 				Outputs status information and error messages related to buffer operations.
 			</description>
 		</outlet>
-		<outlet id="1" type="anything">
+		<outlet id="2" type="anything">
 			<digest>
 				Verbose Logging Outlet
 			</digest>
@@ -69,6 +69,9 @@
 			<description>
 				When enabled (1), the object will output detailed diagnostic information to the second outlet during buffer operations, particularly during resizing.
 			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
 		</attribute>
 	</attributelist>
 

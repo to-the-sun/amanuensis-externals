@@ -5,33 +5,43 @@
 	<description>
 		The `whichoffset` object finds the optimal offset value from a nested dictionary by comparing a provided list of timestamps against absolute timestamps stored in the dictionary. It calculates "excess time" for each potential offset and outputs the one that results in the minimum total excess.
 	</description>
-	<!--METADATA-->
+
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Analysis</metadata>
 	</metadatalist>
-	<!--INLETS-->
+
 	<inletlist>
-		<inlet id="0" type="bang/int/list">
+		<inlet id="1" type="bang/int/list">
 			<digest>bang, int (track), or span list</digest>
 			<description>Accepts a bang to visualize the dictionary, an int to set the track number, or a span message followed by a list of timestamps.</description>
 		</inlet>
 	</inletlist>
-	<!--OUTLETS-->
+
 	<outletlist>
-		<outlet id="0" type="float">
+		<outlet id="1" type="float">
 			<digest>Optimal offset</digest>
 			<description>Outputs the single float value representing the calculated optimal offset.</description>
 		</outlet>
 	</outletlist>
-	<!--ARGUMENTS-->
+
 	<objarglist>
 		<objarg name="dictionary-name" type="symbol" optional="0">
 			<digest>The name of the dictionary to query</digest>
 			<description>The name of a registered dictionary (e.g., from a dict object) to read from.</description>
 		</objarg>
 	</objarglist>
-	<!--MESSAGES-->
+
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), the object sends visualization data to the script and posts status updates to the Max console.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+
 	<methodlist>
 		<method name="bang">
 			<digest>Visualize dictionary</digest>
@@ -49,9 +59,7 @@
 			<description>Performs the main calculation using a list of integer timestamps and outputs the optimal offset.</description>
 		</method>
 	</methodlist>
-	<!--ATTRIBUTES-->
-	<attrlist />
-	<!--SEEALSO-->
+
 	<seealsolist>
 		<seealso name="buildspans" />
 		<seealso name="crucible" />
@@ -59,6 +67,7 @@
 		<seealso name="whichoffset" />
 		<seealso name="stemversion" />
 		<seealso name="createproject" />
+		<seealso name="growbuffer~" />
 		<seealso name="dict" />
 	</seealsolist>
 </c74object>

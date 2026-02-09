@@ -5,49 +5,59 @@
 	<description>
 		The `crucible` object implements a challenger/incumbent system for updating a dictionary. It receives streams of messages representing musical spans (typically from `buildspans`) and stores them as a "challenger". When a complete span is received, it compares the rating of each bar in the challenger to the corresponding bar in an "incumbent" dictionary. The challenger only overwrites the incumbent if every bar rating is strictly higher.
 	</description>
-	<!--METADATA-->
+
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Analysis</metadata>
 	</metadatalist>
-	<!--INLETS-->
+
 	<inletlist>
-		<inlet id="0" type="anything">
+		<inlet id="1" type="anything">
 			<digest>Message stream from buildspans</digest>
 			<description>Receives messages describing bars and spans (track::bar::key value or span list).</description>
 		</inlet>
-		<inlet id="1" type="float">
+		<inlet id="2" type="float">
 			<digest>Local Bar Length</digest>
 			<description>Sets a local bar length that overrides the buffer value. A value &lt;= 0 reverts to using the buffer.</description>
 		</inlet>
 	</inletlist>
-	<!--OUTLETS-->
+
 	<outletlist>
-		<outlet id="0" type="list">
+		<outlet id="1" type="list">
 			<digest>Data and Reach Lists</digest>
 			<description>For a winning span, outputs 4-item data lists: [palette:symbol, track:int, bar:int, offset:float] or reach lists: [- track reach offset].</description>
 		</outlet>
-		<outlet id="1" type="symbol">
+		<outlet id="2" type="symbol">
 			<digest>Fill signal</digest>
 			<description>Outputs the symbol 'fill' whenever the song grows in reach.</description>
 		</outlet>
-		<outlet id="2" type="int">
+		<outlet id="3" type="int">
 			<digest>Reach</digest>
 			<description>Outputs the total song reach as an integer whenever the song grows.</description>
 		</outlet>
-		<outlet id="3" type="anything">
+		<outlet id="4" type="anything">
 			<digest>Verbose Logging (Optional)</digest>
 			<description>Status messages when verbose attribute is enabled.</description>
 		</outlet>
 	</outletlist>
-	<!--ARGUMENTS-->
+
 	<objarglist>
 		<objarg name="incumbent_dictionary_name" type="symbol" optional="0">
 			<digest>The name of the incumbent dictionary</digest>
 			<description>Specify the name of a dict object to use for comparisons.</description>
 		</objarg>
 	</objarglist>
-	<!--MESSAGES-->
+
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status messages.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+
 	<methodlist>
 		<method name="anything">
 			<digest>Process input data</digest>
@@ -55,20 +65,10 @@
 		</method>
 		<method name="ft1">
 			<digest>Set local bar length</digest>
-			<description>Sets the bar length in milliseconds in the second inlet.</description>
+			<description>Sets the bar length in milliseconds in the second inlet (Inlet 2).</description>
 		</method>
 	</methodlist>
-	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" get="1" set="1" type="long" size="1">
-			<digest>Enable Verbose Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status messages.</description>
-			<attributelist>
-				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
-			</attributelist>
-		</attr>
-	</attrlist>
-	<!--SEEALSO-->
+
 	<seealsolist>
 		<seealso name="buildspans" />
 		<seealso name="threads~" />

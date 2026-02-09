@@ -133,6 +133,7 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
     class_register(CLASS_BOX, c);
     crucible_class = c;
@@ -144,6 +145,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->challenger_dict = dictionary_new();
         x->span_tracker_dict = dictionary_new();
         x->incumbent_dict_name = gensym("");
+        x->verbose = 0;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->song_reach = 0;
         x->local_bar_length = 0;
@@ -157,11 +159,16 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        // Unconditionally create outlets in right-to-left order
-        x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3
-        x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
-        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
+        // Outlets are created from left-to-right (Index 0 to Index 3)
         x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
+        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
+        x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
+
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (conditional)
+        } else {
+            x->verbose_log_outlet = NULL;
+        }
 
         floatin((t_object *)x, 1);
     }

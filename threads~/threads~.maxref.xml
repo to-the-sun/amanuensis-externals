@@ -12,22 +12,22 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="list">
+		<inlet id="1" type="list">
 			<digest>Data List [palette, track, bar, offset]</digest>
 			<description>The 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
 		</inlet>
-		<inlet id="1" type="symbol">
+		<inlet id="2" type="symbol">
 			<digest>Rescript dictionary name</digest>
 			<description>Accepts a symbol denoting an external dict to reference. This triggers processing of track data from that dictionary and automatically generates "silence caps" based on the 'bar' buffer's length.</description>
 		</inlet>
-		<inlet id="2" type="list">
+		<inlet id="3" type="list">
 			<digest>Palette Configuration</digest>
 			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="anything">
+		<outlet id="1" type="anything">
 			<digest>Verbose Logging Outlet</digest>
 			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
 		</outlet>
@@ -39,6 +39,19 @@
 			<description>The base name of the polybuffer~ (e.g., if prefix is 'script', it will look for 'script.1', 'script.2', etc.).</description>
 		</objarg>
 	</objarglist>
+
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>
+				When enabled (1), the object outputs diagnostic information and sends data to the visualizer script.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="list">
@@ -53,17 +66,11 @@
 			<arglist>
 				<arg name="dictionary_name" type="symbol" optional="0" />
 			</arglist>
-			<digest>Process track data from an external dictionary (Inlet 1)</digest>
-			<description>Triggers when a symbol is received on the second inlet (Inlet 1). Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
+			<digest>Process track data from an external dictionary (Inlet 2)</digest>
+			<description>Triggers when a symbol is received on the second inlet (Inlet 2). Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
 		</method>
 	</methodlist>
-	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" type="long" get="1" set="1" opaque="0">
-			<digest>Enable Verbose Logging</digest>
-			<description>When set to 1, the object outputs diagnostic information and sends data to the visualizer script.</description>
-		</attr>
-	</attrlist>
+
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="crucible" />
