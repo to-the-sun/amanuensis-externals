@@ -159,16 +159,16 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        // Outlets are created from left-to-right (Index 0 to Index 3)
-        x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
-        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
-        x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
-
+        // Outlets are created from right-to-left
         if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (conditional)
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (Rightmost)
         } else {
             x->verbose_log_outlet = NULL;
         }
+
+        x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
+        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
+        x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0 (Leftmost)
 
         floatin((t_object *)x, 1);
     }
@@ -641,15 +641,15 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
-            case 1: sprintf(s, "(float) Local Bar Length"); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans"); break;
+            case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Data and Reach Lists: [palette, track, bar, offset] or [- track reach offset]"); break;
-            case 1: sprintf(s, "Fill (symbol)"); break;
-            case 2: sprintf(s, "Reach (int)"); break;
-            case 3: sprintf(s, "Verbose Logging Outlet"); break;
+            case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
+            case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
+            case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
+            case 3: sprintf(s, "Outlet 4: Verbose Logging"); break;
         }
     }
 }

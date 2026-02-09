@@ -429,17 +429,17 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         intin((t_object *)x, 2);    // Track Number
         floatin((t_object *)x, 1);  // Offset
 
-        // Outlets are created from left-to-right (Index 0 to Index 3)
-        x->span_outlet = outlet_new((t_object *)x, "list"); // Index 0
-        x->track_outlet = intout((t_object *)x);             // Index 1
-        x->log_outlet = outlet_new((t_object *)x, NULL);    // Index 2
-
+        // Outlets are created from right-to-left
         if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (conditional)
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3 (Rightmost)
             visualize_init();
         } else {
             x->verbose_log_outlet = NULL;
         }
+
+        x->log_outlet = outlet_new((t_object *)x, NULL);    // Index 2
+        x->track_outlet = intout((t_object *)x);             // Index 1
+        x->span_outlet = outlet_new((t_object *)x, "list"); // Index 0 (Leftmost)
     }
     return (x);
 }
@@ -1198,35 +1198,27 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "(list) Timestamp-Score Pair, (bang) Flush, (clear) Clear, (set_bar_buffer) Set Buffer Name");
+                sprintf(s, "Inlet 1: (list) Timestamp-Score Pair, (bang) Flush, (clear) Clear");
                 break;
             case 1:
-                sprintf(s, "(float) Offset Timestamp");
+                sprintf(s, "Inlet 2: (float) Offset Timestamp");
                 break;
             case 2:
-                sprintf(s, "(int) Track Number");
+                sprintf(s, "Inlet 3: (int) Track Number");
                 break;
             case 3:
-                sprintf(s, "(symbol) Palette");
+                sprintf(s, "Inlet 4: (symbol) Palette");
                 break;
             case 4:
-                sprintf(s, "(float) Local Bar Length");
+                sprintf(s, "Inlet 5: (float) Local Bar Length");
                 break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
-            switch (a) {
-                case 0: sprintf(s, "Span Data (list)"); break;
-                case 1: sprintf(s, "Track Number (int)"); break;
-                case 2: sprintf(s, "Bar Data for Ended Spans (anything)"); break;
-                case 3: sprintf(s, "Verbose Logging & Visualization Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Span Data (list)"); break;
-                case 1: sprintf(s, "Track Number (int)"); break;
-                case 2: sprintf(s, "Bar Data for Ended Spans (anything)"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
+            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans"); break;
+            case 3: sprintf(s, "Outlet 4: Verbose Logging"); break;
         }
     }
 }

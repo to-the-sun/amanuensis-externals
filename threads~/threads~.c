@@ -156,12 +156,12 @@ t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender,
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(list) Data from crucible, (symbol) clear"); break;
-            case 1: sprintf(s, "(symbol) Dictionary name for rescript"); break;
-            case 2: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
+            case 0: sprintf(s, "Inlet 1: (list) Data from crucible, (symbol) clear"); break;
+            case 1: sprintf(s, "Inlet 2: (symbol) Dictionary name for rescript"); break;
+            case 2: sprintf(s, "Inlet 3: (list) palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
-        sprintf(s, "Verbose Logging Outlet");
+        sprintf(s, "Outlet 1: Verbose Logging");
     }
 }
 

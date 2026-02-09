@@ -33,8 +33,12 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
     t_stemversion *x = (t_stemversion *)object_alloc(stemversion_class);
     if (x) {
         x->verbose = 0;
-        x->outlet = outlet_new((t_object *)x, "symbol");
         attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            outlet_new((t_object *)x, NULL); // Verbose outlet (Rightmost)
+        }
+        x->outlet = outlet_new((t_object *)x, "symbol"); // Main outlet (Leftmost)
     }
     return (x);
 }
@@ -63,8 +67,9 @@ void stemversion_bang(t_stemversion *x) {
 
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(bang) Output Current Timestamp");
+        sprintf(s, "Inlet 1: (bang) Output Current Timestamp");
     } else { // ASSIST_OUTLET
-        sprintf(s, "Timestamp Symbol (e.g., [2025-12-8-15-16-16])");
+        if (a == 0) sprintf(s, "Outlet 1: Timestamp Symbol");
+        else if (a == 1) sprintf(s, "Outlet 2: Verbose Logging");
     }
 }

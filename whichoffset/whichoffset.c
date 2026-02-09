@@ -49,7 +49,6 @@ void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
         x->dict_name = _sym_nothing;
         x->track = 0;
         x->verbose = 0;
-        x->outlet = floatout((t_object *)x); // Create a float outlet
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->dict_name = atom_getsym(argv);
@@ -60,12 +59,15 @@ void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         if (x->verbose) {
+            outlet_new((t_object *)x, NULL); // Verbose outlet (Index 1, Rightmost)
             if (visualize_init() != 0) {
                 object_error((t_object *)x, "Failed to initialize UDP connection.");
             } else {
                 post("UDP connection initialized for visualization.");
             }
         }
+
+        x->outlet = floatout((t_object *)x); // Main outlet (Index 0, Leftmost)
     }
     return (x);
 }
@@ -405,9 +407,10 @@ void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d) {
 
 void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
+        sprintf(s, "Inlet 1: (bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
     } else { // ASSIST_OUTLET
-        sprintf(s, "Calculated Optimal Offset (float)");
+        if (a == 0) sprintf(s, "Outlet 1: Calculated Optimal Offset (float)");
+        else if (a == 1) sprintf(s, "Outlet 2: Verbose Logging");
     }
 }
 

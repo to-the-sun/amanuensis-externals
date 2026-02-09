@@ -23,6 +23,10 @@
 			<digest>Current timestamp symbol</digest>
 			<description>Outputs the formatted timestamp, e.g., `[2025-12-8-15-19-15]`.</description>
 		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Verbose Logging</digest>
+			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
+		</outlet>
 	</outletlist>
 
 	<objarglist />

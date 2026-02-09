@@ -23,6 +23,10 @@
 			<digest>Optimal offset</digest>
 			<description>Outputs the single float value representing the calculated optimal offset.</description>
 		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Verbose Logging</digest>
+			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
+		</outlet>
 	</outletlist>
 
 	<objarglist>

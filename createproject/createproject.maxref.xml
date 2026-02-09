@@ -18,7 +18,12 @@
 		</inlet>
 	</inletlist>
 
-	<outletlist />
+	<outletlist>
+		<outlet id="1" type="anything">
+			<digest>Verbose Logging</digest>
+			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
+		</outlet>
+	</outletlist>
 
 	<objarglist />
 

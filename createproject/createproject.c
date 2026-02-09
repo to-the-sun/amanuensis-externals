@@ -101,13 +101,19 @@ void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->verbose = 0;
         attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            outlet_new((t_object *)x, NULL); // Verbose outlet (Rightmost/Only)
+        }
     }
     return (x);
 }
 
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(create <path>) Create Project from Template");
+        sprintf(s, "Inlet 1: (create <path>) Create Project from Template");
+    } else {
+        sprintf(s, "Outlet 1: Verbose Logging");
     }
 }
 
