@@ -248,9 +248,9 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
     // 1. Palette mapping lookup
     t_atom_long chan_index = -1;
-    hashtab_lookuplong(x->palette_map, palette, &chan_index);
+    t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
-    if (chan_index == -1 && offset_ms != 0.0) {
+    if (err != MAX_ERR_NONE && offset_ms != 0.0) {
         threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
         if (offset_ms == -999999.0) {
              char json[256];
@@ -321,10 +321,10 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
         }
 
         if (samples) {
-            if (offset_ms == 0.0) {
-                // Write 0 to all channels
+            if (offset_ms == 0.0 || chan_index < 0) {
+                // Write write_val (which is 0 if offset_ms is 0) to all channels
                 for (long c = 0; c < num_chans; c++) {
-                    samples[sample_index * num_chans + c] = 0.0f;
+                    samples[sample_index * num_chans + c] = (float)write_val;
                 }
             } else {
                 // Write write_val to chan_index, -999999 to others
