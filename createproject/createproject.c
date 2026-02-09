@@ -4,21 +4,41 @@
 
 typedef struct _createproject {
     t_object s_obj;
+    long verbose;
+    void *verbose_log_outlet;
 } t_createproject;
 
-void *createproject_new(void);
+void *createproject_new(t_symbol *s, long argc, t_atom *argv);
 void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
 
 t_class *createproject_class;
 
+void createproject_verbose_log(t_createproject *x, const char *fmt, ...) {
+    if (x->verbose && x->verbose_log_outlet) {
+        char buf[1024];
+        char final_buf[1100];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, 1024, fmt, args);
+        va_end(args);
+        snprintf(final_buf, 1100, "createproject: %s", buf);
+        outlet_anything(x->verbose_log_outlet, gensym(final_buf), 0, NULL);
+    }
+}
+
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c;
 
-    c = class_new("createproject", (method)createproject_new, (method)NULL, (short)sizeof(t_createproject), 0L, A_DEFSYM, 0);
+    c = class_new("createproject", (method)createproject_new, (method)NULL, sizeof(t_createproject), 0L, A_GIMME, 0);
     class_addmethod(c, (method)createproject_create, "create", A_SYM, 0);
     class_addmethod(c, (method)createproject_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_createproject, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+
     class_register(CLASS_BOX, c);
     createproject_class = c;
 }
@@ -74,27 +94,35 @@ void createproject_create(t_createproject *x, t_symbol *s) {
 
     if (!CreateDirectoryA(dest_path_win, NULL)) {
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            post("createproject: Directory already exists: %s", dest_path_win);
+            createproject_verbose_log(x, "Directory already exists: %s", dest_path_win);
         } else {
             object_error((t_object *)x, "Failed to create directory: %s (Error %ld)", dest_path_win, GetLastError());
             return;
         }
     } else {
-        post("createproject: Successfully created directory: %s", dest_path_win);
+        createproject_verbose_log(x, "Successfully created directory: %s", dest_path_win);
     }
 
     copy_directory_recursively(x, template_path, dest_path_win);
-    post("createproject: Project creation complete.");
+    createproject_verbose_log(x, "Project creation complete.");
 }
 
-void *createproject_new(void) {
+void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
     t_createproject *x = (t_createproject *)object_alloc(createproject_class);
+    if (x) {
+        x->verbose = 0;
+        x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+
+        attr_args_process(x, argc, argv);
+    }
     return (x);
 }
 
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "(create <path>) Create Project from Template");
+    } else { // ASSIST_OUTLET
+        sprintf(s, "Verbose Logging Outlet");
     }
 }
 
@@ -122,14 +150,14 @@ void copy_directory_recursively(t_createproject *x, const char *src_dir, const c
 
             if (find_file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 if (CreateDirectoryA(dest_path, NULL)) {
-                    post("createproject: Created subdirectory %s", dest_path);
+                    createproject_verbose_log(x, "Created subdirectory %s", dest_path);
                     copy_directory_recursively(x, src_path, dest_path);
                 } else {
                     object_error((t_object *)x, "Failed to create subdirectory %s (Error %ld)", dest_path, GetLastError());
                 }
             } else {
                 if (CopyFileA(src_path, dest_path, FALSE)) {
-                    post("createproject: Copied %s to %s", src_path, dest_path);
+                    createproject_verbose_log(x, "Copied %s to %s", src_path, dest_path);
                 } else {
                     object_error((t_object *)x, "Failed to copy file %s (Error %ld)", src_path, GetLastError());
                 }

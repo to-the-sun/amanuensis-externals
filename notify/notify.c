@@ -52,12 +52,15 @@ void ext_main(void *r) {
 
     common_symbols_init();
 
-    c = class_new("notify", (method)notify_new, (method)notify_free, (short)sizeof(t_notify), 0L, A_GIMME, 0);
+    c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
     class_addmethod(c, (method)notify_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_SYM(c, "dictionary", 0, t_notify, dict_name);
+    CLASS_ATTR_LABEL(c, "dictionary", 0, "Source Dictionary Name");
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_notify, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -129,6 +132,12 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
 
+        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
+            x->dict_name = atom_getsym(argv);
+            argc--;
+            argv++;
+        }
+
         attr_args_process(x, argc, argv);
 
         if (x->verbose) {
@@ -139,10 +148,6 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->out_track = outlet_new((t_object *)x, NULL);
         x->out_offset = outlet_new((t_object *)x, NULL);
         x->out_abs_score = outlet_new((t_object *)x, NULL);
-
-        if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
-            x->dict_name = atom_getsym(argv);
-        }
 
         floatin((t_object *)x, 1);
     }

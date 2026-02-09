@@ -383,8 +383,9 @@ void buildspans_visualize_memory(t_buildspans *x) {
 
 
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c;
-    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, (short)sizeof(t_buildspans), 0L, A_GIMME, 0);
+    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, sizeof(t_buildspans), 0L, A_GIMME, 0);
     class_addmethod(c, (method)buildspans_clear, "clear", 0);
     class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
@@ -395,6 +396,9 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
     class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
     
+    CLASS_ATTR_SYM(c, "buffer", 0, t_buildspans, s_buffer_name);
+    CLASS_ATTR_LABEL(c, "buffer", 0, "Bar Length Buffer");
+
     CLASS_ATTR_LONG(c, "verbose", 0, t_buildspans, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
     CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");

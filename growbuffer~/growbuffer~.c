@@ -61,6 +61,9 @@ void ext_main(void *r) {
 	class_addmethod(c, (method)growbuffer_anything, "anything", A_GIMME, 0);
 	class_addmethod(c, (method)growbuffer_assist, "assist", A_CANT, 0);
 
+	CLASS_ATTR_SYM(c, "buffer", 0, t_growbuffer, b_name);
+	CLASS_ATTR_LABEL(c, "buffer", 0, "Buffer Name");
+
 	CLASS_ATTR_LONG(c, "verbose", 0, t_growbuffer, verbose);
 	CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
 

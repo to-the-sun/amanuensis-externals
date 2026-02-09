@@ -8,9 +8,11 @@ typedef struct _whichoffset {
     t_symbol *dict_name;
     long track;
     void *outlet;
+    long verbose;
+    void *verbose_log_outlet;
 } t_whichoffset;
 
-void *whichoffset_new(t_symbol *s);
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv);
 void whichoffset_free(t_whichoffset *x);
 void whichoffset_bang(t_whichoffset *x);
 void whichoffset_int(t_whichoffset *x, long n);
@@ -25,28 +27,61 @@ void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d);
 
 t_class *whichoffset_class;
 
+void whichoffset_verbose_log(t_whichoffset *x, const char *fmt, ...) {
+    if (x->verbose && x->verbose_log_outlet) {
+        char buf[1024];
+        char final_buf[1100];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, 1024, fmt, args);
+        va_end(args);
+        snprintf(final_buf, 1100, "whichoffset: %s", buf);
+        outlet_anything(x->verbose_log_outlet, gensym(final_buf), 0, NULL);
+    }
+}
+
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c;
 
-    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, (short)sizeof(t_whichoffset), 0L, A_DEFSYM, 0);
+    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, sizeof(t_whichoffset), 0L, A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_bang, "bang", 0);
     class_addmethod(c, (method)whichoffset_int, "int", A_LONG, 0);
     class_addmethod(c, (method)whichoffset_span, "span", A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_SYM(c, "dictionary", 0, t_whichoffset, dict_name);
+    CLASS_ATTR_LABEL(c, "dictionary", 0, "Source Dictionary Name");
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_whichoffset, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+
     class_register(CLASS_BOX, c);
     whichoffset_class = c;
 }
 
-void *whichoffset_new(t_symbol *s) {
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
     t_whichoffset *x = (t_whichoffset *)object_alloc(whichoffset_class);
     if (x) {
-        x->dict_name = s;
+        x->dict_name = _sym_nothing;
         x->track = 0;
+        x->verbose = 0;
+
+        x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
         x->outlet = floatout((t_object *)x); // Create a float outlet
+
+        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
+            x->dict_name = atom_getsym(argv);
+            argc--;
+            argv++;
+        }
+
+        attr_args_process(x, argc, argv);
+
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize UDP connection.");
         } else {
-            post("UDP connection initialized for visualization.");
+            whichoffset_verbose_log(x, "UDP connection initialized for visualization.");
         }
     }
     return (x);
@@ -70,7 +105,7 @@ void whichoffset_bang(t_whichoffset *x) {
 
 void whichoffset_int(t_whichoffset *x, long n) {
     x->track = n;
-    post("whichoffset: track set to %ld", n);
+    whichoffset_verbose_log(x, "track set to %ld", n);
 }
 
 void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
@@ -85,7 +120,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    post("whichoffset: received %ld timestamps", argc);
+    whichoffset_verbose_log(x, "received %ld timestamps", argc);
     long min_ts = atom_getlong(argv);
     long max_ts = atom_getlong(argv);
     for (long i = 1; i < argc; i++) {
@@ -93,7 +128,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         if (current_ts < min_ts) min_ts = current_ts;
         if (current_ts > max_ts) max_ts = current_ts;
     }
-    post("whichoffset: min_ts %ld, max_ts %ld", min_ts, max_ts);
+    whichoffset_verbose_log(x, "min_ts %ld, max_ts %ld", min_ts, max_ts);
 
     char min_path[256], max_path[256];
     snprintf(min_path, 256, "%ld::%ld::absolutes", x->track, min_ts);
@@ -130,7 +165,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         double current_val = atom_getfloat(max_abs_ts_atoms + i);
         if(current_val > max_abs_ts) max_abs_ts = current_val;
     }
-    post("whichoffset: min_abs_ts %f, max_abs_ts %f", min_abs_ts, max_abs_ts);
+    whichoffset_verbose_log(x, "min_abs_ts %f, max_abs_ts %f", min_abs_ts, max_abs_ts);
 
     if (min_abs_ts_atoms) sysmem_freeptr(min_abs_ts_atoms);
     if (max_abs_ts_atoms) sysmem_freeptr(max_abs_ts_atoms);
@@ -160,13 +195,13 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
 
     qsort(gathered_offsets, gathered_offsets_count, sizeof(double), compare_doubles);
     
-    char offsets_str[1024] = "whichoffset: gathered offsets: ";
+    char offsets_str[1024] = "gathered offsets: ";
     for (int i=0; i < gathered_offsets_count; i++) {
         char temp[32];
         snprintf(temp, 32, "%.2f ", gathered_offsets[i]);
         strcat(offsets_str, temp);
     }
-    post(offsets_str);
+    whichoffset_verbose_log(x, offsets_str);
     
     double loop_length = 0;
     if (gathered_offsets_count > 1) {
@@ -183,10 +218,10 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         }
     }
     
-    post("whichoffset: loop_length %f", loop_length);
+    whichoffset_verbose_log(x, "loop_length %f", loop_length);
     
     if (loop_length == 0 && gathered_offsets_count > 0) {
-        post("whichoffset: only one unique offset, outputting %f", gathered_offsets[0]);
+        whichoffset_verbose_log(x, "only one unique offset, outputting %f", gathered_offsets[0]);
         outlet_float(x->outlet, gathered_offsets[0]);
         sysmem_freeptr(gathered_offsets);
         object_free(dict);
@@ -201,7 +236,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         double max_value = fmax(0, max_abs_ts - (gathered_offsets[i] + loop_length));
         double sum = min_value + max_value;
         
-        post("whichoffset: offset %f, excess before start: %f, excess after end: %f",
+        whichoffset_verbose_log(x, "offset %f, excess before start: %f, excess after end: %f",
              gathered_offsets[i], min_value, max_value);
 
         if (smallest_index == -1 || sum < smallest_sum) {
@@ -211,7 +246,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (smallest_index != -1) {
-        post("whichoffset: optimal offset is %f", gathered_offsets[smallest_index]);
+        whichoffset_verbose_log(x, "optimal offset is %f", gathered_offsets[smallest_index]);
         outlet_float(x->outlet, gathered_offsets[smallest_index]);
     }
     
@@ -387,7 +422,10 @@ void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "(bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
     } else { // ASSIST_OUTLET
-        sprintf(s, "Calculated Optimal Offset (float)");
+        switch (a) {
+            case 0: sprintf(s, "Calculated Optimal Offset (float)"); break;
+            case 1: sprintf(s, "Verbose Logging Outlet"); break;
+        }
     }
 }
 

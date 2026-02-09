@@ -1,10 +1,13 @@
 CC = x86_64-w64-mingw32-gcc
 CFLAGS = -I../max-sdk/source/max-sdk-base/c74support/max-includes -shared -m64
 LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -lMaxAPI -lws2_32
-OBJS = whichoffset.o ../shared/visualize.o
+OBJS = whichoffset.o ../shared/visualize.o ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.o
 
 whichoffset.mxe64: $(OBJS)
 	$(CC) $(CFLAGS) -o whichoffset.mxe64 $(OBJS) $(LDFLAGS)
+
+../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.o: ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
+	$(CC) $(CFLAGS) -c ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c -o ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.o
 
 whichoffset.o: whichoffset.c
 	$(CC) $(CFLAGS) -c whichoffset.c -o whichoffset.o

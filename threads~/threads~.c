@@ -51,6 +51,8 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...) {
 }
 
 void ext_main(void *r) {
+    common_symbols_init();
+
     t_class *c = class_new("threads~", (method)threads_new, (method)threads_free, sizeof(t_threads), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
@@ -58,13 +60,14 @@ void ext_main(void *r) {
     class_addmethod(c, (method)threads_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)threads_assist, "assist", A_CANT, 0);
 
+    CLASS_ATTR_SYM(c, "prefix", 0, t_threads, poly_prefix);
+    CLASS_ATTR_LABEL(c, "prefix", 0, "Polybuffer~ Prefix");
+
     CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
 
     class_register(CLASS_BOX, c);
     threads_class = c;
-
-    common_symbols_init();
 }
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv) {

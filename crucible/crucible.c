@@ -126,10 +126,13 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
 void ext_main(void *r) {
     common_symbols_init();
     t_class *c;
-    c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
+    c = class_new("crucible", (method)crucible_new, (method)crucible_free, sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_SYM(c, "incumbent", 0, t_crucible, incumbent_dict_name);
+    CLASS_ATTR_LABEL(c, "incumbent", 0, "Incumbent Dictionary Name");
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
@@ -149,7 +152,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
 
-        if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
+        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->incumbent_dict_name = atom_getsym(argv);
             argc--;
             argv++;
