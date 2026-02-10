@@ -11,9 +11,16 @@
 #include "../shared/visualize.h"
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+#include <ctype.h>
+
+typedef struct _bar_cache {
+    double value;
+    t_symbol *sym;
+} t_bar_cache;
 
 typedef struct _threads {
-    t_object t_obj;
+    t_pxobject t_obj;
     t_symbol *poly_prefix;
     t_hashtab *palette_map;
     void *proxy_rescript;
@@ -23,6 +30,15 @@ typedef struct _threads {
     void *verbose_log_outlet;
     t_hashtab *buffer_refs;
     t_buffer_ref *bar_buffer_ref;
+
+    t_symbol *audio_dict_name;
+    double last_ramp_val;
+    t_bar_cache *cached_bars;
+    long num_cached_bars;
+    t_bar_cache hit_bars[1024];
+    int fifo_head;
+    int fifo_tail;
+    t_qelem *audio_qelem;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -34,6 +50,11 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s);
 void threads_verbose_log(t_threads *x, const char *fmt, ...);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void threads_rescript(t_threads *x, t_symbol *dict_name);
+double threads_get_bar_length(t_threads *x);
+void threads_update_cached_bars(t_threads *x, t_symbol *dict_name);
+void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
+void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
+void threads_audio_qtask(t_threads *x);
 
 static t_class *threads_class;
 
@@ -55,6 +76,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)threads_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)threads_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)threads_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)threads_assist, "assist", A_CANT, 0);
 
@@ -73,6 +95,12 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->poly_prefix = _sym_nothing;
         x->verbose = 0;
+        x->audio_dict_name = _sym_nothing;
+        x->last_ramp_val = -1.0;
+        x->cached_bars = NULL;
+        x->num_cached_bars = 0;
+        x->fifo_head = 0;
+        x->fifo_tail = 0;
 
         // Unconditionally create the outlet
         x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
@@ -102,11 +130,18 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->proxy_palette = proxy_new(x, 2, &x->inlet_num);
         x->proxy_rescript = proxy_new(x, 1, &x->inlet_num);
+
+        dsp_setup((t_pxobject *)x, 1);
+        x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);
     }
     return x;
 }
 
 void threads_free(t_threads *x) {
+    dsp_free((t_pxobject *)x);
+    if (x->audio_qelem) qelem_free(x->audio_qelem);
+    if (x->cached_bars) sysmem_freeptr(x->cached_bars);
+
     object_free(x->proxy_rescript);
     object_free(x->proxy_palette);
     if (x->palette_map) {
@@ -152,8 +187,8 @@ t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender,
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(list) Data from crucible, (symbol) clear"); break;
-            case 1: sprintf(s, "(symbol) Dictionary name for rescript"); break;
+            case 0: sprintf(s, "(signal/list) Data from crucible, (symbol) clear"); break;
+            case 1: sprintf(s, "(symbol) Dictionary name for rescript/reference"); break;
             case 2: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
@@ -161,7 +196,7 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     }
 }
 
-void threads_rescript(t_threads *x, t_symbol *dict_name) {
+double threads_get_bar_length(t_threads *x) {
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
     if (b) {
@@ -175,6 +210,57 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
         }
         critical_exit(0);
     }
+    return bar_length;
+}
+
+int compare_bar_cache(const void *a, const void *b) {
+    t_bar_cache *ba = (t_bar_cache *)a;
+    t_bar_cache *bb = (t_bar_cache *)b;
+    if (ba->value < bb->value) return -1;
+    if (ba->value > bb->value) return 1;
+    return 0;
+}
+
+void threads_update_cached_bars(t_threads *x, t_symbol *dict_name) {
+    t_dictionary *dict = dictobj_findregistered_retain(dict_name);
+    t_bar_cache *new_cached = NULL;
+    long new_count = 0;
+
+    if (dict) {
+        long num_keys = 0;
+        t_symbol **keys = NULL;
+        dictionary_getkeys(dict, &num_keys, &keys);
+
+        if (num_keys > 0) {
+            new_cached = (t_bar_cache *)sysmem_newptr(num_keys * sizeof(t_bar_cache));
+            for (long i = 0; i < num_keys; i++) {
+                const char *name = keys[i]->s_name;
+                if (name && (isdigit(name[0]) || name[0] == '-')) {
+                    new_cached[new_count].value = atof(name);
+                    new_cached[new_count].sym = keys[i];
+                    new_count++;
+                }
+            }
+
+            if (new_count > 1) {
+                qsort(new_cached, new_count, sizeof(t_bar_cache), compare_bar_cache);
+            }
+        }
+        if (keys) sysmem_freeptr(keys);
+        dictobj_release(dict);
+    }
+
+    critical_enter(0);
+    t_bar_cache *old_cached = x->cached_bars;
+    x->cached_bars = new_cached;
+    x->num_cached_bars = new_count;
+    critical_exit(0);
+
+    if (old_cached) sysmem_freeptr(old_cached);
+}
+
+void threads_rescript(t_threads *x, t_symbol *dict_name) {
+    double bar_length = threads_get_bar_length(x);
 
     if (bar_length <= 0) {
         object_error((t_object *)x, "threads~: bar buffer~ not found or empty, cannot perform rescript");
@@ -378,7 +464,9 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet = proxy_getinlet((t_object *)x);
 
     if (inlet == 1) {
-        // Inlet 1: Rescript (dictionary name as symbol)
+        // Inlet 1: Rescript / Dictionary Reference
+        x->audio_dict_name = s;
+        threads_update_cached_bars(x, s);
         threads_rescript(x, s);
     } else if (inlet == 2) {
         // Inlet 2: Palette Configuration
@@ -455,5 +543,107 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             double offset_ms = atom_getfloat(argv + 2);
             threads_process_data(x, palette, track, bar_ms, offset_ms);
         }
+    }
+}
+
+void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+    if (count[0]) {
+        dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)threads_perform64, 0, NULL);
+    }
+}
+
+void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+    double *in = ins[0];
+    double last_val = x->last_ramp_val;
+
+    critical_enter(0);
+    t_bar_cache *cached = x->cached_bars;
+    long num_cached = x->num_cached_bars;
+
+    if (num_cached > 0 && cached != NULL) {
+        for (int i = 0; i < sampleframes; i++) {
+            double current_val = in[i];
+            for (long j = 0; j < num_cached; j++) {
+                if (last_val < cached[j].value && current_val >= cached[j].value) {
+                    int next_tail = (x->fifo_tail + 1) % 1024;
+                    if (next_tail != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail] = cached[j];
+                        x->fifo_tail = next_tail;
+                        qelem_set(x->audio_qelem);
+                    }
+                }
+            }
+            last_val = current_val;
+        }
+    }
+    critical_exit(0);
+    x->last_ramp_val = last_val;
+}
+
+void threads_audio_qtask(t_threads *x) {
+    while (x->fifo_head != x->fifo_tail) {
+        t_bar_cache hit = x->hit_bars[x->fifo_head];
+        x->fifo_head = (x->fifo_head + 1) % 1024;
+
+        t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
+        if (!dict) continue;
+
+        t_dictionary *bar_entry_dict = NULL;
+        if (dictionary_getdictionary(dict, hit.sym, (t_object **)&bar_entry_dict) == MAX_ERR_NONE && bar_entry_dict) {
+            t_atomarray *data_aa = NULL;
+            if (dictionary_getatomarray(bar_entry_dict, gensym("data"), (t_object **)&data_aa) == MAX_ERR_NONE && data_aa) {
+                long ac = 0;
+                t_atom *av = NULL;
+                atomarray_getatoms(data_aa, &ac, &av);
+                for (long i = 0; i < ac; i += 4) {
+                    if (i + 3 < ac) {
+                        t_symbol *palette = atom_getsym(av + i);
+                        t_atom_long track = atom_getlong(av + i + 1);
+                        double b_ms = atom_getfloat(av + i + 2);
+                        double offset = atom_getfloat(av + i + 3);
+                        threads_process_data(x, palette, track, b_ms, offset);
+                    }
+                }
+            }
+
+            t_atomarray *span_aa = NULL;
+            if (dictionary_getatomarray(bar_entry_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                long ac_span = 0;
+                t_atom *av_span = NULL;
+                atomarray_getatoms(span_aa, &ac_span, &av_span);
+                if (ac_span > 0) {
+                    double max_val = -1.0;
+                    for (long i = 0; i < ac_span; i++) {
+                        double val = atom_getfloat(av_span + i);
+                        if (val > max_val) max_val = val;
+                    }
+                    double bar_len = threads_get_bar_length(x);
+                    double silence_pos = max_val + bar_len;
+
+                    if (data_aa) {
+                        long ac_data = 0;
+                        t_atom *av_data = NULL;
+                        atomarray_getatoms(data_aa, &ac_data, &av_data);
+
+                        long tracks[128];
+                        int num_tracks = 0;
+                        for (long i = 0; i < ac_data; i += 4) {
+                            if (i + 1 < ac_data) {
+                                long trk = (long)atom_getlong(av_data + i + 1);
+                                int found = 0;
+                                for (int k = 0; k < num_tracks; k++) {
+                                    if (tracks[k] == trk) { found = 1; break; }
+                                }
+                                if (!found && num_tracks < 128) {
+                                    tracks[num_tracks++] = trk;
+                                    threads_process_data(x, gensym("-"), (t_atom_long)trk, silence_pos, -999999.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        dictobj_release(dict);
     }
 }
