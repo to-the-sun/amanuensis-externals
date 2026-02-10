@@ -19,6 +19,11 @@ typedef struct _bar_cache {
     t_symbol *sym;
 } t_bar_cache;
 
+typedef struct _fifo_entry {
+    t_bar_cache bar;
+    long type; // 0 for DATA, 1 for SCAN
+} t_fifo_entry;
+
 typedef struct _threads {
     t_pxobject t_obj;
     t_symbol *poly_prefix;
@@ -33,9 +38,10 @@ typedef struct _threads {
 
     t_symbol *audio_dict_name;
     double last_ramp_val;
+    double last_scan_val;
     t_bar_cache *cached_bars;
     long num_cached_bars;
-    t_bar_cache hit_bars[1024];
+    t_fifo_entry hit_bars[1024];
     int fifo_head;
     int fifo_tail;
     t_qelem *audio_qelem;
@@ -97,6 +103,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->verbose = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_ramp_val = -1.0;
+        x->last_scan_val = -1.0;
         x->cached_bars = NULL;
         x->num_cached_bars = 0;
         x->fifo_head = 0;
@@ -336,7 +343,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     t_atom_long chan_index = -1;
     t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
-    if (err != MAX_ERR_NONE && offset_ms != 0.0) {
+    if (err != MAX_ERR_NONE && offset_ms != 0.0 && palette != gensym("-")) {
         threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
         if (offset_ms == -999999.0) {
              char json[256];
@@ -555,6 +562,7 @@ void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerat
 void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
     double last_val = x->last_ramp_val;
+    double last_scan = x->last_scan_val;
 
     critical_enter(0);
     t_bar_cache *cached = x->cached_bars;
@@ -563,27 +571,49 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
     if (num_cached > 0 && cached != NULL) {
         for (int i = 0; i < sampleframes; i++) {
             double current_val = in[i];
+            double current_scan = current_val + 1.0;
+
             for (long j = 0; j < num_cached; j++) {
-                if (last_val < cached[j].value && current_val >= cached[j].value) {
+                double bar_val = cached[j].value;
+
+                // 1. SCAN hit (+1ms ahead)
+                if (last_scan < bar_val && current_scan >= bar_val) {
                     int next_tail = (x->fifo_tail + 1) % 1024;
                     if (next_tail != x->fifo_head) {
-                        x->hit_bars[x->fifo_tail] = cached[j];
+                        x->hit_bars[x->fifo_tail].bar = cached[j];
+                        x->hit_bars[x->fifo_tail].type = 1; // SCAN
+                        x->fifo_tail = next_tail;
+                        qelem_set(x->audio_qelem);
+                    }
+                }
+
+                // 2. DATA hit (actual ramp)
+                if (last_val < bar_val && current_val >= bar_val) {
+                    int next_tail = (x->fifo_tail + 1) % 1024;
+                    if (next_tail != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].bar = cached[j];
+                        x->hit_bars[x->fifo_tail].type = 0; // DATA
                         x->fifo_tail = next_tail;
                         qelem_set(x->audio_qelem);
                     }
                 }
             }
             last_val = current_val;
+            last_scan = current_scan;
         }
     }
     critical_exit(0);
     x->last_ramp_val = last_val;
+    x->last_scan_val = last_scan;
 }
 
 void threads_audio_qtask(t_threads *x) {
     while (x->fifo_head != x->fifo_tail) {
-        t_bar_cache hit = x->hit_bars[x->fifo_head];
+        t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 1024;
+
+        t_bar_cache hit = hit_entry.bar;
+        long hit_type = hit_entry.type; // 0 for DATA, 1 for SCAN
 
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (!dict) continue;
@@ -591,52 +621,96 @@ void threads_audio_qtask(t_threads *x) {
         t_dictionary *bar_entry_dict = NULL;
         if (dictionary_getdictionary(dict, hit.sym, (t_object **)&bar_entry_dict) == MAX_ERR_NONE && bar_entry_dict) {
             t_atomarray *data_aa = NULL;
-            if (dictionary_getatomarray(bar_entry_dict, gensym("data"), (t_object **)&data_aa) == MAX_ERR_NONE && data_aa) {
-                long ac = 0;
-                t_atom *av = NULL;
-                atomarray_getatoms(data_aa, &ac, &av);
-                for (long i = 0; i < ac; i += 4) {
-                    if (i + 3 < ac) {
-                        t_symbol *palette = atom_getsym(av + i);
-                        t_atom_long track = atom_getlong(av + i + 1);
-                        double b_ms = atom_getfloat(av + i + 2);
-                        double offset = atom_getfloat(av + i + 3);
-                        threads_process_data(x, palette, track, b_ms, offset);
+            dictionary_getatomarray(bar_entry_dict, gensym("data"), (t_object **)&data_aa);
+
+            if (hit_type == 1) { // SCAN hit: Zero out all tracks in this bar
+                if (data_aa) {
+                    long ac = 0;
+                    t_atom *av = NULL;
+                    atomarray_getatoms(data_aa, &ac, &av);
+                    long tracks[128];
+                    int num_tracks = 0;
+                    for (long i = 0; i < ac; i += 4) {
+                        if (i + 1 < ac) {
+                            long trk = (long)atom_getlong(av + i + 1);
+                            int found = 0;
+                            for (int k = 0; k < num_tracks; k++) if (tracks[k] == trk) { found = 1; break; }
+                            if (!found && num_tracks < 128) {
+                                tracks[num_tracks++] = trk;
+                                threads_process_data(x, gensym("-"), (t_atom_long)trk, hit.value, 0.0);
+                            }
+                        }
                     }
                 }
-            }
-
-            t_atomarray *span_aa = NULL;
-            if (dictionary_getatomarray(bar_entry_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                long ac_span = 0;
-                t_atom *av_span = NULL;
-                atomarray_getatoms(span_aa, &ac_span, &av_span);
-                if (ac_span > 0) {
-                    double max_val = -1.0;
-                    for (long i = 0; i < ac_span; i++) {
-                        double val = atom_getfloat(av_span + i);
-                        if (val > max_val) max_val = val;
+            } else { // DATA hit: normal processing + conditional silence caps
+                if (data_aa) {
+                    long ac = 0;
+                    t_atom *av = NULL;
+                    atomarray_getatoms(data_aa, &ac, &av);
+                    for (long i = 0; i < ac; i += 4) {
+                        if (i + 3 < ac) {
+                            t_symbol *palette = atom_getsym(av + i);
+                            t_atom_long track = atom_getlong(av + i + 1);
+                            double b_ms = atom_getfloat(av + i + 2);
+                            double offset = atom_getfloat(av + i + 3);
+                            threads_process_data(x, palette, track, b_ms, offset);
+                        }
                     }
-                    double bar_len = threads_get_bar_length(x);
-                    double silence_pos = max_val + bar_len;
+                }
 
-                    if (data_aa) {
-                        long ac_data = 0;
-                        t_atom *av_data = NULL;
-                        atomarray_getatoms(data_aa, &ac_data, &av_data);
+                t_atomarray *span_aa = NULL;
+                if (dictionary_getatomarray(bar_entry_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                    long ac_span = 0;
+                    t_atom *av_span = NULL;
+                    atomarray_getatoms(span_aa, &ac_span, &av_span);
+                    if (ac_span > 0) {
+                        double max_val = -1.0;
+                        for (long i = 0; i < ac_span; i++) {
+                            double val = atom_getfloat(av_span + i);
+                            if (val > max_val) max_val = val;
+                        }
+                        double bar_len = threads_get_bar_length(x);
+                        double silence_pos = max_val + bar_len;
+                        char silence_str[64];
+                        snprintf(silence_str, 64, "%ld", (long)silence_pos);
+                        t_symbol *silence_sym = gensym(silence_str);
 
-                        long tracks[128];
-                        int num_tracks = 0;
-                        for (long i = 0; i < ac_data; i += 4) {
-                            if (i + 1 < ac_data) {
-                                long trk = (long)atom_getlong(av_data + i + 1);
-                                int found = 0;
-                                for (int k = 0; k < num_tracks; k++) {
-                                    if (tracks[k] == trk) { found = 1; break; }
-                                }
-                                if (!found && num_tracks < 128) {
-                                    tracks[num_tracks++] = trk;
-                                    threads_process_data(x, gensym("-"), (t_atom_long)trk, silence_pos, -999999.0);
+                        if (data_aa) {
+                            long ac_data = 0;
+                            t_atom *av_data = NULL;
+                            atomarray_getatoms(data_aa, &ac_data, &av_data);
+                            long tracks[128];
+                            int num_tracks = 0;
+                            for (long i = 0; i < ac_data; i += 4) {
+                                if (i + 1 < ac_data) {
+                                    long trk = (long)atom_getlong(av_data + i + 1);
+                                    int found = 0;
+                                    for (int k = 0; k < num_tracks; k++) if (tracks[k] == trk) { found = 1; break; }
+                                    if (!found && num_tracks < 128) {
+                                        tracks[num_tracks++] = trk;
+
+                                        // EXISTENCE CHECK
+                                        int exists = 0;
+                                        t_dictionary *next_bar_dict = NULL;
+                                        if (dictionary_getdictionary(dict, silence_sym, (t_object **)&next_bar_dict) == MAX_ERR_NONE && next_bar_dict) {
+                                            t_atomarray *next_data_aa = NULL;
+                                            if (dictionary_getatomarray(next_bar_dict, gensym("data"), (t_object **)&next_data_aa) == MAX_ERR_NONE && next_data_aa) {
+                                                long ac_next = 0;
+                                                t_atom *av_next = NULL;
+                                                atomarray_getatoms(next_data_aa, &ac_next, &av_next);
+                                                for (long m = 0; m < ac_next; m += 4) {
+                                                    if (m + 1 < ac_next && atom_getlong(av_next + m + 1) == (t_atom_long)trk) {
+                                                        exists = 1;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (!exists) {
+                                            threads_process_data(x, gensym("-"), (t_atom_long)trk, silence_pos, -999999.0);
+                                        }
+                                    }
                                 }
                             }
                         }
