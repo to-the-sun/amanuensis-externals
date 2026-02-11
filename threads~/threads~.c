@@ -629,6 +629,8 @@ void threads_audio_qtask(t_threads *x) {
         long hit_type = hit_entry.type; // 0 for DATA, 1 for SWEEP
 
         if (hit_type == 1) { // SWEEP hit: Constant clear for all tracks
+            // TEMPORARILY DISABLED CLEARING SWEEP
+            continue;
             double start_ms = hit.value;
             double end_ms = hit_entry.range_end;
             long max_t = x->max_tracks;
