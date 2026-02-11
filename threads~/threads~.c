@@ -21,7 +21,8 @@ typedef struct _bar_cache {
 
 typedef struct _fifo_entry {
     t_bar_cache bar;
-    long type; // 0 for DATA, 1 for SCAN
+    double range_end; // For SWEEP
+    long type; // 0 for DATA, 1 for SWEEP
 } t_fifo_entry;
 
 typedef struct _threads {
@@ -45,6 +46,8 @@ typedef struct _threads {
     int fifo_head;
     int fifo_tail;
     t_qelem *audio_qelem;
+    t_critical lock;
+    long max_track_seen;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -138,6 +141,9 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->proxy_palette = proxy_new(x, 2, &x->inlet_num);
         x->proxy_rescript = proxy_new(x, 1, &x->inlet_num);
 
+        critical_new(&x->lock);
+        x->max_track_seen = 0;
+
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);
     }
@@ -146,6 +152,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
 void threads_free(t_threads *x) {
     dsp_free((t_pxobject *)x);
+    critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
     if (x->cached_bars) sysmem_freeptr(x->cached_bars);
 
@@ -257,11 +264,11 @@ void threads_update_cached_bars(t_threads *x, t_symbol *dict_name) {
         dictobj_release(dict);
     }
 
-    critical_enter(0);
+    critical_enter(x->lock);
     t_bar_cache *old_cached = x->cached_bars;
     x->cached_bars = new_cached;
     x->num_cached_bars = new_count;
-    critical_exit(0);
+    critical_exit(x->lock);
 
     if (old_cached) sysmem_freeptr(old_cached);
 }
@@ -354,6 +361,8 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
         }
         return;
     }
+
+    if (track > x->max_track_seen) x->max_track_seen = track;
 
     // 2. Buffer lookup
     char bufname[256];
@@ -563,48 +572,75 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
     double *in = ins[0];
     double last_val = x->last_ramp_val;
     double last_scan = x->last_scan_val;
+    double initial_scan = last_scan;
+    double final_scan = in[sampleframes - 1] + 1.0;
 
-    critical_enter(0);
-    t_bar_cache *cached = x->cached_bars;
-    long num_cached = x->num_cached_bars;
+    // 1. Push SWEEP range for the entire vector FIRST to ensure clear before write
+    if (last_scan != -1.0) {
+        int next_tail = (x->fifo_tail + 1) % 1024;
+        if (next_tail != x->fifo_head) {
+            // Handle wrap-around in a simple way for the FIFO:
+            // if it wraps, we'll push two ranges.
+            double current_final = final_scan;
+            if (current_final < initial_scan) {
+                // Wrapped! Push [initial_scan, some_large_val]?
+                // Actually, we can just push two entries.
+                x->hit_bars[x->fifo_tail].bar.value = initial_scan;
+                x->hit_bars[x->fifo_tail].range_end = 999999999.0; // Assume end
+                x->hit_bars[x->fifo_tail].type = 1; // SWEEP
+                x->fifo_tail = (x->fifo_tail + 1) % 1024;
 
-    if (num_cached > 0 && cached != NULL) {
-        for (int i = 0; i < sampleframes; i++) {
-            double current_val = in[i];
-            double current_scan = current_val + 1.0;
-
-            for (long j = 0; j < num_cached; j++) {
-                double bar_val = cached[j].value;
-
-                // 1. SCAN hit (+1ms ahead)
-                if (last_scan < bar_val && current_scan >= bar_val) {
-                    int next_tail = (x->fifo_tail + 1) % 1024;
-                    if (next_tail != x->fifo_head) {
-                        x->hit_bars[x->fifo_tail].bar = cached[j];
-                        x->hit_bars[x->fifo_tail].type = 1; // SCAN
-                        x->fifo_tail = next_tail;
-                        qelem_set(x->audio_qelem);
-                    }
+                if (x->fifo_tail != x->fifo_head) {
+                    x->hit_bars[x->fifo_tail].bar.value = 0.0;
+                    x->hit_bars[x->fifo_tail].range_end = current_final;
+                    x->hit_bars[x->fifo_tail].type = 1; // SWEEP
+                    x->fifo_tail = (x->fifo_tail + 1) % 1024;
                 }
-
-                // 2. DATA hit (actual ramp)
-                if (last_val < bar_val && current_val >= bar_val) {
-                    int next_tail = (x->fifo_tail + 1) % 1024;
-                    if (next_tail != x->fifo_head) {
-                        x->hit_bars[x->fifo_tail].bar = cached[j];
-                        x->hit_bars[x->fifo_tail].type = 0; // DATA
-                        x->fifo_tail = next_tail;
-                        qelem_set(x->audio_qelem);
-                    }
-                }
+            } else {
+                x->hit_bars[x->fifo_tail].bar.value = initial_scan;
+                x->hit_bars[x->fifo_tail].range_end = current_final;
+                x->hit_bars[x->fifo_tail].type = 1; // SWEEP
+                x->fifo_tail = next_tail;
             }
-            last_val = current_val;
-            last_scan = current_scan;
+            qelem_set(x->audio_qelem);
         }
     }
-    critical_exit(0);
+
+    // 2. Push DATA hits (bar crossings)
+    // We use a try-enter to avoid blocking the DSP thread.
+    // If we fail to get the lock, we might miss a hit detection for this vector,
+    // but the next vector will likely catch it if we track last_val correctly.
+    if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
+        t_bar_cache *cached = x->cached_bars;
+        long num_cached = x->num_cached_bars;
+
+        if (num_cached > 0 && cached != NULL) {
+            for (int i = 0; i < sampleframes; i++) {
+                double current_val = in[i];
+                for (long j = 0; j < num_cached; j++) {
+                    double bar_val = cached[j].value;
+                    if (last_val < bar_val && current_val >= bar_val) {
+                        int next_tail = (x->fifo_tail + 1) % 1024;
+                        if (next_tail != x->fifo_head) {
+                            x->hit_bars[x->fifo_tail].bar = cached[j];
+                            x->hit_bars[x->fifo_tail].type = 0; // DATA
+                            x->fifo_tail = next_tail;
+                            qelem_set(x->audio_qelem);
+                        }
+                    }
+                }
+                last_val = current_val;
+            }
+        } else {
+            last_val = in[sampleframes-1];
+        }
+        critical_exit(x->lock);
+    } else {
+        last_val = in[sampleframes-1];
+    }
+
     x->last_ramp_val = last_val;
-    x->last_scan_val = last_scan;
+    x->last_scan_val = final_scan;
 }
 
 void threads_audio_qtask(t_threads *x) {
@@ -613,7 +649,58 @@ void threads_audio_qtask(t_threads *x) {
         x->fifo_head = (x->fifo_head + 1) % 1024;
 
         t_bar_cache hit = hit_entry.bar;
-        long hit_type = hit_entry.type; // 0 for DATA, 1 for SCAN
+        long hit_type = hit_entry.type; // 0 for DATA, 1 for SWEEP
+
+        if (hit_type == 1) { // SWEEP hit: Constant clear for all tracks
+            double start_ms = hit.value;
+            double end_ms = hit_entry.range_end;
+            long max_t = x->max_track_seen > 512 ? x->max_track_seen : 512;
+
+            for (int track = 1; track <= max_t; track++) {
+                char bufname[256];
+                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, track);
+                t_symbol *s_bufname = gensym(bufname);
+                t_buffer_ref *buf_ref = NULL;
+                hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&buf_ref);
+                if (!buf_ref) {
+                    buf_ref = buffer_ref_new((t_object *)x, s_bufname);
+                    hashtab_store(x->buffer_refs, s_bufname, (t_object *)buf_ref);
+                }
+                t_buffer_obj *b = buffer_ref_getobject(buf_ref);
+                if (!b) continue; // Sparse track support: keep going
+
+                double sr = buffer_getsamplerate(b);
+                if (sr <= 0) sr = sys_getsr();
+                if (sr <= 0) sr = 44100.0;
+
+                long s_start = (long)round(start_ms * sr / 1000.0);
+                long s_end = (long)round(end_ms * sr / 1000.0);
+                long n_frames = buffer_getframecount(b);
+                long n_chans = buffer_getchannelcount(b);
+
+                if (s_start < n_frames) {
+                    if (s_end >= n_frames) s_end = n_frames - 1;
+                    if (s_start <= s_end) {
+                        float *samples = NULL;
+                        for (int retries = 0; retries < 10; retries++) {
+                            samples = buffer_locksamples(b);
+                            if (samples) break;
+                            systhread_sleep(1);
+                        }
+                        if (samples) {
+                            for (long s = s_start; s <= s_end; s++) {
+                                for (long c = 0; c < n_chans; c++) {
+                                    samples[s * n_chans + c] = 0.0f;
+                                }
+                            }
+                            buffer_unlocksamples(b);
+                            buffer_setdirty(b);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
 
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (!dict) continue;
@@ -623,26 +710,8 @@ void threads_audio_qtask(t_threads *x) {
             t_atomarray *data_aa = NULL;
             dictionary_getatomarray(bar_entry_dict, gensym("data"), (t_object **)&data_aa);
 
-            if (hit_type == 1) { // SCAN hit: Zero out all tracks in this bar
-                if (data_aa) {
-                    long ac = 0;
-                    t_atom *av = NULL;
-                    atomarray_getatoms(data_aa, &ac, &av);
-                    long tracks[128];
-                    int num_tracks = 0;
-                    for (long i = 0; i < ac; i += 4) {
-                        if (i + 1 < ac) {
-                            long trk = (long)atom_getlong(av + i + 1);
-                            int found = 0;
-                            for (int k = 0; k < num_tracks; k++) if (tracks[k] == trk) { found = 1; break; }
-                            if (!found && num_tracks < 128) {
-                                tracks[num_tracks++] = trk;
-                                threads_process_data(x, gensym("-"), (t_atom_long)trk, hit.value, 0.0);
-                            }
-                        }
-                    }
-                }
-            } else { // DATA hit: normal processing + conditional silence caps
+            // DATA hit: normal processing + conditional silence caps
+            {
                 if (data_aa) {
                     long ac = 0;
                     t_atom *av = NULL;
