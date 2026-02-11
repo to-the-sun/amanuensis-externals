@@ -14,7 +14,7 @@
 	<inletlist>
 		<inlet id="0" type="signal/list">
 			<digest>Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
-			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
+			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. When used as a signal ramp, a lookahead sweep (1ms ahead) automatically zeroes out track buffers. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
 		</inlet>
 		<inlet id="1" type="symbol">
 			<digest>Rescript/Reference dictionary name</digest>

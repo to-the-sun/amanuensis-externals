@@ -288,6 +288,7 @@ void threads_update_cached_bars(t_threads *x, t_symbol *dict_name) {
         hashtab_clear(unique_bars);
         object_free(unique_bars);
         dictobj_release(dict);
+        threads_verbose_log(x, "CACHED %ld unique bar timestamps for ramp processing", new_count);
     }
 
     critical_enter(x->lock);
@@ -309,6 +310,7 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
 
     t_dictionary *dict = dictobj_findregistered_retain(dict_name);
     if (!dict) {
+        threads_verbose_log(x, "CACHING FAILED: dictionary '%s' not found", dict_name->s_name);
         object_error((t_object *)x, "threads~: could not find dictionary named %s", dict_name->s_name);
         return;
     }
@@ -671,7 +673,7 @@ void threads_audio_qtask(t_threads *x) {
         if (hit_type == 1) { // SWEEP hit: Constant clear for all tracks
             double start_ms = hit.value;
             double end_ms = hit_entry.range_end;
-            long max_t = x->max_track_seen > 512 ? x->max_track_seen : 512;
+            long max_t = x->max_track_seen > 64 ? x->max_track_seen : 64;
 
             if (start_ms < 0) start_ms = 0;
 
@@ -718,8 +720,12 @@ void threads_audio_qtask(t_threads *x) {
         }
 
         // DATA Hit logic
+        threads_verbose_log(x, "TRIGGERED bar %s", hit.sym ? hit.sym->s_name : "???");
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
-        if (!dict) continue;
+        if (!dict) {
+            threads_verbose_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
+            continue;
+        }
 
         long num_tracks = 0;
         t_symbol **track_keys = NULL;
@@ -735,6 +741,7 @@ void threads_audio_qtask(t_threads *x) {
 
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, hit.sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                threads_verbose_log(x, "Processing bar %s for track %lld", hit.sym->s_name, (long long)track_val);
                 t_symbol *palette = _sym_nothing;
                 double offset = 0.0;
                 t_atom palette_atom, offset_atom;
