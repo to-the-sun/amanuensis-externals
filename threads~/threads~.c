@@ -47,11 +47,13 @@ typedef struct _threads {
     t_critical lock;
     long max_track_seen;
     long max_tracks;
+    long debug_lookup_count;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
 void threads_free(t_threads *x);
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv);
+void threads_bang(t_threads *x);
 void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
@@ -81,6 +83,7 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...) {
 void ext_main(void *r) {
     t_class *c = class_new("threads~", (method)threads_new, (method)threads_free, sizeof(t_threads), 0L, A_GIMME, 0);
 
+    class_addmethod(c, (method)threads_bang, "bang", 0);
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)threads_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)threads_dsp64, "dsp64", A_CANT, 0);
@@ -140,6 +143,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->max_track_seen = 0;
         x->max_tracks = 0;
+        x->debug_lookup_count = 0;
 
         // Determine max_tracks by checking for existing buffers in the polybuffer~
         if (x->poly_prefix != _sym_nothing) {
@@ -159,6 +163,9 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
                 i++;
             }
             if (temp_ref) object_free(temp_ref);
+            if (x->verbose) {
+                object_post((t_object *)x, "threads~: Initialized with %ld detected track buffers", x->max_tracks);
+            }
             threads_verbose_log(x, "Initialized with %ld detected track buffers", x->max_tracks);
         }
 
@@ -429,6 +436,13 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     }
 }
 
+void threads_bang(t_threads *x) {
+    if (proxy_getinlet((t_object *)x) == 0) {
+        x->debug_lookup_count = 10;
+        object_post((t_object *)x, "threads~: DEBUG: Starting lookup logging for the next 10 dictionary checks");
+    }
+}
+
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
 
@@ -536,6 +550,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
 
 void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
     if (count[0]) {
+        threads_verbose_log(x, "DSP ON: tracking signal ramp");
         dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)threads_perform64, 0, NULL);
     }
 }
@@ -688,6 +703,11 @@ void threads_audio_qtask(t_threads *x) {
             snprintf(tstr, 64, "%d", track_val);
             t_symbol *track_sym = gensym(tstr);
             t_dictionary *track_dict = NULL;
+
+            if (x->debug_lookup_count > 0) {
+                threads_verbose_log(x, "DEBUG LOOKUP: track %d, bar %s", track_val, bar_key->s_name);
+                x->debug_lookup_count--;
+            }
 
             if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
                 continue; // Support sparse tracks
