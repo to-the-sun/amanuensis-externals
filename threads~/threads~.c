@@ -40,8 +40,6 @@ typedef struct _threads {
     t_symbol *audio_dict_name;
     double last_ramp_val;
     double last_scan_val;
-    t_bar_cache *cached_bars;
-    long num_cached_bars;
     t_fifo_entry hit_bars[1024];
     int fifo_head;
     int fifo_tail;
@@ -60,7 +58,6 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void threads_rescript(t_threads *x, t_symbol *dict_name);
 double threads_get_bar_length(t_threads *x);
-void threads_update_cached_bars(t_threads *x, t_symbol *dict_name);
 void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void threads_audio_qtask(t_threads *x);
@@ -107,8 +104,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->audio_dict_name = _sym_nothing;
         x->last_ramp_val = -1.0;
         x->last_scan_val = -1.0;
-        x->cached_bars = NULL;
-        x->num_cached_bars = 0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
 
@@ -154,7 +149,6 @@ void threads_free(t_threads *x) {
     dsp_free((t_pxobject *)x);
     critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
-    if (x->cached_bars) sysmem_freeptr(x->cached_bars);
 
     object_free(x->proxy_rescript);
     object_free(x->proxy_palette);
@@ -227,78 +221,6 @@ double threads_get_bar_length(t_threads *x) {
     return bar_length;
 }
 
-int compare_bar_cache(const void *a, const void *b) {
-    t_bar_cache *ba = (t_bar_cache *)a;
-    t_bar_cache *bb = (t_bar_cache *)b;
-    if (ba->value < bb->value) return -1;
-    if (ba->value > bb->value) return 1;
-    return 0;
-}
-
-void threads_update_cached_bars(t_threads *x, t_symbol *dict_name) {
-    t_dictionary *dict = dictobj_findregistered_retain(dict_name);
-    t_bar_cache *new_cached = NULL;
-    long new_count = 0;
-
-    if (dict) {
-        t_hashtab *unique_bars = hashtab_new(0);
-
-        long num_tracks = 0;
-        t_symbol **track_keys = NULL;
-        dictionary_getkeys(dict, &num_tracks, &track_keys);
-
-        for (long i = 0; i < num_tracks; i++) {
-            t_dictionary *track_dict = NULL;
-            dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict);
-            if (!track_dict) continue;
-
-            long num_bars = 0;
-            t_symbol **bar_keys = NULL;
-            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-
-            for (long j = 0; j < num_bars; j++) {
-                const char *name = bar_keys[j]->s_name;
-                if (name && (isdigit(name[0]) || name[0] == '-')) {
-                    hashtab_store(unique_bars, bar_keys[j], (t_object *)1);
-                }
-            }
-            if (bar_keys) sysmem_freeptr(bar_keys);
-        }
-        if (track_keys) sysmem_freeptr(track_keys);
-
-        long total_unique = (long)hashtab_getsize(unique_bars);
-
-        if (total_unique > 0) {
-            new_cached = (t_bar_cache *)sysmem_newptr(total_unique * sizeof(t_bar_cache));
-            t_symbol **unique_keys = NULL;
-            long dummy = 0;
-            hashtab_getkeys(unique_bars, &dummy, &unique_keys);
-
-            for (long i = 0; i < total_unique; i++) {
-                new_cached[new_count].value = atof(unique_keys[i]->s_name);
-                new_cached[new_count].sym = unique_keys[i];
-                new_count++;
-            }
-            if (unique_keys) sysmem_freeptr(unique_keys);
-
-            if (new_count > 1) {
-                qsort(new_cached, new_count, sizeof(t_bar_cache), compare_bar_cache);
-            }
-        }
-        hashtab_clear(unique_bars);
-        object_free(unique_bars);
-        dictobj_release(dict);
-        threads_verbose_log(x, "CACHED %ld unique bar timestamps for ramp processing", new_count);
-    }
-
-    critical_enter(x->lock);
-    t_bar_cache *old_cached = x->cached_bars;
-    x->cached_bars = new_cached;
-    x->num_cached_bars = new_count;
-    critical_exit(x->lock);
-
-    if (old_cached) sysmem_freeptr(old_cached);
-}
 
 void threads_rescript(t_threads *x, t_symbol *dict_name) {
     double bar_length = threads_get_bar_length(x);
@@ -315,46 +237,46 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
         return;
     }
 
-    long num_tracks = 0;
-    t_symbol **track_keys = NULL;
-    dictionary_getkeys(dict, &num_tracks, &track_keys);
+    long num_bars = 0;
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(dict, &num_bars, &bar_keys);
 
-    for (long i = 0; i < num_tracks; i++) {
-        t_symbol *track_sym = track_keys[i];
-        t_atom_long track_val = atol(track_sym->s_name);
-        t_dictionary *track_dict = NULL;
-        dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
-        if (!track_dict) continue;
+    for (long i = 0; i < num_bars; i++) {
+        t_symbol *bar_key = bar_keys[i];
+        double bar_ms = atof(bar_key->s_name);
+        t_dictionary *bar_dict = NULL;
+        dictionary_getdictionary(dict, bar_key, (t_object **)&bar_dict);
+        if (!bar_dict) continue;
 
-        long num_bars = 0;
-        t_symbol **bar_keys = NULL;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        long num_tracks = 0;
+        t_symbol **track_keys = NULL;
+        dictionary_getkeys(bar_dict, &num_tracks, &track_keys);
 
-        for (long j = 0; j < num_bars; j++) {
-            t_symbol *bar_key = bar_keys[j];
-            double bar_ms = atof(bar_key->s_name);
-            t_dictionary *bar_dict = NULL;
-            dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict);
-            if (!bar_dict) continue;
+        for (long j = 0; j < num_tracks; j++) {
+            t_symbol *track_sym = track_keys[j];
+            t_atom_long track_val = atol(track_sym->s_name);
+            t_dictionary *track_data_dict = NULL;
+            dictionary_getdictionary(bar_dict, track_sym, (t_object **)&track_data_dict);
+            if (!track_data_dict) continue;
 
             t_symbol *palette = _sym_nothing;
             double offset = 0.0;
 
             t_atomarray *palette_aa = NULL;
             t_atom palette_atom;
-            if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+            if (dictionary_getatomarray(track_data_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
                 t_atom p_atom;
                 if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
-            } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+            } else if (dictionary_getatom(track_data_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
             }
 
             t_atomarray *offset_aa = NULL;
             t_atom offset_atom;
-            if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+            if (dictionary_getatomarray(track_data_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
                 t_atom o_atom;
                 if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
-            } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+            } else if (dictionary_getatom(track_data_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
                 offset = atom_getfloat(&offset_atom);
             }
 
@@ -363,13 +285,22 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
             double next_bar_ms = bar_ms + bar_length;
             char next_bar_str[64];
             snprintf(next_bar_str, 64, "%ld", (long)next_bar_ms);
-            if (!dictionary_hasentry(track_dict, gensym(next_bar_str))) {
+            t_symbol *next_bar_sym = gensym(next_bar_str);
+
+            // Check if next_bar_sym exists in Bar-first dict
+            t_dictionary *next_bar_dict = NULL;
+            short has_entry = 0;
+            if (dictionary_getdictionary(dict, next_bar_sym, (t_object **)&next_bar_dict) == MAX_ERR_NONE && next_bar_dict) {
+                if (dictionary_hasentry(next_bar_dict, track_sym)) has_entry = 1;
+            }
+
+            if (!has_entry) {
                  threads_process_data(x, gensym("-"), track_val, next_bar_ms, -999999.0);
             }
         }
-        if (bar_keys) sysmem_freeptr(bar_keys);
+        if (track_keys) sysmem_freeptr(track_keys);
     }
-    if (track_keys) sysmem_freeptr(track_keys);
+    if (bar_keys) sysmem_freeptr(bar_keys);
     dictobj_release(dict);
 }
 
@@ -510,7 +441,6 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     if (inlet == 1) {
         // Inlet 1: Rescript / Dictionary Reference
         x->audio_dict_name = s;
-        threads_update_cached_bars(x, s);
         threads_rescript(x, s);
     } else if (inlet == 2) {
         // Inlet 2: Palette Configuration
@@ -602,22 +532,23 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
     double last_scan = x->last_scan_val;
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
-        t_bar_cache *cached = x->cached_bars;
-        long num_cached = x->num_cached_bars;
         double initial_scan = last_scan;
 
         for (int i = 0; i < sampleframes; i++) {
             double current_val = in[i];
             double current_scan = current_val + 1.0;
 
-            // 1. DATA hits (bar crossings)
-            if (num_cached > 0 && cached != NULL) {
-                for (long j = 0; j < num_cached; j++) {
-                    double bar_val = cached[j].value;
-                    if (last_val < bar_val && current_val >= bar_val) {
+            // 1. DATA hits (integer bar crossings)
+            if (last_val != -1.0 && current_val > last_val) {
+                long floor_last = (long)floor(last_val);
+                long floor_curr = (long)floor(current_val);
+
+                if (floor_curr > floor_last) {
+                    for (long v = floor_last + 1; v <= floor_curr; v++) {
                         int next_tail = (x->fifo_tail + 1) % 1024;
                         if (next_tail != x->fifo_head) {
-                            x->hit_bars[x->fifo_tail].bar = cached[j];
+                            x->hit_bars[x->fifo_tail].bar.value = (double)v;
+                            x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].type = 0; // DATA
                             x->fifo_tail = next_tail;
                             qelem_set(x->audio_qelem);
@@ -720,40 +651,46 @@ void threads_audio_qtask(t_threads *x) {
         }
 
         // DATA Hit logic
-        threads_verbose_log(x, "TRIGGERED bar %s", hit.sym ? hit.sym->s_name : "???");
+        t_symbol *bar_key = hit.sym;
+        if (!bar_key) {
+            char bstr[64];
+            snprintf(bstr, 64, "%ld", (long)hit.value);
+            bar_key = gensym(bstr);
+        }
+
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (!dict) {
             threads_verbose_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
             continue;
         }
 
-        long num_tracks = 0;
-        t_symbol **track_keys = NULL;
-        dictionary_getkeys(dict, &num_tracks, &track_keys);
-        double bar_len = threads_get_bar_length(x);
+        t_dictionary *bar_dict = NULL;
+        if (dictionary_getdictionary(dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+            threads_verbose_log(x, "TRIGGERED bar %s", bar_key->s_name);
+            double bar_len = threads_get_bar_length(x);
+            long num_tracks = 0;
+            t_symbol **track_keys = NULL;
+            dictionary_getkeys(bar_dict, &num_tracks, &track_keys);
 
-        for (long i = 0; i < num_tracks; i++) {
-            t_symbol *track_sym = track_keys[i];
-            t_atom_long track_val = atol(track_sym->s_name);
-            t_dictionary *track_dict = NULL;
-            dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
-            if (!track_dict) continue;
+            for (long i = 0; i < num_tracks; i++) {
+                t_symbol *track_sym = track_keys[i];
+                t_atom_long track_val = atol(track_sym->s_name);
+                t_dictionary *track_data_dict = NULL;
+                dictionary_getdictionary(bar_dict, track_sym, (t_object **)&track_data_dict);
+                if (!track_data_dict) continue;
 
-            t_dictionary *bar_dict = NULL;
-            if (dictionary_getdictionary(track_dict, hit.sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
-                threads_verbose_log(x, "Processing bar %s for track %lld", hit.sym->s_name, (long long)track_val);
                 t_symbol *palette = _sym_nothing;
                 double offset = 0.0;
                 t_atom palette_atom, offset_atom;
 
-                if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) palette = atom_getsym(&palette_atom);
-                if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) offset = atom_getfloat(&offset_atom);
+                if (dictionary_getatom(track_data_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) palette = atom_getsym(&palette_atom);
+                if (dictionary_getatom(track_data_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) offset = atom_getfloat(&offset_atom);
 
                 threads_process_data(x, palette, track_val, hit.value, offset);
 
                 // Silence Cap logic
                 t_atomarray *span_aa = NULL;
-                if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                if (dictionary_getatomarray(track_data_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
                     long ac_span = 0;
                     t_atom *av_span = NULL;
                     atomarray_getatoms(span_aa, &ac_span, &av_span);
@@ -768,14 +705,22 @@ void threads_audio_qtask(t_threads *x) {
                         snprintf(silence_str, 64, "%ld", (long)silence_pos);
                         t_symbol *silence_sym = gensym(silence_str);
 
-                        if (!dictionary_hasentry(track_dict, silence_sym)) {
+                        // Check if the silence_sym bar exists for this track in the main dictionary
+                        // In Bar-first: dict[silence_sym][track_sym]
+                        t_dictionary *silence_bar_dict = NULL;
+                        short has_entry = 0;
+                        if (dictionary_getdictionary(dict, silence_sym, (t_object **)&silence_bar_dict) == MAX_ERR_NONE && silence_bar_dict) {
+                            if (dictionary_hasentry(silence_bar_dict, track_sym)) has_entry = 1;
+                        }
+
+                        if (!has_entry) {
                             threads_process_data(x, gensym("-"), track_val, silence_pos, -999999.0);
                         }
                     }
                 }
             }
+            if (track_keys) sysmem_freeptr(track_keys);
         }
-        if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(dict);
     }
 }
