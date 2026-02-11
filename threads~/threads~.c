@@ -34,6 +34,7 @@ typedef struct _threads {
     long inlet_num;
     long verbose;
     void *verbose_log_outlet;
+    void *signal_outlet;
     t_hashtab *buffer_refs;
     t_buffer_ref *bar_buffer_ref;
 
@@ -96,6 +97,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "tracks", 0, t_threads, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
 
+    class_dspinit(c);
     class_register(CLASS_BOX, c);
     threads_class = c;
 
@@ -114,8 +116,9 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->fifo_head = 0;
         x->fifo_tail = 0;
 
-        // Unconditionally create the outlet
+        // Create outlets from right to left
         x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        x->signal_outlet = outlet_new((t_object *)x, "signal");
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->poly_prefix = atom_getsym(argv);
@@ -220,7 +223,10 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
             case 2: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
-        sprintf(s, "Verbose Logging Outlet");
+        switch (a) {
+            case 0: sprintf(s, "(signal) Signal Mirror of Inlet 1"); break;
+            case 1: sprintf(s, "(anything) Verbose Logging Outlet"); break;
+        }
     }
 }
 
@@ -547,6 +553,7 @@ void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerat
 
 void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
+    double *out = outs[0];
     double last_val = x->last_ramp_val;
     double last_scan = x->last_scan_val;
 
@@ -555,6 +562,7 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
 
         for (int i = 0; i < sampleframes; i++) {
             double current_val = in[i];
+            out[i] = current_val; // Mirror input to output
             double current_scan = current_val + 1.0;
 
             // 1. DATA hits (integer bar crossings)

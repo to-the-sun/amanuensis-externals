@@ -27,7 +27,11 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="anything">
+		<outlet id="0" type="signal">
+			<digest>Signal Mirror</digest>
+			<description>Outputs a mirror of the signal ramp received on the first inlet.</description>
+		</outlet>
+		<outlet id="1" type="anything">
 			<digest>Verbose Logging Outlet</digest>
 			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
 		</outlet>
