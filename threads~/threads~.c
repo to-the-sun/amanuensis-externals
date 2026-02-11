@@ -584,34 +584,10 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
                 }
             }
 
-            // 2. SWEEP tracking (detect wrap-around)
-            if (last_scan != -1.0 && current_scan < last_scan) {
-                // Wrap detected! Push range up to wrap
-                int next_tail = (x->fifo_tail + 1) % 1024;
-                if (next_tail != x->fifo_head) {
-                    x->hit_bars[x->fifo_tail].bar.value = initial_scan;
-                    x->hit_bars[x->fifo_tail].range_end = last_scan;
-                    x->hit_bars[x->fifo_tail].type = 1; // SWEEP
-                    x->fifo_tail = next_tail;
-                    qelem_set(x->audio_qelem);
-                }
-                initial_scan = current_scan;
-            }
+            // SWEEP tracking (DISABLED)
 
             last_val = current_val;
             last_scan = current_scan;
-        }
-
-        // Push final SWEEP range for this vector
-        if (last_scan != -1.0) {
-            int next_tail = (x->fifo_tail + 1) % 1024;
-            if (next_tail != x->fifo_head) {
-                x->hit_bars[x->fifo_tail].bar.value = initial_scan;
-                x->hit_bars[x->fifo_tail].range_end = last_scan;
-                x->hit_bars[x->fifo_tail].type = 1; // SWEEP
-                x->fifo_tail = next_tail;
-                qelem_set(x->audio_qelem);
-            }
         }
 
         x->last_ramp_val = last_val;
@@ -716,10 +692,22 @@ void threads_audio_qtask(t_threads *x) {
             if (dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
                 t_symbol *palette = _sym_nothing;
                 double offset = 0.0;
-                t_atom palette_atom, offset_atom;
 
-                if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) palette = atom_getsym(&palette_atom);
-                if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) offset = atom_getfloat(&offset_atom);
+                t_atomarray *palette_aa = NULL;
+                t_atom p_atom;
+                if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                    if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
+                } else if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) {
+                    palette = atom_getsym(&p_atom);
+                }
+
+                t_atomarray *offset_aa = NULL;
+                t_atom o_atom;
+                if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+                    if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
+                } else if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) {
+                    offset = atom_getfloat(&o_atom);
+                }
 
                 threads_process_data(x, palette, (t_atom_long)track_val, hit.value, offset);
 
