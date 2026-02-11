@@ -38,6 +38,10 @@
 			<digest>Prefix for the polybuffer~ members</digest>
 			<description>The base name of the polybuffer~ (e.g., if prefix is 'script', it will look for 'script.1', 'script.2', etc.).</description>
 		</objarg>
+		<objarg name="tracks" type="int" optional="1">
+			<digest>Number of tracks to process</digest>
+			<description>The maximum number of tracks to check in the dictionary and clear in the buffers. Defaults to 4.</description>
+		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
@@ -66,6 +70,10 @@
 		<attr name="verbose" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Verbose Logging</digest>
 			<description>When set to 1, the object outputs diagnostic information and sends data to the visualizer script.</description>
+		</attr>
+		<attr name="tracks" type="long" get="1" set="1" opaque="0">
+			<digest>Number of Tracks</digest>
+			<description>Specifies the maximum track index to iterate through when processing dictionary data or performing lookahead clearing. Defaults to 4.</description>
 		</attr>
 	</attrlist>
 	<!--SEEALSO-->

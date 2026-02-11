@@ -93,6 +93,9 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
 
+    CLASS_ATTR_LONG(c, "tracks", 0, t_threads, max_tracks);
+    CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
+
     class_register(CLASS_BOX, c);
     threads_class = c;
 
@@ -120,6 +123,13 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
             argv++;
         }
 
+        x->max_tracks = 4; // Default
+        if (argc > 0 && (atom_gettype(argv) == A_LONG || atom_gettype(argv) == A_FLOAT)) {
+            x->max_tracks = atom_getlong(argv);
+            argc--;
+            argv++;
+        }
+
         attr_args_process(x, argc, argv);
 
         if (x->poly_prefix == _sym_nothing) {
@@ -142,32 +152,12 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         critical_new(&x->lock);
         x->max_track_seen = 0;
-        x->max_tracks = 0;
         x->debug_lookup_count = 0;
 
-        // Determine max_tracks by checking for existing buffers in the polybuffer~
-        if (x->poly_prefix != _sym_nothing) {
-            char bufname[256];
-            t_buffer_ref *temp_ref = NULL;
-            int i = 1;
-            while (1) {
-                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i);
-                if (temp_ref == NULL) {
-                    temp_ref = buffer_ref_new((t_object *)x, gensym(bufname));
-                } else {
-                    buffer_ref_set(temp_ref, gensym(bufname));
-                }
-                t_buffer_obj *b = buffer_ref_getobject(temp_ref);
-                if (!b) break;
-                x->max_tracks = i;
-                i++;
-            }
-            if (temp_ref) object_free(temp_ref);
-            if (x->verbose) {
-                object_post((t_object *)x, "threads~: Initialized with %ld detected track buffers", x->max_tracks);
-            }
-            threads_verbose_log(x, "Initialized with %ld detected track buffers", x->max_tracks);
+        if (x->verbose) {
+            object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
         }
+        threads_verbose_log(x, "Initialized with %ld tracks", x->max_tracks);
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);
