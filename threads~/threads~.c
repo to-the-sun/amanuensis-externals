@@ -696,7 +696,6 @@ void threads_audio_qtask(t_threads *x) {
         }
 
         double bar_len = threads_get_bar_length(x);
-        threads_verbose_log(x, "TRIGGERED bar %s", bar_key->s_name);
 
         for (int track_val = 1; track_val <= x->max_tracks; track_val++) {
             char tstr[64];
