@@ -91,13 +91,13 @@ def process_text(text):
                         # Remove all events at this track/ms (clearing all channels)
                         data_points[:] = [p for p in data_points if not (
                             p["track"] == pkt["track"] and
-                            abs(p["ms"] - pkt["ms"]) < 0.001
+                            abs(p["ms"] - pkt["ms"]) < 0.1
                         )]
                     else:
                         # Replace existing event at this track/ms if found, else append
                         found = False
                         for p in data_points:
-                            if p["track"] == pkt["track"] and abs(p["ms"] - pkt["ms"]) < 0.001:
+                            if p["track"] == pkt["track"] and abs(p["ms"] - pkt["ms"]) < 0.1:
                                 p["chan"] = pkt["chan"]
                                 p["val"] = pkt["val"]
                                 p["num_chans"] = max(p["num_chans"], pkt["num_chans"])
