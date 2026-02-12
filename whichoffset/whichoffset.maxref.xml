@@ -1,64 +1,66 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
-<c74object name="whichoffset" module="max" category="Analysis">
-	<digest>Calculates an optimal offset from a dictionary based on timestamps</digest>
-	<description>
-		The `whichoffset` object finds the optimal offset value from a nested dictionary by comparing a provided list of timestamps against absolute timestamps stored in the dictionary. It calculates "excess time" for each potential offset and outputs the one that results in the minimum total excess.
-	</description>
+<c74object name="whichoffset" module="max" category="Utility">
+	<digest>Calculates the optimal offset for a set of bars</digest>
+	<description>The `whichoffset` object analyzes a set of bar timestamps for a given track and determines the optimal global offset to minimize the "excess" time before and after the note sequence.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
-		<metadata name="tag">Analysis</metadata>
+		<metadata name="tag">Utility</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="bang/int/list">
-			<digest>bang, int (track), or span list</digest>
-			<description>Accepts a bang to visualize the dictionary, an int to set the track number, or a span message followed by a list of timestamps.</description>
+		<inlet id="1" type="bang/int/list">
+			<digest>Inlet 1: Control inlet</digest>
+			<description>
+				- bang: Sends the current dictionary content to the visualizer.
+				- int: Sets the current track number.
+				- span [list]: Receives a list of bar timestamps and calculates the optimal offset.
+			</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="float">
-			<digest>Optimal offset</digest>
-			<description>Outputs the single float value representing the calculated optimal offset.</description>
+		<outlet id="1" type="float">
+			<digest>Outlet 1: Calculated Optimal Offset</digest>
+			<description>Outputs the calculated optimal offset in milliseconds.</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Verbose Logging (Optional)</digest>
+			<description>If the verbose attribute is enabled, this outlet provides status messages.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
 		<objarg name="dictionary-name" type="symbol" optional="0">
-			<digest>The name of the dictionary to query</digest>
-			<description>The name of a registered dictionary (e.g., from a dict object) to read from.</description>
+			<digest>Name of the dictionary to analyze</digest>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="bang">
 			<digest>Visualize dictionary</digest>
-			<description>Sends the entire contents of the associated dictionary to an external visualizer via UDP.</description>
 		</method>
 		<method name="int">
-			<digest>Set track number</digest>
-			<description>Sets the internal track number used to construct dictionary lookup keys.</description>
+			<digest>Set track</digest>
 		</method>
 		<method name="span">
-			<arglist>
-				<arg name="timestamp-list" type="list" optional="0" />
-			</arglist>
-			<digest>Calculate optimal offset</digest>
-			<description>Performs the main calculation using a list of integer timestamps and outputs the optimal offset.</description>
+			<digest>Calculate offset</digest>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attrlist />
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />
 		<seealso name="crucible" />
-		<seealso name="notify" />
-		<seealso name="whichoffset" />
-		<seealso name="stemversion" />
-		<seealso name="createproject" />
-		<seealso name="dict" />
 	</seealsolist>
 </c74object>

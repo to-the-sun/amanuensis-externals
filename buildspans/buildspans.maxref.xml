@@ -18,8 +18,8 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="list/bang/clear">
-			<digest>Timestamp-score pair, bang to flush, or clear</digest>
+		<inlet id="1" type="list/bang/clear">
+			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
 			<description>
 				Receives note data as a list of two floats (absolute timestamp and score).
 				A bang message triggers a flush of all currently open spans.
@@ -27,39 +27,39 @@
 				The set_bar_buffer message sets the buffer to read bar length from.
 			</description>
 		</inlet>
-		<inlet id="1" type="float">
-			<digest>Global offset timestamp</digest>
+		<inlet id="2" type="float">
+			<digest>Inlet 2: Global offset timestamp</digest>
 			<description>Receives a high-precision float representing a global offset in milliseconds. This value is used for new bars and is stored with full precision in the dictionary.</description>
 		</inlet>
-		<inlet id="2" type="int">
-			<digest>Track number</digest>
+		<inlet id="3" type="int">
+			<digest>Inlet 3: Track number</digest>
 			<description>Receives an integer that sets the current track for incoming notes.</description>
 		</inlet>
-		<inlet id="3" type="symbol">
-			<digest>Palette name</digest>
+		<inlet id="4" type="symbol">
+			<digest>Inlet 4: Palette name</digest>
 			<description>Receives a symbol that sets the current palette.</description>
 		</inlet>
-		<inlet id="4" type="float">
-			<digest>Local Bar Length</digest>
+		<inlet id="5" type="float">
+			<digest>Inlet 5: Local Bar Length</digest>
 			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message or after a flush triggered by a 'bang'.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="list">
-			<digest>Span of bar timestamps</digest>
+		<outlet id="1" type="list">
+			<digest>Outlet 1: Span of bar timestamps</digest>
 			<description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
 		</outlet>
-		<outlet id="1" type="int">
-			<digest>Track number</digest>
+		<outlet id="2" type="int">
+			<digest>Outlet 2: Track number</digest>
 			<description>Outputs the track number associated with the completed span.</description>
 		</outlet>
-		<outlet id="2" type="anything">
-			<digest>Detailed bar data</digest>
+		<outlet id="3" type="anything">
+			<digest>Outlet 3: Detailed bar data</digest>
 			<description>When a span completes, this outlet outputs detailed data for all bars in that span using selectors in the format track::bar::key.</description>
 		</outlet>
-		<outlet id="3" type="anything">
-			<digest>Verbose Logging (Optional)</digest>
+		<outlet id="4" type="anything">
+			<digest>Outlet 4: Verbose Logging (Optional)</digest>
 			<description>If the verbose attribute is enabled, this outlet provides status messages and visualization data.</description>
 		</outlet>
 	</outletlist>
@@ -92,15 +92,15 @@
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" get="1" set="1" type="long" size="1">
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
 			<digest>Enable Verbose Logging</digest>
 			<description>When enabled (1), creates an additional outlet for status information and visualization.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
-		</attr>
-	</attrlist>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />

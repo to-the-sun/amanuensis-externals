@@ -8,9 +8,11 @@ typedef struct _whichoffset {
     t_symbol *dict_name;
     long track;
     void *outlet;
+    long verbose;
+    void *verbose_log_outlet;
 } t_whichoffset;
 
-void *whichoffset_new(t_symbol *s);
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv);
 void whichoffset_free(t_whichoffset *x);
 void whichoffset_bang(t_whichoffset *x);
 void whichoffset_int(t_whichoffset *x, long n);
@@ -28,25 +30,38 @@ t_class *whichoffset_class;
 void ext_main(void *r) {
     t_class *c;
 
-    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, (short)sizeof(t_whichoffset), 0L, A_DEFSYM, 0);
+    common_symbols_init();
+
+    c = class_new("whichoffset", (method)whichoffset_new, (method)whichoffset_free, sizeof(t_whichoffset), 0L, A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_bang, "bang", 0);
     class_addmethod(c, (method)whichoffset_int, "int", A_LONG, 0);
     class_addmethod(c, (method)whichoffset_span, "span", A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_whichoffset, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+
     class_register(CLASS_BOX, c);
     whichoffset_class = c;
 }
 
-void *whichoffset_new(t_symbol *s) {
+void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
     t_whichoffset *x = (t_whichoffset *)object_alloc(whichoffset_class);
     if (x) {
         x->dict_name = s;
         x->track = 0;
+        x->verbose = 0;
+        x->verbose_log_outlet = NULL;
+
+        attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        }
         x->outlet = floatout((t_object *)x); // Create a float outlet
+
         if (visualize_init() != 0) {
             object_error((t_object *)x, "Failed to initialize UDP connection.");
-        } else {
-            post("UDP connection initialized for visualization.");
         }
     }
     return (x);
@@ -385,9 +400,18 @@ void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d) {
 
 void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
+        sprintf(s, "Inlet 1: (bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
     } else { // ASSIST_OUTLET
-        sprintf(s, "Calculated Optimal Offset (float)");
+        if (x->verbose) {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Calculated Optimal Offset (float)"); break;
+                case 1: sprintf(s, "Outlet 2: Verbose Logging"); break;
+            }
+        } else {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Calculated Optimal Offset (float)"); break;
+            }
+        }
     }
 }
 

@@ -52,7 +52,7 @@ void ext_main(void *r) {
 
     common_symbols_init();
 
-    c = class_new("notify", (method)notify_new, (method)notify_free, (short)sizeof(t_notify), 0L, A_GIMME, 0);
+    c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
     class_addmethod(c, (method)notify_notify, "notify", A_CANT, 0);
@@ -131,6 +131,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
+        // Outlets are created from right to left
         if (x->verbose) {
             x->out_verbose = outlet_new((t_object *)x, NULL);
         }
@@ -488,16 +489,26 @@ void notify_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "bang to dump dictionary, fill for specialized dump");
-        else if (a == 1) sprintf(s, "(float) Local Bar Length");
+        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump");
+        else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
     } else {
-        switch (a) {
-            case 0: sprintf(s, "Abs Timestamp and Score (list)"); break;
-            case 1: sprintf(s, "Offset (float)"); break;
-            case 2: sprintf(s, "Track (int)"); break;
-            case 3: sprintf(s, "Palette (symbol)"); break;
-            case 4: sprintf(s, "Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
-            case 5: if (x->verbose) sprintf(s, "Verbose Logging"); break;
+        if (x->verbose) {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list)"); break;
+                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
+                case 5: sprintf(s, "Outlet 6: Verbose Logging"); break;
+            }
+        } else {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list)"); break;
+                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
+            }
         }
     }
 }

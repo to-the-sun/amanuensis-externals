@@ -1,147 +1,86 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
-<c74object name="notify" module="max" category="Dictionary">
-	<digest>
-		Dump all notes from a dictionary ordered by absolute timestamp
-	</digest>
-	<description>
-		The notify object accepts a dictionary name as an argument and, when it receives a bang, it extracts all notes (timestamped events) from the dictionary, sorts them chronologically by absolute timestamp, clears the original dictionary, and outputs the notes sequentially from its outlets. It also references an external buffer~ named 'bar' to determine the current bar length for reporting upcoming bars.
-	</description>
+<c74object name="notify" module="max" category="Utility">
+	<digest>Dumps a dictionary of track data into lists</digest>
+	<description>The `notify` object reads from a named dictionary and outputs its content as a series of lists. It is designed to work with the track/bar/palette/offset structure used in this project.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
-		<metadata name="tag">Dictionary</metadata>
+		<metadata name="tag">Utility</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="anything">
-			<digest>
-				bang to trigger dump, fill for specialized dump
-			</digest>
+		<inlet id="1" type="bang/fill">
+			<digest>Inlet 1: Control inlet</digest>
 			<description>
-				A bang message triggers a standard dump. A fill message triggers a specialized dump that fills in gaps in shorter tracks relative to the longest track.
+				- bang: Dumps all notes in the dictionary, sorted by absolute timestamp.
+				- fill: Performs a specialized dump that synthesizes notes to match the reach of the longest track.
 			</description>
 		</inlet>
-		<inlet id="1" type="float">
-			<digest>
-				Local Bar Length
-			</digest>
-			<description>
-				Sets a local override for the bar length. If set to 0 (default), the object will instead read the bar length from the first sample of a buffer~ named 'bar'. This value persists across dump operations until manually changed or reset to 0.
-			</description>
+		<inlet id="2" type="float">
+			<digest>Inlet 2: Local Bar Length</digest>
+			<description>Sets the local bar length.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="list">
-			<digest>
-				Absolute Timestamp and Score
-			</digest>
-			<description>
-				A 2-item list consisting of the absolute timestamp (float) and the score (float).
-			</description>
+		<outlet id="1" type="list">
+			<digest>Outlet 1: Absolute Timestamp and Score</digest>
+			<description>Outputs [absolute_ms, score].</description>
 		</outlet>
-		<outlet id="1" type="float">
-			<digest>
-				Offset
-			</digest>
-			<description>
-				The offset associated with the bar containing the note.
-			</description>
+		<outlet id="2" type="float">
+			<digest>Outlet 2: Offset</digest>
+			<description>Outputs the offset in milliseconds.</description>
 		</outlet>
-		<outlet id="2" type="int">
-			<digest>
-				Track
-			</digest>
-			<description>
-				The track number (integer) where the note was found.
-			</description>
+		<outlet id="3" type="int">
+			<digest>Outlet 3: Track</digest>
+			<description>Outputs the track number.</description>
 		</outlet>
-		<outlet id="3" type="symbol">
-			<digest>
-				Palette
-			</digest>
-			<description>
-				The palette name associated with the bar containing the note.
-			</description>
+		<outlet id="4" type="symbol">
+			<digest>Outlet 4: Palette</digest>
+			<description>Outputs the palette name.</description>
 		</outlet>
-		<outlet id="4" type="list">
-			<digest>
-				Descript
-			</digest>
-			<description>
-				A 4-item list formatted as: &lt;palette:symbol&gt; &lt;track:int&gt; &lt;bar_timestamp:float&gt; 0.0. These messages are output as a batch at the very beginning of the dump process. For each bar found in the dictionary, a second descript message is sent for the subsequent bar (current + bar_length) if that bar does not already exist in the dictionary.
-			</description>
+		<outlet id="5" type="list">
+			<digest>Outlet 5: Descript List</digest>
+			<description>Outputs batch initialization messages: [palette, track, bar_ts, 0.0].</description>
 		</outlet>
-		<outlet id="5" type="symbol">
-			<digest>
-				Verbose Logging (Optional)
-			</digest>
-			<description>
-				If the verbose attribute is enabled, this outlet provides status messages.
-			</description>
+		<outlet id="6" type="anything">
+			<digest>Outlet 6: Verbose Logging (Optional)</digest>
+			<description>If the verbose attribute is enabled, this outlet provides status messages.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
-		<objarg name="dictionary-name" optional="0" type="symbol">
-			<digest>
-				Name of the dictionary to reference
-			</digest>
-			<description>
-				The name of the external dict object that notify will read from and clear.
-			</description>
+		<objarg name="dictionary-name" type="symbol" optional="1">
+			<digest>Name of the dictionary to read from</digest>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="bang">
-			<digest>
-				Trigger the dump process
-			</digest>
-			<description>
-				In the leftmost inlet, a bang triggers the gathering of all notes from the referenced dictionary. The notes are then sorted, the dictionary is cleared, and the notes are output sequentially from the outlets.
-			</description>
+			<digest>Dump dictionary</digest>
+			<description>Dumps all note data in chronological order.</description>
 		</method>
 		<method name="fill">
-			<digest>
-				Trigger the specialized fill dump
-			</digest>
-			<description>
-				Triggers a specialized dump that identifies the longest track and fills the gaps in all other tracks by looping their content until they match the reach of the longest track. This dump does NOT clear the dictionary and does NOT send descript messages.
-			</description>
-		</method>
-		<method name="ft1">
-			<digest>
-				Set local bar length
-			</digest>
-			<description>
-				In the second inlet, a float sets the local bar length override. Values &lt;= 0 disable the override and resume reading from the 'bar' buffer~.
-			</description>
+			<digest>Synthesized dump</digest>
+			<description>Dumps data while filling gaps to match global song reach.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" get="1" set="1" type="long" size="1">
-			<digest>
-				Enable Verbose Logging
-			</digest>
-			<description>
-				When enabled (1), adds a rightmost outlet for verbose logging messages and outputs status information to it.
-			</description>
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
-		</attr>
-	</attrlist>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />
 		<seealso name="crucible" />
-		<seealso name="notify" />
-		<seealso name="whichoffset" />
-		<seealso name="stemversion" />
-		<seealso name="createproject" />
-		<seealso name="dict" />
+		<seealso name="threads~" />
+		<seealso name="growbuffer~" />
 	</seealsolist>
 </c74object>
