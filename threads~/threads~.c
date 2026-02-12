@@ -41,20 +41,18 @@ typedef struct _threads {
     t_symbol *audio_dict_name;
     double last_ramp_val;
     double last_scan_val;
-    t_fifo_entry hit_bars[1024];
+    t_fifo_entry hit_bars[4096];
     int fifo_head;
     int fifo_tail;
     t_qelem *audio_qelem;
     t_critical lock;
     long max_track_seen;
     long max_tracks;
-    long debug_lookup_count;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
 void threads_free(t_threads *x);
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv);
-void threads_bang(t_threads *x);
 void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
@@ -84,7 +82,6 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...) {
 void ext_main(void *r) {
     t_class *c = class_new("threads~", (method)threads_new, (method)threads_free, sizeof(t_threads), 0L, A_GIMME, 0);
 
-    class_addmethod(c, (method)threads_bang, "bang", 0);
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)threads_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)threads_dsp64, "dsp64", A_CANT, 0);
@@ -155,7 +152,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         critical_new(&x->lock);
         x->max_track_seen = 0;
-        x->debug_lookup_count = 0;
 
         if (x->verbose) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
@@ -432,12 +428,6 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     }
 }
 
-void threads_bang(t_threads *x) {
-    if (proxy_getinlet((t_object *)x) == 0) {
-        x->debug_lookup_count = 10;
-        object_post((t_object *)x, "threads~: DEBUG: Starting lookup logging for the next 10 dictionary checks");
-    }
-}
 
 void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
@@ -572,23 +562,45 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
 
                 if (floor_curr > floor_last) {
                     for (long v = floor_last + 1; v <= floor_curr; v++) {
-                        int next_tail = (x->fifo_tail + 1) % 1024;
+                        int next_tail = (x->fifo_tail + 1) % 4096;
                         if (next_tail != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].bar.value = (double)v;
                             x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].type = 0; // DATA
                             x->fifo_tail = next_tail;
-                            qelem_set(x->audio_qelem);
                         }
                     }
                 }
             }
 
-            // SWEEP tracking (DISABLED)
+            // 2. SWEEP tracking (detect wrap-around)
+            if (last_scan != -1.0 && current_scan < last_scan) {
+                int next_tail = (x->fifo_tail + 1) % 4096;
+                if (next_tail != x->fifo_head) {
+                    x->hit_bars[x->fifo_tail].bar.value = initial_scan;
+                    x->hit_bars[x->fifo_tail].range_end = last_scan;
+                    x->hit_bars[x->fifo_tail].type = 1; // SWEEP
+                    x->fifo_tail = next_tail;
+                }
+                initial_scan = current_scan;
+            }
 
             last_val = current_val;
             last_scan = current_scan;
         }
+
+        // Final SWEEP for this vector
+        if (last_scan != -1.0 && initial_scan < last_scan) {
+            int next_tail = (x->fifo_tail + 1) % 4096;
+            if (next_tail != x->fifo_head) {
+                x->hit_bars[x->fifo_tail].bar.value = initial_scan;
+                x->hit_bars[x->fifo_tail].range_end = last_scan;
+                x->hit_bars[x->fifo_tail].type = 1; // SWEEP
+                x->fifo_tail = next_tail;
+            }
+        }
+
+        qelem_set(x->audio_qelem);
 
         x->last_ramp_val = last_val;
         x->last_scan_val = last_scan;
@@ -599,14 +611,12 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
 void threads_audio_qtask(t_threads *x) {
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
-        x->fifo_head = (x->fifo_head + 1) % 1024;
+        x->fifo_head = (x->fifo_head + 1) % 4096;
 
         t_bar_cache hit = hit_entry.bar;
         long hit_type = hit_entry.type; // 0 for DATA, 1 for SWEEP
 
         if (hit_type == 1) { // SWEEP hit: Constant clear for all tracks
-            // TEMPORARILY DISABLED CLEARING SWEEP
-            continue;
             double start_ms = hit.value;
             double end_ms = hit_entry.range_end;
             long max_t = x->max_tracks;
@@ -678,11 +688,6 @@ void threads_audio_qtask(t_threads *x) {
             snprintf(tstr, 64, "%d", track_val);
             t_symbol *track_sym = gensym(tstr);
             t_dictionary *track_dict = NULL;
-
-            if (x->debug_lookup_count > 0) {
-                threads_verbose_log(x, "DEBUG LOOKUP: track %d, bar %s", track_val, bar_key->s_name);
-                x->debug_lookup_count--;
-            }
 
             if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
                 continue; // Support sparse tracks
