@@ -37,6 +37,7 @@ typedef struct _threads {
     void *signal_outlet;
     t_hashtab *buffer_refs;
     t_buffer_ref *bar_buffer_ref;
+    t_buffer_ref *track1_ref;
 
     t_symbol *audio_dict_name;
     double last_ramp_val;
@@ -134,6 +135,10 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         if (x->poly_prefix == _sym_nothing) {
             object_error((t_object *)x, "missing polybuffer~ prefix argument");
+        } else {
+            char t1name[256];
+            snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
+            x->track1_ref = buffer_ref_new((t_object *)x, gensym(t1name));
         }
 
         // Unconditionally initialize visualization socket
@@ -190,6 +195,9 @@ void threads_free(t_threads *x) {
     if (x->bar_buffer_ref) {
         object_free(x->bar_buffer_ref);
     }
+    if (x->track1_ref) {
+        object_free(x->track1_ref);
+    }
     visualize_cleanup();
 }
 
@@ -208,20 +216,23 @@ t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender,
     if (x->bar_buffer_ref) {
         buffer_ref_notify(x->bar_buffer_ref, s, msg, sender, data);
     }
+    if (x->track1_ref) {
+        buffer_ref_notify(x->track1_ref, s, msg, sender, data);
+    }
     return MAX_ERR_NONE;
 }
 
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal/list) Data from crucible, (symbol) clear"); break;
-            case 1: sprintf(s, "(symbol) Dictionary name for rescript/reference"); break;
-            case 2: sprintf(s, "(list) palette-index pairs, (symbol) clear"); break;
+            case 0: sprintf(s, "Inlet 1 (signal/list): Data from crucible, (symbol) clear"); break;
+            case 1: sprintf(s, "Inlet 2 (symbol): Dictionary name for rescript/reference"); break;
+            case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "(signal) Signal Mirror of Inlet 1"); break;
-            case 1: sprintf(s, "(anything) Verbose Logging Outlet"); break;
+            case 0: sprintf(s, "Outlet 1 (signal): Last Cleared Sample Value (9ms Scan Head)"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Verbose Logging Outlet"); break;
         }
     }
 }
@@ -547,13 +558,38 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
     double last_val = x->last_ramp_val;
     double last_scan = x->last_scan_val;
 
+    t_buffer_obj *b1 = x->track1_ref ? buffer_ref_getobject(x->track1_ref) : NULL;
+    float *b1_samples = NULL;
+    long b1_frames = 0;
+    long b1_chans = 0;
+    double b1_sr = 0;
+
+    if (b1) {
+        b1_samples = buffer_locksamples(b1);
+        if (b1_samples) {
+            b1_frames = buffer_getframecount(b1);
+            b1_chans = buffer_getchannelcount(b1);
+            b1_sr = buffer_getsamplerate(b1);
+            if (b1_sr <= 0) b1_sr = sys_getsr();
+            if (b1_sr <= 0) b1_sr = 44100.0;
+        }
+    }
+
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         double initial_scan = last_scan;
 
         for (int i = 0; i < sampleframes; i++) {
             double current_val = in[i];
-            out[i] = current_val; // Mirror input to output
-            double current_scan = current_val + 1.0;
+            double current_scan = current_val + 9.0; // 9ms lookahead
+
+            float scan_val = 0.0f;
+            if (b1_samples) {
+                long s_idx = (long)round(current_scan * b1_sr / 1000.0);
+                if (s_idx >= 0 && s_idx < b1_frames) {
+                    scan_val = b1_samples[s_idx * b1_chans];
+                }
+            }
+            out[i] = (double)scan_val; // Output value at scan head (leading edge of sweep)
 
             // 1. DATA hits (integer bar crossings)
             if (last_val != -1.0 && current_val > last_val) {
@@ -605,6 +641,10 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
         x->last_ramp_val = last_val;
         x->last_scan_val = last_scan;
         critical_exit(x->lock);
+    }
+
+    if (b1_samples) {
+        buffer_unlocksamples(b1);
     }
 }
 

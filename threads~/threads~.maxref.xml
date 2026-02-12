@@ -14,7 +14,7 @@
 	<inletlist>
 		<inlet id="0" type="signal/list">
 			<digest>Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
-			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. When used as a signal ramp, a lookahead sweep (1ms ahead) automatically zeroes out track buffers. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
+			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. When used as a signal ramp, a lookahead sweep (9ms ahead) automatically zeroes out track buffers. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
 		</inlet>
 		<inlet id="1" type="symbol">
 			<digest>Rescript/Reference dictionary name</digest>
@@ -28,8 +28,8 @@
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="0" type="signal">
-			<digest>Signal Mirror</digest>
-			<description>Outputs a mirror of the signal ramp received on the first inlet.</description>
+			<digest>Last Cleared Sample Value</digest>
+			<description>Outputs the value of the sample at the leading edge of the clearing sweep (9ms ahead of the ramp) from the first track buffer.</description>
 		</outlet>
 		<outlet id="1" type="anything">
 			<digest>Verbose Logging Outlet</digest>
@@ -77,7 +77,7 @@
 		</attr>
 		<attr name="tracks" type="long" get="1" set="1" opaque="0">
 			<digest>Number of Tracks</digest>
-			<description>Specifies the maximum track index to iterate through when processing dictionary data or performing lookahead clearing. Defaults to 4.</description>
+			<description>Specifies the maximum track index to iterate through when processing dictionary data or performing lookahead clearing (9ms lookahead). Defaults to 4.</description>
 		</attr>
 	</attrlist>
 	<!--SEEALSO-->
