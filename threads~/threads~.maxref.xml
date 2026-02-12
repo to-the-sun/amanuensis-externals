@@ -28,8 +28,8 @@
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="0" type="signal">
-			<digest>Last Cleared Sample Value</digest>
-			<description>Outputs the value of the sample at the leading edge of the clearing sweep (9ms ahead of the ramp) from the first track buffer.</description>
+			<digest>Scan Head Position (ms)</digest>
+			<description>Outputs the current position of the 9ms lookahead scan head in milliseconds.</description>
 		</outlet>
 		<outlet id="1" type="anything">
 			<digest>Verbose Logging Outlet</digest>

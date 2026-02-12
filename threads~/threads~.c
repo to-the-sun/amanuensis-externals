@@ -231,7 +231,7 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1 (signal): Last Cleared Sample Value (9ms Scan Head)"); break;
+            case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
             case 1: sprintf(s, "Outlet 2 (anything): Verbose Logging Outlet"); break;
         }
     }
@@ -558,23 +558,6 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
     double last_val = x->last_ramp_val;
     double last_scan = x->last_scan_val;
 
-    t_buffer_obj *b1 = x->track1_ref ? buffer_ref_getobject(x->track1_ref) : NULL;
-    float *b1_samples = NULL;
-    long b1_frames = 0;
-    long b1_chans = 0;
-    double b1_sr = 0;
-
-    if (b1) {
-        b1_samples = buffer_locksamples(b1);
-        if (b1_samples) {
-            b1_frames = buffer_getframecount(b1);
-            b1_chans = buffer_getchannelcount(b1);
-            b1_sr = buffer_getsamplerate(b1);
-            if (b1_sr <= 0) b1_sr = sys_getsr();
-            if (b1_sr <= 0) b1_sr = 44100.0;
-        }
-    }
-
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         double initial_scan = last_scan;
 
@@ -582,14 +565,7 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
             double current_val = in[i];
             double current_scan = current_val + 9.0; // 9ms lookahead
 
-            float scan_val = 0.0f;
-            if (b1_samples) {
-                long s_idx = (long)round(current_scan * b1_sr / 1000.0);
-                if (s_idx >= 0 && s_idx < b1_frames) {
-                    scan_val = b1_samples[s_idx * b1_chans];
-                }
-            }
-            out[i] = (double)scan_val; // Output value at scan head (leading edge of sweep)
+            out[i] = current_scan; // Output scan head position (ms)
 
             // 1. DATA hits (integer bar crossings)
             if (last_val != -1.0 && current_val > last_val) {
@@ -643,9 +619,6 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
         critical_exit(x->lock);
     }
 
-    if (b1_samples) {
-        buffer_unlocksamples(b1);
-    }
 }
 
 void threads_audio_qtask(t_threads *x) {
