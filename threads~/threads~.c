@@ -49,6 +49,7 @@ typedef struct _threads {
     t_critical lock;
     long max_track_seen;
     long max_tracks;
+    t_hashtab *pending_silence;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -64,8 +65,42 @@ double threads_get_bar_length(t_threads *x);
 void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void threads_audio_qtask(t_threads *x);
+void threads_clear_pending_silence(t_threads *x);
+void threads_schedule_silence(t_threads *x, t_atom_long track, double ms);
 
 static t_class *threads_class;
+
+void threads_clear_pending_silence(t_threads *x) {
+    if (!x->pending_silence) return;
+    long num_ms = 0;
+    t_symbol **ms_keys = NULL;
+    hashtab_getkeys(x->pending_silence, &num_ms, &ms_keys);
+    for (long i = 0; i < num_ms; i++) {
+        t_hashtab *tracks = NULL;
+        hashtab_lookup(x->pending_silence, ms_keys[i], (t_object**)&tracks);
+        if (tracks) {
+            hashtab_clear(tracks);
+            object_free(tracks);
+        }
+    }
+    if (ms_keys) sysmem_freeptr(ms_keys);
+    hashtab_clear(x->pending_silence);
+}
+
+void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
+    if (!x->pending_silence) return;
+    char ms_str[64];
+    snprintf(ms_str, 64, "%ld", (long)ms);
+    t_symbol *s_ms = gensym(ms_str);
+
+    t_hashtab *tracks = NULL;
+    if (hashtab_lookup(x->pending_silence, s_ms, (t_object**)&tracks) != MAX_ERR_NONE) {
+        tracks = hashtab_new(0);
+        hashtab_store(x->pending_silence, s_ms, (t_object*)tracks);
+    }
+    // Store track as a pointer key
+    hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
+}
 
 void threads_verbose_log(t_threads *x, const char *fmt, ...) {
     if (x->verbose && x->verbose_log_outlet) {
@@ -157,6 +192,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         critical_new(&x->lock);
         x->max_track_seen = 0;
+        x->pending_silence = hashtab_new(0);
 
         if (x->verbose) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
@@ -198,6 +234,8 @@ void threads_free(t_threads *x) {
     if (x->track1_ref) {
         object_free(x->track1_ref);
     }
+    threads_clear_pending_silence(x);
+    if (x->pending_silence) object_free(x->pending_silence);
     visualize_cleanup();
 }
 
@@ -324,7 +362,7 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
             t_symbol *next_bar_sym = gensym(next_bar_str);
 
             if (!dictionary_hasentry(track_dict, next_bar_sym)) {
-                 threads_process_data(x, gensym("-"), (t_atom_long)track_val, next_bar_ms, -999999.0);
+                 threads_schedule_silence(x, (t_atom_long)track_val, next_bar_ms);
             }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
@@ -537,7 +575,8 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             threads_verbose_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
 
             visualize("{\"clear\": 1}");
-            threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer");
+            threads_clear_pending_silence(x);
+            threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
@@ -703,6 +742,22 @@ void threads_audio_qtask(t_threads *x) {
             bar_key = gensym(bstr);
         }
 
+        // Check for scheduled silence caps at this millisecond
+        t_hashtab *pending_tracks = NULL;
+        if (hashtab_lookup(x->pending_silence, bar_key, (t_object**)&pending_tracks) == MAX_ERR_NONE && pending_tracks) {
+            long num_pt = 0;
+            t_symbol **pt_keys = NULL;
+            hashtab_getkeys(pending_tracks, &num_pt, &pt_keys);
+            for (long i = 0; i < num_pt; i++) {
+                t_atom_long track = (t_atom_long)(size_t)pt_keys[i];
+                threads_process_data(x, gensym("-"), track, hit.value, -999999.0);
+            }
+            if (pt_keys) sysmem_freeptr(pt_keys);
+            hashtab_clear(pending_tracks);
+            object_free(pending_tracks);
+            hashtab_delete(x->pending_silence, bar_key);
+        }
+
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (!dict) {
             threads_verbose_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
@@ -764,7 +819,7 @@ void threads_audio_qtask(t_threads *x) {
                         // Check if the silence_sym bar exists for THIS track in the dictionary
                         // dict[track_sym][silence_sym]
                         if (!dictionary_hasentry(track_dict, silence_sym)) {
-                            threads_process_data(x, gensym("-"), (t_atom_long)track_val, silence_pos, -999999.0);
+                            threads_schedule_silence(x, (t_atom_long)track_val, silence_pos);
                         }
                     }
                 }
