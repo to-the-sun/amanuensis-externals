@@ -259,14 +259,18 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
     double bar_length = threads_get_bar_length(x);
 
     if (bar_length <= 0) {
-        object_error((t_object *)x, "threads~: bar buffer~ not found or empty, cannot perform rescript");
-        return;
+        object_error((t_object *)x, "threads~: bar buffer~ not found or empty, skipping rescript loop but updating reference");
     }
 
     t_dictionary *dict = dictobj_findregistered_retain(dict_name);
     if (!dict) {
         threads_verbose_log(x, "CACHING FAILED: dictionary '%s' not found", dict_name->s_name);
         object_error((t_object *)x, "threads~: could not find dictionary named %s", dict_name->s_name);
+        return;
+    }
+
+    if (bar_length <= 0) {
+        dictobj_release(dict);
         return;
     }
 
@@ -667,8 +671,19 @@ void threads_audio_qtask(t_threads *x) {
                         float *samples = buffer_locksamples(b);
                         if (samples) {
                             for (long s = s_start; s <= s_end; s++) {
+                                int was_nonzero = 0;
                                 for (long c = 0; c < n_chans; c++) {
-                                    samples[s * n_chans + c] = 0.0f;
+                                    if (samples[s * n_chans + c] != 0.0f) {
+                                        was_nonzero = 1;
+                                        samples[s * n_chans + c] = 0.0f;
+                                    }
+                                }
+                                if (was_nonzero) {
+                                    double sample_ms = (double)s * 1000.0 / sr;
+                                    char json[256];
+                                    snprintf(json, 256, "{\"track\": %d, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
+                                             track, sample_ms, n_chans);
+                                    visualize(json);
                                 }
                             }
                             buffer_unlocksamples(b);
