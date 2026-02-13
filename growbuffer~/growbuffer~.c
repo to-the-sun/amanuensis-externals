@@ -74,9 +74,7 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 	if (x) {
 		x->b_name = _sym_nothing;
 		x->verbose = 0;
-
-		x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-		x->b_outlet = outlet_new((t_object *)x, NULL);
+		x->verbose_log_outlet = NULL;
 
 		if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
 			x->b_name = atom_getsym(argv);
@@ -85,6 +83,12 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 		}
 
 		attr_args_process(x, argc, argv);
+
+		// Outlets are created from right to left
+		if (x->verbose) {
+			x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+		}
+		x->b_outlet = outlet_new((t_object *)x, NULL);
 
 		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
 		x->b_ref = buffer_ref_new((t_object *)x, x->b_name);
@@ -289,20 +293,28 @@ void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
 	if (m == ASSIST_INLET) {
 		switch (a) {
 			case 0:
-				sprintf(s, "(bang) report length, (number) resize, (set) set buffer name");
+				sprintf(s, "Inlet 1: (bang) report length, (number) resize, (set) set buffer name");
 				break;
 			case 1:
-				sprintf(s, "(symbol) set buffer name");
+				sprintf(s, "Inlet 2: (symbol) set buffer name");
 				break;
 		}
 	} else {
-		switch (a) {
-			case 0:
-				sprintf(s, "Status and Error Messages");
-				break;
-			case 1:
-				sprintf(s, "Verbose Logging Outlet");
-				break;
+		if (x->verbose) {
+			switch (a) {
+				case 0:
+					sprintf(s, "Outlet 1: Status and Error Messages");
+					break;
+				case 1:
+					sprintf(s, "Outlet 2: Verbose Logging Outlet");
+					break;
+			}
+		} else {
+			switch (a) {
+				case 0:
+					sprintf(s, "Outlet 1: Status and Error Messages");
+					break;
+			}
 		}
 	}
 }

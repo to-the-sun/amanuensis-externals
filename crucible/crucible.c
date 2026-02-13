@@ -126,7 +126,7 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
 void ext_main(void *r) {
     common_symbols_init();
     t_class *c;
-    c = class_new("crucible", (method)crucible_new, (method)crucible_free, (short)sizeof(t_crucible), 0L, A_GIMME, 0);
+    c = class_new("crucible", (method)crucible_new, (method)crucible_free, sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
@@ -157,8 +157,10 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        // Unconditionally create outlets in right-to-left order
-        x->verbose_log_outlet = outlet_new((t_object *)x, NULL); // Index 3
+        // Outlets are created from right to left
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        }
         x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
         x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
         x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
@@ -634,15 +636,23 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
-            case 1: sprintf(s, "(float) Local Bar Length"); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
+            case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
-        switch (a) {
-            case 0: sprintf(s, "Data and Reach Lists: [palette, track, bar, offset] or [- track reach offset]"); break;
-            case 1: sprintf(s, "Fill (symbol)"); break;
-            case 2: sprintf(s, "Reach (int)"); break;
-            case 3: sprintf(s, "Verbose Logging Outlet"); break;
+        if (x->verbose) {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
+                case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
+                case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Verbose Logging Outlet"); break;
+            }
+        } else {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
+                case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
+                case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
+            }
         }
     }
 }

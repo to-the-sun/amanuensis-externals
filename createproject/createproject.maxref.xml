@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="createproject" module="max" category="Utility">
-	<digest>Creates a new project folder from a template</digest>
-	<description>
-		The `createproject` object automates project setup. When it receives a `create` message with a destination path, it creates the folder and recursively copies all files from a hardcoded template directory.
-	</description>
+	<digest>Creates a project folder structure from a template</digest>
+	<description>The `createproject` object creates a new directory at the specified path and copies a standard project template into it. It enforces that projects are created within a specific directory structure.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -12,38 +10,41 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="symbol">
-			<digest>Create message</digest>
-			<description>Accepts the `create` message followed by the absolute path for the new project.</description>
+		<inlet id="1" type="symbol">
+			<digest>Inlet 1: Project path</digest>
+			<description>A symbol containing the full path for the new project.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
-	<outletlist />
+	<outletlist>
+		<outlet id="1" type="anything">
+			<digest>Outlet 1: Verbose Logging (Optional)</digest>
+			<description>If the verbose attribute is enabled, this outlet provides status messages.</description>
+		</outlet>
+	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist />
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="create">
 			<arglist>
-				<arg name="destination-path" type="symbol" optional="0" />
+				<arg name="path" type="symbol" optional="0" />
 			</arglist>
-			<digest>Create project and copy template</digest>
-			<description>
-				Creates the specified directory and copies the template.
-				The parent folder must be named exactly `[Projects]`.
-				Template source: `D:\[Library]\[Audio]\[Works]\[Projects]\[Template]`
-			</description>
+			<digest>Create project</digest>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attrlist />
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
-		<seealso name="buildspans" />
-		<seealso name="crucible" />
-		<seealso name="notify" />
-		<seealso name="whichoffset" />
 		<seealso name="stemversion" />
-		<seealso name="createproject" />
 	</seealsolist>
 </c74object>

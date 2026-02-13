@@ -1,128 +1,88 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
-
-<c74object name="growbuffer~" module="msp" category="Utility">
-	<digest>
-		Reference and potentially grow an external buffer
-	</digest>
-	<description>
-		The `growbuffer~` object allows referencing an external buffer~ by name and performing operations on it. It also supports `polybuffer~` objects by automatically iterating through all numbered members (e.g., `name.1`, `name.2`, etc.) if a single buffer with the given name is not found.
-	</description>
-
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="growbuffer~" module="msp" category="Buffer">
+	<digest>Resize one or more buffers while preserving data</digest>
+	<description>The `growbuffer~` object allows for resizing a single `buffer~` or a set of `buffer~` members within a `polybuffer~`. It preserves existing data during the resize by backing it up to memory and restoring it afterward.</description>
+	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
-		<metadata name="tag">Utility</metadata>
+		<metadata name="tag">Buffer</metadata>
 	</metadatalist>
-
+	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="anything">
-			<digest>
-				(bang) report length, (number) resize, (set) set buffer name
-			</digest>
+		<inlet id="1" type="bang/float/int/symbol">
+			<digest>Inlet 1: Control inlet</digest>
 			<description>
-				Sending a bang will report the length of the referenced buffer in milliseconds via the status outlet. Sending a number (int or float) will resize the referenced buffer to that many milliseconds, preserving existing content, and report the result via the status outlet. Sending the message set followed by a symbol will change the referenced buffer. If a `polybuffer~` is detected (via indexed names like `name.1`), operations are applied to all members.
+				- bang: Reports the current length of the buffer(s) in milliseconds.
+				- float/int: Resizes the buffer(s) to the specified length in milliseconds.
+				- set [name]: Changes the target buffer or polybuffer prefix.
 			</description>
 		</inlet>
-		<inlet id="1" type="symbol">
-			<digest>
-				(symbol) set buffer name
-			</digest>
-			<description>
-				Sending a symbol to the second inlet will change the referenced buffer.
-			</description>
+		<inlet id="2" type="symbol">
+			<digest>Inlet 2: Buffer name</digest>
+			<description>Sets the target buffer or polybuffer prefix.</description>
 		</inlet>
 	</inletlist>
-
+	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="anything">
-			<digest>
-				Status and Error Messages
-			</digest>
-			<description>
-				Outputs status information and error messages related to buffer operations.
-			</description>
+		<outlet id="1" type="list">
+			<digest>Outlet 1: Status messages</digest>
+			<description>Outputs status and error messages from the buffer operations.</description>
 		</outlet>
-		<outlet id="1" type="anything">
-			<digest>
-				Verbose Logging Outlet
-			</digest>
-			<description>
-				Outputs detailed diagnostic messages when the verbose attribute is enabled.
-			</description>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Verbose Logging (Optional)</digest>
+			<description>If the verbose attribute is enabled, this outlet provides detailed diagnostic logs.</description>
 		</outlet>
 	</outletlist>
-
+	<!--ARGUMENTS-->
 	<objarglist>
-		<objarg name="buffer-name" optional="0" type="symbol">
-			<digest>
-				Name of the buffer~ to reference
-			</digest>
-			<description>
-				The first argument specifies the name of an external buffer~ object to reference.
-			</description>
+		<objarg name="buffer-name" type="symbol" optional="1">
+			<digest>Initial buffer name or polybuffer prefix</digest>
 		</objarg>
 	</objarglist>
-
-	<attributelist>
-		<attribute name="verbose" get="1" set="1" type="long" size="1">
-			<digest>Enable Verbose Logging</digest>
-			<description>
-				When enabled (1), the object will output detailed diagnostic information to the second outlet during buffer operations, particularly during resizing.
-			</description>
-		</attribute>
-	</attributelist>
-
+	<!--MESSAGES-->
 	<methodlist>
 		<method name="bang">
-			<arglist />
-			<digest>
-				Report buffer length
-			</digest>
-			<description>
-				Outputs the length of the currently referenced buffer in milliseconds to the status outlet.
-			</description>
-		</method>
-		<method name="int">
-			<arglist>
-				<arg name="duration" optional="0" type="int" />
-			</arglist>
-			<digest>
-				Resize the buffer (ms)
-			</digest>
-			<description>
-				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved. The result is reported to the status outlet.
-			</description>
+			<digest>Report length</digest>
+			<description>Triggers a report of the current buffer length in milliseconds.</description>
 		</method>
 		<method name="float">
 			<arglist>
-				<arg name="duration" optional="0" type="float" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
-			<digest>
-				Resize the buffer (ms)
-			</digest>
-			<description>
-				Resizes the referenced buffer to the specified number of milliseconds. Existing audio data is preserved. The result is reported to the status outlet.
-			</description>
+			<digest>Resize buffer</digest>
+			<description>Resizes the buffer(s) to the specified length in milliseconds.</description>
+		</method>
+		<method name="int">
+			<arglist>
+				<arg name="ms" type="int" optional="0" />
+			</arglist>
+			<digest>Resize buffer</digest>
+			<description>Resizes the buffer(s) to the specified length in milliseconds.</description>
 		</method>
 		<method name="set">
 			<arglist>
-				<arg name="buffer-name" optional="0" type="symbol" />
+				<arg name="buffer-name" type="symbol" optional="0" />
 			</arglist>
-			<digest>
-				Set the referenced buffer
-			</digest>
-			<description>
-				Changes the referenced buffer~ object to the one specified by the symbol argument. A confirmation message is sent to the status outlet.
-			</description>
+			<digest>Set target</digest>
+			<description>Sets the target buffer name or polybuffer prefix.</description>
 		</method>
 	</methodlist>
-
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="verbose" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
 	<seealsolist>
+		<seealso name="buffer~" />
+		<seealso name="polybuffer~" />
+		<seealso name="threads~" />
 		<seealso name="buildspans" />
-		<seealso name="crucible" />
-		<seealso name="notify" />
-		<seealso name="whichoffset" />
-		<seealso name="stemversion" />
-		<seealso name="createproject" />
 	</seealsolist>
 </c74object>

@@ -4,9 +4,11 @@
 
 typedef struct _createproject {
     t_object s_obj;
+    long verbose;
+    void *verbose_log_outlet;
 } t_createproject;
 
-void *createproject_new(void);
+void *createproject_new(t_symbol *s, long argc, t_atom *argv);
 void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
@@ -16,9 +18,15 @@ t_class *createproject_class;
 void ext_main(void *r) {
     t_class *c;
 
-    c = class_new("createproject", (method)createproject_new, (method)NULL, (short)sizeof(t_createproject), 0L, A_DEFSYM, 0);
+    common_symbols_init();
+
+    c = class_new("createproject", (method)createproject_new, (method)NULL, sizeof(t_createproject), 0L, A_GIMME, 0);
     class_addmethod(c, (method)createproject_create, "create", A_SYM, 0);
     class_addmethod(c, (method)createproject_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_LONG(c, "verbose", 0, t_createproject, verbose);
+    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+
     class_register(CLASS_BOX, c);
     createproject_class = c;
 }
@@ -87,14 +95,30 @@ void createproject_create(t_createproject *x, t_symbol *s) {
     post("createproject: Project creation complete.");
 }
 
-void *createproject_new(void) {
+void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
     t_createproject *x = (t_createproject *)object_alloc(createproject_class);
+    if (x) {
+        x->verbose = 0;
+        x->verbose_log_outlet = NULL;
+
+        attr_args_process(x, argc, argv);
+
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        }
+    }
     return (x);
 }
 
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(create <path>) Create Project from Template");
+        sprintf(s, "Inlet 1: (create <path>) Create Project from Template");
+    } else {
+        if (x->verbose) {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1: Verbose Logging"); break;
+            }
+        }
     }
 }
 

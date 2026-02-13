@@ -12,27 +12,27 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="0" type="signal/list">
-			<digest>Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
-			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. When used as a signal ramp, a lookahead sweep (9ms ahead) automatically zeroes out track buffers. Also accepts anything messages (like reach updates) on this inlet, or the symbol 'clear' to clear all buffers and the visualizer. Note: The 'clear' operation is synchronous and blocks the message thread until all buffers are cleared.</description>
+		<inlet id="1" type="signal/list">
+			<digest>Inlet 1: Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
+			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source.</description>
 		</inlet>
-		<inlet id="1" type="symbol">
-			<digest>Rescript/Reference dictionary name</digest>
-			<description>Accepts a symbol denoting an external dict to reference. This triggers a rescript of the track data and sets a reference for audio-rate ramp processing. When the input ramp signal hits bar timestamp keys in the dictionary, data and "silence caps" are automatically generated and processed.</description>
+		<inlet id="2" type="symbol">
+			<digest>Inlet 2: Rescript/Reference dictionary name</digest>
+			<description>Accepts a symbol denoting an external dict to reference.</description>
 		</inlet>
-		<inlet id="2" type="list">
-			<digest>Palette Configuration</digest>
-			<description>Accepts [palette_name, channel_index] pairs to register palettes, or the symbol 'clear' to reset all mappings.</description>
+		<inlet id="3" type="list">
+			<digest>Inlet 3: Palette Configuration</digest>
+			<description>Accepts [palette_name, channel_index] pairs to register palettes.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="0" type="signal">
-			<digest>Scan Head Position (ms)</digest>
+		<outlet id="1" type="signal">
+			<digest>Outlet 1: Scan Head Position (ms)</digest>
 			<description>Outputs the current position of the 9ms lookahead scan head in milliseconds.</description>
 		</outlet>
-		<outlet id="1" type="anything">
-			<digest>Verbose Logging Outlet</digest>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Verbose Logging Outlet</digest>
 			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
 		</outlet>
 	</outletlist>
@@ -40,54 +40,35 @@
 	<objarglist>
 		<objarg name="polybuffer_prefix" type="symbol" optional="0">
 			<digest>Prefix for the polybuffer~ members</digest>
-			<description>The base name of the polybuffer~ (e.g., if prefix is 'script', it will look for 'script.1', 'script.2', etc.).</description>
 		</objarg>
 		<objarg name="tracks" type="int" optional="1">
 			<digest>Number of tracks to process</digest>
-			<description>The maximum number of tracks to check in the dictionary and clear in the buffers. Defaults to 4.</description>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="list">
 			<digest>Process data list</digest>
-			<description>Parses the 4-item list and writes data to the appropriate buffer and channel.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
-			<description>Registers the audio-rate perform routine when a signal is connected to the first inlet. This allows tracking an input ramp for automated dictionary processing.</description>
-		</method>
-		<method name="anything">
-			<digest>Register palette or clear</digest>
-			<description>Used on the third inlet to map palette names to channel indices or clear the map. On the second inlet, a symbol triggers the rescript functionality. On the first inlet, handles formatted messages similar to the data list, or the symbol 'clear' to reset all buffers and the visualizer (synchronously).</description>
-		</method>
-		<method name="rescript">
-			<arglist>
-				<arg name="dictionary_name" type="symbol" optional="0" />
-			</arglist>
-			<digest>Process track data from an external dictionary (Inlet 1)</digest>
-			<description>Triggers when a symbol is received on the second inlet (Inlet 1). Retrieves data from the named dictionary (matching the sampletranscript.json format) and processes it as if it entered the first inlet. It also automatically generates "silence caps" for missing bar timestamps based on the bar_length value found in a buffer~ named 'bar'.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attrlist>
-		<attr name="verbose" type="long" get="1" set="1" opaque="0">
+	<attributelist>
+		<attribute name="verbose" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Verbose Logging</digest>
-			<description>When set to 1, the object outputs diagnostic information and sends data to the visualizer script.</description>
-		</attr>
-		<attr name="tracks" type="long" get="1" set="1" opaque="0">
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
 			<digest>Number of Tracks</digest>
-			<description>Specifies the maximum track index to iterate through when processing dictionary data or performing lookahead clearing (9ms lookahead). Defaults to 4.</description>
-		</attr>
-	</attrlist>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="crucible" />
-		<seealso name="polybuffer~" />
-		<seealso name="buffer~" />
 		<seealso name="buildspans" />
-		<seealso name="whichoffset" />
-		<seealso name="notify" />
-		<seealso name="growbuffer~" />
 	</seealsolist>
 </c74object>

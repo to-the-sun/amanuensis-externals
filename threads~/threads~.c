@@ -116,6 +116,7 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...) {
 }
 
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c = class_new("threads~", (method)threads_new, (method)threads_free, sizeof(t_threads), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)threads_list, "list", A_GIMME, 0);
@@ -133,8 +134,6 @@ void ext_main(void *r) {
     class_dspinit(c);
     class_register(CLASS_BOX, c);
     threads_class = c;
-
-    common_symbols_init();
 }
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv) {
@@ -148,10 +147,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_scan_val = -1.0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
-
-        // Create outlets from right to left
-        x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-        x->signal_outlet = outlet_new((t_object *)x, "signal");
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->poly_prefix = atom_getsym(argv);
@@ -167,6 +162,14 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         attr_args_process(x, argc, argv);
+
+        // Create outlets from right to left
+        if (x->verbose) {
+            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        } else {
+            x->verbose_log_outlet = NULL;
+        }
+        x->signal_outlet = outlet_new((t_object *)x, "signal");
 
         if (x->poly_prefix == _sym_nothing) {
             object_error((t_object *)x, "missing polybuffer~ prefix argument");
@@ -268,9 +271,15 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
             case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
-        switch (a) {
-            case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
-            case 1: sprintf(s, "Outlet 2 (anything): Verbose Logging Outlet"); break;
+        if (x->verbose) {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
+                case 1: sprintf(s, "Outlet 2 (anything): Verbose Logging Outlet"); break;
+            }
+        } else {
+            switch (a) {
+                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
+            }
         }
     }
 }
