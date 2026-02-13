@@ -50,6 +50,10 @@
 		<method name="list">
 			<digest>Process data list</digest>
 		</method>
+		<method name="clear_visualizer">
+			<digest>Clear the visualizer without clearing the buffers</digest>
+			<description>Sends a clear command to the connected visualization script, but does not modify any sample data in the polybuffer~.</description>
+		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
