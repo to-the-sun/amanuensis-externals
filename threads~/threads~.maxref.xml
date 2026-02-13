@@ -3,7 +3,7 @@
 <c74object name="threads~" module="msp" category="Utility">
 	<digest>Writes incoming track data into a polybuffer~</digest>
 	<description>
-		The `threads~` object receives 4-item lists (palette, track, bar, offset) and writes them into a named `polybuffer~`. It uses a palette-to-channel mapping to determine which channel of a buffer to write to. Special values like 0 and -999999 are handled according to a specific multi-channel writing protocol.
+		The `threads~` object receives 4-item lists (palette, track, bar, offset) and writes them into a named `polybuffer~`. It uses a palette-to-channel mapping to determine which channel of a buffer to write to. Special values like 0 and -999999 are handled according to a specific multi-channel writing protocol. It also monitors an incoming time ramp signal on Inlet 1, triggering dictionary-driven writes on integer crossings and ramp wrap-arounds.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -14,7 +14,7 @@
 	<inletlist>
 		<inlet id="1" type="signal/list">
 			<digest>Inlet 1: Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
-			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source.</description>
+			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. Integer crossings and ramp wrap-arounds (delta &lt; 0) trigger dictionary lookups.</description>
 		</inlet>
 		<inlet id="2" type="symbol">
 			<digest>Inlet 2: Rescript/Reference dictionary name</digest>
