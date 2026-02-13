@@ -266,7 +266,7 @@ t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender,
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal/list): Data from crucible, (symbol) clear"); break;
+            case 0: sprintf(s, "Inlet 1 (signal/list): Time ramp (signal), Data from crucible (list), (symbol) clear"); break;
             case 1: sprintf(s, "Inlet 2 (symbol): Dictionary name for rescript/reference"); break;
             case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
@@ -619,19 +619,42 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
 
             out[i] = current_scan; // Output scan head position (ms)
 
-            // 1. DATA hits (integer bar crossings)
-            if (last_val != -1.0 && current_val > last_val) {
-                long floor_last = (long)floor(last_val);
-                long floor_curr = (long)floor(current_val);
+            // 1. DATA hits (integer bar crossings and wrap-around)
+            if (last_val != -1.0) {
+                if (current_val < last_val) {
+                    // Wrap-around: trigger bar 0
+                    int next_tail = (x->fifo_tail + 1) % 4096;
+                    if (next_tail != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].bar.value = 0.0;
+                        x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                        x->hit_bars[x->fifo_tail].type = 0; // DATA
+                        x->fifo_tail = next_tail;
+                    }
 
-                if (floor_curr > floor_last) {
-                    for (long v = floor_last + 1; v <= floor_curr; v++) {
-                        int next_tail = (x->fifo_tail + 1) % 4096;
-                        if (next_tail != x->fifo_head) {
+                    // Also handle any integers between 0 and current_val that we might have jumped to
+                    long floor_curr = (long)floor(current_val);
+                    for (long v = 1; v <= floor_curr; v++) {
+                        int nt = (x->fifo_tail + 1) % 4096;
+                        if (nt != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].bar.value = (double)v;
                             x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].type = 0; // DATA
-                            x->fifo_tail = next_tail;
+                            x->fifo_tail = nt;
+                        }
+                    }
+                } else if (current_val > last_val) {
+                    long floor_last = (long)floor(last_val);
+                    long floor_curr = (long)floor(current_val);
+
+                    if (floor_curr > floor_last) {
+                        for (long v = floor_last + 1; v <= floor_curr; v++) {
+                            int next_tail = (x->fifo_tail + 1) % 4096;
+                            if (next_tail != x->fifo_head) {
+                                x->hit_bars[x->fifo_tail].bar.value = (double)v;
+                                x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                x->hit_bars[x->fifo_tail].type = 0; // DATA
+                                x->fifo_tail = next_tail;
+                            }
                         }
                     }
                 }
