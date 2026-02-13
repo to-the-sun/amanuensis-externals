@@ -588,7 +588,8 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
         } else if (s == gensym("clear_visualizer") && argc == 0) {
             visualize("{\"clear\": 1}");
-            threads_verbose_log(x, "VISUALIZER CLEARED: Buffer content preserved");
+            threads_clear_pending_silence(x);
+            threads_verbose_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
