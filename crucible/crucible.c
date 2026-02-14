@@ -145,6 +145,9 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->span_tracker_dict = dictionary_new();
         x->incumbent_dict_name = gensym("");
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+        if (!buffer_ref_getobject(x->buffer_ref)) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
