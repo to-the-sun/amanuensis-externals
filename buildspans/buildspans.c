@@ -190,13 +190,17 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
 void buildspans_retry_tick(t_buildspans *x) {
     if (x->local_bar_length <= 0) {
-        long res = buildspans_get_bar_length(x);
-        if (res <= 0) {
-            // Persistent retry until a valid bar_length is found or set
-            clock_delay(x->retry_clock, 500);
-        } else {
-            buildspans_verbose_log(x, "Retry tick: Successfully retrieved bar_length: %ld", res);
+        t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+        if (b) {
+            float *samples = buffer_locksamples(b);
+            if (samples) {
+                buffer_unlocksamples(b);
+                buildspans_verbose_log(x, "Retry tick: bar buffer found and validated.");
+                return; // Stop retrying
+            }
         }
+        // Buffer not found or not yet lockable, retry later.
+        clock_delay(x->retry_clock, 500);
     }
 }
 
