@@ -266,7 +266,7 @@ t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender,
 void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal/list): Time ramp (signal), Data from crucible (list), (symbol) clear"); break;
+            case 0: sprintf(s, "Inlet 1 (signal/list): Time ramp (signal), Data from crucible (list), (symbol) clear, clear_visualizer"); break;
             case 1: sprintf(s, "Inlet 2 (symbol): Dictionary name for rescript/reference"); break;
             case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
@@ -586,6 +586,10 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
             visualize("{\"clear\": 1}");
             threads_clear_pending_silence(x);
             threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
+        } else if (s == gensym("clear_visualizer") && argc == 0) {
+            visualize("{\"clear\": 1}");
+            threads_clear_pending_silence(x);
+            threads_verbose_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
