@@ -126,6 +126,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->verbose = 0;
         x->out_verbose = NULL;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+        if (!buffer_ref_getobject(x->buffer_ref)) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
 

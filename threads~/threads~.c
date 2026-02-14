@@ -189,6 +189,9 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->buffer_refs = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+        if (!buffer_ref_getobject(x->bar_buffer_ref)) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
 
         x->proxy_palette = proxy_new(x, 2, &x->inlet_num);
         x->proxy_rescript = proxy_new(x, 1, &x->inlet_num);

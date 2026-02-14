@@ -1240,6 +1240,9 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
         buildspans_verbose_log(x, "Buffer set to: %s", s->s_name);
+        if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
