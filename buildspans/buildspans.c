@@ -159,6 +159,7 @@ typedef struct _buildspans {
     long verbose;
     double local_bar_length;
     long instance_id;
+    void *retry_clock;
 } t_buildspans;
 
 // Function prototypes
@@ -187,6 +188,18 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarr
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
+void buildspans_retry_tick(t_buildspans *x) {
+    if (x->local_bar_length <= 0) {
+        long res = buildspans_get_bar_length(x);
+        if (res <= 0) {
+            // Still not found, could reschedule again if we want to be persistent,
+            // but for now let's just try once more after a delay.
+            buildspans_verbose_log(x, "Retry tick: bar_length still not positive.");
+        } else {
+            buildspans_verbose_log(x, "Retry tick: Successfully retrieved bar_length: %ld", res);
+        }
+    }
+}
 
 
 // Helper function to send verbose log messages
@@ -220,13 +233,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     long bar_length = 0;
-    float *samples = NULL;
-    int retries = 0;
-    for (retries = 0; retries < 10; retries++) {
-        samples = buffer_locksamples(b);
-        if (samples) break;
-        systhread_sleep(1);
-    }
+    float *samples = buffer_locksamples(b);
 
     if (samples) {
         critical_enter(0);
@@ -242,11 +249,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-    if (retries > 0) {
-        buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld [Retries: %d]", x->instance_id, bar_length, retries);
-    } else {
-        buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    }
+    buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
     buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
@@ -428,12 +431,16 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
+        x->retry_clock = clock_new(x, (method)buildspans_retry_tick);
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
         // Hardcode the default buffer name to "bar".
         buildspans_set_bar_buffer(x, gensym("bar"));
+
+        // Defer initial lookup to handle patch loading order
+        clock_delay(x->retry_clock, 500);
 
         // Inlets are created from right to left.
         floatin((t_object *)x, 4);  // Local bar length
@@ -465,6 +472,9 @@ void buildspans_free(t_buildspans *x) {
     }
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
+    }
+    if (x->retry_clock) {
+        object_free(x->retry_clock);
     }
 }
 
@@ -1244,6 +1254,9 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     if (s && s->s_name) {
         x->s_buffer_name = s;
         x->local_bar_length = 0; // Reset cached bar length when the buffer changes
+        if (x->retry_clock) {
+            clock_delay(x->retry_clock, 500);
+        }
         if (x->buffer_ref) {
             buffer_ref_set(x->buffer_ref, s);
         } else {
