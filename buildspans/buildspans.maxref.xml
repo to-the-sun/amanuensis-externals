@@ -60,7 +60,7 @@
 		</outlet>
 		<outlet id="4" type="anything">
 			<digest>Outlet 4: Verbose Logging (Optional)</digest>
-			<description>If the verbose attribute is enabled, this outlet provides status messages and visualization data.</description>
+			<description>If the verbose attribute is enabled, this outlet provides status messages.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -95,7 +95,14 @@
 	<attributelist>
 		<attribute name="verbose" get="1" set="1" type="long" size="1">
 			<digest>Enable Verbose Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status information and visualization.</description>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="visualize" get="1" set="1" type="long" size="1">
+			<digest>Enable Visualization</digest>
+			<description>When enabled (1), the object sends JSON data to the connected visualization script.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
