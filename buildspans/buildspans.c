@@ -157,6 +157,7 @@ typedef struct _buildspans {
     void *log_outlet;
     void *verbose_log_outlet;
     long verbose;
+    long visualize;
     double local_bar_length;
     long instance_id;
 } t_buildspans;
@@ -244,6 +245,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
 }
 
 void buildspans_visualize_memory(t_buildspans *x) {
+    if (!x->visualize) return;
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -369,12 +371,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     long bar_length = buildspans_get_bar_length(x);
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld}", x->current_offset, bar_length);
 
-    if (x->verbose && x->verbose_log_outlet) {
-        visualize(json_buffer);
-        // t_atom json_atom;
-        // atom_setsym(&json_atom, gensym(json_buffer));
-        // outlet_anything(x->verbose_log_outlet, gensym("visualize"), 1, &json_atom);
-    }
+    visualize(json_buffer);
 
     sysmem_freeptr(json_buffer);
     sysmem_freeptr(unique_tracks);
@@ -402,6 +399,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
     CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
 
+    CLASS_ATTR_LONG(c, "visualize", 0, t_buildspans, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+
     class_register(CLASS_BOX, c);
     buildspans_class = c;
 }
@@ -415,6 +416,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_offset = 0.0;
         x->current_palette = gensym("");
         x->verbose_log_outlet = NULL;
+        x->visualize = 0;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
@@ -435,8 +437,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Outlets are created from right to left
         if (x->verbose) {
             x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-            visualize_init();
         }
+        visualize_init();
         x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
         x->span_outlet = outlet_new((t_object *)x, "list");
@@ -445,9 +447,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void buildspans_free(t_buildspans *x) {
-    if (x->verbose) {
-        visualize_cleanup();
-    }
+    visualize_cleanup();
     if (x->building) {
         object_free(x->building);
     }

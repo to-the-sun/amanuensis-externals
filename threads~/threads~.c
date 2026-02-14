@@ -33,6 +33,7 @@ typedef struct _threads {
     void *proxy_palette;
     long inlet_num;
     long verbose;
+    long visualize;
     void *verbose_log_outlet;
     void *signal_outlet;
     t_hashtab *buffer_refs;
@@ -127,6 +128,11 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_threads, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     CLASS_ATTR_LONG(c, "tracks", 0, t_threads, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
@@ -142,6 +148,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->poly_prefix = _sym_nothing;
         x->verbose = 0;
+        x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_ramp_val = -1.0;
         x->last_scan_val = -1.0;
@@ -389,7 +396,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
 
     if (err != MAX_ERR_NONE && offset_ms != 0.0 && palette != gensym("-")) {
         threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
-        if (offset_ms == -999999.0) {
+        if (x->visualize && offset_ms == -999999.0) {
              char json[256];
              // Send with num_chans = -1 to indicate unmapped/reach event
              snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": -1, \"val\": %.2f, \"num_chans\": -1}",
@@ -439,12 +446,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     // 5. Writing to buffer
 
     // Visualization: Send single packet regardless of buffer bounds (offload work to script)
-    char json[256];
-    // We'll get num_chans here just for visualization, then again inside critical if needed
-    long num_chans_viz = buffer_getchannelcount(b);
-    snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
-             (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
-    visualize(json);
+    if (x->visualize) {
+        char json[256];
+        // We'll get num_chans here just for visualization, then again inside critical if needed
+        long num_chans_viz = buffer_getchannelcount(b);
+        snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
+                 (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
+        visualize(json);
+    }
 
     critical_enter(0);
     long num_frames = buffer_getframecount(b);
@@ -586,11 +595,11 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
 
             threads_verbose_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
 
-            visualize("{\"clear\": 1}");
+            if (x->visualize) visualize("{\"clear\": 1}");
             threads_clear_pending_silence(x);
             threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
         } else if (s == gensym("clear_visualizer") && argc == 0) {
-            visualize("{\"clear\": 1}");
+            if (x->visualize) visualize("{\"clear\": 1}");
             threads_clear_pending_silence(x);
             threads_verbose_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
         } else if (argc >= 3) {
@@ -748,21 +757,25 @@ void threads_audio_qtask(t_threads *x) {
                     if (s_start <= s_end) {
                         float *samples = buffer_locksamples(b);
                         if (samples) {
-                            for (long s = s_start; s <= s_end; s++) {
-                                int was_nonzero = 0;
-                                for (long c = 0; c < n_chans; c++) {
-                                    if (samples[s * n_chans + c] != 0.0f) {
-                                        was_nonzero = 1;
-                                        samples[s * n_chans + c] = 0.0f;
+                            if (x->visualize) {
+                                for (long s = s_start; s <= s_end; s++) {
+                                    int was_nonzero = 0;
+                                    for (long c = 0; c < n_chans; c++) {
+                                        if (samples[s * n_chans + c] != 0.0f) {
+                                            was_nonzero = 1;
+                                            samples[s * n_chans + c] = 0.0f;
+                                        }
+                                    }
+                                    if (was_nonzero) {
+                                        double sample_ms = (double)s * 1000.0 / sr;
+                                        char json[256];
+                                        snprintf(json, 256, "{\"track\": %ld, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
+                                                 (long)track, sample_ms, n_chans);
+                                        visualize(json);
                                     }
                                 }
-                                if (was_nonzero) {
-                                    double sample_ms = (double)s * 1000.0 / sr;
-                                    char json[256];
-                                    snprintf(json, 256, "{\"track\": %d, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
-                                             track, sample_ms, n_chans);
-                                    visualize(json);
-                                }
+                            } else {
+                                memset(samples + s_start * n_chans, 0, (s_end - s_start + 1) * n_chans * sizeof(float));
                             }
                             buffer_unlocksamples(b);
                             buffer_setdirty(b);

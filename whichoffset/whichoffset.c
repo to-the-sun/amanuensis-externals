@@ -9,6 +9,7 @@ typedef struct _whichoffset {
     long track;
     void *outlet;
     long verbose;
+    long visualize;
     void *verbose_log_outlet;
 } t_whichoffset;
 
@@ -40,6 +41,11 @@ void ext_main(void *r) {
 
     CLASS_ATTR_LONG(c, "verbose", 0, t_whichoffset, verbose);
     CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_whichoffset, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     class_register(CLASS_BOX, c);
     whichoffset_class = c;
@@ -51,6 +57,7 @@ void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
         x->dict_name = s;
         x->track = 0;
         x->verbose = 0;
+        x->visualize = 0;
         x->verbose_log_outlet = NULL;
 
         attr_args_process(x, argc, argv);
@@ -376,9 +383,11 @@ void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d) {
                             dictionary_appenddictionary(transcript_dict, track_key, (t_object *)single_track_dict);
                             dictionary_appenddictionary(final_dict, gensym("transcript"), (t_object *)transcript_dict);
 
-                            char *json_str = dictionary_to_string(final_dict);
-                            visualize(json_str);
-                            sysmem_freeptr(json_str);
+                            if (x->visualize) {
+                                char *json_str = dictionary_to_string(final_dict);
+                                visualize(json_str);
+                                sysmem_freeptr(json_str);
+                            }
 
                             object_free(final_dict);
                         }
