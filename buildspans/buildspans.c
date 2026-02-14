@@ -192,9 +192,8 @@ void buildspans_retry_tick(t_buildspans *x) {
     if (x->local_bar_length <= 0) {
         long res = buildspans_get_bar_length(x);
         if (res <= 0) {
-            // Still not found, could reschedule again if we want to be persistent,
-            // but for now let's just try once more after a delay.
-            buildspans_verbose_log(x, "Retry tick: bar_length still not positive.");
+            // Persistent retry until a valid bar_length is found or set
+            clock_delay(x->retry_clock, 500);
         } else {
             buildspans_verbose_log(x, "Retry tick: Successfully retrieved bar_length: %ld", res);
         }
@@ -1271,6 +1270,9 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 void buildspans_local_bar_length(t_buildspans *x, double f) {
     if (f <= 0) {
         x->local_bar_length = 0;
+        if (x->retry_clock) {
+            clock_delay(x->retry_clock, 500);
+        }
     } else {
         x->local_bar_length = (double)round(f);
     }
