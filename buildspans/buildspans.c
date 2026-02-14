@@ -1234,6 +1234,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     if (s && s->s_name) {
         x->s_buffer_name = s;
+        x->local_bar_length = 0; // Reset cached bar length when the buffer changes
         if (x->buffer_ref) {
             buffer_ref_set(x->buffer_ref, s);
         } else {
