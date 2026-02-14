@@ -220,15 +220,20 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     long bar_length = 0;
-    critical_enter(0);
-    float *samples = buffer_locksamples(b);
+    float *samples = NULL;
+    int retries = 0;
+    for (retries = 0; retries < 10; retries++) {
+        samples = buffer_locksamples(b);
+        if (samples) break;
+        systhread_sleep(1);
+    }
+
     if (samples) {
+        critical_enter(0);
         if (buffer_getframecount(b) > 0) {
-            bar_length = (long)samples[0];
+            bar_length = (long)round(samples[0]);
         }
         buffer_unlocksamples(b);
-        critical_exit(0);
-    } else {
         critical_exit(0);
     }
 
@@ -237,7 +242,11 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-    buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    if (retries > 0) {
+        buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld [Retries: %d]", x->instance_id, bar_length, retries);
+    } else {
+        buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    }
     buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
@@ -1250,7 +1259,7 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
-        x->local_bar_length = f;
+        x->local_bar_length = (double)round(f);
     }
     buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
     buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
