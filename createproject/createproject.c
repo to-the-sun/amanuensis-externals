@@ -4,8 +4,8 @@
 
 typedef struct _createproject {
     t_object s_obj;
-    long verbose;
-    void *verbose_log_outlet;
+    long log;
+    void *log_outlet;
 } t_createproject;
 
 void *createproject_new(t_symbol *s, long argc, t_atom *argv);
@@ -24,8 +24,9 @@ void ext_main(void *r) {
     class_addmethod(c, (method)createproject_create, "create", A_SYM, 0);
     class_addmethod(c, (method)createproject_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_createproject, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_createproject, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
     createproject_class = c;
@@ -98,13 +99,13 @@ void createproject_create(t_createproject *x, t_symbol *s) {
 void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
     t_createproject *x = (t_createproject *)object_alloc(createproject_class);
     if (x) {
-        x->verbose = 0;
-        x->verbose_log_outlet = NULL;
+        x->log = 0;
+        x->log_outlet = NULL;
 
         attr_args_process(x, argc, argv);
 
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         }
     }
     return (x);
@@ -114,9 +115,9 @@ void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) 
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (create <path>) Create Project from Template");
     } else {
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Verbose Logging"); break;
+                case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;
             }
         }
     }

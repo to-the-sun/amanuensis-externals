@@ -5,8 +5,8 @@
 typedef struct _stemversion {
     t_object s_obj;
     void *outlet;
-    long verbose;
-    void *verbose_log_outlet;
+    long log;
+    void *log_outlet;
 } t_stemversion;
 
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
@@ -24,8 +24,9 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stemversion_bang, "bang", 0);
     class_addmethod(c, (method)stemversion_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_stemversion, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_stemversion, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
     stemversion_class = c;
@@ -34,13 +35,13 @@ void ext_main(void *r) {
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
     t_stemversion *x = (t_stemversion *)object_alloc(stemversion_class);
     if (x) {
-        x->verbose = 0;
-        x->verbose_log_outlet = NULL;
+        x->log = 0;
+        x->log_outlet = NULL;
 
         attr_args_process(x, argc, argv);
 
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         }
         x->outlet = outlet_new((t_object *)x, "symbol");
     }
@@ -70,10 +71,10 @@ void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (bang) Output Current Timestamp");
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])"); break;
-                case 1: sprintf(s, "Outlet 2: Verbose Logging"); break;
+                case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
             }
         } else {
             switch (a) {

@@ -14,9 +14,9 @@ typedef struct _crucible {
     void *outlet_data;
     void *outlet_fill;
     void *outlet_reach_int;
-    void *verbose_log_outlet;
+    void *log_outlet;
     t_buffer_ref *buffer_ref;
-    long verbose;
+    long log;
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
@@ -28,7 +28,7 @@ void crucible_free(t_crucible *x);
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
-void crucible_verbose_log(t_crucible *x, const char *fmt, ...);
+void crucible_log(t_crucible *x, const char *fmt, ...);
 char *crucible_atoms_to_string(long argc, t_atom *argv);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
@@ -39,14 +39,14 @@ t_atom_long crucible_get_bar_length(t_crucible *x);
 
 t_class *crucible_class;
 
-void crucible_verbose_log(t_crucible *x, const char *fmt, ...) {
-    if (x->verbose && x->verbose_log_outlet) {
+void crucible_log(t_crucible *x, const char *fmt, ...) {
+    if (x->log && x->log_outlet) {
         char buf[1024];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->verbose_log_outlet, gensym(buf), 0, NULL);
+        outlet_anything(x->log_outlet, gensym(buf), 0, NULL);
     }
 }
 
@@ -131,8 +131,9 @@ void ext_main(void *r) {
     class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_crucible, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_crucible, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
     crucible_class = c;
@@ -161,8 +162,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Outlets are created from right to left
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         }
         x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
         x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
@@ -212,9 +213,9 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
         char reach_str[64];
         snprintf(reach_str, 64, "%lld", (long long)current_reach);
 
-        crucible_verbose_log(x, "Checking reach %lld for track %s", (long long)current_reach, track_sym->s_name);
+        crucible_log(x, "Checking reach %lld for track %s", (long long)current_reach, track_sym->s_name);
         if (incumbent_track_dict && !dictionary_hasentry(incumbent_track_dict, gensym(reach_str))) {
-            crucible_verbose_log(x, "  -> Reach %lld not found in incumbent. Sending reach message.", (long long)current_reach);
+            crucible_log(x, "  -> Reach %lld not found in incumbent. Sending reach message.", (long long)current_reach);
             t_atom reach_list[3];
             atom_setlong(reach_list, (t_atom_long)atol(track_sym->s_name));
             atom_setlong(reach_list + 1, current_reach);
@@ -272,7 +273,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     t_atom *span_atoms = NULL;
     atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
 
-    crucible_verbose_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
+    crucible_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
 
     int challenger_wins = 1;
 
@@ -320,7 +321,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getatomarray(incumbent_bar_dict, gensym("rating"), (t_object **)&incumbent_rating_atomarray);
 
             if (!incumbent_rating_atomarray) {
-                crucible_verbose_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
+                crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 continue;
             }
 
@@ -328,26 +329,26 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             t_atom *incumbent_rating_atoms = NULL;
             atomarray_getatoms(incumbent_rating_atomarray, &incumbent_rating_len, &incumbent_rating_atoms);
             if(incumbent_rating_len == 0) {
-                crucible_verbose_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
+                crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 continue;
             }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
-            crucible_verbose_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
+            crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
-                crucible_verbose_log(x, "-> Challenger loses bar. Span comparison failed.");
+                crucible_log(x, "-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
             } else {
-                crucible_verbose_log(x, "-> Challenger wins bar.");
+                crucible_log(x, "-> Challenger wins bar.");
             }
         } else {
-            crucible_verbose_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts_long, challenger_rating);
+            crucible_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts_long, challenger_rating);
         }
     }
 
     if (challenger_wins) {
-        crucible_verbose_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
+        crucible_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
 
         t_atom_long max_reach = 0;
         for (long i = 0; i < span_len; i++) {
@@ -395,7 +396,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         t_atom_long old_song_reach = x->song_reach;
         if (song_grew) {
             x->song_reach = max_reach;
-            crucible_verbose_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
+            crucible_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
         }
 
         for (long i = 0; i < span_len; i++) {
@@ -414,7 +415,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 t_dictionary *copied_bar_dict = dictionary_deep_copy(challenger_bar_dict);
                 if (copied_bar_dict && incumbent_track_dict) {
                     dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
-                    crucible_verbose_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
+                    crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
                 }
             }
         }
@@ -443,13 +444,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             }
         }
     } else {
-        crucible_verbose_log(x, "Challenger span for track %s lost.", track_sym->s_name);
+        crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
     }
 
     // Cleanup challenger dict for this track
     if (dictionary_hasentry(x->challenger_dict, track_sym)) {
         dictionary_deleteentry(x->challenger_dict, track_sym);
-        crucible_verbose_log(x, "Cleaned up challenger data for track %s.", track_sym->s_name);
+        crucible_log(x, "Cleaned up challenger data for track %s.", track_sym->s_name);
     }
 
     object_release((t_object *)incumbent_dict);
@@ -481,7 +482,7 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 
     if (bar_length > 0) {
         x->local_bar_length = (double)bar_length;
-        crucible_verbose_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
+        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
     }
 
     return bar_length;
@@ -493,7 +494,7 @@ void crucible_local_bar_length(t_crucible *x, double f) {
     } else {
         x->local_bar_length = f;
     }
-    crucible_verbose_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
+    crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
 }
 
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
@@ -541,9 +542,9 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->verbose) {
+    if (x->log) {
         char *val_str = crucible_atoms_to_string(argc, argv);
-        crucible_verbose_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
+        crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
         if (val_str) sysmem_freeptr(val_str);
     }
 
@@ -631,7 +632,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         sysmem_freeptr(bar_str);
         sysmem_freeptr(key_str);
     } else {
-        crucible_verbose_log(x, "Unparsable message selector: %s", s->s_name);
+        crucible_log(x, "Unparsable message selector: %s", s->s_name);
     }
 }
 
@@ -643,12 +644,12 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
                 case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
                 case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Verbose Logging Outlet"); break;
+                case 3: sprintf(s, "Outlet 4: Logging Outlet"); break;
             }
         } else {
             switch (a) {

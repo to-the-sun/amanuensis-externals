@@ -45,7 +45,7 @@ int parse_hierarchical_key(t_symbol *hierarchical_key, char **track, char **bar,
 }
 
 
-// Helper function to convert an atomarray to a string for buildspans_verbose_loging
+// Helper function to convert an atomarray to a string for buildspans_loging
 char* atomarray_to_string(t_atomarray *arr) {
     if (!arr) return NULL;
 
@@ -154,9 +154,10 @@ typedef struct _buildspans {
     t_symbol *current_palette;
     void *span_outlet;
     void *track_outlet;
+    void *out_bar_data;
     void *log_outlet;
-    void *verbose_log_outlet;
-    long verbose;
+    long log;
+    long visualize;
     double local_bar_length;
     long instance_id;
 } t_buildspans;
@@ -175,7 +176,7 @@ void buildspans_flush(t_buildspans *x);
 void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym);
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep);
 void buildspans_visualize_memory(t_buildspans *x);
-void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...);
+void buildspans_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long last_bar_timestamp);
@@ -190,14 +191,14 @@ void buildspans_local_bar_length(t_buildspans *x, double f);
 
 
 // Helper function to send verbose log messages
-void buildspans_verbose_log(t_buildspans *x, const char *fmt, ...) {
-    if (x->verbose && x->verbose_log_outlet) {
+void buildspans_log(t_buildspans *x, const char *fmt, ...) {
+    if (x->log && x->log_outlet) {
         char buf[1024];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->verbose_log_outlet, gensym(buf), 0, NULL);
+        outlet_anything(x->log_outlet, gensym(buf), 0, NULL);
     }
 }
 
@@ -237,13 +238,14 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-    buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    buildspans_verbose_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
 }
 
 void buildspans_visualize_memory(t_buildspans *x) {
+    if (!x->visualize) return;
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -369,12 +371,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     long bar_length = buildspans_get_bar_length(x);
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld}", x->current_offset, bar_length);
 
-    if (x->verbose && x->verbose_log_outlet) {
-        visualize(json_buffer);
-        // t_atom json_atom;
-        // atom_setsym(&json_atom, gensym(json_buffer));
-        // outlet_anything(x->verbose_log_outlet, gensym("visualize"), 1, &json_atom);
-    }
+    visualize(json_buffer);
 
     sysmem_freeptr(json_buffer);
     sysmem_freeptr(unique_tracks);
@@ -398,9 +395,13 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
     class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
     
-    CLASS_ATTR_LONG(c, "verbose", 0, t_buildspans, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
-    CLASS_ATTR_DEFAULT(c, "verbose", 0, "0");
+    CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_buildspans, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     class_register(CLASS_BOX, c);
     buildspans_class = c;
@@ -414,7 +415,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_track = 0;
         x->current_offset = 0.0;
         x->current_palette = gensym("");
-        x->verbose_log_outlet = NULL;
+        x->log_outlet = NULL;
+        x->log = 0;
+        x->visualize = 0;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
@@ -433,11 +436,11 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         floatin((t_object *)x, 1);  // Offset
 
         // Outlets are created from right to left
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
-            visualize_init();
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         }
-        x->log_outlet = outlet_new((t_object *)x, NULL); // Generic outlet for logs
+        visualize_init();
+        x->out_bar_data = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
         x->span_outlet = outlet_new((t_object *)x, "list");
     }
@@ -445,9 +448,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void buildspans_free(t_buildspans *x) {
-    if (x->verbose) {
-        visualize_cleanup();
-    }
+    visualize_cleanup();
     if (x->building) {
         object_free(x->building);
     }
@@ -472,7 +473,7 @@ void buildspans_clear(t_buildspans *x) {
     x->current_offset = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
-    buildspans_verbose_log(x, "buildspans cleared.");
+    buildspans_log(x, "buildspans cleared.");
     buildspans_visualize_memory(x);
 }
 
@@ -484,14 +485,14 @@ void buildspans_offset(t_buildspans *x, double f) {
     // Only duplicate if the rounded offset is different and the old offset was not the initial default.
     if (new_rounded_offset == old_rounded_offset || x->current_offset == 0.0) {
         x->current_offset = f;
-        buildspans_verbose_log(x, "Global offset updated to: %.2f. No duplication.", f);
+        buildspans_log(x, "Global offset updated to: %.2f. No duplication.", f);
         return;
     }
 
     // Update the global offset first
     double old_offset = x->current_offset;
     x->current_offset = f;
-    buildspans_verbose_log(x, "Global offset updated to: %.2f (rounded: %ld). Duplicating one span for each active track.", f, new_rounded_offset);
+    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Duplicating one span for each active track.", f, new_rounded_offset);
 
     long num_keys;
     t_symbol **keys;
@@ -499,7 +500,7 @@ void buildspans_offset(t_buildspans *x, double f) {
     if (!keys) return;
 
     // --- GATHER PHASE ---
-    buildspans_verbose_log(x, "Gathering notes for span duplication.");
+    buildspans_log(x, "Gathering notes for span duplication.");
     // First, we gather all the notes that need to be duplicated into a temporary "manifest".
     // This avoids modifying the `building` dictionary while iterating over its keys.
     long manifest_capacity = 128;
@@ -578,7 +579,7 @@ void buildspans_offset(t_buildspans *x, double f) {
     sysmem_freeptr(unique_track_nums);
 
     // --- PROCESSING PHASE ---
-    buildspans_verbose_log(x, "Processing %ld notes from duplication manifest.", manifest_count);
+    buildspans_log(x, "Processing %ld notes from duplication manifest.", manifest_count);
     // Now that we have all the notes, we can safely add them to the building dictionary.
     if (manifest_count > 0) {
         qsort(manifest, manifest_count, sizeof(t_duplication_manifest_item), compare_manifest_items);
@@ -605,7 +606,7 @@ void buildspans_offset(t_buildspans *x, double f) {
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
 void buildspans_track(t_buildspans *x, long n) {
     x->current_track = n;
-    buildspans_verbose_log(x, "Track updated to: %ld", n);
+    buildspans_log(x, "Track updated to: %ld", n);
 }
 
 // Handler for various messages, including palette symbol
@@ -617,7 +618,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
         // A standalone symbol is a message with argc=0
         if (argc == 0) {
             x->current_palette = s;
-            buildspans_verbose_log(x, "Palette set to: %s", s->s_name);
+            buildspans_log(x, "Palette set to: %s", s->s_name);
         } else {
             // If it has arguments, it's a list starting with a symbol, which we don't handle here.
             object_error((t_object *)x, "Palette inlet expects a single symbol, but received a list.");
@@ -642,8 +643,8 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
     double timestamp = atom_getfloat(argv);
     double score = atom_getfloat(argv + 1);
-    buildspans_verbose_log(x, "--- New Timestamp-Score Pair Received ---");
-    buildspans_verbose_log(x, "Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
+    buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
+    buildspans_log(x, "Absolute timestamp: %.2f, Score: %.2f", timestamp, score);
 
     // 1. Find all unique track symbols for the current track.
     long num_keys;
@@ -695,7 +696,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     // 3. Add the note to each span (identified by its unique track symbol)
-    buildspans_verbose_log(x, "Adding note to %ld span(s) on track %ld", unique_tracks_count, x->current_track);
+    buildspans_log(x, "Adding note to %ld span(s) on track %ld", unique_tracks_count, x->current_track);
     for (long i = 0; i < unique_tracks_count; i++) {
         t_symbol *target_track_sym = unique_track_syms[i];
 
@@ -764,9 +765,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
 
     // Calculate bar timestamp
     double relative_timestamp = timestamp - offset;
-    buildspans_verbose_log(x, "Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
+    buildspans_log(x, "Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
-    buildspans_verbose_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
+    buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
     // --- Find the most recent bar for the current track to see if this is a new bar ---
     long last_bar_timestamp = -1;
@@ -820,7 +821,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
         }
 
         if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + bar_length) {
-            buildspans_verbose_log(x, "Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, bar_length, most_recent_bar_after_rating_check);
+            buildspans_log(x, "Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, bar_length, most_recent_bar_after_rating_check);
             buildspans_end_track_span(x, track_sym);
         }
     }
@@ -834,7 +835,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     t_symbol *offset_key = generate_hierarchical_key(track_sym, bar_sym, gensym("offset"));
     if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
     dictionary_appendfloat(x->building, offset_key, offset);
-    buildspans_verbose_log(x, "%s %.2f", offset_key->s_name, offset);
+    buildspans_log(x, "%s %.2f", offset_key->s_name, offset);
     t_atom offset_atom;
     atom_setfloat(&offset_atom, offset);
 
@@ -842,7 +843,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     t_symbol *palette_key = generate_hierarchical_key(track_sym, bar_sym, gensym("palette"));
     if (dictionary_hasentry(x->building, palette_key)) dictionary_deleteentry(x->building, palette_key);
     dictionary_appendsym(x->building, palette_key, x->current_palette);
-    buildspans_verbose_log(x, "%s %s", palette_key->s_name, x->current_palette->s_name);
+    buildspans_log(x, "%s %s", palette_key->s_name, x->current_palette->s_name);
     t_atom palette_atom;
     atom_setsym(&palette_atom, x->current_palette);
 
@@ -861,7 +862,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {
-        buildspans_verbose_log(x, "%s %s", absolutes_key->s_name, abs_str);
+        buildspans_log(x, "%s %s", absolutes_key->s_name, abs_str);
         sysmem_freeptr(abs_str);
     }
 
@@ -880,7 +881,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
     atomarray_appendatom(scores_array, &new_score);
     char *scores_str = atomarray_to_string(scores_array);
     if (scores_str) {
-        buildspans_verbose_log(x, "%s %s", scores_key->s_name, scores_str);
+        buildspans_log(x, "%s %s", scores_key->s_name, scores_str);
         sysmem_freeptr(scores_str);
     }
 
@@ -896,7 +897,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
         t_symbol *mean_key = generate_hierarchical_key(track_sym, bar_sym, gensym("mean"));
         if (dictionary_hasentry(x->building, mean_key)) dictionary_deleteentry(x->building, mean_key);
         dictionary_appendfloat(x->building, mean_key, mean);
-        buildspans_verbose_log(x, "%s %.2f", mean_key->s_name, mean);
+        buildspans_log(x, "%s %.2f", mean_key->s_name, mean);
         t_atom mean_atom;
         atom_setfloat(&mean_atom, mean);
     }
@@ -947,7 +948,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             // Logging
             char log_buffer[512];
             snprintf(log_buffer, 512, "%s %s", span_key->s_name, span_str);
-            buildspans_verbose_log(x, "%s", log_buffer);
+            buildspans_log(x, "%s", log_buffer);
         }
         sysmem_freeptr(span_str);
     }
@@ -976,9 +977,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
             t_symbol *rating_key = generate_hierarchical_key(track_sym, temp_bar_sym, gensym("rating"));
             if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
             dictionary_appendfloat(x->building, rating_key, final_rating);
-            buildspans_verbose_log(x, "%s %.2f", rating_key->s_name, final_rating);
+            buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
         }
-        buildspans_verbose_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
+        buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
 
     sysmem_freeptr(bar_timestamps);
@@ -1066,7 +1067,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
                 }
             }
             double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
-            buildspans_verbose_log(x, "Ending span for track %s with rating %.2f (%.2f * %ld)", track_sym->s_name, final_rating, lowest_mean, span_size);
+            buildspans_log(x, "Ending span for track %s with rating %.2f (%.2f * %ld)", track_sym->s_name, final_rating, lowest_mean, span_size);
 
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
@@ -1115,10 +1116,10 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *track_sym) {
 
 
 void buildspans_bang(t_buildspans *x) {
-    buildspans_verbose_log(x, "Flush triggered by bang.");
+    buildspans_log(x, "Flush triggered by bang.");
     buildspans_flush(x);
     x->local_bar_length = 0;
-    buildspans_verbose_log(x, "Bar length reset to zero after flush.");
+    buildspans_log(x, "Bar length reset to zero after flush.");
 }
 
 void buildspans_flush(t_buildspans *x) {
@@ -1214,12 +1215,12 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
                 case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
                 case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
-                case 3: sprintf(s, "Outlet 4: Verbose Logging & Visualization Outlet"); break;
+                case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
             }
         } else {
             switch (a) {
@@ -1239,7 +1240,7 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
         } else {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
-        buildspans_verbose_log(x, "Buffer set to: %s", s->s_name);
+        buildspans_log(x, "Buffer set to: %s", s->s_name);
         if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
             object_error((t_object *)x, "bar buffer~ not found");
         }
@@ -1254,8 +1255,8 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
     } else {
         x->local_bar_length = f;
     }
-    buildspans_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
-    buildspans_verbose_log(x, "Local bar length set to: %.2f", x->local_bar_length);
+    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_keep) {
@@ -1285,7 +1286,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     // 2. Finalize the state of the ended bars and then output.
     if (end_count > 0) {
-        buildspans_verbose_log(x, "Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
+        buildspans_log(x, "Pruning span for track %s, keeping bar %ld", track_sym->s_name, bar_to_keep);
         qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
 
         // Create the list of ended bars
@@ -1296,7 +1297,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
         }
 
         // Finalize the span data *before* outputting
-        buildspans_verbose_log(x, "Finalizing ended span...");
+        buildspans_log(x, "Finalizing ended span...");
         buildspans_finalize_and_log_span(x, track_sym, ended_span_array);
 
         // Validate and output the finalized data
@@ -1348,7 +1349,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *track_sym, long bar_to_kee
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
-    buildspans_verbose_log(x, "Resetting kept bar...");
+    buildspans_log(x, "Resetting kept bar...");
     buildspans_reset_bar_to_standalone(x, track_sym, gensym(bar_to_keep_str));
 
     // Since a span was ended, we need to schedule a cleanup check.
@@ -1371,7 +1372,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
         t_symbol *rating_key = generate_hierarchical_key(track_sym, bar_sym, gensym("rating"));
         if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
         dictionary_appendfloat(x->building, rating_key, mean_val);
-        buildspans_verbose_log(x, "%s %.2f", rating_key->s_name, mean_val);
+        buildspans_log(x, "%s %.2f", rating_key->s_name, mean_val);
     }
 
     // Update span to be only itself
@@ -1388,7 +1389,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *track_sym, t_
 
     char *span_str = atomarray_to_string(new_span_array);
     if (span_str) {
-        buildspans_verbose_log(x, "%s %s", span_key->s_name, span_str);
+        buildspans_log(x, "%s %s", span_key->s_name, span_str);
         sysmem_freeptr(span_str);
     }
 }
@@ -1433,7 +1434,7 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
         t_symbol *rating_key = generate_hierarchical_key(track_sym, bar_sym, gensym("rating"));
         if(dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
         dictionary_appendatom(x->building, rating_key, &rating_atom);
-        buildspans_verbose_log(x, "%s %.2f", rating_key->s_name, final_rating);
+        buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
 
         // Create a deep copy for each bar to ensure no shared ownership
         t_atomarray *span_copy = atomarray_deep_copy(span_array);
@@ -1443,7 +1444,7 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *track_sym, t_at
         dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
         if (span_str) {
-            buildspans_verbose_log(x, "%s %s", span_key->s_name, span_str);
+            buildspans_log(x, "%s %s", span_key->s_name, span_str);
         }
     }
     if (span_str) sysmem_freeptr(span_str);
@@ -1515,13 +1516,13 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *track_sym, long
         double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
         
         if (rating_with < rating_without) {
-            buildspans_verbose_log(x, "Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
+            buildspans_log(x, "Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
             prune_span = 1;
         } else if (last_bar_mean > rating_with) {
-            buildspans_verbose_log(x, "Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
+            buildspans_log(x, "Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
             prune_span = 1;
         } else {
-            buildspans_verbose_log(x, "Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
+            buildspans_log(x, "Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
         }
 
         if (prune_span) {
@@ -1663,21 +1664,21 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym,
     }
 
     if (earliest_absolute == -1.0) { // No notes in span
-        buildspans_verbose_log(x, "Validation: Span %s has no notes. Aborting.", track_sym->s_name);
+        buildspans_log(x, "Validation: Span %s has no notes. Aborting.", track_sym->s_name);
         return 0;
     }
 
     if (latest_absolute < offset_val) {
-        buildspans_verbose_log(x, "Validation failed for %s: latest absolute (%.2f) is before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
+        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
         return 0;
     }
 
     if (next_offset != -1.0 && earliest_absolute > next_offset) {
-        buildspans_verbose_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
+        buildspans_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
         return 0;
     }
 
-    buildspans_verbose_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
+    buildspans_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
     return 1;
 }
 
@@ -1720,15 +1721,15 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarr
                 if (type == A_FLOAT) {
                     t_atom out_atom;
                     atom_setfloat(&out_atom, atom_getfloat(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
+                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_LONG) {
                     t_atom out_atom;
                     atom_setlong(&out_atom, atom_getlong(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
+                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_SYM) {
                     t_atom out_atom;
                     atom_setsym(&out_atom, atom_getsym(&a));
-                    outlet_anything(x->log_outlet, output_key_sym, (short)1, &out_atom);
+                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
                 } else if (type == A_OBJ) {
                     t_object *obj = atom_getobj(&a);
                     if (object_classname(obj) == gensym("atomarray")) {
@@ -1736,7 +1737,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarr
                         long ac;
                         t_atom *av;
                         atomarray_getatoms(arr, &ac, &av);
-                        outlet_anything(x->log_outlet, output_key_sym, (short)ac, av);
+                        outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
                     }
                 }
             }
@@ -1778,7 +1779,7 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_
         }
     }
 
-    buildspans_verbose_log(x, "--- Cleanup Check for %s (Precision offset: %.2f) ---", track_offset_sym->s_name, offset_val_to_check);
+    buildspans_log(x, "--- Cleanup Check for %s (Precision offset: %.2f) ---", track_offset_sym->s_name, offset_val_to_check);
 
     // --- Single Pass ---
     // In one loop, we will:
@@ -1825,27 +1826,27 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *track_
     double next_offset_time = find_next_offset(x, track_num_to_check, offset_val_to_check);
 
     if (next_offset_time == -1.0) {
-        buildspans_verbose_log(x, "Cleanup: No subsequent offset found for track %ld. No action taken.", track_num_to_check);
+        buildspans_log(x, "Cleanup: No subsequent offset found for track %ld. No action taken.", track_num_to_check);
         goto cleanup;
     }
-    buildspans_verbose_log(x, "Cleanup: Next offset for track %ld is %.2f.", track_num_to_check, next_offset_time);
+    buildspans_log(x, "Cleanup: Next offset for track %ld is %.2f.", track_num_to_check, next_offset_time);
 
     if (oldest_absolute_time == -1.0) {
-        buildspans_verbose_log(x, "Cleanup: No absolute timestamps found for %s. No action taken.", track_offset_sym->s_name);
+        buildspans_log(x, "Cleanup: No absolute timestamps found for %s. No action taken.", track_offset_sym->s_name);
         goto cleanup;
     }
-    buildspans_verbose_log(x, "Cleanup: Oldest absolute time for %s is %.2f.", track_offset_sym->s_name, oldest_absolute_time);
+    buildspans_log(x, "Cleanup: Oldest absolute time for %s is %.2f.", track_offset_sym->s_name, oldest_absolute_time);
 
     // 3. Compare and potentially delete.
     if (oldest_absolute_time >= next_offset_time) {
-        buildspans_verbose_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
+        buildspans_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting %ld keys for %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name);
 
         for (long i = 0; i < delete_count; i++) {
             dictionary_deleteentry(x->building, keys_to_delete[i]);
         }
         buildspans_visualize_memory(x);
     } else {
-        buildspans_verbose_log(x, "Cleanup: Condition not met (%.2f < %ld). No action taken.", oldest_absolute_time, next_offset_time);
+        buildspans_log(x, "Cleanup: Condition not met (%.2f < %ld). No action taken.", oldest_absolute_time, next_offset_time);
     }
 
 cleanup:

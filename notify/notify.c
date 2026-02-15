@@ -21,13 +21,13 @@ typedef struct _note {
 typedef struct _notify {
     t_object s_obj;
     t_symbol *dict_name;
-    long verbose;
+    long log;
     void *out_abs_score; // Outlet 1 (Leftmost, Index 0)
     void *out_offset;    // Outlet 2 (Index 1)
     void *out_track;     // Outlet 3 (Index 2)
     void *out_palette;   // Outlet 4 (Index 3)
     void *out_descript;  // Outlet 5 (Index 4)
-    void *out_verbose;   // Outlet 6 (Rightmost, optional, Index 5)
+    void *out_log;   // Outlet 6 (Rightmost, optional, Index 5)
     t_buffer_ref *buffer_ref;
     double local_bar_length;
     long instance_id;
@@ -43,7 +43,7 @@ void notify_fill(t_notify *x);
 t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
-void notify_verbose_log(t_notify *x, const char *fmt, ...);
+void notify_log(t_notify *x, const char *fmt, ...);
 void notify_local_bar_length(t_notify *x, double f);
 long notify_get_bar_length(t_notify *x);
 
@@ -59,21 +59,22 @@ void ext_main(void *r) {
     class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_notify, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
     notify_class = c;
 }
 
-void notify_verbose_log(t_notify *x, const char *fmt, ...) {
-    if (x->verbose && x->out_verbose) {
+void notify_log(t_notify *x, const char *fmt, ...) {
+    if (x->log && x->out_log) {
         char buf[1024];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->out_verbose, gensym(buf), 0, NULL);
+        outlet_anything(x->out_log, gensym(buf), 0, NULL);
     }
 }
 
@@ -84,7 +85,7 @@ long notify_get_bar_length(t_notify *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        notify_verbose_log(x, "bar buffer~ not found");
+        notify_log(x, "bar buffer~ not found");
         return 0;
     }
 
@@ -103,7 +104,7 @@ long notify_get_bar_length(t_notify *x) {
 
     if (bar_length > 0) {
         x->local_bar_length = (double)bar_length;
-        notify_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+        notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
     }
 
     return bar_length;
@@ -115,16 +116,16 @@ void notify_local_bar_length(t_notify *x, double f) {
     } else {
         x->local_bar_length = f;
     }
-    notify_verbose_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
-    notify_verbose_log(x, "Local bar length set to: %.2f", f);
+    notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    notify_log(x, "Local bar length set to: %.2f", f);
 }
 
 void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     t_notify *x = (t_notify *)object_alloc(notify_class);
     if (x) {
         x->dict_name = gensym("");
-        x->verbose = 0;
-        x->out_verbose = NULL;
+        x->log = 0;
+        x->out_log = NULL;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         if (!buffer_ref_getobject(x->buffer_ref)) {
             object_error((t_object *)x, "bar buffer~ not found");
@@ -135,8 +136,8 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Outlets are created from right to left
-        if (x->verbose) {
-            x->out_verbose = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->out_log = outlet_new((t_object *)x, NULL);
         }
         x->out_descript = outlet_new((t_object *)x, NULL);
         x->out_palette = outlet_new((t_object *)x, NULL);
@@ -470,7 +471,7 @@ void notify_bang(t_notify *x) {
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
     dictionary_clear(dict);
-    notify_verbose_log(x, "Dictionary cleared.");
+    notify_log(x, "Dictionary cleared.");
 
     for (long i = 0; i < total_notes; i++) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
@@ -495,14 +496,14 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
         if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump");
         else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
     } else {
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list)"); break;
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
                 case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
-                case 5: sprintf(s, "Outlet 6: Verbose Logging"); break;
+                case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
             }
         } else {
             switch (a) {

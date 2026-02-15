@@ -8,8 +8,9 @@ typedef struct _whichoffset {
     t_symbol *dict_name;
     long track;
     void *outlet;
-    long verbose;
-    void *verbose_log_outlet;
+    long log;
+    long visualize;
+    void *log_outlet;
 } t_whichoffset;
 
 void *whichoffset_new(t_symbol *s, long argc, t_atom *argv);
@@ -38,8 +39,13 @@ void ext_main(void *r) {
     class_addmethod(c, (method)whichoffset_span, "span", A_GIMME, 0);
     class_addmethod(c, (method)whichoffset_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_whichoffset, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_whichoffset, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_whichoffset, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     class_register(CLASS_BOX, c);
     whichoffset_class = c;
@@ -50,13 +56,14 @@ void *whichoffset_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->dict_name = s;
         x->track = 0;
-        x->verbose = 0;
-        x->verbose_log_outlet = NULL;
+        x->log = 0;
+        x->visualize = 0;
+        x->log_outlet = NULL;
 
         attr_args_process(x, argc, argv);
 
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         }
         x->outlet = floatout((t_object *)x); // Create a float outlet
 
@@ -376,9 +383,11 @@ void whichoffset_send_dict_in_chunks(t_whichoffset *x, t_dictionary *d) {
                             dictionary_appenddictionary(transcript_dict, track_key, (t_object *)single_track_dict);
                             dictionary_appenddictionary(final_dict, gensym("transcript"), (t_object *)transcript_dict);
 
-                            char *json_str = dictionary_to_string(final_dict);
-                            visualize(json_str);
-                            sysmem_freeptr(json_str);
+                            if (x->visualize) {
+                                char *json_str = dictionary_to_string(final_dict);
+                                visualize(json_str);
+                                sysmem_freeptr(json_str);
+                            }
 
                             object_free(final_dict);
                         }
@@ -402,10 +411,10 @@ void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (bang) Visualize Dictionary, (int) Set Track, (span <list>) Calculate Offset");
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Calculated Optimal Offset (float)"); break;
-                case 1: sprintf(s, "Outlet 2: Verbose Logging"); break;
+                case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
             }
         } else {
             switch (a) {

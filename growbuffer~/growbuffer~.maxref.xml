@@ -30,8 +30,8 @@
 			<description>Outputs status and error messages from the buffer operations.</description>
 		</outlet>
 		<outlet id="2" type="anything">
-			<digest>Outlet 2: Verbose Logging (Optional)</digest>
-			<description>If the verbose attribute is enabled, this outlet provides detailed diagnostic logs.</description>
+			<digest>Outlet 2: Logging (Optional)</digest>
+			<description>If the log attribute is enabled, this outlet provides detailed diagnostic logs.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -70,8 +70,8 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
-		<attribute name="verbose" get="1" set="1" type="long" size="1">
-			<digest>Enable Verbose Logging</digest>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Logging</digest>
 			<description>When enabled (1), creates an additional outlet for status information.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />

@@ -32,8 +32,8 @@
 			<description>Outputs the current position of the 9ms lookahead scan head in milliseconds.</description>
 		</outlet>
 		<outlet id="2" type="anything">
-			<digest>Outlet 2: Verbose Logging Outlet</digest>
-			<description>Outputs diagnostic information when the verbose attribute is enabled.</description>
+			<digest>Outlet 2: Logging Outlet</digest>
+			<description>Outputs diagnostic information when the log attribute is enabled.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -52,7 +52,7 @@
 		</method>
 		<method name="clear_visualizer">
 			<digest>Clear the visualizer without clearing the buffers</digest>
-			<description>Sends a clear command to the connected visualization script, but does not modify any sample data in the polybuffer~.</description>
+			<description>Sends a clear command to the connected visualization script (only if @visualize is enabled), but does not modify any sample data in the polybuffer~.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
@@ -60,8 +60,15 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
-		<attribute name="verbose" type="long" get="1" set="1" opaque="0">
-			<digest>Enable Verbose Logging</digest>
+		<attribute name="log" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Logging</digest>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="visualize" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Visualization</digest>
+			<description>When enabled (1), the object sends JSON data to the connected visualization script.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>

@@ -32,8 +32,9 @@ typedef struct _threads {
     void *proxy_rescript;
     void *proxy_palette;
     long inlet_num;
-    long verbose;
-    void *verbose_log_outlet;
+    long log;
+    long visualize;
+    void *log_outlet;
     void *signal_outlet;
     t_hashtab *buffer_refs;
     t_buffer_ref *bar_buffer_ref;
@@ -58,7 +59,7 @@ void threads_list(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
-void threads_verbose_log(t_threads *x, const char *fmt, ...);
+void threads_log(t_threads *x, const char *fmt, ...);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void threads_rescript(t_threads *x, t_symbol *dict_name);
 double threads_get_bar_length(t_threads *x);
@@ -102,8 +103,8 @@ void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
     hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
 }
 
-void threads_verbose_log(t_threads *x, const char *fmt, ...) {
-    if (x->verbose && x->verbose_log_outlet) {
+void threads_log(t_threads *x, const char *fmt, ...) {
+    if (x->log && x->log_outlet) {
         char buf[1024];
         char final_buf[1100];
         va_list args;
@@ -111,7 +112,7 @@ void threads_verbose_log(t_threads *x, const char *fmt, ...) {
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
         snprintf(final_buf, 1100, "threads~: %s", buf);
-        outlet_anything(x->verbose_log_outlet, gensym(final_buf), 0, NULL);
+        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
     }
 }
 
@@ -125,8 +126,13 @@ void ext_main(void *r) {
     class_addmethod(c, (method)threads_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)threads_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "verbose", 0, t_threads, verbose);
-    CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Enable Verbose Logging");
+    CLASS_ATTR_LONG(c, "log", 0, t_threads, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_threads, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     CLASS_ATTR_LONG(c, "tracks", 0, t_threads, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
@@ -141,7 +147,8 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         x->poly_prefix = _sym_nothing;
-        x->verbose = 0;
+        x->log = 0;
+        x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_ramp_val = -1.0;
         x->last_scan_val = -1.0;
@@ -164,10 +171,10 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Create outlets from right to left
-        if (x->verbose) {
-            x->verbose_log_outlet = outlet_new((t_object *)x, NULL);
+        if (x->log) {
+            x->log_outlet = outlet_new((t_object *)x, NULL);
         } else {
-            x->verbose_log_outlet = NULL;
+            x->log_outlet = NULL;
         }
         x->signal_outlet = outlet_new((t_object *)x, "signal");
 
@@ -200,10 +207,10 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         x->max_track_seen = 0;
         x->pending_silence = hashtab_new(0);
 
-        if (x->verbose) {
+        if (x->log) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
         }
-        threads_verbose_log(x, "Initialized with %ld tracks", x->max_tracks);
+        threads_log(x, "Initialized with %ld tracks", x->max_tracks);
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);
@@ -274,10 +281,10 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
             case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->verbose) {
+        if (x->log) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
-                case 1: sprintf(s, "Outlet 2 (anything): Verbose Logging Outlet"); break;
+                case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
             }
         } else {
             switch (a) {
@@ -314,7 +321,7 @@ void threads_rescript(t_threads *x, t_symbol *dict_name) {
 
     t_dictionary *dict = dictobj_findregistered_retain(dict_name);
     if (!dict) {
-        threads_verbose_log(x, "CACHING FAILED: dictionary '%s' not found", dict_name->s_name);
+        threads_log(x, "CACHING FAILED: dictionary '%s' not found", dict_name->s_name);
         object_error((t_object *)x, "threads~: could not find dictionary named %s", dict_name->s_name);
         return;
     }
@@ -388,8 +395,8 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
     if (err != MAX_ERR_NONE && offset_ms != 0.0 && palette != gensym("-")) {
-        threads_verbose_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
-        if (offset_ms == -999999.0) {
+        threads_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
+        if (x->visualize && offset_ms == -999999.0) {
              char json[256];
              // Send with num_chans = -1 to indicate unmapped/reach event
              snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": -1, \"val\": %.2f, \"num_chans\": -1}",
@@ -415,7 +422,7 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     t_buffer_obj *b = buffer_ref_getobject(buf_ref);
 
     if (!b) {
-        threads_verbose_log(x, "Error: buffer %s not found", s_bufname->s_name);
+        threads_log(x, "Error: buffer %s not found", s_bufname->s_name);
         return;
     }
 
@@ -439,12 +446,14 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
     // 5. Writing to buffer
 
     // Visualization: Send single packet regardless of buffer bounds (offload work to script)
-    char json[256];
-    // We'll get num_chans here just for visualization, then again inside critical if needed
-    long num_chans_viz = buffer_getchannelcount(b);
-    snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
-             (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
-    visualize(json);
+    if (x->visualize) {
+        char json[256];
+        // We'll get num_chans here just for visualization, then again inside critical if needed
+        long num_chans_viz = buffer_getchannelcount(b);
+        snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
+                 (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
+        visualize(json);
+    }
 
     critical_enter(0);
     long num_frames = buffer_getframecount(b);
@@ -479,17 +488,17 @@ void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, do
             buffer_setdirty(b);
             critical_exit(0);
             if (retries > 0) {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name, retries);
+                threads_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name, retries);
             } else {
-                threads_verbose_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name);
+                threads_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name);
             }
         } else {
             critical_exit(0);
-            threads_verbose_log(x, "WRITE FAILED: Could not lock samples for buffer %s", s_bufname->s_name);
+            threads_log(x, "WRITE FAILED: Could not lock samples for buffer %s", s_bufname->s_name);
         }
     } else {
         critical_exit(0);
-        threads_verbose_log(x, "WRITE SKIPPED: Position %.2f ms out of bounds for buffer %s", bar_ms, s_bufname->s_name);
+        threads_log(x, "WRITE SKIPPED: Position %.2f ms out of bounds for buffer %s", bar_ms, s_bufname->s_name);
     }
 }
 
@@ -525,7 +534,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         // Inlet 2: Palette Configuration
         if (s == gensym("clear")) {
             hashtab_clear(x->palette_map);
-            threads_verbose_log(x, "PALETTE MAP CLEARED: All mappings removed");
+            threads_log(x, "PALETTE MAP CLEARED: All mappings removed");
         } else if (argc >= 1 && (atom_gettype(argv) == A_LONG || atom_gettype(argv) == A_FLOAT)) {
             // Store palette (s) -> index (argv[0])
             t_atom_long index = atom_getlong(argv);
@@ -535,7 +544,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
         if (s == gensym("clear") && argc == 0) {
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
-            threads_verbose_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
+            threads_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
             char bufname[256];
             int i = 1;
             int cleared_count = 0;
@@ -571,28 +580,28 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
                     buffer_setdirty(b);
                     critical_exit(0);
                     if (retries > 0) {
-                        threads_verbose_log(x, "CLEARED BUFFER: %s [Retries: %d]", bufname, retries);
+                        threads_log(x, "CLEARED BUFFER: %s [Retries: %d]", bufname, retries);
                     } else {
-                        threads_verbose_log(x, "CLEARED BUFFER: %s", bufname);
+                        threads_log(x, "CLEARED BUFFER: %s", bufname);
                     }
                     cleared_count++;
                 } else {
                     critical_exit(0);
-                    threads_verbose_log(x, "CLEARING FAILED: Could not lock samples for buffer %s", bufname);
+                    threads_log(x, "CLEARING FAILED: Could not lock samples for buffer %s", bufname);
                 }
                 i++;
             }
             if (temp_ref) object_free(temp_ref);
 
-            threads_verbose_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
+            threads_log(x, "CLEARING END: Total %d buffers cleared", cleared_count);
 
-            visualize("{\"clear\": 1}");
+            if (x->visualize) visualize("{\"clear\": 1}");
             threads_clear_pending_silence(x);
-            threads_verbose_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
+            threads_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
         } else if (s == gensym("clear_visualizer") && argc == 0) {
-            visualize("{\"clear\": 1}");
+            if (x->visualize) visualize("{\"clear\": 1}");
             threads_clear_pending_silence(x);
-            threads_verbose_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
+            threads_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;
@@ -606,7 +615,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv) {
 
 void threads_dsp64(t_threads *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
     if (count[0]) {
-        threads_verbose_log(x, "DSP ON: tracking signal ramp");
+        threads_log(x, "DSP ON: tracking signal ramp");
         dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)threads_perform64, 0, NULL);
     }
 }
@@ -748,21 +757,25 @@ void threads_audio_qtask(t_threads *x) {
                     if (s_start <= s_end) {
                         float *samples = buffer_locksamples(b);
                         if (samples) {
-                            for (long s = s_start; s <= s_end; s++) {
-                                int was_nonzero = 0;
-                                for (long c = 0; c < n_chans; c++) {
-                                    if (samples[s * n_chans + c] != 0.0f) {
-                                        was_nonzero = 1;
-                                        samples[s * n_chans + c] = 0.0f;
+                            if (x->visualize) {
+                                for (long s = s_start; s <= s_end; s++) {
+                                    int was_nonzero = 0;
+                                    for (long c = 0; c < n_chans; c++) {
+                                        if (samples[s * n_chans + c] != 0.0f) {
+                                            was_nonzero = 1;
+                                            samples[s * n_chans + c] = 0.0f;
+                                        }
+                                    }
+                                    if (was_nonzero) {
+                                        double sample_ms = (double)s * 1000.0 / sr;
+                                        char json[256];
+                                        snprintf(json, 256, "{\"track\": %ld, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
+                                                 (long)track, sample_ms, n_chans);
+                                        visualize(json);
                                     }
                                 }
-                                if (was_nonzero) {
-                                    double sample_ms = (double)s * 1000.0 / sr;
-                                    char json[256];
-                                    snprintf(json, 256, "{\"track\": %d, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
-                                             track, sample_ms, n_chans);
-                                    visualize(json);
-                                }
+                            } else {
+                                memset(samples + s_start * n_chans, 0, (s_end - s_start + 1) * n_chans * sizeof(float));
                             }
                             buffer_unlocksamples(b);
                             buffer_setdirty(b);
@@ -799,7 +812,7 @@ void threads_audio_qtask(t_threads *x) {
 
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (!dict) {
-            threads_verbose_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
+            threads_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
             continue;
         }
 
