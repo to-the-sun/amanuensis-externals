@@ -536,6 +536,33 @@ void buildspans_offset(t_buildspans *x, double f) {
     for (long i = 0; i < unique_track_num_count; i++) {
         long track_num_to_process = unique_track_nums[i];
 
+        // Construct the expected target track-offset identifier and check if it already exists
+        char target_track_str[64];
+        snprintf(target_track_str, 64, "%ld-%ld", track_num_to_process, new_rounded_offset);
+        t_symbol *target_track_sym = gensym(target_track_str);
+
+        int target_exists = 0;
+        for (long j = 0; j < num_keys; j++) {
+            char *t_str, *b_str, *p_str;
+            if (parse_hierarchical_key(keys[j], &t_str, &b_str, &p_str)) {
+                if (strcmp(t_str, target_track_sym->s_name) == 0) {
+                    target_exists = 1;
+                    sysmem_freeptr(t_str);
+                    sysmem_freeptr(b_str);
+                    sysmem_freeptr(p_str);
+                    break;
+                }
+                sysmem_freeptr(t_str);
+                sysmem_freeptr(b_str);
+                sysmem_freeptr(p_str);
+            }
+        }
+
+        if (target_exists) {
+            buildspans_log(x, "Target span %s already exists. Skipping duplication for this track.", target_track_sym->s_name);
+            continue;
+        }
+
         // Construct the expected source track-offset identifier
         char source_track_str[64];
         snprintf(source_track_str, 64, "%ld-%ld", track_num_to_process, old_rounded_offset);
