@@ -73,11 +73,13 @@ void ext_main(void *r) {
 void notify_log(t_notify *x, const char *fmt, ...) {
     if (x->log && x->out_log) {
         char buf[1024];
+        char final_buf[1100];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->out_log, gensym(buf), 0, NULL);
+        snprintf(final_buf, 1100, "notify: %s", buf);
+        outlet_anything(x->out_log, gensym(final_buf), 0, NULL);
     }
 }
 
