@@ -160,6 +160,7 @@ typedef struct _buildspans {
     long visualize;
     double local_bar_length;
     long instance_id;
+    t_clock *retry_clock;
 } t_buildspans;
 
 // Function prototypes
@@ -186,7 +187,7 @@ double find_next_offset(t_buildspans *x, long track_num_to_check, double offset_
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
-void buildspans_deferred_init(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_retry_tick(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
 
@@ -437,7 +438,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Hardcode the default buffer name to "bar".
         x->s_buffer_name = gensym("bar");
         x->buffer_ref = buffer_ref_new((t_object *)x, x->s_buffer_name);
-        defer_low(x, (method)buildspans_deferred_init, NULL, 0, NULL);
+
+        x->retry_clock = clock_new(x, (method)buildspans_retry_tick);
+        clock_delay(x->retry_clock, 500);
 
         // Inlets are created from right to left.
         floatin((t_object *)x, 4);  // Local bar length
@@ -467,6 +470,9 @@ void buildspans_free(t_buildspans *x) {
     }
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
+    }
+    if (x->retry_clock) {
+        object_free(x->retry_clock);
     }
 }
 
@@ -1278,20 +1284,28 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
         buildspans_log(x, "Buffer set to: %s", s->s_name);
-        if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
+        if (!buffer_ref_getobject(x->buffer_ref)) {
+            if (s == gensym("bar")) {
+                buildspans_log(x, "Buffer 'bar' not found. Starting retry clock.");
+                clock_delay(x->retry_clock, 500);
+            } else {
+                 object_error((t_object *)x, "buffer~ %s not found", s->s_name);
+            }
         }
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
 }
 
-void buildspans_deferred_init(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (x->buffer_ref && !buffer_ref_getobject(x->buffer_ref)) {
-        if (x->s_buffer_name == gensym("bar")) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
+void buildspans_retry_tick(t_buildspans *x) {
+    if (buffer_ref_getobject(x->buffer_ref)) {
+        buildspans_log(x, "SUCCESS: 'bar' buffer found and bound.");
+        return;
     }
+
+    // Attempt to "kick" the buffer reference by re-setting its name
+    buffer_ref_set(x->buffer_ref, x->s_buffer_name);
+    clock_delay(x->retry_clock, 500);
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {

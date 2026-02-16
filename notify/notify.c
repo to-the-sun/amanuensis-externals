@@ -31,6 +31,8 @@ typedef struct _notify {
     t_buffer_ref *buffer_ref;
     double local_bar_length;
     long instance_id;
+    t_clock *retry_clock;
+    t_symbol *s_bar_name;
 } t_notify;
 
 t_class *notify_class;
@@ -45,7 +47,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 void notify_local_bar_length(t_notify *x, double f);
-void notify_deferred_init(t_notify *x, t_symbol *s, short argc, t_atom *argv);
+void notify_retry_tick(t_notify *x);
 long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
@@ -117,10 +119,15 @@ long notify_get_bar_length(t_notify *x) {
     return bar_length;
 }
 
-void notify_deferred_init(t_notify *x, t_symbol *s, short argc, t_atom *argv) {
-    if (!buffer_ref_getobject(x->buffer_ref)) {
-        object_error((t_object *)x, "bar buffer~ not found");
+void notify_retry_tick(t_notify *x) {
+    if (buffer_ref_getobject(x->buffer_ref)) {
+        notify_log(x, "SUCCESS: 'bar' buffer found and bound.");
+        return;
     }
+
+    // Attempt to "kick" the buffer reference by re-setting its name
+    buffer_ref_set(x->buffer_ref, x->s_bar_name);
+    clock_delay(x->retry_clock, 500);
 }
 
 void notify_local_bar_length(t_notify *x, double f) {
@@ -139,8 +146,12 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->dict_name = gensym("");
         x->log = 0;
         x->out_log = NULL;
-        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        defer_low(x, (method)notify_deferred_init, NULL, 0, NULL);
+        x->s_bar_name = gensym("bar");
+        x->buffer_ref = buffer_ref_new((t_object *)x, x->s_bar_name);
+
+        x->retry_clock = clock_new(x, (method)notify_retry_tick);
+        clock_delay(x->retry_clock, 500);
+
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
 
@@ -168,6 +179,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
 void notify_free(t_notify *x) {
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
+    }
+    if (x->retry_clock) {
+        object_free(x->retry_clock);
     }
 }
 

@@ -20,6 +20,8 @@ typedef struct _crucible {
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
+    t_clock *retry_clock;
+    t_symbol *s_bar_name;
 } t_crucible;
 
 // Function prototypes
@@ -29,7 +31,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
 void crucible_log(t_crucible *x, const char *fmt, ...);
-void crucible_deferred_init(t_crucible *x, t_symbol *s, short argc, t_atom *argv);
+void crucible_retry_tick(t_crucible *x);
 char *crucible_atoms_to_string(long argc, t_atom *argv);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
@@ -146,8 +148,12 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->challenger_dict = dictionary_new();
         x->span_tracker_dict = dictionary_new();
         x->incumbent_dict_name = gensym("");
-        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        defer_low(x, (method)crucible_deferred_init, NULL, 0, NULL);
+        x->s_bar_name = gensym("bar");
+        x->buffer_ref = buffer_ref_new((t_object *)x, x->s_bar_name);
+
+        x->retry_clock = clock_new(x, (method)crucible_retry_tick);
+        clock_delay(x->retry_clock, 500);
+
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
@@ -182,6 +188,9 @@ void crucible_free(t_crucible *x) {
     }
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
+    }
+    if (x->retry_clock) {
+        object_free(x->retry_clock);
     }
 }
 
@@ -455,10 +464,15 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     object_release((t_object *)incumbent_dict);
 }
 
-void crucible_deferred_init(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
-    if (!buffer_ref_getobject(x->buffer_ref)) {
-        object_error((t_object *)x, "bar buffer~ not found");
+void crucible_retry_tick(t_crucible *x) {
+    if (buffer_ref_getobject(x->buffer_ref)) {
+        crucible_log(x, "SUCCESS: 'bar' buffer found and bound.");
+        return;
     }
+
+    // Attempt to "kick" the buffer reference by re-setting its name
+    buffer_ref_set(x->buffer_ref, x->s_bar_name);
+    clock_delay(x->retry_clock, 500);
 }
 
 t_atom_long crucible_get_bar_length(t_crucible *x) {

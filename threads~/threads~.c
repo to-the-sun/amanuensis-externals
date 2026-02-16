@@ -53,6 +53,8 @@ typedef struct _threads {
     t_hashtab *pending_silence;
     double local_bar_length;
     long instance_id;
+    t_clock *retry_clock;
+    t_symbol *s_bar_name;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -62,7 +64,6 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
 void threads_log(t_threads *x, const char *fmt, ...);
-void threads_deferred_init(t_threads *x, t_symbol *s, short argc, t_atom *argv);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void threads_rescript(t_threads *x, t_symbol *dict_name);
 double threads_get_bar_length(t_threads *x);
@@ -71,6 +72,7 @@ void threads_perform64(t_threads *x, t_object *dsp64, double **ins, long numins,
 void threads_audio_qtask(t_threads *x);
 void threads_clear_pending_silence(t_threads *x);
 void threads_schedule_silence(t_threads *x, t_atom_long track, double ms);
+void threads_retry_tick(t_threads *x);
 
 static t_class *threads_class;
 
@@ -106,10 +108,15 @@ void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
     hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
 }
 
-void threads_deferred_init(t_threads *x, t_symbol *s, short argc, t_atom *argv) {
-    if (!buffer_ref_getobject(x->bar_buffer_ref)) {
-        object_error((t_object *)x, "bar buffer~ not found");
+void threads_retry_tick(t_threads *x) {
+    if (buffer_ref_getobject(x->bar_buffer_ref)) {
+        threads_log(x, "SUCCESS: 'bar' buffer found and bound.");
+        return;
     }
+
+    // Attempt to "kick" the buffer reference by re-setting its name
+    buffer_ref_set(x->bar_buffer_ref, x->s_bar_name);
+    clock_delay(x->retry_clock, 500);
 }
 
 void threads_log(t_threads *x, const char *fmt, ...) {
@@ -204,8 +211,11 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         hashtab_flags(x->palette_map, OBJ_FLAG_REF);
 
         x->buffer_refs = hashtab_new(0);
-        x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        defer_low(x, (method)threads_deferred_init, NULL, 0, NULL);
+        x->s_bar_name = gensym("bar");
+        x->bar_buffer_ref = buffer_ref_new((t_object *)x, x->s_bar_name);
+
+        x->retry_clock = clock_new(x, (method)threads_retry_tick);
+        clock_delay(x->retry_clock, 500);
 
         x->proxy_palette = proxy_new(x, 2, &x->inlet_num);
         x->proxy_rescript = proxy_new(x, 1, &x->inlet_num);
@@ -231,6 +241,7 @@ void threads_free(t_threads *x) {
     dsp_free((t_pxobject *)x);
     critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
+    if (x->retry_clock) object_free(x->retry_clock);
 
     object_free(x->proxy_rescript);
     object_free(x->proxy_palette);
