@@ -103,6 +103,7 @@ void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
     hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
 }
 
+// Helper function to send verbose log messages with prefix
 void threads_log(t_threads *x, const char *fmt, ...) {
     if (x->log && x->log_outlet) {
         char buf[1024];

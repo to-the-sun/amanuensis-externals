@@ -194,11 +194,13 @@ void buildspans_local_bar_length(t_buildspans *x, double f);
 void buildspans_log(t_buildspans *x, const char *fmt, ...) {
     if (x->log && x->log_outlet) {
         char buf[1024];
+        char final_buf[1100];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buf, 1024, fmt, args);
         va_end(args);
-        outlet_anything(x->log_outlet, gensym(buf), 0, NULL);
+        snprintf(final_buf, 1100, "buildspans: %s", buf);
+        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
     }
 }
 

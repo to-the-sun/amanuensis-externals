@@ -12,6 +12,7 @@ typedef struct _stemversion {
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
 void stemversion_bang(t_stemversion *x);
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s);
+void stemversion_log(t_stemversion *x, const char *fmt, ...);
 
 t_class *stemversion_class;
 
@@ -48,6 +49,19 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
     return (x);
 }
 
+void stemversion_log(t_stemversion *x, const char *fmt, ...) {
+    if (x->log && x->log_outlet) {
+        char buf[1024];
+        char final_buf[1100];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, 1024, fmt, args);
+        va_end(args);
+        snprintf(final_buf, 1100, "stemversion: %s", buf);
+        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
+    }
+}
+
 void stemversion_bang(t_stemversion *x) {
     time_t rawtime;
     struct tm *timeinfo;
@@ -64,6 +78,7 @@ void stemversion_bang(t_stemversion *x) {
              timeinfo->tm_min,
              timeinfo->tm_sec);
 
+    stemversion_log(x, "Generated timestamp: %s", final_symbol_str);
     outlet_anything(x->outlet, gensym(final_symbol_str), 0, NULL);
 }
 
