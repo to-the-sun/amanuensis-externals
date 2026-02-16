@@ -29,16 +29,16 @@ void growbuffer_do_resize(t_growbuffer *x, t_buffer_obj *b, t_symbol *name, doub
 
 // Helper function to send verbose log messages with prefix
 void growbuffer_log(t_growbuffer *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "growbuffer~: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+	if (x->log && x->log_outlet) {
+		char buf[1024];
+		char final_buf[1100];
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf(buf, 1024, fmt, args);
+		va_end(args);
+		snprintf(final_buf, 1100, "growbuffer~: %s", buf);
+		outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
+	}
 }
 void growbuffer_execute(t_growbuffer *x, double ms, int is_resize);
 

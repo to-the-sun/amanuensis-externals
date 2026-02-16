@@ -91,23 +91,23 @@ void createproject_create(t_createproject *x, t_symbol *s) {
         return;
     }
 
-    createproject_log(x, "Received path %s", dest_path_max);
+    post("createproject: Received path %s", dest_path_max);
     convert_path_to_windows(dest_path_max, dest_path_win);
-    createproject_log(x, "Converted path to %s", dest_path_win);
+    post("createproject: Converted path to %s", dest_path_win);
 
     if (!CreateDirectoryA(dest_path_win, NULL)) {
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            createproject_log(x, "Directory already exists: %s", dest_path_win);
+            post("createproject: Directory already exists: %s", dest_path_win);
         } else {
             object_error((t_object *)x, "Failed to create directory: %s (Error %ld)", dest_path_win, GetLastError());
             return;
         }
     } else {
-        createproject_log(x, "Successfully created directory: %s", dest_path_win);
+        post("createproject: Successfully created directory: %s", dest_path_win);
     }
 
     copy_directory_recursively(x, template_path, dest_path_win);
-    createproject_log(x, "Project creation complete.");
+    post("createproject: Project creation complete.");
 }
 
 void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
@@ -161,14 +161,14 @@ void copy_directory_recursively(t_createproject *x, const char *src_dir, const c
 
             if (find_file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 if (CreateDirectoryA(dest_path, NULL)) {
-                    createproject_log(x, "Created subdirectory %s", dest_path);
+                    post("createproject: Created subdirectory %s", dest_path);
                     copy_directory_recursively(x, src_path, dest_path);
                 } else {
                     object_error((t_object *)x, "Failed to create subdirectory %s (Error %ld)", dest_path, GetLastError());
                 }
             } else {
                 if (CopyFileA(src_path, dest_path, FALSE)) {
-                    createproject_log(x, "Copied %s to %s", src_path, dest_path);
+                    post("createproject: Copied %s to %s", src_path, dest_path);
                 } else {
                     object_error((t_object *)x, "Failed to copy file %s (Error %ld)", src_path, GetLastError());
                 }

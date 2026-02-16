@@ -20,7 +20,7 @@ void whichoffset_int(t_whichoffset *x, long n);
 void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv);
 void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s);
 void whichoffset_log(t_whichoffset *x, const char *fmt, ...);
-void whichoffset_print_dict(t_whichoffset *x, t_dictionary *d, int indent);
+void whichoffset_print_dict(t_dictionary *d, int indent);
 t_max_err dictionary_getatoms_nested(t_dictionary *d, const char *path, long *argc, t_atom **argv);
 int compare_doubles(const void *a, const void *b);
 void dictionary_to_json_string_recursive(t_dictionary *d, char **str, long *len, long *capacity);
@@ -106,7 +106,7 @@ void whichoffset_log(t_whichoffset *x, const char *fmt, ...) {
 
 void whichoffset_int(t_whichoffset *x, long n) {
     x->track = n;
-    whichoffset_log(x, "track set to %ld", n);
+    post("whichoffset: track set to %ld", n);
 }
 
 void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
@@ -121,7 +121,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    whichoffset_log(x, "received %ld timestamps", argc);
+    post("whichoffset: received %ld timestamps", argc);
     long min_ts = atom_getlong(argv);
     long max_ts = atom_getlong(argv);
     for (long i = 1; i < argc; i++) {
@@ -129,7 +129,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         if (current_ts < min_ts) min_ts = current_ts;
         if (current_ts > max_ts) max_ts = current_ts;
     }
-    whichoffset_log(x, "min_ts %ld, max_ts %ld", min_ts, max_ts);
+    post("whichoffset: min_ts %ld, max_ts %ld", min_ts, max_ts);
 
     char min_path[256], max_path[256];
     snprintf(min_path, 256, "%ld::%ld::absolutes", x->track, min_ts);
@@ -166,7 +166,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         double current_val = atom_getfloat(max_abs_ts_atoms + i);
         if(current_val > max_abs_ts) max_abs_ts = current_val;
     }
-    whichoffset_log(x, "min_abs_ts %f, max_abs_ts %f", min_abs_ts, max_abs_ts);
+    post("whichoffset: min_abs_ts %f, max_abs_ts %f", min_abs_ts, max_abs_ts);
 
     if (min_abs_ts_atoms) sysmem_freeptr(min_abs_ts_atoms);
     if (max_abs_ts_atoms) sysmem_freeptr(max_abs_ts_atoms);
@@ -188,7 +188,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
     }
     
     if (gathered_offsets_count == 0) {
-        whichoffset_log(x, "span: no offsets found");
+        object_post((t_object *)x, "span: no offsets found");
         sysmem_freeptr(gathered_offsets);
         object_free(dict);
         return;
@@ -196,13 +196,13 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
 
     qsort(gathered_offsets, gathered_offsets_count, sizeof(double), compare_doubles);
     
-    char offsets_str[1024] = "gathered offsets: ";
+    char offsets_str[1024] = "whichoffset: gathered offsets: ";
     for (int i=0; i < gathered_offsets_count; i++) {
         char temp[32];
         snprintf(temp, 32, "%.2f ", gathered_offsets[i]);
         strcat(offsets_str, temp);
     }
-    whichoffset_log(x, "%s", offsets_str);
+    post(offsets_str);
     
     double loop_length = 0;
     if (gathered_offsets_count > 1) {
@@ -219,10 +219,10 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         }
     }
     
-    whichoffset_log(x, "loop_length %f", loop_length);
+    post("whichoffset: loop_length %f", loop_length);
     
     if (loop_length == 0 && gathered_offsets_count > 0) {
-        whichoffset_log(x, "only one unique offset, outputting %f", gathered_offsets[0]);
+        post("whichoffset: only one unique offset, outputting %f", gathered_offsets[0]);
         outlet_float(x->outlet, gathered_offsets[0]);
         sysmem_freeptr(gathered_offsets);
         object_free(dict);
@@ -237,7 +237,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
         double max_value = fmax(0, max_abs_ts - (gathered_offsets[i] + loop_length));
         double sum = min_value + max_value;
         
-        whichoffset_log(x, "offset %f, excess before start: %f, excess after end: %f",
+        post("whichoffset: offset %f, excess before start: %f, excess after end: %f",
              gathered_offsets[i], min_value, max_value);
 
         if (smallest_index == -1 || sum < smallest_sum) {
@@ -247,7 +247,7 @@ void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (smallest_index != -1) {
-        whichoffset_log(x, "optimal offset is %f", gathered_offsets[smallest_index]);
+        post("whichoffset: optimal offset is %f", gathered_offsets[smallest_index]);
         outlet_float(x->outlet, gathered_offsets[smallest_index]);
     }
     
@@ -479,7 +479,7 @@ t_max_err dictionary_getatoms_nested(t_dictionary *d, const char *path, long *ar
     return MAX_ERR_GENERIC; 
 }
 
-void whichoffset_print_dict(t_whichoffset *x, t_dictionary *d, int indent) {
+void whichoffset_print_dict(t_dictionary *d, int indent) {
     long numkeys;
     t_symbol **keys;
     long i;
@@ -494,24 +494,24 @@ void whichoffset_print_dict(t_whichoffset *x, t_dictionary *d, int indent) {
             memset(indent_str, ' ', indent * 2);
             indent_str[indent * 2] = 0;
 
-            whichoffset_log(x, "%s%s:", indent_str, keys[i]->s_name);
+            post("%s%s:", indent_str, keys[i]->s_name);
 
             dictionary_getatoms(d, keys[i], &argc, &argv);
 
             if (argc > 0 && atom_gettype(argv) == A_OBJ && object_classname(atom_getobj(argv)) == gensym("dictionary")) {
                 t_dictionary *subdict = (t_dictionary *)atom_getobj(argv);
-                whichoffset_print_dict(x, subdict, indent + 1);
+                whichoffset_print_dict(subdict, indent + 1);
             } else {
                 for (int j = 0; j < argc; j++) {
                     switch (atom_gettype(argv + j)) {
                         case A_LONG:
-                            whichoffset_log(x, "%s  %ld", indent_str, atom_getlong(argv + j));
+                            post("%s  %ld", indent_str, atom_getlong(argv + j));
                             break;
                         case A_FLOAT:
-                            whichoffset_log(x, "%s  %f", indent_str, atom_getfloat(argv + j));
+                            post("%s  %f", indent_str, atom_getfloat(argv + j));
                             break;
                         case A_SYM:
-                            whichoffset_log(x, "%s  %s", indent_str, atom_getsym(argv + j)->s_name);
+                            post("%s  %s", indent_str, atom_getsym(argv + j)->s_name);
                             break;
                         default:
                             break;

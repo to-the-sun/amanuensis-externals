@@ -211,7 +211,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->log) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
         }
-        threads_log(x, "Initialized with %ld tracks", x->max_tracks);
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);

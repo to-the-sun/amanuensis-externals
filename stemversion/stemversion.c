@@ -78,7 +78,6 @@ void stemversion_bang(t_stemversion *x) {
              timeinfo->tm_min,
              timeinfo->tm_sec);
 
-    stemversion_log(x, "Generated timestamp: %s", final_symbol_str);
     outlet_anything(x->outlet, gensym(final_symbol_str), 0, NULL);
 }
 
