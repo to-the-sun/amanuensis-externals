@@ -18,6 +18,12 @@ typedef struct _note {
     t_symbol *palette;
 } t_note;
 
+typedef struct _bar {
+    t_symbol *palette;
+    t_symbol *track;
+    double bar_ts;
+} t_bar;
+
 typedef struct _notify {
     t_object s_obj;
     t_symbol *dict_name;
@@ -43,6 +49,7 @@ void notify_fill(t_notify *x);
 t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
+int bar_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 void notify_local_bar_length(t_notify *x, double f);
 long notify_get_bar_length(t_notify *x);
@@ -167,8 +174,30 @@ t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, v
 int note_compare(const void *a, const void *b) {
     t_note *noteA = (t_note *)a;
     t_note *noteB = (t_note *)b;
+
+    // Primary sort: palette (alphanumeric)
+    int palette_cmp = strcmp(noteA->palette->s_name, noteB->palette->s_name);
+    if (palette_cmp != 0) return palette_cmp;
+
+    // Secondary sort: absolute timestamp
     if (noteA->absolute < noteB->absolute) return -1;
     if (noteA->absolute > noteB->absolute) return 1;
+
+    return 0;
+}
+
+int bar_compare(const void *a, const void *b) {
+    t_bar *barA = (t_bar *)a;
+    t_bar *barB = (t_bar *)b;
+
+    // Primary sort: palette (alphanumeric)
+    int palette_cmp = strcmp(barA->palette->s_name, barB->palette->s_name);
+    if (palette_cmp != 0) return palette_cmp;
+
+    // Secondary sort: bar timestamp
+    if (barA->bar_ts < barB->bar_ts) return -1;
+    if (barA->bar_ts > barB->bar_ts) return 1;
+
     return 0;
 }
 
@@ -323,6 +352,18 @@ void notify_fill(t_notify *x) {
 
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
+    // Verbose Manifest Logging
+    if (x->log && x->out_log) {
+        for (long i = 0; i < total_notes; i++) {
+            notify_log(x, "Note Manifest: palette %s, absolute %.2f, score %.2f, track %s, offset %.2f",
+                all_notes[i].palette->s_name,
+                all_notes[i].absolute,
+                all_notes[i].score,
+                (all_notes[i].track && all_notes[i].track != gensym("")) ? all_notes[i].track->s_name : "0",
+                all_notes[i].offset);
+        }
+    }
+
     for (long i = 0; i < total_notes; i++) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
         if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
@@ -358,6 +399,11 @@ void notify_bang(t_notify *x) {
     long total_notes = 0;
     long notes_capacity = 100;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
+
+    t_bar *all_bars = NULL;
+    long total_bars = 0;
+    long bars_capacity = 50;
+    all_bars = (t_bar *)sysmem_newptr(sizeof(t_bar) * bars_capacity);
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -397,22 +443,30 @@ void notify_bang(t_notify *x) {
                 palette = atom_getsym(&palette_atom);
             }
 
-            // Output descript message for THIS bar
-            t_atom descript_list[3];
-            long track_val = (track_sym == NULL || track_sym == gensym("")) ? 0 : atol(track_sym->s_name);
-            atom_setlong(&descript_list[0], track_val);
-            atom_setfloat(&descript_list[1], bar_ts);
-            atom_setfloat(&descript_list[2], 0.0);
-            outlet_anything(x->out_descript, palette, 3, descript_list);
+            // Collect THIS bar
+            if (total_bars >= bars_capacity) {
+                bars_capacity *= 2;
+                all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
+            }
+            all_bars[total_bars].palette = palette;
+            all_bars[total_bars].track = track_sym;
+            all_bars[total_bars].bar_ts = bar_ts;
+            total_bars++;
 
-            // Handle NEXT bar descript
+            // Collect NEXT bar if needed
             if (bar_length > 0) {
                 double next_bar_ts = bar_ts + bar_length;
                 char next_bar_str[64];
                 snprintf(next_bar_str, 64, "%ld", (long)next_bar_ts);
                 if (!dictionary_hasentry(track_dict, gensym(next_bar_str))) {
-                    atom_setfloat(&descript_list[1], next_bar_ts);
-                    outlet_anything(x->out_descript, palette, 3, descript_list);
+                    if (total_bars >= bars_capacity) {
+                        bars_capacity *= 2;
+                        all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
+                    }
+                    all_bars[total_bars].palette = palette;
+                    all_bars[total_bars].track = track_sym;
+                    all_bars[total_bars].bar_ts = next_bar_ts;
+                    total_bars++;
                 }
             }
 
@@ -468,11 +522,42 @@ void notify_bang(t_notify *x) {
     }
     if (track_keys) sysmem_freeptr(track_keys);
 
+    // Sort everything
+    if (total_bars > 1) qsort(all_bars, total_bars, sizeof(t_bar), bar_compare);
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
+
+    // Verbose Manifest Logging
+    if (x->log && x->out_log) {
+        for (long i = 0; i < total_bars; i++) {
+            notify_log(x, "Bar Manifest: palette %s, track %s, bar_ts %.2f",
+                all_bars[i].palette->s_name,
+                (all_bars[i].track && all_bars[i].track != gensym("")) ? all_bars[i].track->s_name : "0",
+                all_bars[i].bar_ts);
+        }
+        for (long i = 0; i < total_notes; i++) {
+            notify_log(x, "Note Manifest: palette %s, absolute %.2f, score %.2f, track %s, offset %.2f",
+                all_notes[i].palette->s_name,
+                all_notes[i].absolute,
+                all_notes[i].score,
+                (all_notes[i].track && all_notes[i].track != gensym("")) ? all_notes[i].track->s_name : "0",
+                all_notes[i].offset);
+        }
+    }
+
+    // Output sorted bars
+    for (long i = 0; i < total_bars; i++) {
+        t_atom descript_list[3];
+        long track_val = (all_bars[i].track == NULL || all_bars[i].track == gensym("")) ? 0 : atol(all_bars[i].track->s_name);
+        atom_setlong(&descript_list[0], track_val);
+        atom_setfloat(&descript_list[1], all_bars[i].bar_ts);
+        atom_setfloat(&descript_list[2], 0.0);
+        outlet_anything(x->out_descript, all_bars[i].palette, 3, descript_list);
+    }
 
     dictionary_clear(dict);
     notify_log(x, "Dictionary cleared.");
 
+    // Output sorted notes
     for (long i = 0; i < total_notes; i++) {
         outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
         if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
@@ -488,30 +573,31 @@ void notify_bang(t_notify *x) {
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
+    if (all_bars) sysmem_freeptr(all_bars);
     object_release((t_object *)dict);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump");
+        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump. Sorted by Palette then Timestamp.");
         else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
     } else {
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list)"); break;
+                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list). Sorted by Palette then Absolute Timestamp."); break;
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Palette then Bar Timestamp."); break;
                 case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list)"); break;
+                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list). Sorted by Palette then Absolute Timestamp."); break;
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0"); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Palette then Bar Timestamp."); break;
             }
         }
     }
