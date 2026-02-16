@@ -45,6 +45,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 void notify_local_bar_length(t_notify *x, double f);
+void notify_deferred_init(t_notify *x, t_symbol *s, short argc, t_atom *argv);
 long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
@@ -110,6 +111,12 @@ long notify_get_bar_length(t_notify *x) {
     return bar_length;
 }
 
+void notify_deferred_init(t_notify *x, t_symbol *s, short argc, t_atom *argv) {
+    if (!buffer_ref_getobject(x->buffer_ref)) {
+        object_error((t_object *)x, "bar buffer~ not found");
+    }
+}
+
 void notify_local_bar_length(t_notify *x, double f) {
     if (f <= 0) {
         x->local_bar_length = 0;
@@ -127,9 +134,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->out_log = NULL;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        if (!buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
+        defer_low(x, (method)notify_deferred_init, NULL, 0, NULL);
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
 

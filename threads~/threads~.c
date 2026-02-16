@@ -60,6 +60,7 @@ void threads_anything(t_threads *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err threads_notify(t_threads *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void threads_assist(t_threads *x, void *b, long m, long a, char *s);
 void threads_log(t_threads *x, const char *fmt, ...);
+void threads_deferred_init(t_threads *x, t_symbol *s, short argc, t_atom *argv);
 void threads_process_data(t_threads *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void threads_rescript(t_threads *x, t_symbol *dict_name);
 double threads_get_bar_length(t_threads *x);
@@ -101,6 +102,12 @@ void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
     }
     // Store track as a pointer key
     hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
+}
+
+void threads_deferred_init(t_threads *x, t_symbol *s, short argc, t_atom *argv) {
+    if (!buffer_ref_getobject(x->bar_buffer_ref)) {
+        object_error((t_object *)x, "bar buffer~ not found");
+    }
 }
 
 void threads_log(t_threads *x, const char *fmt, ...) {
@@ -196,9 +203,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->buffer_refs = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        if (!buffer_ref_getobject(x->bar_buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
+        defer_low(x, (method)threads_deferred_init, NULL, 0, NULL);
 
         x->proxy_palette = proxy_new(x, 2, &x->inlet_num);
         x->proxy_rescript = proxy_new(x, 1, &x->inlet_num);

@@ -186,6 +186,7 @@ double find_next_offset(t_buildspans *x, long track_num_to_check, double offset_
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_to_output);
 void buildspans_output_span_data(t_buildspans *x, t_symbol *track_sym, t_atomarray *span_atom_array);
 long buildspans_get_bar_length(t_buildspans *x);
+void buildspans_deferred_init(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
 
@@ -428,6 +429,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 
         // Hardcode the default buffer name to "bar".
         buildspans_set_bar_buffer(x, gensym("bar"));
+        defer_low(x, (method)buildspans_deferred_init, NULL, 0, NULL);
 
         // Inlets are created from right to left.
         floatin((t_object *)x, 4);  // Local bar length
@@ -1268,11 +1270,16 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
         buildspans_log(x, "Buffer set to: %s", s->s_name);
-        if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
+    }
+}
+
+void buildspans_deferred_init(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (x->buffer_ref && !buffer_ref_getobject(x->buffer_ref)) {
+        if (x->s_buffer_name == gensym("bar")) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
     }
 }
 
