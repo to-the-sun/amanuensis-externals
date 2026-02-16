@@ -84,9 +84,11 @@ long notify_get_bar_length(t_notify *x) {
         return (long)x->local_bar_length;
     }
 
+    notify_log(x, "Internal bar_length is not set, attempting to retrieve from buffer 'bar'...");
+
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        notify_log(x, "bar buffer~ not found");
+        notify_log(x, "'bar' buffer object not found.");
         return 0;
     }
 
@@ -101,11 +103,15 @@ long notify_get_bar_length(t_notify *x) {
         critical_exit(0);
     } else {
         critical_exit(0);
+        notify_log(x, "Failed to lock samples for 'bar' buffer.");
     }
 
     if (bar_length > 0) {
         x->local_bar_length = (double)bar_length;
         notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+        notify_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+    } else {
+        notify_log(x, "Retrieved bar_length is zero or negative (%ld).", bar_length);
     }
 
     return bar_length;

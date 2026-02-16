@@ -51,6 +51,8 @@ typedef struct _threads {
     long max_track_seen;
     long max_tracks;
     t_hashtab *pending_silence;
+    double local_bar_length;
+    long instance_id;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -211,6 +213,8 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->max_track_seen = 0;
         x->pending_silence = hashtab_new(0);
+        x->local_bar_length = 0;
+        x->instance_id = 1000 + (rand() % 9000);
 
         if (x->log) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
@@ -300,6 +304,12 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
 }
 
 double threads_get_bar_length(t_threads *x) {
+    if (x->local_bar_length > 0) {
+        return x->local_bar_length;
+    }
+
+    threads_log(x, "Internal bar_length is not set, attempting to retrieve from buffer 'bar'...");
+
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
     if (b) {
@@ -310,9 +320,21 @@ double threads_get_bar_length(t_threads *x) {
                 bar_length = (double)samples[0];
             }
             buffer_unlocksamples(b);
+            critical_exit(0);
+        } else {
+            critical_exit(0);
+            threads_log(x, "Failed to lock samples for 'bar' buffer.");
         }
-        critical_exit(0);
+    } else {
+        threads_log(x, "'bar' buffer not found.");
     }
+
+    if (bar_length > 0) {
+        x->local_bar_length = bar_length;
+        threads_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)bar_length);
+        threads_log(x, "Retrieved bar length %ld from buffer and cached it.", (long)bar_length);
+    }
+
     return bar_length;
 }
 

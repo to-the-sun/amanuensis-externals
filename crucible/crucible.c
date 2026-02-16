@@ -466,9 +466,11 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
         return (t_atom_long)x->local_bar_length;
     }
 
+    crucible_log(x, "Internal bar_length is not set, attempting to retrieve from buffer 'bar'...");
+
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        object_error((t_object *)x, "bar buffer~ not found");
+        crucible_log(x, "'bar' buffer object not found.");
         return 0;
     }
 
@@ -483,11 +485,15 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
         critical_exit(0);
     } else {
         critical_exit(0);
+        crucible_log(x, "Failed to lock samples for 'bar' buffer.");
     }
 
     if (bar_length > 0) {
         x->local_bar_length = (double)bar_length;
         crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
+        crucible_log(x, "Retrieved bar length %lld from buffer and cached it.", (long long)bar_length);
+    } else {
+        crucible_log(x, "Retrieved bar_length is zero or negative (%lld).", (long long)bar_length);
     }
 
     return bar_length;

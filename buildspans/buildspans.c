@@ -212,12 +212,17 @@ long buildspans_get_bar_length(t_buildspans *x) {
     if (x->local_bar_length > 0) {
         return (long)x->local_bar_length;
     }
+
+    buildspans_log(x, "Internal bar_length is not set, attempting to retrieve from buffer 'bar'...");
+
     if (!x->buffer_ref) {
+        buildspans_log(x, "Buffer reference not initialized.");
         return -1; // Buffer name not set.
     }
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        buildspans_log(x, "'bar' buffer object not found.");
         return -1; // Buffer object not found.
     }
 
@@ -232,9 +237,11 @@ long buildspans_get_bar_length(t_buildspans *x) {
         critical_exit(0);
     } else {
         critical_exit(0);
+        buildspans_log(x, "Failed to lock samples for 'bar' buffer.");
     }
 
     if (bar_length <= 0) {
+        buildspans_log(x, "Retrieved bar_length is zero or negative (%ld).", bar_length);
         return -1; // Value in buffer is not positive.
     }
 
