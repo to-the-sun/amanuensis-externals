@@ -4,6 +4,7 @@
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "../shared/logging.h"
 #include <string.h>
 
 typedef struct _crucible {
@@ -40,16 +41,10 @@ t_atom_long crucible_get_bar_length(t_crucible *x);
 t_class *crucible_class;
 
 void crucible_log(t_crucible *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "crucible: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "crucible", fmt, args);
+    va_end(args);
 }
 
 char *crucible_atoms_to_string(long argc, t_atom *argv) {

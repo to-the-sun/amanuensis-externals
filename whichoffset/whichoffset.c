@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "../shared/visualize.h"
+#include "../shared/logging.h"
 
 typedef struct _whichoffset {
     t_object s_obj;
@@ -92,16 +93,10 @@ void whichoffset_bang(t_whichoffset *x) {
 }
 
 void whichoffset_log(t_whichoffset *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "whichoffset: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "whichoffset", fmt, args);
+    va_end(args);
 }
 
 void whichoffset_int(t_whichoffset *x, long n) {

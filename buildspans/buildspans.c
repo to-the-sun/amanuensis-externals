@@ -5,6 +5,7 @@
 #include "ext_buffer.h"
 #include "ext_critical.h"
 #include "../shared/visualize.h"
+#include "../shared/logging.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
@@ -192,16 +193,10 @@ void buildspans_local_bar_length(t_buildspans *x, double f);
 
 // Helper function to send verbose log messages
 void buildspans_log(t_buildspans *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "buildspans: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "buildspans", fmt, args);
+    va_end(args);
 }
 
 t_class *buildspans_class;

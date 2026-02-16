@@ -1,5 +1,6 @@
 #include "ext.h"
 #include "ext_obex.h"
+#include "../shared/logging.h"
 #include <windows.h>
 
 typedef struct _createproject {
@@ -34,16 +35,10 @@ void ext_main(void *r) {
 }
 
 void createproject_log(t_createproject *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "createproject: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "createproject", fmt, args);
+    va_end(args);
 }
 
 void convert_path_to_windows(const char* max_path, char* win_path) {
