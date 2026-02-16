@@ -13,8 +13,8 @@
 		<inlet id="1" type="bang/fill">
 			<digest>Inlet 1: Control inlet</digest>
 			<description>
-				- bang: Dumps all notes in the dictionary, sorted by absolute timestamp.
-				- fill: Performs a specialized dump that synthesizes notes to match the reach of the longest track.
+				- bang: Dumps all notes in the dictionary, sorted by palette and then by absolute timestamp.
+				- fill: Performs a specialized dump that synthesizes notes to match the reach of the longest track, sorted by palette and then by absolute timestamp.
 			</description>
 		</inlet>
 		<inlet id="2" type="float">
@@ -59,11 +59,11 @@
 	<methodlist>
 		<method name="bang">
 			<digest>Dump dictionary</digest>
-			<description>Dumps all note data in chronological order.</description>
+			<description>Dumps all note data sorted by palette then by absolute timestamp.</description>
 		</method>
 		<method name="fill">
 			<digest>Synthesized dump</digest>
-			<description>Dumps data while filling gaps to match global song reach.</description>
+			<description>Dumps data while filling gaps to match global song reach, sorted by palette then by absolute timestamp.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
