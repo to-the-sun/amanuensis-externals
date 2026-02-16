@@ -428,7 +428,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Hardcode the default buffer name to "bar".
-        buildspans_set_bar_buffer(x, gensym("bar"));
+        x->s_buffer_name = gensym("bar");
+        x->buffer_ref = buffer_ref_new((t_object *)x, x->s_buffer_name);
         defer_low(x, (method)buildspans_deferred_init, NULL, 0, NULL);
 
         // Inlets are created from right to left.
@@ -1270,6 +1271,9 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
         buildspans_log(x, "Buffer set to: %s", s->s_name);
+        if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
+            object_error((t_object *)x, "bar buffer~ not found");
+        }
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
