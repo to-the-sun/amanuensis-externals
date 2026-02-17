@@ -19,7 +19,8 @@ FPS = 60
 
 # State (shared between threads; guarded by lock)
 state = {
-    "palettes": {}
+    "palettes": {},
+    "bar_length": 125.0
 }
 state_lock = threading.Lock()
 
@@ -31,13 +32,16 @@ def process_pkt(text):
         with state_lock:
             if "palettes" in pkt:
                 state["palettes"] = pkt["palettes"]
-            elif "building" in pkt:
+
+            if "bar_length" in pkt:
+                state["bar_length"] = float(pkt["bar_length"])
+
+            if "building" in pkt and "palettes" not in pkt:
                 # Compatibility for single-palette packets
                 state["palettes"] = {
                     "default": {
                         "building": pkt["building"],
-                        "current_offset": pkt.get("current_offset", 0.0),
-                        "bar_length": pkt.get("bar_length", 125.0)
+                        "current_offset": pkt.get("current_offset", 0.0)
                     }
                 }
     except json.JSONDecodeError as e:
@@ -117,6 +121,7 @@ def run_gui():
             # Take a thread-safe snapshot of state to use in rendering
             with state_lock:
                 palettes = state.get("palettes", {})
+                bar_length = state.get("bar_length", 125.0)
 
             # background
             screen.fill(BACKGROUND)
@@ -140,7 +145,6 @@ def run_gui():
                 p_data = palettes[p_name]
                 working_memory = p_data.get("building", {})
                 current_offset = p_data.get("current_offset", 0.0)
-                bar_length = p_data.get("bar_length", 125.0)
 
                 p_top = 40 + p_idx * palette_h
                 p_timeline_h = palette_h * 0.8

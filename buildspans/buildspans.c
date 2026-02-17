@@ -339,14 +339,10 @@ void buildspans_visualize_memory(t_buildspans *x) {
         t_dictionary *d = NULL;
         if (dictionary_getdictionary(x->palette_states, palette_sym, (t_object **)&d) == MAX_ERR_NONE) {
             dictionary_getfloat(d, gensym("current_offset"), &pal_current_offset);
-            double pal_local_bar_length;
-            if (dictionary_getfloat(d, gensym("local_bar_length"), &pal_local_bar_length) == MAX_ERR_NONE && pal_local_bar_length > 0) {
-                pal_bar_length = (long)pal_local_bar_length;
-            }
         }
 
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"current_offset\":%.2f,\"bar_length\":%ld,\"building\":{",
-                            palette_sym->s_name, pal_current_offset, pal_bar_length);
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"current_offset\":%.2f,\"building\":{",
+                            palette_sym->s_name, pal_current_offset);
 
         for (long i = 0; i < unique_track_count; i++) {
             t_symbol *track_sym = unique_tracks[i];
@@ -440,7 +436,8 @@ void buildspans_visualize_memory(t_buildspans *x) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
         sysmem_freeptr(unique_tracks);
     }
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+    long bar_length = buildspans_get_bar_length(x);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"bar_length\":%ld}", bar_length);
 
     visualize(json_buffer);
 
@@ -733,7 +730,6 @@ void buildspans_save_current_state(t_buildspans *x) {
 
     dictionary_appendlong(d, gensym("current_track"), x->current_track);
     dictionary_appendfloat(d, gensym("current_offset"), x->current_offset);
-    dictionary_appendfloat(d, gensym("local_bar_length"), x->local_bar_length);
 }
 
 void buildspans_load_state_for_palette(t_buildspans *x, t_symbol *palette_sym) {
@@ -743,12 +739,10 @@ void buildspans_load_state_for_palette(t_buildspans *x, t_symbol *palette_sym) {
         dictionary_getlong(d, gensym("current_track"), &temp_track);
         x->current_track = (long)temp_track;
         dictionary_getfloat(d, gensym("current_offset"), &x->current_offset);
-        dictionary_getfloat(d, gensym("local_bar_length"), &x->local_bar_length);
     } else {
         // Defaults if no state exists for this palette
         x->current_track = 0;
         x->current_offset = 0.0;
-        x->local_bar_length = 0;
     }
     x->current_palette = palette_sym;
 }
