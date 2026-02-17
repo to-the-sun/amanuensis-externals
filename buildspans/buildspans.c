@@ -161,6 +161,7 @@ typedef struct _buildspans {
     long visualize;
     double local_bar_length;
     long instance_id;
+    long bar_warn_sent;
 } t_buildspans;
 
 // Function prototypes
@@ -214,8 +215,19 @@ long buildspans_get_bar_length(t_buildspans *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(x->buffer_ref, _sym_nothing);
+        buffer_ref_set(x->buffer_ref, (x->s_buffer_name && x->s_buffer_name != _sym_nothing) ? x->s_buffer_name : gensym("bar"));
+        b = buffer_ref_getobject(x->buffer_ref);
+    }
+    if (!b) {
         return -1; // Buffer object not found.
     }
+    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
 
     long bar_length = 0;
     critical_enter(0);
@@ -419,6 +431,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
+        x->bar_warn_sent = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);

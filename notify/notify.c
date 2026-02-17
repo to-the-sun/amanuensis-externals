@@ -38,6 +38,7 @@ typedef struct _notify {
     t_buffer_ref *buffer_ref;
     double local_bar_length;
     long instance_id;
+    long bar_warn_sent;
 } t_notify;
 
 t_class *notify_class;
@@ -89,9 +90,20 @@ long notify_get_bar_length(t_notify *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(x->buffer_ref, _sym_nothing);
+        buffer_ref_set(x->buffer_ref, gensym("bar"));
+        b = buffer_ref_getobject(x->buffer_ref);
+    }
+    if (!b) {
         notify_log(x, "bar buffer~ not found");
         return 0;
     }
+    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
 
     long bar_length = 0;
     critical_enter(0);
@@ -136,6 +148,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
+        x->bar_warn_sent = 0;
 
         attr_args_process(x, argc, argv);
 
