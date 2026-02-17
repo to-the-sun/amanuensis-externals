@@ -223,6 +223,7 @@ void notify_fill(t_notify *x) {
     dictionary_getkeys(dict, &num_tracks, &track_keys);
 
     double max_bar_all = -1.0;
+    t_symbol *longest_track = NULL;
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict);
@@ -233,7 +234,10 @@ void notify_fill(t_notify *x) {
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
         for (long j = 0; j < num_bars; j++) {
             double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts > max_bar_all) max_bar_all = bar_ts;
+            if (bar_ts > max_bar_all) {
+                max_bar_all = bar_ts;
+                longest_track = track_keys[i];
+            }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
@@ -250,7 +254,7 @@ void notify_fill(t_notify *x) {
     long total_synthetic_added = 0;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    notify_log(x, "Fill: processing %ld tracks. Global max bar timestamp: %.2f", num_tracks, max_bar_all);
+    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms defined by track %s.", num_tracks, max_bar_all, longest_track ? longest_track->s_name : "none");
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -267,9 +271,11 @@ void notify_fill(t_notify *x) {
             if (bar_ts > max_bar_this) max_bar_this = bar_ts;
         }
 
-        if (max_bar_this < max_bar_all && max_bar_this > 0) {
+        if (max_bar_this == max_bar_all) {
+            notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
+        } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
             long synthetic_added_this_track = 0;
-            notify_log(x, "Track %s grew by %.2f ms (%.2f -> %.2f)", track_sym->s_name, max_bar_all - max_bar_this, max_bar_this, max_bar_all);
+            notify_log(x, "Track %s is being grown to match %.2f (original length %.2f).", track_sym->s_name, max_bar_all, max_bar_this);
             for (long n = 1; ; n++) {
                 int notes_added_this_pass = 0;
                 for (long j = 0; j < num_bars; j++) {
