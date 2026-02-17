@@ -5,6 +5,7 @@
 #include "ext_atomarray.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "../shared/logging.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -75,14 +76,10 @@ void ext_main(void *r) {
 }
 
 void notify_log(t_notify *x, const char *fmt, ...) {
-    if (x->log && x->out_log) {
-        char buf[1024];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        outlet_anything(x->out_log, gensym(buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->out_log, x->log, "notify", fmt, args);
+    va_end(args);
 }
 
 long notify_get_bar_length(t_notify *x) {

@@ -2,6 +2,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "../shared/visualize.h"
+#include "../shared/logging.h"
 
 typedef struct _whichoffset {
     t_object s_obj;
@@ -19,6 +20,7 @@ void whichoffset_bang(t_whichoffset *x);
 void whichoffset_int(t_whichoffset *x, long n);
 void whichoffset_span(t_whichoffset *x, t_symbol *s, long argc, t_atom *argv);
 void whichoffset_assist(t_whichoffset *x, void *b, long m, long a, char *s);
+void whichoffset_log(t_whichoffset *x, const char *fmt, ...);
 void whichoffset_print_dict(t_dictionary *d, int indent);
 t_max_err dictionary_getatoms_nested(t_dictionary *d, const char *path, long *argc, t_atom **argv);
 int compare_doubles(const void *a, const void *b);
@@ -82,12 +84,19 @@ void whichoffset_bang(t_whichoffset *x) {
     t_dictionary *d = dictobj_findregistered_clone(x->dict_name);
 
     if (d) {
-        //whichoffset_print_dict(d, 0);
+        //whichoffset_print_dict(x, d, 0);
         whichoffset_send_dict_in_chunks(x, d);
         object_free(d);
     } else {
         object_error((t_object *)x, "could not find dictionary %s", x->dict_name->s_name);
     }
+}
+
+void whichoffset_log(t_whichoffset *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "whichoffset", fmt, args);
+    va_end(args);
 }
 
 void whichoffset_int(t_whichoffset *x, long n) {

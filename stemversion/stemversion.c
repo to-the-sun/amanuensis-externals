@@ -1,5 +1,6 @@
 #include "ext.h"
 #include "ext_obex.h"
+#include "../shared/logging.h"
 #include <time.h>
 
 typedef struct _stemversion {
@@ -12,6 +13,7 @@ typedef struct _stemversion {
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
 void stemversion_bang(t_stemversion *x);
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s);
+void stemversion_log(t_stemversion *x, const char *fmt, ...);
 
 t_class *stemversion_class;
 
@@ -46,6 +48,13 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet = outlet_new((t_object *)x, "symbol");
     }
     return (x);
+}
+
+void stemversion_log(t_stemversion *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "stemversion", fmt, args);
+    va_end(args);
 }
 
 void stemversion_bang(t_stemversion *x) {

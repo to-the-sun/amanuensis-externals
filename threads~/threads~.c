@@ -9,6 +9,7 @@
 #include "ext_atomarray.h"
 #include "z_dsp.h"
 #include "../shared/visualize.h"
+#include "../shared/logging.h"
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
@@ -103,17 +104,12 @@ void threads_schedule_silence(t_threads *x, t_atom_long track, double ms) {
     hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
 }
 
+// Helper function to send verbose log messages with prefix
 void threads_log(t_threads *x, const char *fmt, ...) {
-    if (x->log && x->log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 1024, fmt, args);
-        va_end(args);
-        snprintf(final_buf, 1100, "threads~: %s", buf);
-        outlet_anything(x->log_outlet, gensym(final_buf), 0, NULL);
-    }
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "threads~", fmt, args);
+    va_end(args);
 }
 
 void ext_main(void *r) {
@@ -210,7 +206,6 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->log) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
         }
-        threads_log(x, "Initialized with %ld tracks", x->max_tracks);
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)threads_audio_qtask);

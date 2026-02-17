@@ -1,5 +1,6 @@
 #include "ext.h"
 #include "ext_obex.h"
+#include "../shared/logging.h"
 #include <windows.h>
 
 typedef struct _createproject {
@@ -11,6 +12,7 @@ typedef struct _createproject {
 void *createproject_new(t_symbol *s, long argc, t_atom *argv);
 void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
+void createproject_log(t_createproject *x, const char *fmt, ...);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
 
 t_class *createproject_class;
@@ -30,6 +32,13 @@ void ext_main(void *r) {
 
     class_register(CLASS_BOX, c);
     createproject_class = c;
+}
+
+void createproject_log(t_createproject *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->log_outlet, x->log, "createproject", fmt, args);
+    va_end(args);
 }
 
 void convert_path_to_windows(const char* max_path, char* win_path) {
