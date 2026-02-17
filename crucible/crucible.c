@@ -21,6 +21,7 @@ typedef struct _crucible {
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
+    long bar_warn_sent;
 } t_crucible;
 
 // Function prototypes
@@ -149,6 +150,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
+        x->bar_warn_sent = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -460,9 +462,20 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(x->buffer_ref, _sym_nothing);
+        buffer_ref_set(x->buffer_ref, gensym("bar"));
+        b = buffer_ref_getobject(x->buffer_ref);
+    }
+    if (!b) {
         object_error((t_object *)x, "bar buffer~ not found");
         return 0;
     }
+    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
 
     t_atom_long bar_length = 0;
     critical_enter(0);

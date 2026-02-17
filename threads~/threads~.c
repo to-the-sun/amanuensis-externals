@@ -52,6 +52,7 @@ typedef struct _threads {
     long max_track_seen;
     long max_tracks;
     t_hashtab *pending_silence;
+    long bar_warn_sent;
 } t_threads;
 
 void *threads_new(t_symbol *s, long argc, t_atom *argv);
@@ -202,6 +203,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->max_track_seen = 0;
         x->pending_silence = hashtab_new(0);
+        x->bar_warn_sent = 0;
 
         if (x->log) {
             object_post((t_object *)x, "threads~: Initialized with %ld tracks", x->max_tracks);
@@ -292,7 +294,18 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
 double threads_get_bar_length(t_threads *x) {
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
+    if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
+        buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
+        b = buffer_ref_getobject(x->bar_buffer_ref);
+    }
     if (b) {
+        x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
         critical_enter(0);
         float *samples = buffer_locksamples(b);
         if (samples) {
