@@ -275,6 +275,7 @@ void notify_fill(t_notify *x) {
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
 
+                    if (synth_bar_ts <= max_bar_this) continue;
                     if (synth_bar_ts > max_bar_all) continue;
 
                     t_dictionary *bar_dict = NULL;
@@ -615,6 +616,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
                 case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
             }
         } else {
