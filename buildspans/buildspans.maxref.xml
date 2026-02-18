@@ -21,7 +21,7 @@
 		<inlet id="1" type="list/bang/clear">
 			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
 			<description>
-				Receives note data as a list of two floats (absolute timestamp and score).
+				Receives note data as a list of two floats (absolute timestamp and score) or three floats (synthesized timestamp, score, and original absolute timestamp). If three items are received, the first is used for bar calculation and the third is stored in the dictionary.
 				A bang message triggers a flush of all currently open spans.
 				A clear message resets the internal state.
 				The set_bar_buffer message sets the buffer to read bar length from.
@@ -68,12 +68,8 @@
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="list">
-			<arglist>
-				<arg name="timestamp" type="float" optional="0" />
-				<arg name="score" type="float" optional="0" />
-			</arglist>
 			<digest>Process a single note</digest>
-			<description>Receives a list containing the absolute millisecond timestamp of a note and its score.</description>
+			<description>Receives a list containing either [timestamp, score] or [calc_timestamp, score, store_timestamp].</description>
 		</method>
 		<method name="bang">
 			<digest>Flush all spans</digest>

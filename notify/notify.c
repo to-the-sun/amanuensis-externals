@@ -275,6 +275,8 @@ void notify_fill(t_notify *x) {
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
 
+                    if (synth_bar_ts >= max_bar_all) continue;
+
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
                     if (!bar_dict) continue;
