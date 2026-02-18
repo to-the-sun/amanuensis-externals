@@ -17,6 +17,7 @@ typedef struct _note {
     double bar_ts;
     t_symbol *track;
     t_symbol *palette;
+    double original_absolute;
 } t_note;
 
 typedef struct _bar {
@@ -185,11 +186,7 @@ int note_compare(const void *a, const void *b) {
     t_note *noteA = (t_note *)a;
     t_note *noteB = (t_note *)b;
 
-    // Primary sort: palette (alphanumeric)
-    int palette_cmp = strcmp(noteA->palette->s_name, noteB->palette->s_name);
-    if (palette_cmp != 0) return palette_cmp;
-
-    // Secondary sort: absolute timestamp
+    // Sort solely by absolute timestamp
     if (noteA->absolute < noteB->absolute) return -1;
     if (noteA->absolute > noteB->absolute) return 1;
 
@@ -200,11 +197,7 @@ int bar_compare(const void *a, const void *b) {
     t_bar *barA = (t_bar *)a;
     t_bar *barB = (t_bar *)b;
 
-    // Primary sort: palette (alphanumeric)
-    int palette_cmp = strcmp(barA->palette->s_name, barB->palette->s_name);
-    if (palette_cmp != 0) return palette_cmp;
-
-    // Secondary sort: bar timestamp
+    // Sort solely by bar timestamp
     if (barA->bar_ts < barB->bar_ts) return -1;
     if (barA->bar_ts > barB->bar_ts) return 1;
 
@@ -274,7 +267,6 @@ void notify_fill(t_notify *x) {
         if (max_bar_this == max_bar_all) {
             notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
         } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
-            long synthetic_added_this_track = 0;
             notify_log(x, "Track %s is being grown to match %.2f (original length %.2f).", track_sym->s_name, max_bar_all, max_bar_this);
             for (long n = 1; ; n++) {
                 int notes_added_this_pass = 0;
@@ -283,9 +275,8 @@ void notify_fill(t_notify *x) {
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
 
-                    if (synth_bar_ts < max_bar_all) {
-                        notify_log(x, "Duplicating span: original bar_ts %.2f -> synth bar_ts %.2f", bar_ts, synth_bar_ts);
-                    }
+                    if (synth_bar_ts <= max_bar_this) continue;
+                    if (synth_bar_ts > max_bar_all) continue;
 
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -326,58 +317,54 @@ void notify_fill(t_notify *x) {
                         for (long k = 0; k < num_entries; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
                             double synth_abs = orig_abs + n * max_bar_this;
-                            if (synth_abs < max_bar_all) {
-                                if (total_notes >= notes_capacity) {
-                                    notes_capacity *= 2;
-                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                                }
-                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
-                                    orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
-                                all_notes[total_notes].absolute = synth_abs;
-                                all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                                all_notes[total_notes].offset = offset;
-                                all_notes[total_notes].bar_ts = synth_bar_ts;
-                                all_notes[total_notes].track = track_sym;
-                                all_notes[total_notes].palette = palette;
-                                total_notes++;
-                                notes_added_this_pass++;
-                                synthetic_added_this_track++;
+                            if (total_notes >= notes_capacity) {
+                                notes_capacity *= 2;
+                                all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                             }
+                            notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
+                            all_notes[total_notes].absolute = synth_abs;
+                            all_notes[total_notes].original_absolute = orig_abs;
+                            all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
+                            all_notes[total_notes].offset = offset;
+                            all_notes[total_notes].bar_ts = synth_bar_ts;
+                            all_notes[total_notes].track = track_sym;
+                            all_notes[total_notes].palette = palette;
+                            total_notes++;
+                            notes_added_this_pass++;
+                            total_synthetic_added++;
                         }
                     } else {
                         t_atom absolute_atom;
                         if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
                             double orig_abs = atom_getfloat(&absolute_atom);
                             double synth_abs = orig_abs + n * max_bar_this;
-                            if (synth_abs < max_bar_all) {
-                                if (total_notes >= notes_capacity) {
-                                    notes_capacity *= 2;
-                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                                }
-                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
-                                    orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
-                                all_notes[total_notes].absolute = synth_abs;
-                                t_atom score_atom;
-                                if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                                    all_notes[total_notes].score = atom_getfloat(&score_atom);
-                                } else {
-                                    all_notes[total_notes].score = 0;
-                                }
-                                all_notes[total_notes].offset = offset;
-                                all_notes[total_notes].bar_ts = synth_bar_ts;
-                                all_notes[total_notes].track = track_sym;
-                                all_notes[total_notes].palette = palette;
-                                total_notes++;
-                                notes_added_this_pass++;
-                                synthetic_added_this_track++;
+                            if (total_notes >= notes_capacity) {
+                                notes_capacity *= 2;
+                                all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                             }
+                            notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
+                            all_notes[total_notes].absolute = synth_abs;
+                            all_notes[total_notes].original_absolute = orig_abs;
+                            t_atom score_atom;
+                            if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                                all_notes[total_notes].score = atom_getfloat(&score_atom);
+                            } else {
+                                all_notes[total_notes].score = 0;
+                            }
+                            all_notes[total_notes].offset = offset;
+                            all_notes[total_notes].bar_ts = synth_bar_ts;
+                            all_notes[total_notes].track = track_sym;
+                            all_notes[total_notes].palette = palette;
+                            total_notes++;
+                            notes_added_this_pass++;
+                            total_synthetic_added++;
                         }
                     }
                 }
                 if (notes_added_this_pass == 0) break;
             }
-            notify_log(x, "Track %s: added %ld synthetic notes.", track_sym->s_name, synthetic_added_this_track);
-            total_synthetic_added += synthetic_added_this_track;
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
@@ -390,9 +377,10 @@ void notify_fill(t_notify *x) {
     // Verbose Manifest Logging
     if (x->log && x->out_log) {
         for (long i = 0; i < total_notes; i++) {
-            notify_log(x, "Note Manifest: palette %s, absolute %.2f, score %.2f, track %s, offset %.2f",
+            notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f",
                 all_notes[i].palette->s_name,
                 all_notes[i].absolute,
+                all_notes[i].original_absolute,
                 all_notes[i].score,
                 (all_notes[i].track && all_notes[i].track != gensym("")) ? all_notes[i].track->s_name : "0",
                 all_notes[i].offset);
@@ -407,10 +395,11 @@ void notify_fill(t_notify *x) {
             outlet_int(x->out_track, atol(all_notes[i].track->s_name));
         }
         outlet_float(x->out_offset, all_notes[i].offset);
-        t_atom list_atoms[2];
+        t_atom list_atoms[3];
         atom_setfloat(&list_atoms[0], all_notes[i].absolute);
         atom_setfloat(&list_atoms[1], all_notes[i].score);
-        outlet_list(x->out_abs_score, NULL, 2, list_atoms);
+        atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+        outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
@@ -523,6 +512,7 @@ void notify_bang(t_notify *x) {
                             all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                         }
                         all_notes[total_notes].absolute = atom_getfloat(&aa_atoms[k]);
+                        all_notes[total_notes].original_absolute = all_notes[total_notes].absolute;
                         all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                         all_notes[total_notes].offset = offset;
                         all_notes[total_notes].bar_ts = bar_ts;
@@ -539,6 +529,7 @@ void notify_bang(t_notify *x) {
                         all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                     }
                     all_notes[total_notes].absolute = atom_getfloat(&absolute_atom);
+                    all_notes[total_notes].original_absolute = all_notes[total_notes].absolute;
                     t_atom score_atom;
                     if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
                         all_notes[total_notes].score = atom_getfloat(&score_atom);
@@ -570,9 +561,10 @@ void notify_bang(t_notify *x) {
                 all_bars[i].bar_ts);
         }
         for (long i = 0; i < total_notes; i++) {
-            notify_log(x, "Note Manifest: palette %s, absolute %.2f, score %.2f, track %s, offset %.2f",
+            notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f",
                 all_notes[i].palette->s_name,
                 all_notes[i].absolute,
+                all_notes[i].original_absolute,
                 all_notes[i].score,
                 (all_notes[i].track && all_notes[i].track != gensym("")) ? all_notes[i].track->s_name : "0",
                 all_notes[i].offset);
@@ -601,10 +593,11 @@ void notify_bang(t_notify *x) {
             outlet_int(x->out_track, atol(all_notes[i].track->s_name));
         }
         outlet_float(x->out_offset, all_notes[i].offset);
-        t_atom list_atoms[2];
+        t_atom list_atoms[3];
         atom_setfloat(&list_atoms[0], all_notes[i].absolute);
         atom_setfloat(&list_atoms[1], all_notes[i].score);
-        outlet_list(x->out_abs_score, NULL, 2, list_atoms);
+        atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+        outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
@@ -614,25 +607,25 @@ void notify_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump. Sorted by Palette then Timestamp.");
+        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump. Sorted by Timestamp.");
         else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
     } else {
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list). Sorted by Palette then Absolute Timestamp."); break;
+                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Palette then Bar Timestamp."); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
                 case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Abs Timestamp and Score (list). Sorted by Palette then Absolute Timestamp."); break;
+                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
                 case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Palette then Bar Timestamp."); break;
+                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
             }
         }
     }
