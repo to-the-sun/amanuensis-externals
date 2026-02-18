@@ -223,6 +223,7 @@ void notify_fill(t_notify *x) {
     dictionary_getkeys(dict, &num_tracks, &track_keys);
 
     double max_bar_all = -1.0;
+    t_symbol *longest_track = NULL;
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
         dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict);
@@ -233,7 +234,10 @@ void notify_fill(t_notify *x) {
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
         for (long j = 0; j < num_bars; j++) {
             double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts > max_bar_all) max_bar_all = bar_ts;
+            if (bar_ts > max_bar_all) {
+                max_bar_all = bar_ts;
+                longest_track = track_keys[i];
+            }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
@@ -247,7 +251,10 @@ void notify_fill(t_notify *x) {
     t_note *all_notes = NULL;
     long total_notes = 0;
     long notes_capacity = 100;
+    long total_synthetic_added = 0;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
+
+    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms defined by track %s.", num_tracks, max_bar_all, longest_track ? longest_track->s_name : "none");
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -264,13 +271,21 @@ void notify_fill(t_notify *x) {
             if (bar_ts > max_bar_this) max_bar_this = bar_ts;
         }
 
-        if (max_bar_this < max_bar_all && max_bar_this > 0) {
+        if (max_bar_this == max_bar_all) {
+            notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
+        } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
+            long synthetic_added_this_track = 0;
+            notify_log(x, "Track %s is being grown to match %.2f (original length %.2f).", track_sym->s_name, max_bar_all, max_bar_this);
             for (long n = 1; ; n++) {
                 int notes_added_this_pass = 0;
                 for (long j = 0; j < num_bars; j++) {
                     t_symbol *bar_sym = bar_keys[j];
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
+
+                    if (synth_bar_ts < max_bar_all) {
+                        notify_log(x, "Duplicating span: original bar_ts %.2f -> synth bar_ts %.2f", bar_ts, synth_bar_ts);
+                    }
 
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -316,6 +331,8 @@ void notify_fill(t_notify *x) {
                                     notes_capacity *= 2;
                                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                                 }
+                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                    orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                                 all_notes[total_notes].absolute = synth_abs;
                                 all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                                 all_notes[total_notes].offset = offset;
@@ -324,6 +341,7 @@ void notify_fill(t_notify *x) {
                                 all_notes[total_notes].palette = palette;
                                 total_notes++;
                                 notes_added_this_pass++;
+                                synthetic_added_this_track++;
                             }
                         }
                     } else {
@@ -336,6 +354,8 @@ void notify_fill(t_notify *x) {
                                     notes_capacity *= 2;
                                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                                 }
+                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                    orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                                 all_notes[total_notes].absolute = synth_abs;
                                 t_atom score_atom;
                                 if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
@@ -349,16 +369,21 @@ void notify_fill(t_notify *x) {
                                 all_notes[total_notes].palette = palette;
                                 total_notes++;
                                 notes_added_this_pass++;
+                                synthetic_added_this_track++;
                             }
                         }
                     }
                 }
                 if (notes_added_this_pass == 0) break;
             }
+            notify_log(x, "Track %s: added %ld synthetic notes.", track_sym->s_name, synthetic_added_this_track);
+            total_synthetic_added += synthetic_added_this_track;
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
     if (track_keys) sysmem_freeptr(track_keys);
+
+    notify_log(x, "Fill: added %ld total synthetic notes to manifest.", total_synthetic_added);
 
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
