@@ -331,7 +331,7 @@ void notify_fill(t_notify *x) {
                                     notes_capacity *= 2;
                                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                                 }
-                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
                                     orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                                 all_notes[total_notes].absolute = synth_abs;
                                 all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
@@ -354,7 +354,7 @@ void notify_fill(t_notify *x) {
                                     notes_capacity *= 2;
                                     all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                                 }
-                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
+                                notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
                                     orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                                 all_notes[total_notes].absolute = synth_abs;
                                 t_atom score_atom;

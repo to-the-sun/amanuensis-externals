@@ -89,7 +89,7 @@ void visualize(const char *message) {
         return;
     }
 
-    char buf[8192];
+    char buf[65536];
     int n = snprintf(buf, sizeof(buf), "%s\n", message);
     if (n < 0 || n >= (int)sizeof(buf)) {
         return;
