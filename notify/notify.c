@@ -264,110 +264,108 @@ void notify_fill(t_notify *x) {
             if (bar_ts > max_bar_this) max_bar_this = bar_ts;
         }
 
-        notify_log(x, "Track %s: original length %.2f. Global reach %.2f.", track_sym->s_name, max_bar_this, max_bar_all);
+        if (max_bar_this == max_bar_all) {
+            notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
+        } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
+            notify_log(x, "Track %s is being grown to match %.2f (original length %.2f).", track_sym->s_name, max_bar_all, max_bar_this);
+            for (long n = 1; ; n++) {
+                int notes_added_this_pass = 0;
+                for (long j = 0; j < num_bars; j++) {
+                    t_symbol *bar_sym = bar_keys[j];
+                    double bar_ts = atof(bar_sym->s_name);
+                    double synth_bar_ts = bar_ts + n * max_bar_this;
 
-        for (long n = 0; ; n++) {
-            int notes_added_this_pass = 0;
-            for (long j = 0; j < num_bars; j++) {
-                t_symbol *bar_sym = bar_keys[j];
-                double bar_ts = atof(bar_sym->s_name);
-                double synth_bar_ts = bar_ts + n * max_bar_this;
+                    t_dictionary *bar_dict = NULL;
+                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                    if (!bar_dict) continue;
 
-                t_dictionary *bar_dict = NULL;
-                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-                if (!bar_dict) continue;
-
-                double offset = 0;
-                t_atomarray *offset_aa = NULL;
-                t_atom offset_atom;
-                if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
-                    t_atom o_atom;
-                    if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
-                } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
-                    offset = atom_getfloat(&offset_atom);
-                }
-
-                t_symbol *palette = gensym("");
-                t_atomarray *palette_aa = NULL;
-                t_atom palette_atom;
-                if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
-                    t_atom p_atom;
-                    if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
-                } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
-                    palette = atom_getsym(&palette_atom);
-                }
-
-                t_atomarray *absolutes_aa = NULL;
-                if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
-                    long aa_len = 0;
-                    t_atom *aa_atoms = NULL;
-                    atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-                    t_atomarray *scores_aa = NULL;
-                    long scores_len = 0;
-                    t_atom *scores_atoms = NULL;
-                    if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
-                        atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
+                    double offset = 0;
+                    t_atomarray *offset_aa = NULL;
+                    t_atom offset_atom;
+                    if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+                        t_atom o_atom;
+                        if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+                        offset = atom_getfloat(&offset_atom);
                     }
-                    long num_entries = aa_len < scores_len ? aa_len : scores_len;
-                    for (long k = 0; k < num_entries; k++) {
-                        double orig_abs = atom_getfloat(&aa_atoms[k]);
-                        double synth_abs = orig_abs + n * max_bar_this;
-                        if (n == 0 || synth_abs < max_bar_all) {
-                            if (total_notes >= notes_capacity) {
-                                notes_capacity *= 2;
-                                all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                            }
-                            if (n > 0) {
+
+                    t_symbol *palette = gensym("");
+                    t_atomarray *palette_aa = NULL;
+                    t_atom palette_atom;
+                    if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                        t_atom p_atom;
+                        if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+                        palette = atom_getsym(&palette_atom);
+                    }
+
+                    t_atomarray *absolutes_aa = NULL;
+                    if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
+                        long aa_len = 0;
+                        t_atom *aa_atoms = NULL;
+                        atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
+                        t_atomarray *scores_aa = NULL;
+                        long scores_len = 0;
+                        t_atom *scores_atoms = NULL;
+                        if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
+                            atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
+                        }
+                        long num_entries = aa_len < scores_len ? aa_len : scores_len;
+                        for (long k = 0; k < num_entries; k++) {
+                            double orig_abs = atom_getfloat(&aa_atoms[k]);
+                            double synth_abs = orig_abs + n * max_bar_this;
+                            if (synth_abs < max_bar_all) {
+                                if (total_notes >= notes_capacity) {
+                                    notes_capacity *= 2;
+                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+                                }
                                 notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
                                     orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
+                                all_notes[total_notes].absolute = synth_abs;
+                                all_notes[total_notes].original_absolute = orig_abs;
+                                all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
+                                all_notes[total_notes].offset = offset;
+                                all_notes[total_notes].bar_ts = synth_bar_ts;
+                                all_notes[total_notes].track = track_sym;
+                                all_notes[total_notes].palette = palette;
+                                total_notes++;
+                                notes_added_this_pass++;
                                 total_synthetic_added++;
                             }
-                            all_notes[total_notes].absolute = synth_abs;
-                            all_notes[total_notes].original_absolute = orig_abs;
-                            all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                            all_notes[total_notes].offset = offset;
-                            all_notes[total_notes].bar_ts = synth_bar_ts;
-                            all_notes[total_notes].track = track_sym;
-                            all_notes[total_notes].palette = palette;
-                            total_notes++;
-                            notes_added_this_pass++;
                         }
-                    }
-                } else {
-                    t_atom absolute_atom;
-                    if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
-                        double orig_abs = atom_getfloat(&absolute_atom);
-                        double synth_abs = orig_abs + n * max_bar_this;
-                        if (n == 0 || synth_abs < max_bar_all) {
-                            if (total_notes >= notes_capacity) {
-                                notes_capacity *= 2;
-                                all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                            }
-                            if (n > 0) {
+                    } else {
+                        t_atom absolute_atom;
+                        if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+                            double orig_abs = atom_getfloat(&absolute_atom);
+                            double synth_abs = orig_abs + n * max_bar_this;
+                            if (synth_abs < max_bar_all) {
+                                if (total_notes >= notes_capacity) {
+                                    notes_capacity *= 2;
+                                    all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
+                                }
                                 notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)", 
                                     orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
+                                all_notes[total_notes].absolute = synth_abs;
+                                all_notes[total_notes].original_absolute = orig_abs;
+                                t_atom score_atom;
+                                if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                                    all_notes[total_notes].score = atom_getfloat(&score_atom);
+                                } else {
+                                    all_notes[total_notes].score = 0;
+                                }
+                                all_notes[total_notes].offset = offset;
+                                all_notes[total_notes].bar_ts = synth_bar_ts;
+                                all_notes[total_notes].track = track_sym;
+                                all_notes[total_notes].palette = palette;
+                                total_notes++;
+                                notes_added_this_pass++;
                                 total_synthetic_added++;
                             }
-                            all_notes[total_notes].absolute = synth_abs;
-                            all_notes[total_notes].original_absolute = orig_abs;
-                            t_atom score_atom;
-                            if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                                all_notes[total_notes].score = atom_getfloat(&score_atom);
-                            } else {
-                                all_notes[total_notes].score = 0;
-                            }
-                            all_notes[total_notes].offset = offset;
-                            all_notes[total_notes].bar_ts = synth_bar_ts;
-                            all_notes[total_notes].track = track_sym;
-                            all_notes[total_notes].palette = palette;
-                            total_notes++;
-                            notes_added_this_pass++;
                         }
                     }
                 }
+                if (notes_added_this_pass == 0) break;
             }
-            if (n > 0 && notes_added_this_pass == 0) break;
-            if (n == 0 && (max_bar_this == max_bar_all || max_bar_this <= 0)) break;
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
