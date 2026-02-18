@@ -190,7 +190,7 @@ void buildspans_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset, long bar_length);
+void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
 double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output);
@@ -679,7 +679,7 @@ void buildspans_offset(t_buildspans *x, double f) {
 
             for (long k = 0; k < manifest_count; k++) {
                 x->current_track = manifest[k].track_number;
-                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].score, f, bar_length);
+                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].timestamp, manifest[k].score, f, bar_length);
             }
 
             x->current_track = original_track;
@@ -727,14 +727,23 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
         return;
     }
-    if (argc != 2 || atom_gettype(argv) != A_FLOAT || atom_gettype(argv + 1) != A_FLOAT) {
-        object_error((t_object *)x, "Input must be a list of two floats: timestamp and score.");
+    double calc_timestamp, store_timestamp, score;
+
+    if (argc == 2 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT) {
+        calc_timestamp = atom_getfloat(argv);
+        store_timestamp = calc_timestamp;
+        score = atom_getfloat(argv + 1);
+    } else if (argc == 3 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT && atom_gettype(argv + 2) == A_FLOAT) {
+        calc_timestamp = atom_getfloat(argv);
+        score = atom_getfloat(argv + 1);
+        store_timestamp = atom_getfloat(argv + 2);
+    } else {
+        object_error((t_object *)x, "Input must be a list of two floats (timestamp, score) or three floats (synth_timestamp, score, orig_timestamp).");
         return;
     }
-    double timestamp = atom_getfloat(argv);
-    double score = atom_getfloat(argv + 1);
+
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
-    buildspans_log(x, "Palette: %s, Absolute timestamp: %.2f, Score: %.2f", x->current_palette->s_name, timestamp, score);
+    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
     long num_keys;
@@ -830,7 +839,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
         }
 
-        buildspans_process_and_add_note(x, timestamp, score, actual_offset, bar_length);
+        buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
     }
 
     if (keys) sysmem_freeptr(keys);
@@ -861,15 +870,15 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 
-void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double score, double offset, long bar_length) {
+void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
-    double relative_timestamp = timestamp - offset;
-    buildspans_log(x, "Relative timestamp (absolutes - offset): %.2f", relative_timestamp);
+    double relative_timestamp = calc_timestamp - offset;
+    buildspans_log(x, "Relative timestamp (calc_absolute - offset): %.2f", relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
@@ -964,7 +973,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double timestamp, double s
         t_atom a; dictionary_getatom(x->building, absolutes_key, &a);
         absolutes_array = (t_atomarray *)atom_getobj(&a);
     }
-    t_atom new_absolute; atom_setfloat(&new_absolute, timestamp);
+    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {
@@ -1328,7 +1337,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) Timestamp-Score Pair, (bang) Flush, (clear) Clear, (set_bar_buffer) Set Buffer Name");
+                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (float) Offset Timestamp");
