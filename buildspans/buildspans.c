@@ -1239,8 +1239,44 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
 
 void buildspans_bang(t_buildspans *x) {
-    buildspans_log(x, "Flush triggered by bang for palette %s.", x->current_palette->s_name);
-    buildspans_flush(x, x->current_palette);
+    buildspans_log(x, "Flush triggered by bang for all palettes.");
+
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+
+    if (keys) {
+        long unique_palette_count = 0;
+        t_symbol **unique_palettes = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+
+        for (long i = 0; i < num_keys; i++) {
+            char *pal_str, *track_str, *bar_str, *prop_str;
+            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                int found = 0;
+                for (long j = 0; j < unique_palette_count; j++) {
+                    if (strcmp(unique_palettes[j]->s_name, pal_str) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    unique_palettes[unique_palette_count++] = gensym(pal_str);
+                }
+                sysmem_freeptr(pal_str);
+                sysmem_freeptr(track_str);
+                sysmem_freeptr(bar_str);
+                sysmem_freeptr(prop_str);
+            }
+        }
+
+        for (long i = 0; i < unique_palette_count; i++) {
+            buildspans_flush(x, unique_palettes[i]);
+        }
+
+        sysmem_freeptr(unique_palettes);
+        sysmem_freeptr(keys);
+    }
+
     x->local_bar_length = 0;
     buildspans_log(x, "Bar length reset to zero after flush.");
 }

@@ -87,7 +87,7 @@ It is critical to distinguish between global properties of the object and the pe
 
 A span is "flushed" (i.e., ended and output) under several conditions:
 
-1.  **Manual Flush**: Receiving a `bang` in the first inlet triggers a flush of all active spans for the current palette.
+1.  **Manual Flush**: Receiving a `bang` in the first inlet triggers a flush of all active spans for all palettes.
 2.  **Discontinuity**: If a new timestamp is received that would create a bar that is not contiguous with the existing span, the object automatically flushes the existing span for that track.
 3.  **Rating-Based End**: A deferred rating check occurs when a new bar starts. If including the previous bar would have decreased the overall span rating, the span is ended before that bar.
 

@@ -9,7 +9,7 @@
 		a. Including the previous bar would have decreased the span's overall rating.
 		b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
 		The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
-		A bang to the first inlet will flush (end and output) all currently open spans for all tracks.
+		A bang to the first inlet will flush (end and output) all currently open spans for all tracks and palettes.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -22,7 +22,7 @@
 			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
 			<description>
 				Receives note data as a list of two floats (absolute timestamp and score) or three floats (synthesized timestamp, score, and original absolute timestamp). If three items are received, the first is used for bar calculation and the third is stored in the dictionary.
-				A bang message triggers a flush of all currently open spans.
+				A bang message triggers a flush of all currently open spans for all tracks and palettes.
 				A clear message resets the internal state.
 				The set_bar_buffer message sets the buffer to read bar length from.
 			</description>
