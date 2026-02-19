@@ -81,6 +81,7 @@ It is critical to distinguish between global properties of the object and the pe
     *   `current_offset`: The global offset value.
     *   `current_palette`: The currently active palette symbol.
     *   `local_bar_length`: The length of a bar in milliseconds.
+-   **Automatic Offset Initialization**: If the offset has not yet been set (since instantiation or the last `clear` message) and a note list is received in Inlet 1, the first timestamp in that list is used to automatically initialize the global offset.
 -   **Persistence after Flush**: When a span is flushed via a `bang`, **only** the `local_bar_length` is reset to 0. The `current_track`, `current_offset`, and `current_palette` persist at their last received values.
 
 ### Flushing Logic

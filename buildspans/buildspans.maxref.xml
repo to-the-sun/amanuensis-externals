@@ -22,6 +22,7 @@
 			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
 			<description>
 				Receives note data as a list of two floats (absolute timestamp and score) or three floats (synthesized timestamp, score, and original absolute timestamp). If three items are received, the first is used for bar calculation and the third is stored in the dictionary.
+				If the global offset has not been set yet, the first timestamp received in this inlet will be used to automatically initialize it.
 				A bang message triggers a flush of all currently open spans for all tracks and palettes.
 				A clear message resets the internal state.
 				The set_bar_buffer message sets the buffer to read bar length from.
