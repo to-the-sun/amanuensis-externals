@@ -6,7 +6,7 @@ This repository contains custom external objects for the Max/MSP programming lan
 
 The repository is organized into several directories:
 
--   `assemblespans/`, `createproject/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
+-   `buildspans/`, `createproject/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
 -   `shared/`: Contains common C code modules that can be shared across multiple external objects.
 -   `max-sdk/`: Contains the Max SDK, which is required for building the external objects.
 -   `gui.py`: A Python-based GUI for visualizing data from the objects.
@@ -51,51 +51,50 @@ Each external object's directory typically contains:
 To build an individual external object, navigate into its specific directory and run the `make` command from a standard Windows Command Prompt or PowerShell:
 
 ```bash
-cd assemblespans/
+cd buildspans/
 make
 ```
 
-## The `assemblespans` Object
+## The `buildspans` Object
 
-The `assemblespans` object is designed to process musical note data and group it into "spans."
+The `buildspans` object is designed to process musical note data and group it into "spans."
 
 ### Core Concepts
 
 -   **Span**: A span is a contiguous sequence of musical "bars." A bar is a time interval defined by the `bar_length` attribute. A span is considered contiguous if the time gap between consecutive bars is no greater than `bar_length`.
--   **Working Memory**: The object's primary internal data structure is a `t_dictionary` called `working_memory`.
-    -   The top-level keys of this dictionary are track numbers (e.g., "1", "2", "3").
-    -   Each top-level key maps to a track-specific sub-dictionary.
--   **Track Dictionary**: Each track's sub-dictionary contains keys for each bar's timestamp (e.g., "44440", "49995").
--   **Bar Dictionary**: Each bar's sub-dictionary contains the actual note data:
+-   **Working Memory**: The object's primary internal data structure is a `t_dictionary` called `building`.
+    -   The keys of this dictionary are hierarchical: `palette::track-rounded_offset::bar_timestamp::property`.
+-   **Bar Dictionary**: Each bar's data includes:
     -   `absolutes`: A `t_atomarray` of the absolute millisecond timestamps of the notes in that bar.
     -   `scores`: A parallel `t_atomarray` of the scores for each note.
     -   `mean`: The calculated mean of the scores.
     -   `offset`: A *copy* of the global offset at the time the bar was created.
     -   `palette`: A *copy* of the global palette symbol at the time the bar was created.
-    -   `span`: A *shared reference* to a `t_atomarray` that contains the timestamps of all bars in the current span for that track. This is back-propagated to all bars in the span whenever a new bar is added.
+    -   `span`: A `t_atomarray` that contains the timestamps of all bars in the current span for that track. This is back-propagated to all bars in the span whenever a new bar is added.
 
 ### Global vs. Per-Bar Properties
 
 It is critical to distinguish between global properties of the object and the per-bar data that is stored.
 
--   **Global Properties**: These are stored as members of the main `_assemblespans` C struct and persist until they are changed by the user. They are not affected when a span is flushed.
+-   **Global Properties**: These are stored as members of the main `_buildspans` C struct and persist until they are changed by the user.
     -   `current_track`: The currently active track number.
-    -   `current_offset`: The global offset value.
-    -   `bar_length`: The length of a bar in milliseconds.
-    -   `current_palette`: The currently active palette symbol.
--   **Per-Bar Properties**: When a new bar is created, the current values of the global `current_offset` and `current_palette` are copied into that bar's dictionary. This provides a snapshot of the global state at the time of the bar's creation.
+    *   `current_offset`: The global offset value.
+    *   `current_palette`: The currently active palette symbol.
+    *   `local_bar_length`: The length of a bar in milliseconds.
+-   **Automatic Offset Initialization**: If the offset has not yet been set (since instantiation or the last `clear` message) and a note list is received in Inlet 1, the first timestamp in that list is used to automatically initialize the global offset.
+-   **Persistence after Flush**: When a span is flushed via a `bang`, **only** the `local_bar_length` is reset to 0. The `current_track`, `current_offset`, and `current_palette` persist at their last received values.
 
 ### Flushing Logic
 
-A span is "flushed" (i.e., ended and output) under two conditions:
+A span is "flushed" (i.e., ended and output) under several conditions:
 
-1.  **Manual Flush**: Receiving a `bang` in the first inlet triggers a flush of all active spans for all tracks.
-2.  **Automatic Flush**: If a new timestamp-score pair is received that would create a bar that is not contiguous with the existing span (i.e., `new_bar_timestamp > last_bar_timestamp + bar_length`), the object automatically flushes the existing span for that track *before* creating the new bar, which then starts a new span.
+1.  **Manual Flush**: Receiving a `bang` in the first inlet triggers a flush of all active spans for all palettes.
+2.  **Discontinuity**: If a new timestamp is received that would create a bar that is not contiguous with the existing span, the object automatically flushes the existing span for that track.
+3.  **Rating-Based End**: A deferred rating check occurs when a new bar starts. If including the previous bar would have decreased the overall span rating, the span is ended before that bar.
 
-The `assemblespans_flush_track` function handles the flushing process by:
-1.  Sending the track number and the list of bar timestamps in the span to the outlets.
-2.  Freeing the *entire* track dictionary object. This is a crucial step that recursively and safely frees all the bar sub-dictionaries and their contents.
-3.  Deleting the top-level entry for that track from the `working_memory` dictionary.
+The flushing process handles:
+1.  Outputting the span data, track number, and detailed bar properties to the outlets.
+2.  Deleting the entries for that track from the `building` dictionary.
 
 ## Development Workflow
 
