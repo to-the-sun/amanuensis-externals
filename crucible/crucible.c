@@ -18,6 +18,7 @@ typedef struct _crucible {
     void *log_outlet;
     t_buffer_ref *buffer_ref;
     long log;
+    long consume;
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
@@ -133,6 +134,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_LONG(c, "consume", 0, t_crucible, consume);
+    CLASS_ATTR_STYLE_LABEL(c, "consume", 0, "onoff", "Enable Consume Mode");
+    CLASS_ATTR_DEFAULT(c, "consume", 0, "0");
+
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
@@ -148,6 +153,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
             object_error((t_object *)x, "bar buffer~ not found");
         }
         x->song_reach = 0;
+        x->consume = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
@@ -301,9 +307,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     }
 
     for (long i = 0; i < span_len; i++) {
-        long bar_ts_long = atom_getlong(&span_atoms[i]);
+        t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
         char bar_ts_str[32];
-        snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+        snprintf(bar_ts_str, 32, "%lld", (long long)bar_ts_long);
         t_symbol *bar_sym = gensym(bar_ts_str);
 
         // Get challenger bar dictionary
@@ -363,7 +369,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_log(x, "-> Challenger wins bar.");
             }
         } else {
-            crucible_log(x, "Bar %ld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", bar_ts_long, challenger_rating);
+            crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
         }
     }
 
@@ -417,6 +423,54 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
 
+        if (x->consume && incumbent_track_dict) {
+            t_dictionary *consume_set = dictionary_new();
+            if (consume_set) {
+                for (long i = 0; i < span_len; i++) {
+                    t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
+                    char bar_ts_str[32];
+                    snprintf(bar_ts_str, 32, "%lld", (long long)bar_ts_long);
+                    t_symbol *bar_sym = gensym(bar_ts_str);
+
+                    t_dictionary *incumbent_bar_dict = NULL;
+                    if (dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict) == MAX_ERR_NONE && incumbent_bar_dict) {
+                        t_atom *inc_span_atoms = NULL;
+                        long inc_span_len = 0;
+                        t_atomarray *inc_span_aa = NULL;
+                        t_atom inc_span_atom;
+
+                        if (dictionary_getatomarray(incumbent_bar_dict, gensym("span"), (t_object **)&inc_span_aa) == MAX_ERR_NONE && inc_span_aa) {
+                            atomarray_getatoms(inc_span_aa, &inc_span_len, &inc_span_atoms);
+                        } else if (dictionary_getatom(incumbent_bar_dict, gensym("span"), &inc_span_atom) == MAX_ERR_NONE) {
+                            inc_span_atoms = &inc_span_atom;
+                            inc_span_len = 1;
+                        }
+
+                        for (long j = 0; j < inc_span_len; j++) {
+                            t_atom_long ts = atom_getlong(inc_span_atoms + j);
+                            char ts_str[32];
+                            snprintf(ts_str, 32, "%lld", (long long)ts);
+                            dictionary_setlong(consume_set, gensym(ts_str), 1);
+                        }
+                    }
+                }
+
+                t_symbol **keys = NULL;
+                long numkeys = 0;
+                dictionary_getkeys(consume_set, &numkeys, &keys);
+                if (keys) {
+                    for (long i = 0; i < numkeys; i++) {
+                        if (dictionary_hasentry(incumbent_track_dict, keys[i])) {
+                            dictionary_deleteentry(incumbent_track_dict, keys[i]);
+                            crucible_log(x, "  -> Consumed bar %s from incumbent track %s", keys[i]->s_name, track_sym->s_name);
+                        }
+                    }
+                    sysmem_freeptr(keys);
+                }
+                object_release((t_object *)consume_set);
+            }
+        }
+
         int song_grew = (max_reach > x->song_reach);
         t_atom_long old_song_reach = x->song_reach;
         if (song_grew) {
@@ -425,9 +479,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         for (long i = 0; i < span_len; i++) {
-            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[32];
-            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            snprintf(bar_ts_str, 32, "%lld", (long long)bar_ts_long);
             t_symbol *bar_sym = gensym(bar_ts_str);
 
             t_dictionary *challenger_bar_dict = NULL;
@@ -457,9 +511,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         for (long i = 0; i < span_len; i++) {
-            long bar_ts_long = atom_getlong(&span_atoms[i]);
+            t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[32];
-            snprintf(bar_ts_str, 32, "%ld", bar_ts_long);
+            snprintf(bar_ts_str, 32, "%lld", (long long)bar_ts_long);
             t_symbol *bar_sym = gensym(bar_ts_str);
 
             t_dictionary *bar_dict = NULL;
