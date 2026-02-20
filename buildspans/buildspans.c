@@ -363,17 +363,20 @@ void buildspans_visualize_memory(t_buildspans *x) {
             for (long j = 0; j < bar_count; j++) {
                 char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
                 t_symbol* abs_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("absolutes"));
-                if (dictionary_hasentry(x->building, abs_key)) {
-                    t_atom a;
-                    dictionary_getatom(x->building, abs_key, &a);
-                    t_atomarray *arr = (t_atomarray *)atom_getobj(&a);
-                    long ac; t_atom *av;
-                    atomarray_getatoms(arr, &ac, &av);
-                    for (long k = 0; k < ac; k++) {
-                        if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                        first_absolute = 0;
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
-                    }
+                t_atom *av;
+                long ac = 0;
+                t_atomarray *aa = NULL;
+                t_atom a;
+                if (dictionary_getatomarray(x->building, abs_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                    atomarray_getatoms(aa, &ac, &av);
+                } else if (dictionary_getatom(x->building, abs_key, &a) == MAX_ERR_NONE) {
+                    av = &a;
+                    ac = 1;
+                }
+                for (long k = 0; k < ac; k++) {
+                    if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    first_absolute = 0;
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
                 }
             }
             offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
@@ -401,21 +404,23 @@ void buildspans_visualize_memory(t_buildspans *x) {
                 snprintf(first_bar_str, 32, "%ld", bar_timestamps[0]);
                 t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, gensym(first_bar_str), gensym("span"));
 
-                if (dictionary_hasentry(x->building, span_key)) {
-                    t_atom a;
-                    dictionary_getatom(x->building, span_key, &a);
-                    t_atomarray *span_array = (t_atomarray *)atom_getobj(&a);
-                    long span_count;
-                    t_atom *span_atoms;
-                    atomarray_getatoms(span_array, &span_count, &span_atoms);
+                t_atom *span_atoms;
+                long span_count = 0;
+                t_atomarray *span_aa = NULL;
+                t_atom span_atom;
+                if (dictionary_getatomarray(x->building, span_key, (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                    atomarray_getatoms(span_aa, &span_count, &span_atoms);
+                } else if (dictionary_getatom(x->building, span_key, &span_atom) == MAX_ERR_NONE) {
+                    span_atoms = &span_atom;
+                    span_count = 1;
+                }
 
-                    for (long k = 0; k < span_count; k++) {
-                        if (!first_span) {
-                            offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                        }
-                        first_span = 0;
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, "%ld", atom_getlong(span_atoms + k));
+                for (long k = 0; k < span_count; k++) {
+                    if (!first_span) {
+                        offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
                     }
+                    first_span = 0;
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%ld", atom_getlong(span_atoms + k));
                 }
             }
 
@@ -639,18 +644,28 @@ void buildspans_offset(t_buildspans *x, double f) {
             char *pal_str, *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[j], &pal_str, &track_str, &bar_str, &prop_str)) {
                 if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, source_track_sym->s_name) == 0 && strcmp(prop_str, "absolutes") == 0) {
-                    t_atom a;
-                    dictionary_getatom(x->building, keys[j], &a);
-                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
+                    t_atom *abs_atoms = NULL;
+                    long abs_count = 0;
+                    t_atomarray *abs_aa = NULL;
+                    t_atom abs_atom;
+                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
+                        atomarray_getatoms(abs_aa, &abs_count, &abs_atoms);
+                    } else if (dictionary_getatom(x->building, keys[j], &abs_atom) == MAX_ERR_NONE) {
+                        abs_atoms = &abs_atom;
+                        abs_count = 1;
+                    }
 
                     t_symbol *scores_key = generate_hierarchical_key(x->current_palette, source_track_sym, gensym(bar_str), gensym("scores"));
-                    dictionary_getatom(x->building, scores_key, &a);
-                    t_atomarray *scores = (t_atomarray *)atom_getobj(&a);
-
-                    long abs_count; t_atom *abs_atoms;
-                    atomarray_getatoms(absolutes, &abs_count, &abs_atoms);
-                    long scores_count; t_atom *scores_atoms;
-                    atomarray_getatoms(scores, &scores_count, &scores_atoms);
+                    t_atom *scores_atoms = NULL;
+                    long scores_count = 0;
+                    t_atomarray *scores_aa = NULL;
+                    t_atom scores_atom;
+                    if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
+                        atomarray_getatoms(scores_aa, &scores_count, &scores_atoms);
+                    } else if (dictionary_getatom(x->building, scores_key, &scores_atom) == MAX_ERR_NONE) {
+                        scores_atoms = &scores_atom;
+                        scores_count = 1;
+                    }
 
                     for (long k = 0; k < abs_count; k++) {
                         if (manifest_count >= manifest_capacity) {
@@ -820,9 +835,17 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             char *key_pal, *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
                 if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, target_track_sym->s_name) == 0 && strcmp(key_prop, "offset") == 0) {
-                    t_atom a;
-                    dictionary_getatom(x->building, keys[j], &a);
-                    actual_offset = atom_getfloat(&a);
+                    t_atom *off_atoms = NULL;
+                    long off_count = 0;
+                    t_atomarray *off_aa = NULL;
+                    t_atom off_atom;
+                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
+                        atomarray_getatoms(off_aa, &off_count, &off_atoms);
+                    } else if (dictionary_getatom(x->building, keys[j], &off_atom) == MAX_ERR_NONE) {
+                        off_atoms = &off_atom;
+                        off_count = 1;
+                    }
+                    if (off_count > 0) actual_offset = atom_getfloat(off_atoms);
                     offset_found = 1;
                     sysmem_freeptr(key_pal);
                     sysmem_freeptr(key_track);
@@ -975,14 +998,18 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // Update absolutes array
     t_symbol *absolutes_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("absolutes"));
-    t_atomarray *absolutes_array;
-    if (!dictionary_hasentry(x->building, absolutes_key)) {
-        absolutes_array = atomarray_new(0, NULL);
+    t_atomarray *absolutes_array = NULL;
+    if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&absolutes_array) != MAX_ERR_NONE || !absolutes_array) {
+        // If not found or if it was a single atom, create a new atomarray
+        t_atom existing_atom;
+        if (dictionary_getatom(x->building, absolutes_key, &existing_atom) == MAX_ERR_NONE) {
+            absolutes_array = atomarray_new(1, &existing_atom);
+        } else {
+            absolutes_array = atomarray_new(0, NULL);
+        }
         t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
+        if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
         dictionary_appendatom(x->building, absolutes_key, &a);
-    } else {
-        t_atom a; dictionary_getatom(x->building, absolutes_key, &a);
-        absolutes_array = (t_atomarray *)atom_getobj(&a);
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
@@ -994,14 +1021,18 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // Update scores array
     t_symbol *scores_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("scores"));
-    t_atomarray *scores_array;
-    if (!dictionary_hasentry(x->building, scores_key)) {
-        scores_array = atomarray_new(0, NULL);
+    t_atomarray *scores_array = NULL;
+    if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_array) != MAX_ERR_NONE || !scores_array) {
+        // If not found or if it was a single atom, create a new atomarray
+        t_atom existing_atom;
+        if (dictionary_getatom(x->building, scores_key, &existing_atom) == MAX_ERR_NONE) {
+            scores_array = atomarray_new(1, &existing_atom);
+        } else {
+            scores_array = atomarray_new(0, NULL);
+        }
         t_atom a; atom_setobj(&a, (t_object *)scores_array);
+        if (dictionary_hasentry(x->building, scores_key)) dictionary_deleteentry(x->building, scores_key);
         dictionary_appendatom(x->building, scores_key, &a);
-    } else {
-        t_atom a; dictionary_getatom(x->building, scores_key, &a);
-        scores_array = (t_atomarray *)atom_getobj(&a);
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
@@ -1087,10 +1118,18 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
         t_symbol *temp_bar_sym = gensym(temp_bar_str);
         t_symbol *mean_key = generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("mean"));
-        if (dictionary_hasentry(x->building, mean_key)) {
-            t_atom mean_atom;
-            dictionary_getatom(x->building, mean_key, &mean_atom);
-            double current_bar_mean = atom_getfloat(&mean_atom);
+        t_atom *m_atoms = NULL;
+        long m_count = 0;
+        t_atomarray *m_aa = NULL;
+        t_atom m_atom;
+        if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+            atomarray_getatoms(m_aa, &m_count, &m_atoms);
+        } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+            m_atoms = &m_atom;
+            m_count = 1;
+        }
+        if (m_count > 0) {
+            double current_bar_mean = atom_getfloat(m_atoms);
             if (final_lowest_mean == -1.0 || current_bar_mean < final_lowest_mean) {
                 final_lowest_mean = current_bar_mean;
             }
@@ -1121,19 +1160,27 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
     // 1. Find the first 'span' atomarray for the track. They are all shared.
     t_atomarray *span_to_output = NULL;
+    t_atomarray *span_aa = NULL;
+    t_atom span_atom;
+    int span_found_robustly = 0;
+
     if (keys) {
         for (long i = 0; i < num_keys; i++) {
             char *key_pal, *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
                 if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "span") == 0) {
-                    t_atom a;
-                    dictionary_getatom(x->building, keys[i], &a);
-                    span_to_output = (t_atomarray *)atom_getobj(&a);
+                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                        span_to_output = span_aa;
+                        span_found_robustly = 1;
+                    } else if (dictionary_getatom(x->building, keys[i], &span_atom) == MAX_ERR_NONE) {
+                        span_to_output = atomarray_new(1, &span_atom);
+                        span_found_robustly = 1;
+                    }
                     sysmem_freeptr(key_pal);
                     sysmem_freeptr(key_track);
                     sysmem_freeptr(key_bar);
                     sysmem_freeptr(key_prop);
-                    break; // Found it.
+                    if (span_found_robustly) break; // Found it.
                 }
                 sysmem_freeptr(key_pal);
                 sysmem_freeptr(key_track);
@@ -1181,15 +1228,23 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
             double lowest_mean = -1.0;
             if (span_size > 0) {
-                 for (long i = 0; i < span_size; i++) {
+                for (long i = 0; i < span_size; i++) {
                     long bar_ts = atom_getlong(&span_atoms[i]);
                     char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
                     t_symbol *bar_sym = gensym(bar_str);
                     t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-                    if (dictionary_hasentry(x->building, mean_key)) {
-                        t_atom mean_atom;
-                        dictionary_getatom(x->building, mean_key, &mean_atom);
-                        double bar_mean = atom_getfloat(&mean_atom);
+                    t_atom *m_atoms = NULL;
+                    long m_count = 0;
+                    t_atomarray *m_aa = NULL;
+                    t_atom m_atom;
+                    if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+                        atomarray_getatoms(m_aa, &m_count, &m_atoms);
+                    } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+                        m_atoms = &m_atom;
+                        m_count = 1;
+                    }
+                    if (m_count > 0) {
+                        double bar_mean = atom_getfloat(m_atoms);
                         if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
                             lowest_mean = bar_mean;
                         }
@@ -1212,7 +1267,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
         }
 
-        if (local_span_created) {
+        if (local_span_created || (span_found_robustly && span_to_output != span_aa)) {
             object_free(span_to_output);
         }
     }
@@ -1553,10 +1608,19 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym) {
     // Update rating to mean
     t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-    if (dictionary_hasentry(x->building, mean_key)) {
-        t_atom mean_atom;
-        dictionary_getatom(x->building, mean_key, &mean_atom);
-        double mean_val = atom_getfloat(&mean_atom);
+    t_atom *m_atoms = NULL;
+    long m_count = 0;
+    t_atomarray *m_aa = NULL;
+    t_atom m_atom;
+    if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+        atomarray_getatoms(m_aa, &m_count, &m_atoms);
+    } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+        m_atoms = &m_atom;
+        m_count = 1;
+    }
+
+    if (m_count > 0) {
+        double mean_val = atom_getfloat(m_atoms);
 
         t_symbol *rating_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("rating"));
         if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
@@ -1599,10 +1663,18 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
         char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
         t_symbol *bar_sym = gensym(bar_str);
         t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-        if (dictionary_hasentry(x->building, mean_key)) {
-            t_atom mean_atom;
-            dictionary_getatom(x->building, mean_key, &mean_atom);
-            double bar_mean = atom_getfloat(&mean_atom);
+        t_atom *m_atoms = NULL;
+        long m_count = 0;
+        t_atomarray *m_aa = NULL;
+        t_atom m_atom;
+        if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+            atomarray_getatoms(m_aa, &m_count, &m_atoms);
+        } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+            m_atoms = &m_atom;
+            m_count = 1;
+        }
+        if (m_count > 0) {
+            double bar_mean = atom_getfloat(m_atoms);
             if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
                 lowest_mean = bar_mean;
             }
@@ -1630,6 +1702,7 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
         t_atom span_copy_atom;
         atom_setobj(&span_copy_atom, (t_object *)span_copy);
         t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
+        if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
         dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
         if (span_str) {
@@ -1670,10 +1743,18 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
             char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *bar_sym = gensym(bar_str);
             t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-            if (dictionary_hasentry(x->building, mean_key)) {
-                t_atom mean_atom;
-                dictionary_getatom(x->building, mean_key, &mean_atom);
-                double bar_mean = atom_getfloat(&mean_atom);
+            t_atom *m_atoms = NULL;
+            long m_count = 0;
+            t_atomarray *m_aa = NULL;
+            t_atom m_atom;
+            if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+                atomarray_getatoms(m_aa, &m_count, &m_atoms);
+            } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+                m_atoms = &m_atom;
+                m_count = 1;
+            }
+            if (m_count > 0) {
+                double bar_mean = atom_getfloat(m_atoms);
                 if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) {
                     lowest_mean_with = bar_mean;
                 }
@@ -1686,13 +1767,21 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
         long bars_without_count = 0;
         double last_bar_mean = 0.0;
         for (long i = 0; i < bar_count; i++) {
-             char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
+            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *bar_sym = gensym(bar_str);
             t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-            if (dictionary_hasentry(x->building, mean_key)) {
-                t_atom mean_atom;
-                dictionary_getatom(x->building, mean_key, &mean_atom);
-                double bar_mean = atom_getfloat(&mean_atom);
+            t_atom *m_atoms = NULL;
+            long m_count = 0;
+            t_atomarray *m_aa = NULL;
+            t_atom m_atom;
+            if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+                atomarray_getatoms(m_aa, &m_count, &m_atoms);
+            } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+                m_atoms = &m_atom;
+                m_count = 1;
+            }
+            if (m_count > 0) {
+                double bar_mean = atom_getfloat(m_atoms);
                 if (bar_timestamps[i] == last_bar_timestamp) {
                     last_bar_mean = bar_mean;
                 } else {
@@ -1745,12 +1834,22 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
         char *pal_str, *track_str, *bar_str, *prop_str;
         if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
             if (strcmp(pal_str, palette_sym->s_name) == 0 && strncmp(track_str, track_prefix, strlen(track_prefix)) == 0 && strcmp(prop_str, "offset") == 0) {
-                t_atom a;
-                dictionary_getatom(x->building, keys[i], &a);
-                double current_offset = atom_getfloat(&a);
-                char offset_key_str[64];
-                snprintf(offset_key_str, 64, "%.2f", current_offset);
-                dictionary_appendfloat(unique_offsets_dict, gensym(offset_key_str), current_offset);
+                t_atom *off_atoms = NULL;
+                long off_count = 0;
+                t_atomarray *off_aa = NULL;
+                t_atom off_atom;
+                if (dictionary_getatomarray(x->building, keys[i], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
+                    atomarray_getatoms(off_aa, &off_count, &off_atoms);
+                } else if (dictionary_getatom(x->building, keys[i], &off_atom) == MAX_ERR_NONE) {
+                    off_atoms = &off_atom;
+                    off_count = 1;
+                }
+                if (off_count > 0) {
+                    double current_offset = atom_getfloat(off_atoms);
+                    char offset_key_str[64];
+                    snprintf(offset_key_str, 64, "%.2f", current_offset);
+                    dictionary_appendfloat(unique_offsets_dict, gensym(offset_key_str), current_offset);
+                }
             }
             sysmem_freeptr(pal_str);
             sysmem_freeptr(track_str);
@@ -1833,14 +1932,18 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
         t_symbol *bar_sym = gensym(bar_str);
         t_symbol *absolutes_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("absolutes"));
 
-        if (dictionary_hasentry(x->building, absolutes_key)) {
-            t_atom a;
-            dictionary_getatom(x->building, absolutes_key, &a);
-            t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
-            long ac;
-            t_atom *av;
-            atomarray_getatoms(absolutes, &ac, &av);
+        t_atom *av = NULL;
+        long ac = 0;
+        t_atomarray *aa = NULL;
+        t_atom a;
+        if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+            atomarray_getatoms(aa, &ac, &av);
+        } else if (dictionary_getatom(x->building, absolutes_key, &a) == MAX_ERR_NONE) {
+            av = &a;
+            ac = 1;
+        }
 
+        if (ac > 0) {
             for (long k = 0; k < ac; k++) {
                 double current_time = atom_getfloat(av + k);
                 if (earliest_absolute == -1.0 || current_time < earliest_absolute) {
@@ -1899,37 +2002,23 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
             t_symbol *prop_sym = gensym(properties_to_output[j]);
             t_symbol *hierarchical_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, prop_sym);
 
-            if (dictionary_hasentry(x->building, hierarchical_key)) {
+            t_atom *av = NULL;
+            long ac = 0;
+            t_atomarray *aa = NULL;
+            t_atom a;
+
+            if (dictionary_getatomarray(x->building, hierarchical_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                atomarray_getatoms(aa, &ac, &av);
+            } else if (dictionary_getatom(x->building, hierarchical_key, &a) == MAX_ERR_NONE) {
+                av = &a;
+                ac = 1;
+            }
+
+            if (ac > 0) {
                 char output_key_str[256];
                 snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
                 t_symbol *output_key_sym = gensym(output_key_str);
-
-                t_atom a;
-                dictionary_getatom(x->building, hierarchical_key, &a);
-                short type = atom_gettype(&a);
-
-                if (type == A_FLOAT) {
-                    t_atom out_atom;
-                    atom_setfloat(&out_atom, atom_getfloat(&a));
-                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
-                } else if (type == A_LONG) {
-                    t_atom out_atom;
-                    atom_setlong(&out_atom, atom_getlong(&a));
-                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
-                } else if (type == A_SYM) {
-                    t_atom out_atom;
-                    atom_setsym(&out_atom, atom_getsym(&a));
-                    outlet_anything(x->out_bar_data, output_key_sym, (short)1, &out_atom);
-                } else if (type == A_OBJ) {
-                    t_object *obj = atom_getobj(&a);
-                    if (object_classname(obj) == gensym("atomarray")) {
-                        t_atomarray *arr = (t_atomarray *)obj;
-                        long ac;
-                        t_atom *av;
-                        atomarray_getatoms(arr, &ac, &av);
-                        outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
-                    }
-                }
+                outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
             }
         }
     }
@@ -1991,12 +2080,16 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
 
                 // a) Find the oldest absolute time
                 if (strcmp(prop_str, "absolutes") == 0) {
+                    t_atom *av = NULL;
+                    long ac = 0;
+                    t_atomarray *aa = NULL;
                     t_atom a;
-                    dictionary_getatom(x->building, keys[i], &a);
-                    t_atomarray *absolutes = (t_atomarray *)atom_getobj(&a);
-                    long ac;
-                    t_atom *av;
-                    atomarray_getatoms(absolutes, &ac, &av);
+                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                        atomarray_getatoms(aa, &ac, &av);
+                    } else if (dictionary_getatom(x->building, keys[i], &a) == MAX_ERR_NONE) {
+                        av = &a;
+                        ac = 1;
+                    }
                     for (long k = 0; k < ac; k++) {
                         double current_time = atom_getfloat(av + k);
                         if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {

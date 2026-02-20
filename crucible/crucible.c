@@ -187,22 +187,26 @@ void crucible_free(t_crucible *x) {
 
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict) {
     if (!bar_dict) return;
-    t_atomarray *offset_atomarray = NULL, *palette_atomarray = NULL, *bar_span_atomarray = NULL;
-    dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_atomarray);
-    dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_atomarray);
-    dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
+
+    t_atom *span_atoms = NULL;
+    long span_len = 0;
+    t_atomarray *span_aa = NULL;
+    t_atom span_atom;
+
+    if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+        atomarray_getatoms(span_aa, &span_len, &span_atoms);
+    } else if (dictionary_getatom(bar_dict, gensym("span"), &span_atom) == MAX_ERR_NONE) {
+        span_atoms = &span_atom;
+        span_len = 1;
+    }
 
     // Right-to-Left execution order: Reach, Offset, Bar, Track, Palette
 
     // 1. Reach
-    if (bar_span_atomarray) {
-        long bar_span_len = 0;
-        t_atom *bar_span_atoms = NULL;
-        atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
-
+    if (span_len > 0) {
         t_atom_long max_val = 0;
-        for (long j = 0; j < bar_span_len; j++) {
-            t_atom_long current_val = atom_getlong(bar_span_atoms + j);
+        for (long j = 0; j < span_len; j++) {
+            t_atom_long current_val = atom_getlong(span_atoms + j);
             if (current_val > max_val) max_val = current_val;
         }
 
@@ -231,23 +235,35 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     t_symbol *palette_sym = _sym_nothing;
     double offset_val = 0.0;
 
-    if (palette_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(palette_atomarray, &len, &atoms);
-        if (len > 0 && atom_gettype(atoms) == A_SYM) palette_sym = atom_getsym(atoms);
-    }
+    t_atom *palette_atoms = NULL;
+    long palette_len = 0;
+    t_atomarray *palette_aa = NULL;
+    t_atom palette_atom;
 
-    if (offset_atomarray) {
-        long len;
-        t_atom *atoms;
-        atomarray_getatoms(offset_atomarray, &len, &atoms);
-        if (len > 0) {
-            if (atom_gettype(atoms) == A_FLOAT) {
-                offset_val = atom_getfloat(atoms);
-            } else if (atom_gettype(atoms) == A_LONG) {
-                offset_val = (double)atom_getlong(atoms);
-            }
+    if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+        atomarray_getatoms(palette_aa, &palette_len, &palette_atoms);
+    } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
+        palette_atoms = &palette_atom;
+        palette_len = 1;
+    }
+    if (palette_len > 0 && atom_gettype(palette_atoms) == A_SYM) palette_sym = atom_getsym(palette_atoms);
+
+    t_atom *offset_atoms = NULL;
+    long offset_len = 0;
+    t_atomarray *offset_aa = NULL;
+    t_atom offset_atom;
+
+    if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+        atomarray_getatoms(offset_aa, &offset_len, &offset_atoms);
+    } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+        offset_atoms = &offset_atom;
+        offset_len = 1;
+    }
+    if (offset_len > 0) {
+        if (atom_gettype(offset_atoms) == A_FLOAT) {
+            offset_val = atom_getfloat(offset_atoms);
+        } else if (atom_gettype(offset_atoms) == A_LONG) {
+            offset_val = (double)atom_getlong(offset_atoms);
         }
     }
 
@@ -295,13 +311,17 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
         if (!challenger_bar_dict) continue;
 
-        t_atomarray *challenger_rating_atomarray = NULL;
-        dictionary_getatomarray(challenger_bar_dict, gensym("rating"), (t_object **)&challenger_rating_atomarray);
-        if (!challenger_rating_atomarray) continue;
-
-        long challenger_rating_len = 0;
         t_atom *challenger_rating_atoms = NULL;
-        atomarray_getatoms(challenger_rating_atomarray, &challenger_rating_len, &challenger_rating_atoms);
+        long challenger_rating_len = 0;
+        t_atomarray *challenger_rating_aa = NULL;
+        t_atom challenger_rating_atom;
+
+        if (dictionary_getatomarray(challenger_bar_dict, gensym("rating"), (t_object **)&challenger_rating_aa) == MAX_ERR_NONE && challenger_rating_aa) {
+            atomarray_getatoms(challenger_rating_aa, &challenger_rating_len, &challenger_rating_atoms);
+        } else if (dictionary_getatom(challenger_bar_dict, gensym("rating"), &challenger_rating_atom) == MAX_ERR_NONE) {
+            challenger_rating_atoms = &challenger_rating_atom;
+            challenger_rating_len = 1;
+        }
         if (challenger_rating_len == 0) continue;
         double challenger_rating = atom_getfloat(challenger_rating_atoms);
 
@@ -316,19 +336,20 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             t_dictionary *incumbent_bar_dict = NULL;
             dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
 
-            t_atomarray *incumbent_rating_atomarray = NULL;
-            dictionary_getatomarray(incumbent_bar_dict, gensym("rating"), (t_object **)&incumbent_rating_atomarray);
+            t_atom *incumbent_rating_atoms = NULL;
+            long incumbent_rating_len = 0;
+            t_atomarray *incumbent_rating_aa = NULL;
+            t_atom incumbent_rating_atom;
 
-            if (!incumbent_rating_atomarray) {
-                crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
-                continue;
+            if (dictionary_getatomarray(incumbent_bar_dict, gensym("rating"), (t_object **)&incumbent_rating_aa) == MAX_ERR_NONE && incumbent_rating_aa) {
+                atomarray_getatoms(incumbent_rating_aa, &incumbent_rating_len, &incumbent_rating_atoms);
+            } else if (dictionary_getatom(incumbent_bar_dict, gensym("rating"), &incumbent_rating_atom) == MAX_ERR_NONE) {
+                incumbent_rating_atoms = &incumbent_rating_atom;
+                incumbent_rating_len = 1;
             }
 
-            long incumbent_rating_len = 0;
-            t_atom *incumbent_rating_atoms = NULL;
-            atomarray_getatoms(incumbent_rating_atomarray, &incumbent_rating_len, &incumbent_rating_atoms);
-            if(incumbent_rating_len == 0) {
-                crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, empty atomarray). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
+            if (incumbent_rating_len == 0) {
+                crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 continue;
             }
 
@@ -360,14 +381,19 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
             if (!challenger_bar_dict) continue;
 
-            t_atomarray *bar_span_atomarray = NULL;
-            dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_atomarray);
+            t_atom *bar_span_atoms = NULL;
+            long bar_span_len = 0;
+            t_atomarray *bar_span_aa = NULL;
+            t_atom bar_span_atom;
 
-            if (bar_span_atomarray) {
-                long bar_span_len = 0;
-                t_atom *bar_span_atoms = NULL;
-                atomarray_getatoms(bar_span_atomarray, &bar_span_len, &bar_span_atoms);
+            if (dictionary_getatomarray(challenger_bar_dict, gensym("span"), (t_object **)&bar_span_aa) == MAX_ERR_NONE && bar_span_aa) {
+                atomarray_getatoms(bar_span_aa, &bar_span_len, &bar_span_atoms);
+            } else if (dictionary_getatom(challenger_bar_dict, gensym("span"), &bar_span_atom) == MAX_ERR_NONE) {
+                bar_span_atoms = &bar_span_atom;
+                bar_span_len = 1;
+            }
 
+            if (bar_span_len > 0) {
                 t_atom_long max_val = 0;
                 for (long j = 0; j < bar_span_len; j++) {
                     t_atom_long current_val = atom_getlong(bar_span_atoms + j);

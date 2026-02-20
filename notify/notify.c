@@ -303,19 +303,32 @@ void notify_fill(t_notify *x) {
                         palette = atom_getsym(&palette_atom);
                     }
 
+                    t_atom *aa_atoms = NULL;
+                    long aa_len = 0;
                     t_atomarray *absolutes_aa = NULL;
+                    t_atom absolute_atom;
+
                     if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
-                        long aa_len = 0;
-                        t_atom *aa_atoms = NULL;
                         atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-                        t_atomarray *scores_aa = NULL;
-                        long scores_len = 0;
+                    } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+                        aa_atoms = &absolute_atom;
+                        aa_len = 1;
+                    }
+
+                    if (aa_len > 0) {
                         t_atom *scores_atoms = NULL;
+                        long scores_len = 0;
+                        t_atomarray *scores_aa = NULL;
+                        t_atom score_atom;
+
                         if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
                             atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
+                        } else if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                            scores_atoms = &score_atom;
+                            scores_len = 1;
                         }
-                        long num_entries = aa_len < scores_len ? aa_len : scores_len;
-                        for (long k = 0; k < num_entries; k++) {
+
+                        for (long k = 0; k < aa_len; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
                             double synth_abs = orig_abs + n * max_bar_this;
                             if (total_notes >= notes_capacity) {
@@ -326,31 +339,8 @@ void notify_fill(t_notify *x) {
                                 orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                             all_notes[total_notes].absolute = synth_abs;
                             all_notes[total_notes].original_absolute = orig_abs;
-                            all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                            all_notes[total_notes].offset = offset;
-                            all_notes[total_notes].bar_ts = synth_bar_ts;
-                            all_notes[total_notes].track = track_sym;
-                            all_notes[total_notes].palette = palette;
-                            total_notes++;
-                            notes_added_this_pass++;
-                            total_synthetic_added++;
-                        }
-                    } else {
-                        t_atom absolute_atom;
-                        if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
-                            double orig_abs = atom_getfloat(&absolute_atom);
-                            double synth_abs = orig_abs + n * max_bar_this;
-                            if (total_notes >= notes_capacity) {
-                                notes_capacity *= 2;
-                                all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                            }
-                            notify_log(x, "Duplicating note: original abs %.2f -> manifest abs %.2f (span %.2f -> %.2f, palette %s, offset %.2f)",
-                                orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
-                            all_notes[total_notes].absolute = synth_abs;
-                            all_notes[total_notes].original_absolute = orig_abs;
-                            t_atom score_atom;
-                            if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                                all_notes[total_notes].score = atom_getfloat(&score_atom);
+                            if (k < scores_len) {
+                                all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                             } else {
                                 all_notes[total_notes].score = 0;
                             }
