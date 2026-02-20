@@ -328,7 +328,8 @@ void notify_fill(t_notify *x) {
                             scores_len = 1;
                         }
 
-                        for (long k = 0; k < aa_len; k++) {
+                        long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
+                        for (long k = 0; k < num_notes; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
                             double synth_abs = orig_abs + n * max_bar_this;
                             if (total_notes >= notes_capacity) {
@@ -339,11 +340,7 @@ void notify_fill(t_notify *x) {
                                 orig_abs, synth_abs, bar_ts, synth_bar_ts, palette->s_name, offset);
                             all_notes[total_notes].absolute = synth_abs;
                             all_notes[total_notes].original_absolute = orig_abs;
-                            if (k < scores_len) {
-                                all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                            } else {
-                                all_notes[total_notes].score = 0;
-                            }
+                            all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                             all_notes[total_notes].offset = offset;
                             all_notes[total_notes].bar_ts = synth_bar_ts;
                             all_notes[total_notes].track = track_sym;
@@ -513,18 +510,15 @@ void notify_bang(t_notify *x) {
                     scores_len = 1;
                 }
 
-                for (long k = 0; k < aa_len; k++) {
+                long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
+                for (long k = 0; k < num_notes; k++) {
                     if (total_notes >= notes_capacity) {
                         notes_capacity *= 2;
                         all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                     }
                     all_notes[total_notes].absolute = atom_getfloat(&aa_atoms[k]);
                     all_notes[total_notes].original_absolute = all_notes[total_notes].absolute;
-                    if (k < scores_len) {
-                        all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                    } else {
-                        all_notes[total_notes].score = 0;
-                    }
+                    all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                     all_notes[total_notes].offset = offset;
                     all_notes[total_notes].bar_ts = bar_ts;
                     all_notes[total_notes].track = track_sym;
