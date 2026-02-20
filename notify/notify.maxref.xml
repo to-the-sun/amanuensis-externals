@@ -42,7 +42,7 @@
 		</outlet>
 		<outlet id="5" type="list">
 			<digest>Outlet 5: Descript List</digest>
-			<description>Outputs batch initialization messages: [palette, track, bar_ts, 0.0].</description>
+			<description>Outputs batch initialization messages: [palette, track, bar_ts, 0.0]. This includes "cap" bars automatically generated at the end of each track (bar_ts + bar_length) to mark sequence boundaries and total track duration.</description>
 		</outlet>
 		<outlet id="6" type="anything">
 			<digest>Outlet 6: Logging (Optional)</digest>
