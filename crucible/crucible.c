@@ -35,7 +35,6 @@ void crucible_log(t_crucible *x, const char *fmt, ...);
 char *crucible_atoms_to_string(long argc, t_atom *argv);
 int parse_selector(const char *selector_str, char **track, char **bar, char **key);
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
-int crucible_spans_equal(t_atomarray *aa1, t_atomarray *aa2);
 int crucible_span_has_loser(t_atomarray *aa, t_dictionary *direct_loss_set);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict, int *created);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict);
@@ -50,19 +49,6 @@ void crucible_log(t_crucible *x, const char *fmt, ...) {
     va_start(args, fmt);
     vcommon_log(x->log_outlet, x->log, "crucible", fmt, args);
     va_end(args);
-}
-
-int crucible_spans_equal(t_atomarray *aa1, t_atomarray *aa2) {
-    if (!aa1 || !aa2) return (aa1 == aa2);
-    long ac1, ac2;
-    t_atom *av1, *av2;
-    atomarray_getatoms(aa1, &ac1, &av1);
-    atomarray_getatoms(aa2, &ac2, &av2);
-    if (ac1 != ac2) return 0;
-    for (long i = 0; i < ac1; i++) {
-        if (atom_getlong(av1 + i) != atom_getlong(av2 + i)) return 0;
-    }
-    return 1;
 }
 
 int crucible_span_has_loser(t_atomarray *aa, t_dictionary *direct_loss_set) {
@@ -512,13 +498,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                     int created_cand_span = 0;
                                     t_atomarray *candidate_span_aa = crucible_get_span_as_atomarray(candidate_bar_dict, &created_cand_span);
 
-                                    int agree = crucible_spans_equal(losing_span_aa, candidate_span_aa);
-                                    int has_loser = crucible_span_has_loser(candidate_span_aa, direct_loss_set);
-
-                                    if (agree || has_loser) {
+                                    if (crucible_span_has_loser(candidate_span_aa, direct_loss_set)) {
                                         dictionary_appendlong(consume_set, ts_sym, 1);
                                     } else {
-                                        crucible_log(x, "  -> Aborting consumption of bar %s: span disagreement and no loser found.", ts_str);
+                                        crucible_log(x, "  -> Aborting consumption of bar %s: no bar in its span lost the comparison.", ts_str);
                                     }
 
                                     if (created_cand_span) object_free(candidate_span_aa);
