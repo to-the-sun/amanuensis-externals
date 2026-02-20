@@ -24,6 +24,7 @@ typedef struct _bar {
     t_symbol *palette;
     t_symbol *track;
     double bar_ts;
+    long is_cap;
 } t_bar;
 
 typedef struct _notify {
@@ -475,6 +476,7 @@ void notify_bang(t_notify *x) {
             all_bars[total_bars].palette = palette;
             all_bars[total_bars].track = track_sym;
             all_bars[total_bars].bar_ts = bar_ts;
+            all_bars[total_bars].is_cap = 0;
             total_bars++;
 
             // Collect NEXT bar if needed
@@ -490,49 +492,46 @@ void notify_bang(t_notify *x) {
                     all_bars[total_bars].palette = palette;
                     all_bars[total_bars].track = track_sym;
                     all_bars[total_bars].bar_ts = next_bar_ts;
+                    all_bars[total_bars].is_cap = 1;
                     total_bars++;
                 }
             }
 
-            long num_entries = 0;
+            t_atom *aa_atoms = NULL;
+            long aa_len = 0;
             t_atomarray *absolutes_aa = NULL;
+            t_atom absolute_atom;
+
+            // Robust Note Collection
             if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
-                long aa_len = 0;
-                t_atom *aa_atoms = NULL;
                 atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-                t_atomarray *scores_aa_check = NULL;
-                if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa_check) == MAX_ERR_NONE && scores_aa_check) {
-                    long scores_len = 0;
-                    t_atom *scores_atoms = NULL;
-                    atomarray_getatoms(scores_aa_check, &scores_len, &scores_atoms);
-                    num_entries = aa_len < scores_len ? aa_len : scores_len;
-                    for (long k = 0; k < num_entries; k++) {
-                        if (total_notes >= notes_capacity) {
-                            notes_capacity *= 2;
-                            all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
-                        }
-                        all_notes[total_notes].absolute = atom_getfloat(&aa_atoms[k]);
-                        all_notes[total_notes].original_absolute = all_notes[total_notes].absolute;
-                        all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
-                        all_notes[total_notes].offset = offset;
-                        all_notes[total_notes].bar_ts = bar_ts;
-                        all_notes[total_notes].track = track_sym;
-                        all_notes[total_notes].palette = palette;
-                        total_notes++;
-                    }
+            } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+                aa_atoms = &absolute_atom;
+                aa_len = 1;
+            }
+
+            if (aa_len > 0) {
+                t_atom *scores_atoms = NULL;
+                long scores_len = 0;
+                t_atomarray *scores_aa = NULL;
+                t_atom score_atom;
+
+                if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
+                    atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
+                } else if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
+                    scores_atoms = &score_atom;
+                    scores_len = 1;
                 }
-            } else {
-                t_atom absolute_atom;
-                if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
+
+                for (long k = 0; k < aa_len; k++) {
                     if (total_notes >= notes_capacity) {
                         notes_capacity *= 2;
                         all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                     }
-                    all_notes[total_notes].absolute = atom_getfloat(&absolute_atom);
+                    all_notes[total_notes].absolute = atom_getfloat(&aa_atoms[k]);
                     all_notes[total_notes].original_absolute = all_notes[total_notes].absolute;
-                    t_atom score_atom;
-                    if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                        all_notes[total_notes].score = atom_getfloat(&score_atom);
+                    if (k < scores_len) {
+                        all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
                     } else {
                         all_notes[total_notes].score = 0;
                     }
@@ -555,19 +554,21 @@ void notify_bang(t_notify *x) {
     // Verbose Manifest Logging
     if (x->log && x->out_log) {
         for (long i = 0; i < total_bars; i++) {
-            notify_log(x, "Bar Manifest: palette %s, track %s, bar_ts %.2f",
+            notify_log(x, "Bar Manifest: palette %s, track %s, bar_ts %.2f%s",
                 all_bars[i].palette->s_name,
                 (all_bars[i].track && all_bars[i].track != gensym("")) ? all_bars[i].track->s_name : "0",
-                all_bars[i].bar_ts);
+                all_bars[i].bar_ts,
+                all_bars[i].is_cap ? " (cap)" : "");
         }
         for (long i = 0; i < total_notes; i++) {
-            notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f",
+            notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f, bar_ts %.2f",
                 all_notes[i].palette->s_name,
                 all_notes[i].absolute,
                 all_notes[i].original_absolute,
                 all_notes[i].score,
                 (all_notes[i].track && all_notes[i].track != gensym("")) ? all_notes[i].track->s_name : "0",
-                all_notes[i].offset);
+                all_notes[i].offset,
+                all_notes[i].bar_ts);
         }
     }
 
