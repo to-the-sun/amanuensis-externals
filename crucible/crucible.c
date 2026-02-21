@@ -189,13 +189,11 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
 
+        attr_args_process(x, argc, argv);
+
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
-            argc--;
-            argv++;
         }
-
-        attr_args_process(x, argc, argv);
 
         // Outlets are created from right to left
         if (x->log) {
