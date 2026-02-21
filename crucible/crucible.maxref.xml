@@ -2,7 +2,7 @@
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="crucible" module="max" category="Utility">
 	<digest>Compare "challenger" track data against "incumbent" data</digest>
-	<description>The `crucible` object receives track data and compares it against an existing dictionary. If the new data (challenger) has a higher rating than the existing data (incumbent), it overwrites the incumbent dictionary and outputs the new data.</description>
+	<description>The `crucible` object receives track data and compares it against an existing dictionary. If the new data (challenger) has a higher rating than the existing data (incumbent), it overwrites the incumbent dictionary and outputs the new data. If the `consume` attribute is enabled, winning challenger spans also remove all bars associated with the spans they defeated.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -56,6 +56,13 @@
 		<attribute name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Logging</digest>
 			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="consume" get="1" set="1" type="long" size="1">
+			<digest>Enable Consume Mode</digest>
+			<description>When enabled (1), winning challenger spans remove all bars associated with the incumbent spans they defeated from the dictionary before being placed.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
