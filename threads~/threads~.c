@@ -808,10 +808,32 @@ void threads_audio_qtask(t_threads *x) {
             long num_pt = 0;
             t_symbol **pt_keys = NULL;
             hashtab_getkeys(pending_tracks, &num_pt, &pt_keys);
+
+            t_dictionary *s_dict = dictobj_findregistered_retain(x->audio_dict_name);
+
             for (long i = 0; i < num_pt; i++) {
-                t_atom_long track = (t_atom_long)(size_t)pt_keys[i];
-                threads_process_data(x, gensym("-"), track, hit.value, -999999.0);
+                t_atom_long track_num = (t_atom_long)(size_t)pt_keys[i];
+                int still_missing = 1;
+
+                if (s_dict) {
+                    char tstr[64];
+                    snprintf(tstr, 64, "%ld", (long)track_num);
+                    t_symbol *track_sym = gensym(tstr);
+                    t_dictionary *track_dict = NULL;
+
+                    if (dictionary_getdictionary(s_dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+                        if (dictionary_hasentry(track_dict, bar_key)) {
+                            still_missing = 0;
+                        }
+                    }
+                }
+
+                if (still_missing) {
+                    threads_process_data(x, gensym("-"), track_num, hit.value, -999999.0);
+                }
             }
+            if (s_dict) dictobj_release(s_dict);
+
             if (pt_keys) sysmem_freeptr(pt_keys);
             hashtab_clear(pending_tracks);
             object_free(pending_tracks);
@@ -859,35 +881,14 @@ void threads_audio_qtask(t_threads *x) {
 
                 threads_process_data(x, palette, (t_atom_long)track_val, hit.value, offset);
 
-                // Silence Cap logic
-                t_atom *av_span = NULL;
-                long ac_span = 0;
-                t_atomarray *span_aa = NULL;
-                t_atom span_atom;
+                // Silence Cap logic: schedule silence if the next bar is missing from the dictionary
+                double next_bar_ms = hit.value + bar_len;
+                char next_bar_str[64];
+                snprintf(next_bar_str, 64, "%ld", (long)next_bar_ms);
+                t_symbol *next_bar_sym = gensym(next_bar_str);
 
-                if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                    atomarray_getatoms(span_aa, &ac_span, &av_span);
-                } else if (dictionary_getatom(bar_dict, gensym("span"), &span_atom) == MAX_ERR_NONE) {
-                    av_span = &span_atom;
-                    ac_span = 1;
-                }
-
-                if (ac_span > 0) {
-                    double max_val = -1.0;
-                    for (long j = 0; j < ac_span; j++) {
-                        double val = atom_getfloat(av_span + j);
-                        if (val > max_val) max_val = val;
-                    }
-                    double silence_pos = max_val + bar_len;
-                    char silence_str[64];
-                    snprintf(silence_str, 64, "%ld", (long)silence_pos);
-                    t_symbol *silence_sym = gensym(silence_str);
-
-                    // Check if the silence_sym bar exists for THIS track in the dictionary
-                    // dict[track_sym][silence_sym]
-                    if (!dictionary_hasentry(track_dict, silence_sym)) {
-                        threads_schedule_silence(x, (t_atom_long)track_val, silence_pos);
-                    }
+                if (!dictionary_hasentry(track_dict, next_bar_sym)) {
+                    threads_schedule_silence(x, (t_atom_long)track_val, next_bar_ms);
                 }
             }
         }
