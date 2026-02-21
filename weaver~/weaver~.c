@@ -42,7 +42,6 @@ typedef struct _weaver {
     t_buffer_ref *track1_ref;
 
     t_symbol *audio_dict_name;
-    double last_ramp_val;
     double last_scan_val;
     t_fifo_entry hit_bars[4096];
     int fifo_head;
@@ -185,7 +184,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
-        x->last_ramp_val = -1.0;
         x->last_scan_val = -1.0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
@@ -565,7 +563,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                     if (c < n_chans_src) {
                         samples_dest[f * n_chans_dest + c] = samples_src[f_src * n_chans_src + c];
                     } else {
-                        samples_dest[f * n_chans_dest + c] = 0.0f;
+                        samples_dest[f * n_chans_dest + c] = -999999.0f;
                     }
                 }
             } else {
@@ -662,7 +660,11 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                 if (samples) {
                     long num_chans = buffer_getchannelcount(b);
                     long num_frames = buffer_getframecount(b);
-                    memset(samples, 0, num_frames * num_chans * sizeof(float));
+                    for (long f = 0; f < num_frames; f++) {
+                        for (long c = 0; c < num_chans; c++) {
+                            samples[f * num_chans + c] = -999999.0f;
+                        }
+                    }
                     buffer_unlocksamples(b);
                     buffer_setdirty(b);
                     critical_exit(0);
@@ -685,7 +687,6 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
             if (x->visualize) visualize("{\"clear\": 1}");
             weaver_clear_pending_silence(x);
 
-            x->last_ramp_val = -1.0;
             x->last_scan_val = -1.0;
             x->fifo_head = 0;
             x->fifo_tail = 0;
@@ -716,15 +717,11 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
     double *out = outs[0];
-    double last_val = x->last_ramp_val;
     double last_scan = x->last_scan_val;
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
-        double initial_scan = last_scan;
-
         for (int i = 0; i < sampleframes; i++) {
-            double current_val = in[i];
-            double current_scan = current_val + 9.0; // 9ms lookahead
+            double current_scan = in[i] + 9.0; // 9ms lookahead
 
             out[i] = current_scan; // Output scan head position (ms)
 
@@ -769,36 +766,11 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 }
             }
 
-            // 2. SWEEP tracking (detect wrap-around)
-            if (last_scan != -1.0 && current_scan < last_scan) {
-                int next_tail = (x->fifo_tail + 1) % 4096;
-                if (next_tail != x->fifo_head) {
-                    x->hit_bars[x->fifo_tail].bar.value = initial_scan;
-                    x->hit_bars[x->fifo_tail].range_end = last_scan;
-                    x->hit_bars[x->fifo_tail].type = 1; // SWEEP
-                    x->fifo_tail = next_tail;
-                }
-                initial_scan = current_scan;
-            }
-
-            last_val = current_val;
             last_scan = current_scan;
-        }
-
-        // Final SWEEP for this vector
-        if (last_scan != -1.0 && initial_scan < last_scan) {
-            int next_tail = (x->fifo_tail + 1) % 4096;
-            if (next_tail != x->fifo_head) {
-                x->hit_bars[x->fifo_tail].bar.value = initial_scan;
-                x->hit_bars[x->fifo_tail].range_end = last_scan;
-                x->hit_bars[x->fifo_tail].type = 1; // SWEEP
-                x->fifo_tail = next_tail;
-            }
         }
 
         qelem_set(x->audio_qelem);
 
-        x->last_ramp_val = last_val;
         x->last_scan_val = last_scan;
         critical_exit(x->lock);
     }
@@ -812,73 +784,6 @@ void weaver_audio_qtask(t_weaver *x) {
         x->fifo_head = (x->fifo_head + 1) % 4096;
 
         t_bar_cache hit = hit_entry.bar;
-        long hit_type = hit_entry.type; // 0 for DATA, 1 for SWEEP
-
-        if (hit_type == 1) { // SWEEP hit: Constant clear for all tracks
-            double start_ms = hit.value;
-            double end_ms = hit_entry.range_end;
-            long max_t = x->max_tracks;
-            if (x->max_track_seen > max_t) max_t = x->max_track_seen;
-            if (max_t < 64) max_t = 64; // Safety minimum
-
-            if (start_ms < 0) start_ms = 0;
-
-            for (int track = 1; track <= (int)max_t; track++) {
-                char bufname[256];
-                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, track);
-                t_symbol *s_bufname = gensym(bufname);
-                t_buffer_ref *buf_ref = NULL;
-                hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&buf_ref);
-                if (!buf_ref) {
-                    buf_ref = buffer_ref_new((t_object *)x, s_bufname);
-                    hashtab_store(x->buffer_refs, s_bufname, (t_object *)buf_ref);
-                }
-                t_buffer_obj *b = buffer_ref_getobject(buf_ref);
-                if (!b) break; // Contiguous tracks: stop at first missing
-
-                double sr = buffer_getsamplerate(b);
-                if (sr <= 0) sr = sys_getsr();
-                if (sr <= 0) sr = 44100.0;
-
-                long s_start = (long)round(start_ms * sr / 1000.0);
-                long s_end = (long)round(end_ms * sr / 1000.0);
-                long n_frames = buffer_getframecount(b);
-                long n_chans = buffer_getchannelcount(b);
-
-                if (s_start < 0) s_start = 0;
-                if (s_start < n_frames) {
-                    if (s_end >= n_frames) s_end = n_frames - 1;
-                    if (s_start <= s_end) {
-                        float *samples = buffer_locksamples(b);
-                        if (samples) {
-                            if (x->visualize) {
-                                for (long s = s_start; s <= s_end; s++) {
-                                    int was_nonzero = 0;
-                                    for (long c = 0; c < n_chans; c++) {
-                                        if (samples[s * n_chans + c] != 0.0f) {
-                                            was_nonzero = 1;
-                                            samples[s * n_chans + c] = 0.0f;
-                                        }
-                                    }
-                                    if (was_nonzero) {
-                                        double sample_ms = (double)s * 1000.0 / sr;
-                                        char json[256];
-                                        snprintf(json, 256, "{\"track\": %ld, \"ms\": %.2f, \"chan\": 0, \"val\": 0.0, \"num_chans\": %ld}",
-                                                 (long)track, sample_ms, n_chans);
-                                        visualize(json);
-                                    }
-                                }
-                            } else {
-                                memset(samples + s_start * n_chans, 0, (s_end - s_start + 1) * n_chans * sizeof(float));
-                            }
-                            buffer_unlocksamples(b);
-                            buffer_setdirty(b);
-                        }
-                    }
-                }
-            }
-            continue;
-        }
 
         // DATA Hit logic
         t_symbol *bar_key = hit.sym;
