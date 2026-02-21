@@ -58,6 +58,13 @@
 			<digest>High Limit (ms)</digest>
 			<description>The maximum length of the crossfade ramp in milliseconds. Defaults to 4999.0 ms.</description>
 		</attribute>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

@@ -54,14 +54,24 @@ double ramp_process(t_ramp_state *x, double signal, double movement, long long e
 }
 
 void crossfade_init(t_crossfade_state *x, double samplerate, double low_ms, double high_ms) {
-    x->samplerate = samplerate;
+    if (low_ms < 0.001) low_ms = 0.001;
+    if (high_ms < low_ms) high_ms = low_ms;
+    x->samplerate = (samplerate > 0) ? samplerate : 44100.0;
     x->low_ms = low_ms;
     x->high_ms = high_ms;
-    ramp_init(&x->ramp1, samplerate, high_ms);
-    ramp_init(&x->ramp2, samplerate, high_ms);
+    ramp_init(&x->ramp1, x->samplerate, high_ms);
+    ramp_init(&x->ramp2, x->samplerate, high_ms);
     x->direction = -1.0;
     x->last_control = 0.0;
     x->elapsed = 0;
+}
+
+void crossfade_update_params(t_crossfade_state *x, double samplerate, double low_ms, double high_ms) {
+    if (low_ms < 0.001) low_ms = 0.001;
+    if (high_ms < low_ms) high_ms = low_ms;
+    if (samplerate > 0) x->samplerate = samplerate;
+    x->low_ms = low_ms;
+    x->high_ms = high_ms;
 }
 
 void crossfade_process(t_crossfade_state *x, double control, double s1, double s2, double *mix1, double *mix2, double *sum, int *busy) {
