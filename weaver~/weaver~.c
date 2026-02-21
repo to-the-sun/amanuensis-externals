@@ -450,115 +450,138 @@ void weaver_rescript(t_weaver *x, t_symbol *dict_name) {
 
 void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
     weaver_check_attachments(x, 0);
-    // 1. Palette mapping lookup
-    t_atom_long chan_index = -1;
-    t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
 
-    if (err != MAX_ERR_NONE && offset_ms != 0.0 && palette != gensym("-")) {
-        weaver_log(x, "WRITE SKIPPED: Palette '%s' not mapped to any channel", palette->s_name);
-        if (x->visualize && offset_ms == -999999.0) {
-             char json[256];
-             // Send with num_chans = -1 to indicate unmapped/reach event
-             snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": -1, \"val\": %.2f, \"num_chans\": -1}",
-                      (long long)track, bar_ms, offset_ms);
-             visualize(json);
-        }
-        return;
-    }
+    double bar_len = weaver_get_bar_length(x);
+    if (bar_len <= 0) return;
 
-    if (track > x->max_track_seen) x->max_track_seen = track;
-
-    // 2. Buffer lookup
+    // 1. Destination Buffer Lookup
     char bufname[256];
     snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track);
     t_symbol *s_bufname = gensym(bufname);
 
-    t_buffer_ref *buf_ref = NULL;
-    hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&buf_ref);
-    if (!buf_ref) {
-        buf_ref = buffer_ref_new((t_object *)x, s_bufname);
-        hashtab_store(x->buffer_refs, s_bufname, (t_object *)buf_ref);
+    t_buffer_ref *dest_ref = NULL;
+    hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&dest_ref);
+    if (!dest_ref) {
+        dest_ref = buffer_ref_new((t_object *)x, s_bufname);
+        hashtab_store(x->buffer_refs, s_bufname, (t_object *)dest_ref);
     }
-    t_buffer_obj *b = buffer_ref_getobject(buf_ref);
-
-    if (!b) {
-        weaver_log(x, "Error: buffer %s not found", s_bufname->s_name);
+    t_buffer_obj *dest_buf = buffer_ref_getobject(dest_ref);
+    if (!dest_buf) {
+        weaver_log(x, "Error: destination buffer %s not found", s_bufname->s_name);
         return;
     }
 
-    double sr = buffer_getsamplerate(b);
-    if (sr <= 0) sr = sys_getsr();
-    if (sr <= 0) sr = 44100.0; // fallback
+    double sr_dest = buffer_getsamplerate(dest_buf);
+    if (sr_dest <= 0) sr_dest = sys_getsr();
+    if (sr_dest <= 0) sr_dest = 44100.0;
 
-    // 3. Sample index conversion
-    long sample_index = (long)round(bar_ms * sr / 1000.0);
+    long n_frames_dest = buffer_getframecount(dest_buf);
+    long n_chans_dest = buffer_getchannelcount(dest_buf);
+    long start_frame = (long)round(bar_ms * sr_dest / 1000.0);
+    long end_frame = (long)round((bar_ms + bar_len) * sr_dest / 1000.0);
 
-    // 4. Offset value conversion
-    double write_val;
-    if (offset_ms == 0.0) {
-        write_val = 0.0;
-    } else if (offset_ms == -999999.0) {
-        write_val = -999999.0;
-    } else {
-        write_val = round(offset_ms * sr / 1000.0);
-    }
+    if (start_frame >= n_frames_dest) return;
+    if (end_frame > n_frames_dest) end_frame = n_frames_dest;
+    if (start_frame < 0) start_frame = 0;
 
-    // 5. Writing to buffer
+    if (track > x->max_track_seen) x->max_track_seen = track;
 
-    // Visualization: Send single packet regardless of buffer bounds (offload work to script)
+    // 2. Action determination
+    int is_silence = (palette == gensym("-") || offset_ms == -999999.0);
+
+    // Visualization: Send single packet to indicate bar transition
     if (x->visualize) {
         char json[256];
-        // We'll get num_chans here just for visualization, then again inside critical if needed
-        long num_chans_viz = buffer_getchannelcount(b);
-        snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"chan\": %lld, \"val\": %.2f, \"num_chans\": %ld}",
-                 (long long)track, bar_ms, (long long)chan_index, offset_ms, num_chans_viz);
+        snprintf(json, 256, "{\"track\": %lld, \"ms\": %.2f, \"val\": %.2f, \"palette\": \"%s\"}",
+                 (long long)track, bar_ms, offset_ms, palette->s_name);
         visualize(json);
     }
 
     critical_enter(0);
-    long num_frames = buffer_getframecount(b);
-    long num_chans = buffer_getchannelcount(b);
+    float *samples_dest = NULL;
+    int retries_dest = 0;
+    for (retries_dest = 0; retries_dest < 10; retries_dest++) {
+        samples_dest = buffer_locksamples(dest_buf);
+        if (samples_dest) break;
+        systhread_sleep(1);
+    }
+    if (!samples_dest) {
+        critical_exit(0);
+        weaver_log(x, "Error: could not lock destination buffer %s", s_bufname->s_name);
+        return;
+    }
 
-    if (sample_index >= 0 && sample_index < num_frames) {
-        float *samples = NULL;
-        int retries = 0;
-        for (retries = 0; retries < 10; retries++) {
-            samples = buffer_locksamples(b);
-            if (samples) break;
+    if (is_silence) {
+        for (long f = start_frame; f < end_frame; f++) {
+            for (long c = 0; c < n_chans_dest; c++) {
+                samples_dest[f * n_chans_dest + c] = -999999.0f;
+            }
+        }
+        buffer_unlocksamples(dest_buf);
+        buffer_setdirty(dest_buf);
+        critical_exit(0);
+        weaver_log(x, "SILENCE FILL: Track %lld, Range [%.2f, %.2f] ms", (long long)track, bar_ms, bar_ms + bar_len);
+    } else {
+        t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, palette);
+        t_buffer_obj *src_buf = buffer_ref_getobject(src_ref);
+        if (!src_buf) {
+            buffer_unlocksamples(dest_buf);
+            critical_exit(0);
+            object_free(src_ref);
+            weaver_log(x, "Error: palette buffer %s not found", palette->s_name);
+            return;
+        }
+
+        double sr_src = buffer_getsamplerate(src_buf);
+        if (sr_src <= 0) sr_src = sys_getsr();
+        if (sr_src <= 0) sr_src = 44100.0;
+        long n_frames_src = buffer_getframecount(src_buf);
+        long n_chans_src = buffer_getchannelcount(src_buf);
+
+        float *samples_src = NULL;
+        int retries_src = 0;
+        for (retries_src = 0; retries_src < 10; retries_src++) {
+            samples_src = buffer_locksamples(src_buf);
+            if (samples_src) break;
             systhread_sleep(1);
         }
 
-        if (samples) {
-            if (offset_ms == 0.0 || chan_index < 0) {
-                // Write write_val (which is 0 if offset_ms is 0) to all channels
-                for (long c = 0; c < num_chans; c++) {
-                    samples[sample_index * num_chans + c] = (float)write_val;
-                }
-            } else {
-                // Write write_val to chan_index, -999999 to others
-                for (long c = 0; c < num_chans; c++) {
-                    if (c == (long)chan_index) {
-                        samples[sample_index * num_chans + c] = (float)write_val;
+        if (!samples_src) {
+            buffer_unlocksamples(dest_buf);
+            critical_exit(0);
+            object_free(src_ref);
+            weaver_log(x, "Error: could not lock palette buffer %s", palette->s_name);
+            return;
+        }
+
+        // Weave loop with nearest-neighbor sample rate conversion
+        for (long f = start_frame; f < end_frame; f++) {
+            double current_ms = (double)f * 1000.0 / sr_dest;
+            double src_ms = current_ms + offset_ms;
+            long f_src = (long)round(src_ms * sr_src / 1000.0);
+
+            if (f_src >= 0 && f_src < n_frames_src) {
+                for (long c = 0; c < n_chans_dest; c++) {
+                    if (c < n_chans_src) {
+                        samples_dest[f * n_chans_dest + c] = samples_src[f_src * n_chans_src + c];
                     } else {
-                        samples[sample_index * num_chans + c] = -999999.0f;
+                        samples_dest[f * n_chans_dest + c] = 0.0f;
                     }
                 }
-            }
-            buffer_unlocksamples(b);
-            buffer_setdirty(b);
-            critical_exit(0);
-            if (retries > 0) {
-                weaver_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s) [Retries: %d]", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name, retries);
             } else {
-                weaver_log(x, "WRITE SUCCESS: Track %lld, Position %.2f ms, Channel %lld, Offset %.2f ms (Palette: %s)", (long long)track, bar_ms, (long long)chan_index, offset_ms, palette->s_name);
+                for (long c = 0; c < n_chans_dest; c++) {
+                    samples_dest[f * n_chans_dest + c] = -999999.0f;
+                }
             }
-        } else {
-            critical_exit(0);
-            weaver_log(x, "WRITE FAILED: Could not lock samples for buffer %s", s_bufname->s_name);
         }
-    } else {
+
+        buffer_unlocksamples(src_buf);
+        buffer_unlocksamples(dest_buf);
+        buffer_setdirty(dest_buf);
         critical_exit(0);
-        weaver_log(x, "WRITE SKIPPED: Position %.2f ms out of bounds for buffer %s", bar_ms, s_bufname->s_name);
+        object_free(src_ref);
+        weaver_log(x, "WEAVE SUCCESS: Track %lld, Palette %s, Offset %.2f ms, Range [%.2f, %.2f] ms",
+                   (long long)track, palette->s_name, offset_ms, bar_ms, bar_ms + bar_len);
     }
 }
 
@@ -661,7 +684,13 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 
             if (x->visualize) visualize("{\"clear\": 1}");
             weaver_clear_pending_silence(x);
-            weaver_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared");
+
+            x->last_ramp_val = -1.0;
+            x->last_scan_val = -1.0;
+            x->fifo_head = 0;
+            x->fifo_tail = 0;
+
+            weaver_log(x, "CLEAR COMMAND SENT: To visualizer and pending silence cleared, state reset");
         } else if (s == gensym("clear_visualizer") && argc == 0) {
             if (x->visualize) visualize("{\"clear\": 1}");
             weaver_clear_pending_silence(x);
@@ -700,8 +729,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
             out[i] = current_scan; // Output scan head position (ms)
 
             // 1. DATA hits (integer bar crossings and wrap-around)
-            if (last_val != -1.0) {
-                if (current_val < last_val) {
+            if (last_scan != -1.0) {
+                if (current_scan < last_scan) {
                     // Wrap-around: trigger bar 0
                     int next_tail = (x->fifo_tail + 1) % 4096;
                     if (next_tail != x->fifo_head) {
@@ -711,8 +740,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         x->fifo_tail = next_tail;
                     }
 
-                    // Also handle any integers between 0 and current_val that we might have jumped to
-                    long floor_curr = (long)floor(current_val);
+                    // Also handle any integers between 0 and current_scan that we might have jumped to
+                    long floor_curr = (long)floor(current_scan);
                     for (long v = 1; v <= floor_curr; v++) {
                         int nt = (x->fifo_tail + 1) % 4096;
                         if (nt != x->fifo_head) {
@@ -722,9 +751,9 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                             x->fifo_tail = nt;
                         }
                     }
-                } else if (current_val > last_val) {
-                    long floor_last = (long)floor(last_val);
-                    long floor_curr = (long)floor(current_val);
+                } else if (current_scan > last_scan) {
+                    long floor_last = (long)floor(last_scan);
+                    long floor_curr = (long)floor(current_scan);
 
                     if (floor_curr > floor_last) {
                         for (long v = floor_last + 1; v <= floor_curr; v++) {

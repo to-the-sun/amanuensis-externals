@@ -3,7 +3,7 @@
 <c74object name="weaver~" module="msp" category="Utility">
 	<digest>Writes incoming track data into a polybuffer~</digest>
 	<description>
-		The `weaver~` object receives 4-item lists (palette, track, bar, offset) and writes them into a named `polybuffer~`. It uses a palette-to-channel mapping to determine which channel of a buffer to write to. Special values like 0 and -999999 are handled according to a specific multi-channel writing protocol. It also monitors an incoming time ramp signal on Inlet 1, triggering dictionary-driven writes on integer crossings and ramp wrap-arounds.
+		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~`. It monitors an incoming time ramp signal on Inlet 1. When the ramp crosses an integer (with a 9ms lookahead), it looks up the corresponding bar in an external dictionary. Each bar defines a `palette` (the name of an external buffer~) and an `offset`. The object then copies a continuous segment of audio from that palette buffer into the member of the `polybuffer~` corresponding to the track, starting from the bar's timestamp. The sample position in the source buffer is derived from the current ramp position plus the bar's offset. It also accepts 4-item lists (palette, track, bar, offset) on Inlet 1 to trigger manual block-weaving.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
