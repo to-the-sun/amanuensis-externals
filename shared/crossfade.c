@@ -1,4 +1,4 @@
-#include "dsp.h"
+#include "crossfade.h"
 #include <math.h>
 
 #define HI (44.0 * 4999.0)

@@ -1,7 +1,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "z_dsp.h"
-#include "../shared/dsp.h"
+#include "../shared/crossfade.h"
 
 typedef struct _crossfade {
     t_pxobject x_obj;

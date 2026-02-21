@@ -3,8 +3,8 @@ CFLAGS = -I../max-sdk/source/max-sdk-base/c74support/max-includes -I../max-sdk/s
 LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-sdk/source/max-sdk-base/c74support/msp-includes/x64 -lMaxAPI -lMaxAudio
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
-crossfade~.mxe64: crossfade~.c ../shared/dsp.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o crossfade~.mxe64 crossfade~.c ../shared/dsp.c $(COMMON_SOURCES) $(LDFLAGS)
+crossfade~.mxe64: crossfade~.c ../shared/crossfade.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -o crossfade~.mxe64 crossfade~.c ../shared/crossfade.c $(COMMON_SOURCES) $(LDFLAGS)
 
 clean:
 	rm -f crossfade~.mxe64

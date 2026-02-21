@@ -1,5 +1,5 @@
-#ifndef _SHARED_DSP_H_
-#define _SHARED_DSP_H_
+#ifndef _SHARED_CROSSFADE_H_
+#define _SHARED_CROSSFADE_H_
 
 #include "ext.h"
 
