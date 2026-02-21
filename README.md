@@ -6,7 +6,7 @@ This repository contains custom external objects for the Max/MSP programming lan
 
 The repository is organized into several directories:
 
--   `buildspans/`, `createproject/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
+-   `buildspans/`, `createproject/`, `crossfade~/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
 -   `shared/`: Contains common C code modules that can be shared across multiple external objects.
 -   `max-sdk/`: Contains the Max SDK, which is required for building the external objects.
 -   `gui.py`: A Python-based GUI for visualizing data from the objects.
@@ -54,6 +54,17 @@ To build an individual external object, navigate into its specific directory and
 cd buildspans/
 make
 ```
+
+## The `crossfade~` Object
+
+The `crossfade~` object implements a dynamic crossfading algorithm between two input signals based on a control signal. It is a translation of a GenExpr algorithm provided by the user.
+
+### Key Features
+
+-   **Dynamic Ramping:** The ramp length is dynamically adjusted based on the signal amplitude.
+-   **Busy Signal:** A dedicated outlet indicates when a crossfade is in progress.
+-   **High Performance:** Implemented in C using a shared DSP module for maximum efficiency.
+-   **Variable Parameters:** Customizable `low` and `high` limits for the ramp length via object attributes.
 
 ## The `buildspans` Object
 
