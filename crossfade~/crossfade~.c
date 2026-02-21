@@ -6,6 +6,8 @@
 typedef struct _crossfade {
     t_pxobject x_obj;
     t_crossfade_state state;
+    double low_ms;
+    double high_ms;
 } t_crossfade;
 
 void *crossfade_new(t_symbol *s, long argc, t_atom *argv);
@@ -21,6 +23,14 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)crossfade_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)crossfade_assist, "assist", A_CANT, 0);
+
+    CLASS_ATTR_DOUBLE(c, "low", 0, t_crossfade, low_ms);
+    CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "low", 0, "22.653"); // Approx 999 samples at 44.1kHz
+
+    CLASS_ATTR_DOUBLE(c, "high", 0, t_crossfade, high_ms);
+    CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -39,7 +49,9 @@ void *crossfade_new(t_symbol *s, long argc, t_atom *argv) {
         outlet_new((t_object *)x, "signal"); // sum (Outlet 3, outs[2])
         outlet_new((t_object *)x, "signal"); // busy (Outlet 4, rightmost, outs[3])
 
-        crossfade_init(&x->state);
+        attr_args_process(x, argc, argv);
+
+        crossfade_init(&x->state, sys_getsr(), x->low_ms, x->high_ms);
     }
     return x;
 }
@@ -49,6 +61,7 @@ void crossfade_free(t_crossfade *x) {
 }
 
 void crossfade_dsp64(t_crossfade *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+    x->state.samplerate = samplerate;
     dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)crossfade_perform64, 0, NULL);
 }
 
@@ -60,6 +73,10 @@ void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long num
     double *mix2_out = outs[1];
     double *sum_out = outs[2];
     double *busy_out = outs[3];
+
+    // Update parameters in state
+    x->state.low_ms = x->low_ms;
+    x->state.high_ms = x->high_ms;
 
     for (int i = 0; i < sampleframes; i++) {
         double m1, m2, sum;

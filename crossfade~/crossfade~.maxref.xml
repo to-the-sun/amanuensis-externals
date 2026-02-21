@@ -49,7 +49,16 @@
 	<!--MESSAGES-->
 	<methodlist />
 	<!--ATTRIBUTES-->
-	<attributelist />
+	<attributelist>
+		<attribute name="low" get="1" set="1" type="double" size="1">
+			<digest>Low Limit (ms)</digest>
+			<description>The minimum length of the crossfade ramp in milliseconds. Defaults to 22.653 ms (approx 999 samples at 44.1kHz).</description>
+		</attribute>
+		<attribute name="high" get="1" set="1" type="double" size="1">
+			<digest>High Limit (ms)</digest>
+			<description>The maximum length of the crossfade ramp in milliseconds. Defaults to 4999.0 ms.</description>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="threads~" />

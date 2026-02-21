@@ -64,6 +64,7 @@ The `crossfade~` object implements a dynamic crossfading algorithm between two i
 -   **Dynamic Ramping:** The ramp length is dynamically adjusted based on the signal amplitude.
 -   **Busy Signal:** A dedicated outlet indicates when a crossfade is in progress.
 -   **High Performance:** Implemented in C using a shared DSP module for maximum efficiency.
+-   **Variable Parameters:** Customizable `low` and `high` limits for the ramp length via object attributes.
 
 ## The `buildspans` Object
 

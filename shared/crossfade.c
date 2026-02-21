@@ -1,42 +1,49 @@
 #include "crossfade.h"
 #include <math.h>
 
-#define HI (44.0 * 4999.0)
-#define LO 999.0
-
-void ramp_init(t_ramp_state *x) {
-    x->length = HI;
+void ramp_init(t_ramp_state *x, double samplerate, double high_ms) {
+    double samples_per_ms = samplerate / 1000.0;
+    if (samples_per_ms <= 0) samples_per_ms = 44.1;
+    x->length = samples_per_ms * high_ms;
     x->toggle = 0.0;
     x->go = 0.0;
     x->last_amp = 0.0;
 }
 
-double ramp_process(t_ramp_state *x, double signal, double movement, long long elapsed, double *fade_out) {
+double ramp_process(t_ramp_state *x, double signal, double movement, long long elapsed, double samplerate, double low_ms, double high_ms, double *fade_out) {
+    double samples_per_ms = samplerate / 1000.0;
+    if (samples_per_ms <= 0) samples_per_ms = 44.1;
+    double high_samples = samples_per_ms * high_ms;
+    double low_samples = samples_per_ms * low_ms;
+
     if (movement != 0.0) {
-        x->length = HI;
+        x->length = high_samples;
         x->go = (double)elapsed;
         x->toggle = (movement > 0.0) ? 1.0 : 0.0;
     }
 
     double abs_sig = fabs(signal);
-    // slide(abs_sig, 0, LO)
-    // up=0 (no smoothing), down=LO
+    // slide(abs_sig, 0, low_samples)
     double amp;
     if (abs_sig > x->last_amp) {
         amp = abs_sig; // up=0 means immediate
     } else {
-        amp = x->last_amp + (abs_sig - x->last_amp) / LO;
+        if (low_samples > 1.0) {
+            amp = x->last_amp + (abs_sig - x->last_amp) / low_samples;
+        } else {
+            amp = abs_sig;
+        }
     }
     x->last_amp = amp;
 
-    // length = clip(amp * hi, lo, length)
-    double target_length = amp * HI;
-    if (target_length < LO) target_length = LO;
+    // length = clip(amp * high_samples, low_samples, x->length)
+    double target_length = amp * high_samples;
+    if (target_length < low_samples) target_length = low_samples;
     if (target_length > x->length) target_length = x->length;
     x->length = target_length;
 
     double age = (double)elapsed - x->go;
-    double fade = age / x->length;
+    double fade = (x->length > 0) ? (age / x->length) : 1.0;
     if (fade > 1.0) fade = 1.0;
     if (fade < 0.0) fade = 0.0;
 
@@ -46,9 +53,12 @@ double ramp_process(t_ramp_state *x, double signal, double movement, long long e
     return signal * fade;
 }
 
-void crossfade_init(t_crossfade_state *x) {
-    ramp_init(&x->ramp1);
-    ramp_init(&x->ramp2);
+void crossfade_init(t_crossfade_state *x, double samplerate, double low_ms, double high_ms) {
+    x->samplerate = samplerate;
+    x->low_ms = low_ms;
+    x->high_ms = high_ms;
+    ramp_init(&x->ramp1, samplerate, high_ms);
+    ramp_init(&x->ramp2, samplerate, high_ms);
     x->direction = -1.0;
     x->last_control = 0.0;
     x->elapsed = 0;
@@ -56,16 +66,13 @@ void crossfade_init(t_crossfade_state *x) {
 
 void crossfade_process(t_crossfade_state *x, double control, double s1, double s2, double *mix1, double *mix2, double *sum, int *busy) {
     double f1, f2;
-    *mix1 = ramp_process(&x->ramp1, s1, x->direction, x->elapsed, &f1);
-    *mix2 = ramp_process(&x->ramp2, s2, x->direction * -1.0, x->elapsed, &f2);
+    *mix1 = ramp_process(&x->ramp1, s1, x->direction, x->elapsed, x->samplerate, x->low_ms, x->high_ms, &f1);
+    *mix2 = ramp_process(&x->ramp2, s2, x->direction * -1.0, x->elapsed, x->samplerate, x->low_ms, x->high_ms, &f2);
 
-    // finished = !(fader1 % 1) && !(fader2 % 1);
-    // Gen's ! (f % 1) is true if f is integer.
     int finished = (f1 <= 0.0 || f1 >= 1.0) && (f2 <= 0.0 || f2 >= 1.0);
 
     x->direction = 0.0;
     if (finished) {
-        // direction = change(control)
         double diff = control - x->last_control;
         if (diff != 0.0) {
             x->direction = diff;
