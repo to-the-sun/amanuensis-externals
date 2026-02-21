@@ -485,7 +485,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     if (track > x->max_track_seen) x->max_track_seen = track;
 
     // 2. Action determination
-    int is_silence = (palette == gensym("-") || offset_ms == -999999.0);
+    int is_silence = (palette == gensym("-"));
 
     // Visualization: Send single packet to indicate bar transition
     if (x->visualize) {
@@ -512,7 +512,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     if (is_silence) {
         for (long f = start_frame; f < end_frame; f++) {
             for (long c = 0; c < n_chans_dest; c++) {
-                samples_dest[f * n_chans_dest + c] = -999999.0f;
+                samples_dest[f * n_chans_dest + c] = 0.0f;
             }
         }
         buffer_unlocksamples(dest_buf);
@@ -563,12 +563,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                     if (c < n_chans_src) {
                         samples_dest[f * n_chans_dest + c] = samples_src[f_src * n_chans_src + c];
                     } else {
-                        samples_dest[f * n_chans_dest + c] = -999999.0f;
+                        samples_dest[f * n_chans_dest + c] = 0.0f;
                     }
                 }
             } else {
                 for (long c = 0; c < n_chans_dest; c++) {
-                    samples_dest[f * n_chans_dest + c] = -999999.0f;
+                    samples_dest[f * n_chans_dest + c] = 0.0f;
                 }
             }
         }
@@ -662,7 +662,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                     long num_frames = buffer_getframecount(b);
                     for (long f = 0; f < num_frames; f++) {
                         for (long c = 0; c < num_chans; c++) {
-                            samples[f * num_chans + c] = -999999.0f;
+                            samples[f * num_chans + c] = 0.0f;
                         }
                     }
                     buffer_unlocksamples(b);
@@ -820,7 +820,7 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (still_missing) {
-                    weaver_process_data(x, gensym("-"), track_num, hit.value, -999999.0);
+                    weaver_process_data(x, gensym("-"), track_num, hit.value, 0.0);
                 }
             }
             if (s_dict) dictobj_release(s_dict);
