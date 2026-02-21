@@ -53,6 +53,8 @@ typedef struct _weaver {
     long max_tracks;
     t_hashtab *pending_silence;
     long bar_warn_sent;
+    long dict_found;
+    long poly_found;
 } t_weaver;
 
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
@@ -64,6 +66,7 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
 void weaver_rescript(t_weaver *x, t_symbol *dict_name);
+void weaver_check_attachments(t_weaver *x, long report_error);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -113,6 +116,41 @@ void weaver_log(t_weaver *x, const char *fmt, ...) {
     va_end(args);
 }
 
+void weaver_check_attachments(t_weaver *x, long report_error) {
+    // Dictionary check
+    if (x->audio_dict_name != _sym_nothing) {
+        t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
+        if (d) {
+            if (!x->dict_found) {
+                weaver_log(x, "successfully found dictionary '%s'", x->audio_dict_name->s_name);
+                x->dict_found = 1;
+            }
+            dictobj_release(d);
+        } else {
+            if (x->dict_found) x->dict_found = 0;
+            if (report_error) {
+                object_error((t_object *)x, "dictionary '%s' not found", x->audio_dict_name->s_name);
+            }
+        }
+    }
+
+    // Polybuffer check (via track1_ref)
+    if (x->poly_prefix != _sym_nothing) {
+        t_buffer_obj *b = buffer_ref_getobject(x->track1_ref);
+        if (b) {
+            if (!x->poly_found) {
+                weaver_log(x, "successfully found polybuffer~ '%s' (via %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                x->poly_found = 1;
+            }
+        } else {
+            if (x->poly_found) x->poly_found = 0;
+            if (report_error) {
+                object_error((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+            }
+        }
+    }
+}
+
 void ext_main(void *r) {
     common_symbols_init();
     t_class *c = class_new("weaver~", (method)weaver_new, (method)weaver_free, sizeof(t_weaver), 0L, A_GIMME, 0);
@@ -151,19 +189,28 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_scan_val = -1.0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
+        x->dict_found = 0;
+        x->poly_found = 0;
 
+        // Argument 1: dictionary name
+        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
+            x->audio_dict_name = atom_getsym(argv);
+            argc--;
+            argv++;
+        } else {
+            object_error((t_object *)x, "missing mandatory dictionary name argument");
+        }
+
+        // Argument 2: polybuffer name
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->poly_prefix = atom_getsym(argv);
             argc--;
             argv++;
+        } else {
+            object_error((t_object *)x, "missing mandatory polybuffer~ name argument");
         }
 
         x->max_tracks = 4; // Default
-        if (argc > 0 && (atom_gettype(argv) == A_LONG || atom_gettype(argv) == A_FLOAT)) {
-            x->max_tracks = atom_getlong(argv);
-            argc--;
-            argv++;
-        }
 
         attr_args_process(x, argc, argv);
 
@@ -175,13 +222,16 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->signal_outlet = outlet_new((t_object *)x, "signal");
 
-        if (x->poly_prefix == _sym_nothing) {
-            object_error((t_object *)x, "missing polybuffer~ prefix argument");
-        } else {
+        if (x->poly_prefix != _sym_nothing) {
             char t1name[256];
             snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
             x->track1_ref = buffer_ref_new((t_object *)x, gensym(t1name));
+        } else {
+            x->track1_ref = buffer_ref_new((t_object *)x, _sym_nothing);
         }
+
+        // Initial search for mandatory objects
+        weaver_check_attachments(x, 1);
 
         // Unconditionally initialize visualization socket
         if (visualize_init() != 0) {
@@ -321,6 +371,7 @@ double weaver_get_bar_length(t_weaver *x) {
 
 
 void weaver_rescript(t_weaver *x, t_symbol *dict_name) {
+    weaver_check_attachments(x, 0);
     double bar_length = weaver_get_bar_length(x);
 
     if (bar_length <= 0) {
@@ -398,6 +449,7 @@ void weaver_rescript(t_weaver *x, t_symbol *dict_name) {
 }
 
 void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
+    weaver_check_attachments(x, 0);
     // 1. Palette mapping lookup
     t_atom_long chan_index = -1;
     t_max_err err = hashtab_lookuplong(x->palette_map, palette, &chan_index);
@@ -536,7 +588,10 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (inlet == 1) {
         // Inlet 1: Rescript / Dictionary Reference
-        x->audio_dict_name = s;
+        if (s != x->audio_dict_name) {
+            x->audio_dict_name = s;
+            x->dict_found = 0;
+        }
         weaver_rescript(x, s);
     } else if (inlet == 2) {
         // Inlet 2: Palette Configuration
@@ -550,6 +605,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
         }
     } else if (inlet == 0) {
         if (s == gensym("clear") && argc == 0) {
+            weaver_check_attachments(x, 0);
             // Note: This operation is synchronous and blocks the message thread
             // until all buffers in the polybuffer~ have been cleared.
             weaver_log(x, "CLEARING START: Prefix '%s' on inlet 0", x->poly_prefix->s_name);
@@ -721,6 +777,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 }
 
 void weaver_audio_qtask(t_weaver *x) {
+    weaver_check_attachments(x, 0);
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;

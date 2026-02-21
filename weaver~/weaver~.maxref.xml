@@ -38,11 +38,11 @@
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
-		<objarg name="polybuffer_prefix" type="symbol" optional="0">
-			<digest>Prefix for the polybuffer~ members</digest>
+		<objarg name="dictionary" type="symbol" optional="0">
+			<digest>Name of the dictionary to reference</digest>
 		</objarg>
-		<objarg name="tracks" type="int" optional="1">
-			<digest>Number of tracks to process</digest>
+		<objarg name="polybuffer" type="symbol" optional="0">
+			<digest>Name of the polybuffer~ to reference</digest>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
