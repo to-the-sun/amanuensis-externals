@@ -683,7 +683,9 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         // Movement is only non-zero for the first sample to trigger the ramps
         tr->xf.direction = 0.0;
 
-        int finished = (f1 <= 0.0 || f1 >= 1.0) && (f2 <= 0.0 || f2 >= 1.0);
+        int r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
+        int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
+        int finished = r1_done && r2_done;
         tr->xf.last_control = tr->control;
         tr->xf.elapsed++;
         tr->busy = !finished;
