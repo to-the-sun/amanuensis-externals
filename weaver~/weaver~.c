@@ -10,6 +10,7 @@
 #include "z_dsp.h"
 #include "../shared/visualize.h"
 #include "../shared/logging.h"
+#include "../shared/crossfade.h"
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
@@ -25,6 +26,15 @@ typedef struct _fifo_entry {
     double range_end; // For SWEEP
     long type; // 0 for DATA, 1 for SWEEP
 } t_fifo_entry;
+
+typedef struct _weaver_track {
+    t_crossfade_state xf;
+    t_symbol *palette[2];
+    double offset[2];
+    double control;
+    int busy;
+    t_buffer_ref *src_refs[2];
+} t_weaver_track;
 
 typedef struct _weaver {
     t_pxobject t_obj;
@@ -54,6 +64,10 @@ typedef struct _weaver {
     long bar_warn_sent;
     long dict_found;
     long poly_found;
+
+    t_hashtab *track_states;
+    double low_ms;
+    double high_ms;
 } t_weaver;
 
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
@@ -72,8 +86,62 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 void weaver_audio_qtask(t_weaver *x);
 void weaver_clear_pending_silence(t_weaver *x);
 void weaver_schedule_silence(t_weaver *x, t_atom_long track, double ms);
+t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
+void weaver_clear_track_states(t_weaver *x);
 
 static t_class *weaver_class;
+
+int weaver_compare_bars(const void *a, const void *b) {
+    t_symbol *sa = *(t_symbol **)a;
+    t_symbol *sb = *(t_symbol **)b;
+    double da = atof(sa->s_name);
+    double db = atof(sb->s_name);
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
+    t_weaver_track *tr = NULL;
+    char tstr[64];
+    snprintf(tstr, 64, "%lld", (long long)track_id);
+    t_symbol *s_track = gensym(tstr);
+
+    if (hashtab_lookup(x->track_states, s_track, (t_object **)&tr) != MAX_ERR_NONE) {
+        tr = (t_weaver_track *)sysmem_newptr(sizeof(t_weaver_track));
+        if (tr) {
+            crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
+            tr->palette[0] = gensym("-");
+            tr->offset[0] = 0.0;
+            tr->palette[1] = gensym("-");
+            tr->offset[1] = 0.0;
+            tr->control = 0.0;
+            tr->busy = 0;
+            tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
+            tr->src_refs[1] = buffer_ref_new((t_object *)x, _sym_nothing);
+            hashtab_store(x->track_states, s_track, (t_object *)tr);
+        }
+    }
+    return tr;
+}
+
+void weaver_clear_track_states(t_weaver *x) {
+    if (!x->track_states) return;
+    long num_items = 0;
+    t_symbol **keys = NULL;
+    hashtab_getkeys(x->track_states, &num_items, &keys);
+    for (long i = 0; i < num_items; i++) {
+        t_weaver_track *tr = NULL;
+        hashtab_lookup(x->track_states, keys[i], (t_object **)&tr);
+        if (tr) {
+            if (tr->src_refs[0]) object_free(tr->src_refs[0]);
+            if (tr->src_refs[1]) object_free(tr->src_refs[1]);
+            sysmem_freeptr(tr);
+        }
+    }
+    if (keys) sysmem_freeptr(keys);
+    hashtab_clear(x->track_states);
+}
 
 void weaver_clear_pending_silence(t_weaver *x) {
     if (!x->pending_silence) return;
@@ -171,6 +239,14 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
 
+    CLASS_ATTR_DOUBLE(c, "low", 0, t_weaver, low_ms);
+    CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "low", 0, "22.653");
+
+    CLASS_ATTR_DOUBLE(c, "high", 0, t_weaver, high_ms);
+    CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
+
     class_dspinit(c);
     class_register(CLASS_BOX, c);
     weaver_class = c;
@@ -253,6 +329,10 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->pending_silence = hashtab_new(0);
         x->bar_warn_sent = 0;
 
+        x->track_states = hashtab_new(0);
+        x->low_ms = 22.653;
+        x->high_ms = 4999.0;
+
         if (x->log) {
             object_post((t_object *)x, "weaver~: Initialized with %ld tracks", x->max_tracks);
         }
@@ -294,6 +374,8 @@ void weaver_free(t_weaver *x) {
     }
     weaver_clear_pending_silence(x);
     if (x->pending_silence) object_free(x->pending_silence);
+    weaver_clear_track_states(x);
+    if (x->track_states) object_free(x->track_states);
     visualize_cleanup();
 }
 
@@ -306,6 +388,20 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
             t_buffer_ref *ref = NULL;
             hashtab_lookup(x->buffer_refs, keys[i], (t_object **)&ref);
             if (ref) buffer_ref_notify(ref, s, msg, sender, data);
+        }
+        if (keys) sysmem_freeptr(keys);
+    }
+    if (x->track_states) {
+        long num_items = 0;
+        t_symbol **keys = NULL;
+        hashtab_getkeys(x->track_states, &num_items, &keys);
+        for (long i = 0; i < num_items; i++) {
+            t_weaver_track *tr = NULL;
+            hashtab_lookup(x->track_states, keys[i], (t_object **)&tr);
+            if (tr) {
+                if (tr->src_refs[0]) buffer_ref_notify(tr->src_refs[0], s, msg, sender, data);
+                if (tr->src_refs[1]) buffer_ref_notify(tr->src_refs[1], s, msg, sender, data);
+            }
         }
         if (keys) sysmem_freeptr(keys);
     }
@@ -388,6 +484,9 @@ void weaver_rescript(t_weaver *x, t_symbol *dict_name) {
         return;
     }
 
+    // Reset track states for a clean rescript
+    weaver_clear_track_states(x);
+
     for (int track_val = 1; track_val <= x->max_tracks; track_val++) {
         char tstr[64];
         snprintf(tstr, 64, "%d", track_val);
@@ -401,6 +500,10 @@ void weaver_rescript(t_weaver *x, t_symbol *dict_name) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        if (num_bars > 0) {
+            qsort(bar_keys, num_bars, sizeof(t_symbol *), weaver_compare_bars);
+        }
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_key = bar_keys[j];
@@ -484,8 +587,28 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 
     if (track > x->max_track_seen) x->max_track_seen = track;
 
-    // 2. Action determination
-    int is_silence = (palette == gensym("-"));
+    // 2. Track State and Crossfade Trigger
+    t_weaver_track *tr = weaver_get_track_state(x, track);
+    if (!tr) return;
+
+    crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
+
+    if (tr->busy) {
+        weaver_log(x, "Track %lld: busy at %.2f ms, skipping transition to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
+    } else {
+        int active = (int)round(tr->control);
+        if (palette == tr->palette[active] && offset_ms == tr->offset[active]) {
+            // Same source, no action needed
+        } else {
+            int other = 1 - active;
+            tr->palette[other] = palette;
+            tr->offset[other] = offset_ms;
+            tr->control = (double)other;
+            // Set direction for the crossfade module to trigger on the first sample
+            tr->xf.direction = tr->control - tr->xf.last_control;
+            weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
+        }
+    }
 
     // Visualization: Send single packet to indicate bar transition
     if (x->visualize) {
@@ -509,78 +632,87 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         return;
     }
 
-    if (is_silence) {
-        for (long f = start_frame; f < end_frame; f++) {
-            for (long c = 0; c < n_chans_dest; c++) {
-                samples_dest[f * n_chans_dest + c] = 0.0f;
+    // Source buffers setup using cached refs
+    t_buffer_obj *src_buf[2] = {NULL, NULL};
+    float *samples_src[2] = {NULL, NULL};
+    long n_frames_src[2] = {0, 0};
+    long n_chans_src[2] = {0, 0};
+    double sr_src[2] = {0, 0};
+
+    for (int i = 0; i < 2; i++) {
+        buffer_ref_set(tr->src_refs[i], tr->palette[i]);
+        src_buf[i] = buffer_ref_getobject(tr->src_refs[i]);
+        if (src_buf[i]) {
+            sr_src[i] = buffer_getsamplerate(src_buf[i]);
+            if (sr_src[i] <= 0) sr_src[i] = 44100.0;
+            n_frames_src[i] = buffer_getframecount(src_buf[i]);
+            n_chans_src[i] = buffer_getchannelcount(src_buf[i]);
+
+            for (int retry = 0; retry < 10; retry++) {
+                samples_src[i] = buffer_locksamples(src_buf[i]);
+                if (samples_src[i]) break;
+                systhread_sleep(1);
             }
         }
-        buffer_unlocksamples(dest_buf);
-        buffer_setdirty(dest_buf);
-        critical_exit(0);
-        weaver_log(x, "SILENCE FILL: Track %lld, Range [%.2f, %.2f] ms", (long long)track, bar_ms, bar_ms + bar_len);
-    } else {
-        t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, palette);
-        t_buffer_obj *src_buf = buffer_ref_getobject(src_ref);
-        if (!src_buf) {
-            buffer_unlocksamples(dest_buf);
-            critical_exit(0);
-            object_free(src_ref);
-            weaver_log(x, "Error: palette buffer %s not found", palette->s_name);
-            return;
-        }
+    }
 
-        double sr_src = buffer_getsamplerate(src_buf);
-        if (sr_src <= 0) sr_src = sys_getsr();
-        if (sr_src <= 0) sr_src = 44100.0;
-        long n_frames_src = buffer_getframecount(src_buf);
-        long n_chans_src = buffer_getchannelcount(src_buf);
+    // Weave loop with crossfade and nearest-neighbor sample rate conversion
+    for (long f = start_frame; f < end_frame; f++) {
+        double current_ms = (double)f * 1000.0 / sr_dest;
+        double max_abs[2] = {0.0, 0.0};
+        long f_src[2] = {-1, -1};
 
-        float *samples_src = NULL;
-        int retries_src = 0;
-        for (retries_src = 0; retries_src < 10; retries_src++) {
-            samples_src = buffer_locksamples(src_buf);
-            if (samples_src) break;
-            systhread_sleep(1);
-        }
-
-        if (!samples_src) {
-            buffer_unlocksamples(dest_buf);
-            critical_exit(0);
-            object_free(src_ref);
-            weaver_log(x, "Error: could not lock palette buffer %s", palette->s_name);
-            return;
-        }
-
-        // Weave loop with nearest-neighbor sample rate conversion
-        for (long f = start_frame; f < end_frame; f++) {
-            double current_ms = (double)f * 1000.0 / sr_dest;
-            double src_ms = current_ms + offset_ms;
-            long f_src = (long)round(src_ms * sr_src / 1000.0);
-
-            if (f_src >= 0 && f_src < n_frames_src) {
-                for (long c = 0; c < n_chans_dest; c++) {
-                    if (c < n_chans_src) {
-                        samples_dest[f * n_chans_dest + c] = samples_src[f_src * n_chans_src + c];
-                    } else {
-                        samples_dest[f * n_chans_dest + c] = 0.0f;
+        for (int i = 0; i < 2; i++) {
+            if (samples_src[i]) {
+                double src_ms = current_ms + tr->offset[i];
+                f_src[i] = (long)round(src_ms * sr_src[i] / 1000.0);
+                if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
+                    for (long c = 0; c < n_chans_src[i]; c++) {
+                        double a = fabs((double)samples_src[i][f_src[i] * n_chans_src[i] + c]);
+                        if (a > max_abs[i]) max_abs[i] = a;
                     }
                 }
-            } else {
-                for (long c = 0; c < n_chans_dest; c++) {
-                    samples_dest[f * n_chans_dest + c] = 0.0f;
-                }
             }
         }
 
-        buffer_unlocksamples(src_buf);
-        buffer_unlocksamples(dest_buf);
-        buffer_setdirty(dest_buf);
-        critical_exit(0);
-        object_free(src_ref);
-        weaver_log(x, "WEAVE SUCCESS: Track %lld, Palette %s, Offset %.2f ms, Range [%.2f, %.2f] ms",
-                   (long long)track, palette->s_name, offset_ms, bar_ms, bar_ms + bar_len);
+        double f1, f2;
+        // ramp_process returns signal * fade, and updates internal state
+        ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f1);
+        ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f2);
+
+        // Movement is only non-zero for the first sample to trigger the ramps
+        tr->xf.direction = 0.0;
+
+        int r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
+        int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
+        int finished = r1_done && r2_done;
+        tr->xf.last_control = tr->control;
+        tr->xf.elapsed++;
+        tr->busy = !finished;
+
+        // Apply fades to all destination channels
+        for (long c = 0; c < n_chans_dest; c++) {
+            double mix1 = 0.0;
+            double mix2 = 0.0;
+            if (samples_src[0] && f_src[0] >= 0 && f_src[0] < n_frames_src[0] && c < n_chans_src[0]) {
+                mix1 = (double)samples_src[0][f_src[0] * n_chans_src[0] + c] * f1;
+            }
+            if (samples_src[1] && f_src[1] >= 0 && f_src[1] < n_frames_src[1] && c < n_chans_src[1]) {
+                mix2 = (double)samples_src[1][f_src[1] * n_chans_src[1] + c] * f2;
+            }
+            samples_dest[f * n_chans_dest + c] = (float)(mix1 + mix2);
+        }
     }
+
+    // Cleanup
+    for (int i = 0; i < 2; i++) {
+        if (src_buf[i] && samples_src[i]) {
+            buffer_unlocksamples(src_buf[i]);
+        }
+    }
+    buffer_unlocksamples(dest_buf);
+    buffer_setdirty(dest_buf);
+    critical_exit(0);
 }
 
 
@@ -686,6 +818,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 
             if (x->visualize) visualize("{\"clear\": 1}");
             weaver_clear_pending_silence(x);
+            weaver_clear_track_states(x);
 
             x->last_scan_val = -1.0;
             x->fifo_head = 0;
@@ -695,7 +828,8 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
         } else if (s == gensym("clear_visualizer") && argc == 0) {
             if (x->visualize) visualize("{\"clear\": 1}");
             weaver_clear_pending_silence(x);
-            weaver_log(x, "VISUALIZER CLEARED: Pending silence cleared, buffer content preserved");
+            weaver_clear_track_states(x);
+            weaver_log(x, "VISUALIZER CLEARED: Pending silence and track states cleared, buffer content preserved");
         } else if (argc >= 3) {
             // Handle anything on inlet 0 (like the "-" reach message)
             t_symbol *palette = s;

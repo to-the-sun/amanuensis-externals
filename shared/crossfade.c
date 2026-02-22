@@ -79,7 +79,9 @@ void crossfade_process(t_crossfade_state *x, double control, double s1, double s
     *mix1 = ramp_process(&x->ramp1, s1, x->direction, x->elapsed, x->samplerate, x->low_ms, x->high_ms, &f1);
     *mix2 = ramp_process(&x->ramp2, s2, x->direction * -1.0, x->elapsed, x->samplerate, x->low_ms, x->high_ms, &f2);
 
-    int finished = (f1 <= 0.0 || f1 >= 1.0) && (f2 <= 0.0 || f2 >= 1.0);
+    int r1_done = (x->ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
+    int r2_done = (x->ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
+    int finished = r1_done && r2_done;
 
     x->direction = 0.0;
     if (finished) {
