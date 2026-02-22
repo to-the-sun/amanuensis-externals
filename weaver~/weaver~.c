@@ -52,6 +52,7 @@ typedef struct _weaver {
     int fifo_tail;
     t_qelem *audio_qelem;
     t_critical lock;
+    long max_tracks;
     t_hashtab *pending_silence;
     long bar_warn_sent;
     long dict_found;
@@ -207,6 +208,10 @@ void ext_main(void *r) {
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)weaver_assist, "assist", A_CANT, 0);
 
+    CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
+    CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
+    CLASS_ATTR_DEFAULT(c, "tracks", 0, "4");
+
     CLASS_ATTR_LONG(c, "log", 0, t_weaver, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
@@ -255,6 +260,10 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
             object_error((t_object *)x, "missing mandatory polybuffer~ name argument");
         }
 
+        x->max_tracks = 4;
+        x->low_ms = 22.653;
+        x->high_ms = 4999.0;
+
         attr_args_process(x, argc, argv);
 
         // Create outlets from right to left
@@ -287,8 +296,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->bar_warn_sent = 0;
 
         x->track_states = hashtab_new(0);
-        x->low_ms = 22.653;
-        x->high_ms = 4999.0;
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)weaver_audio_qtask);
@@ -363,7 +370,7 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal): Time ramp (signal)"); break;
+            case 0: sprintf(s, "Inlet 1 (signal): Time ramp (signal), (symbol) Dictionary Name, tracks (int)"); break;
         }
     } else { // ASSIST_OUTLET
         if (x->log) {
@@ -568,8 +575,10 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
 
-    // Inlet 0: Rescript / Dictionary Reference
-    if (s != x->audio_dict_name) {
+    if (s == gensym("tracks") && argc > 0) {
+        x->max_tracks = atom_getlong(argv);
+    } else if (s != x->audio_dict_name) {
+        // Inlet 0: Transcript Dictionary Reference
         x->audio_dict_name = s;
         x->dict_found = 0;
     }
@@ -707,13 +716,10 @@ void weaver_audio_qtask(t_weaver *x) {
 
         double bar_len = weaver_get_bar_length(x);
 
-        long num_tracks = 0;
-        t_symbol **track_keys = NULL;
-        dictionary_getkeys(dict, &num_tracks, &track_keys);
-
-        for (long i = 0; i < num_tracks; i++) {
-            t_symbol *track_sym = track_keys[i];
-            t_atom_long track_val = atoll(track_sym->s_name);
+        for (int track_val = 1; track_val <= x->max_tracks; track_val++) {
+            char tstr[64];
+            snprintf(tstr, 64, "%d", track_val);
+            t_symbol *track_sym = gensym(tstr);
             t_dictionary *track_dict = NULL;
 
             if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
@@ -754,7 +760,6 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
             }
         }
-        if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(dict);
     }
 }

@@ -40,8 +40,8 @@
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="anything">
-			<digest>Change transcript dictionary</digest>
-			<description>Accepts a symbol to change the name of the transcript dictionary being referenced.</description>
+			<digest>Change transcript dictionary or set maximum tracks</digest>
+			<description>Accepts a symbol to change the name of the transcript dictionary being referenced. Also accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
@@ -49,6 +49,10 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
+			<digest>Number of Tracks</digest>
+			<description>The maximum number of tracks to process from the transcript dictionary (default is 4).</description>
+		</attribute>
 		<attribute name="log" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Logging</digest>
 			<attributelist>
