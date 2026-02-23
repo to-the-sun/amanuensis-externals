@@ -186,8 +186,20 @@ void bounce_bang(t_bounce *x) {
     bounce_check_attachments(x, 1);
     if (!x->poly_found || !x->dest_found) return;
 
+    critical_enter(0);
+
     t_buffer_obj *dest_buf = buffer_ref_getobject(x->dest_ref);
-    if (!dest_buf) return;
+    if (!dest_buf) {
+        buffer_ref_set(x->dest_ref, _sym_nothing);
+        buffer_ref_set(x->dest_ref, x->dest_name);
+        dest_buf = buffer_ref_getobject(x->dest_ref);
+    }
+
+    if (!dest_buf) {
+        critical_exit(0);
+        object_error((t_object *)x, "destination buffer~ %s missing during bounce", x->dest_name->s_name);
+        return;
+    }
 
     long n_frames_dest = buffer_getframecount(dest_buf);
     long n_chans_dest = buffer_getchannelcount(dest_buf);
@@ -202,11 +214,13 @@ void bounce_bang(t_bounce *x) {
     }
 
     if (!samples_dest) {
+        critical_exit(0);
         object_error((t_object *)x, "could not lock destination buffer %s", x->dest_name->s_name);
         return;
     }
 
-    critical_enter(0);
+    buffer_edit_begin(dest_buf);
+
     // Clear destination
     memset(samples_dest, 0, n_frames_dest * n_chans_dest * sizeof(float));
 
@@ -218,6 +232,11 @@ void bounce_bang(t_bounce *x) {
         t_symbol *s_bufname = gensym(bufname);
         buffer_ref_set(src_ref, s_bufname);
         t_buffer_obj *src_buf = buffer_ref_getobject(src_ref);
+        if (!src_buf) {
+            buffer_ref_set(src_ref, _sym_nothing);
+            buffer_ref_set(src_ref, s_bufname);
+            src_buf = buffer_ref_getobject(src_ref);
+        }
         if (!src_buf) break;
 
         long n_frames_src = buffer_getframecount(src_buf);
@@ -248,6 +267,7 @@ void bounce_bang(t_bounce *x) {
         }
 
         if (max_abs > 1.0) {
+            buffer_edit_begin(src_buf);
             double scale = 0.9999999 / max_abs;
             for (long f = 0; f < n_frames_src; f++) {
                 for (long c = 0; c < n_chans_src; c++) {
@@ -255,6 +275,7 @@ void bounce_bang(t_bounce *x) {
                 }
             }
             bounce_log(x, "normalized buffer '%s', max absolute value was %f", bufname, max_abs);
+            buffer_edit_end(src_buf, 1);
             buffer_setdirty(src_buf);
         }
 
@@ -280,6 +301,7 @@ void bounce_bang(t_bounce *x) {
         }
     }
 
+    buffer_edit_end(dest_buf, 1);
     buffer_unlocksamples(dest_buf);
     buffer_setdirty(dest_buf);
     critical_exit(0);

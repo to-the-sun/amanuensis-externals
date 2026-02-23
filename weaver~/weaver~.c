@@ -508,6 +508,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         return;
     }
 
+    buffer_edit_begin(dest_buf);
+
     // Source buffers setup using cached refs
     t_buffer_obj *src_buf[2] = {NULL, NULL};
     float *samples_src[2] = {NULL, NULL};
@@ -586,6 +588,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             buffer_unlocksamples(src_buf[i]);
         }
     }
+    buffer_edit_end(dest_buf, 1);
     buffer_unlocksamples(dest_buf);
     buffer_setdirty(dest_buf);
     critical_exit(0);
