@@ -3,7 +3,7 @@
 <c74object name="weaver~" module="msp" category="Utility">
 	<digest>Writes incoming track data into a polybuffer~</digest>
 	<description>
-		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~`. It monitors an incoming time ramp signal on Inlet 1. When the ramp crosses an integer (with a 9ms lookahead), it looks up the corresponding bar in an external dictionary. Each bar defines a `palette` (the name of an external buffer~) and an `offset`. The object then copies a continuous segment of audio from that palette buffer into the member of the `polybuffer~` corresponding to the track, starting from the bar's timestamp. The sample position in the source buffer is derived from the current ramp position plus the bar's offset. It also accepts 4-item lists (palette, track, bar, offset) on Inlet 1 to trigger manual block-weaving.
+		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~`. It monitors an incoming time ramp signal on its inlet. When the ramp crosses an integer (with a 9ms lookahead), it looks up the corresponding bar in an external transcript dictionary. Each bar entry in the dictionary (organized by track and timestamp) defines a `palette` (the name of an external buffer~) and an `offset`. The object then blends a continuous segment of audio from that palette buffer into the member of the `polybuffer~` corresponding to the track, using sample-accurate crossfading for smooth transitions.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -12,17 +12,9 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="1" type="signal/list">
-			<digest>Inlet 1: Time ramp (signal) or Data List [palette, track, bar, offset]</digest>
-			<description>Accepts an audio signal (treated as a time ramp in milliseconds) or the 4-item list from crucible or a similar source. Integer crossings and ramp wrap-arounds (delta &lt; 0) trigger dictionary lookups.</description>
-		</inlet>
-		<inlet id="2" type="symbol">
-			<digest>Inlet 2: Rescript/Reference dictionary name</digest>
-			<description>Accepts a symbol denoting an external dict to reference.</description>
-		</inlet>
-		<inlet id="3" type="list">
-			<digest>Inlet 3: Palette Configuration</digest>
-			<description>Accepts [palette_name, channel_index] pairs to register palettes.</description>
+		<inlet id="1" type="signal">
+			<digest>Time ramp (signal)</digest>
+			<description>Accepts an audio signal treated as a time ramp in milliseconds. Integer crossings and ramp wrap-arounds trigger dictionary lookups to weave audio.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
@@ -47,12 +39,9 @@
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
-		<method name="list">
-			<digest>Process data list</digest>
-		</method>
-		<method name="clear_visualizer">
-			<digest>Clear the visualizer without clearing the buffers</digest>
-			<description>Sends a clear command to the connected visualization script (only if @visualize is enabled), but does not modify any sample data in the polybuffer~.</description>
+		<method name="anything">
+			<digest>Change transcript dictionary or set maximum tracks</digest>
+			<description>Accepts a symbol to change the name of the transcript dictionary being referenced. Also accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
@@ -60,21 +49,23 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
+			<digest>Number of Tracks</digest>
+			<description>The maximum number of tracks to process from the transcript dictionary (default is 4).</description>
+		</attribute>
 		<attribute name="log" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Logging</digest>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
-		<attribute name="visualize" type="long" get="1" set="1" opaque="0">
-			<digest>Enable Visualization</digest>
-			<description>When enabled (1), the object sends JSON data to the connected visualization script.</description>
-			<attributelist>
-				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
-			</attributelist>
+		<attribute name="low" type="double" get="1" set="1" opaque="0">
+			<digest>Low Limit (ms)</digest>
+			<description>Minimum ramp time for crossfades in milliseconds.</description>
 		</attribute>
-		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
-			<digest>Number of Tracks</digest>
+		<attribute name="high" type="double" get="1" set="1" opaque="0">
+			<digest>High Limit (ms)</digest>
+			<description>Maximum ramp time for crossfades in milliseconds.</description>
 		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
