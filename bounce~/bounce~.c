@@ -196,6 +196,7 @@ void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
 }
 
 void bounce_bang(t_bounce *x) {
+    bounce_log(x, "starting bounce process");
     bounce_check_attachments(x, 1);
     if (!x->poly_found || !x->dest_found) return;
 
@@ -215,6 +216,8 @@ void bounce_bang(t_bounce *x) {
     long n_chans_dest = buffer_getchannelcount(dest_buf);
     double sr_dest = buffer_getsamplerate(dest_buf);
     if (sr_dest <= 0) sr_dest = 44100.0;
+
+    bounce_log(x, "destination buffer '%s' has %ld frames, %ld channels", x->dest_name->s_name, n_frames_dest, n_chans_dest);
 
     float *samples_dest = NULL;
     for (int retry = 0; retry < 10; retry++) {
@@ -243,6 +246,7 @@ void bounce_bang(t_bounce *x) {
 
     t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, _sym_nothing);
     int stem_idx = 1;
+    bounce_log(x, "beginning stem iteration");
     while (1) {
         char bufname[256];
         snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, stem_idx);
@@ -255,6 +259,8 @@ void bounce_bang(t_bounce *x) {
             src_buf = buffer_ref_getobject(src_ref);
         }
         if (!src_buf) break;
+
+        bounce_log(x, "processing stem %d: '%s'", stem_idx, bufname);
 
         long n_frames_src = buffer_getframecount(src_buf);
         long n_chans_src = buffer_getchannelcount(src_buf);
@@ -309,10 +315,13 @@ void bounce_bang(t_bounce *x) {
         }
 
         if (last_audio_frame == -1) {
+            bounce_log(x, "stem '%s' is silent, skipping", bufname);
             buffer_unlocksamples(src_buf);
             stem_idx++;
             continue;
         }
+
+        bounce_log(x, "stem '%s': last audio sample found at frame %ld", bufname, last_audio_frame);
 
         // 2. Normalize if needed
         double max_abs = 0.0;
@@ -343,11 +352,15 @@ void bounce_bang(t_bounce *x) {
         long fade_out_start_frame = last_audio_frame - fade_out_duration_frames;
         if (fade_out_start_frame < 0) fade_out_start_frame = 0;
 
+        bounce_log(x, "stem '%s': fade-out will start at frame %ld", bufname, fade_out_start_frame);
+
         t_ramp_state ramp;
         ramp_init(&ramp, sr_dest, x->high_ms);
         long long elapsed = 0;
         int fade_in_triggered = 0;
         int fade_out_triggered = 0;
+
+        bounce_log(x, "stem '%s': starting faded summation", bufname);
 
         for (long f_dest = 0; f_dest < n_frames_dest; f_dest++) {
             long f_src = (long)round((double)f_dest * sr_src / sr_dest);
@@ -375,9 +388,13 @@ void bounce_bang(t_bounce *x) {
             }
         }
 
+        bounce_log(x, "stem '%s': summation complete", bufname);
+
         buffer_unlocksamples(src_buf);
         stem_idx++;
     }
+
+    bounce_log(x, "finished summing stems, duplicating to all channels");
 
     // 4. Duplicate channel 0 to all other channels
     if (n_chans_dest > 1) {
@@ -391,6 +408,7 @@ void bounce_bang(t_bounce *x) {
 
     // 5. Final normalization of product buffer if requested
     if (x->normalize_to != 0.0) {
+        bounce_log(x, "starting final normalization");
         double product_max = 0.0;
         for (long i = 0; i < n_frames_dest * n_chans_dest; i++) {
             double a = fabs((double)samples_dest[i]);
@@ -413,5 +431,6 @@ void bounce_bang(t_bounce *x) {
     critical_exit(0);
 
     if (src_ref) object_free(src_ref);
+    bounce_log(x, "bounce process complete");
     outlet_bang(x->bang_outlet);
 }
