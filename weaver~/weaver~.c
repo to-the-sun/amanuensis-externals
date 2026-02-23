@@ -55,6 +55,7 @@ typedef struct _weaver {
     long max_tracks;
     t_hashtab *pending_silence;
     long bar_warn_sent;
+    long poly_warn_sent;
     long dict_found;
     long poly_found;
 
@@ -185,7 +186,22 @@ void weaver_check_attachments(t_weaver *x, long report_error) {
     // Polybuffer check (via track1_ref)
     if (x->poly_prefix != _sym_nothing) {
         t_buffer_obj *b = buffer_ref_getobject(x->track1_ref);
+
+        if (!b) {
+            if (!x->poly_warn_sent) {
+                object_warn((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1), attempting to kick reference", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                x->poly_warn_sent = 1;
+            }
+            // Kick the buffer reference to force re-binding
+            char t1name[256];
+            snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
+            buffer_ref_set(x->track1_ref, _sym_nothing);
+            buffer_ref_set(x->track1_ref, gensym(t1name));
+            b = buffer_ref_getobject(x->track1_ref);
+        }
+
         if (b) {
+            x->poly_warn_sent = 0; // Reset flag when buffer is successfully found
             if (!x->poly_found) {
                 weaver_log(x, "successfully found polybuffer~ '%s' (via %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
                 x->poly_found = 1;
@@ -294,6 +310,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->pending_silence = hashtab_new(0);
         x->bar_warn_sent = 0;
+        x->poly_warn_sent = 0;
 
         x->track_states = hashtab_new(0);
 
@@ -433,6 +450,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         hashtab_store(x->buffer_refs, s_bufname, (t_object *)dest_ref);
     }
     t_buffer_obj *dest_buf = buffer_ref_getobject(dest_ref);
+    if (!dest_buf) {
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(dest_ref, _sym_nothing);
+        buffer_ref_set(dest_ref, s_bufname);
+        dest_buf = buffer_ref_getobject(dest_ref);
+    }
     if (!dest_buf) {
         weaver_log(x, "Error: destination buffer %s not found", s_bufname->s_name);
         return;
