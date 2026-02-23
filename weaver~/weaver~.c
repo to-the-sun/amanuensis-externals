@@ -448,6 +448,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     }
     t_buffer_obj *dest_buf = buffer_ref_getobject(dest_ref);
     if (!dest_buf) {
+        // Kick the buffer reference to force re-binding
+        buffer_ref_set(dest_ref, _sym_nothing);
+        buffer_ref_set(dest_ref, s_bufname);
+        dest_buf = buffer_ref_getobject(dest_ref);
+    }
+    if (!dest_buf) {
         weaver_log(x, "Error: destination buffer %s not found", s_bufname->s_name);
         return;
     }
