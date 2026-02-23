@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="bounce~" module="msp" category="Utility">
+	<digest>Bounces stems from a polybuffer~ into a single buffer~</digest>
+	<description>
+		The `bounce~` object takes two mandatory arguments: the name of an external `polybuffer~` containing stem buffers, and the name of an external `buffer~` for the final product.
+        When it receives a `bang`, it first normalizes any stem buffers in the `polybuffer~` that exceed the [-1, 1] range to a maximum absolute value of 0.9999999.
+        It then sums the first channel of each stem buffer into the first channel of the destination buffer, accounting for sample rate differences.
+        Finally, it copies the content of the first channel of the destination buffer to all its other channels and sends a `bang` when finished.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="anything">
+			<digest>bang to start bounce</digest>
+			<description>A bang in the first inlet triggers the normalization and bouncing process.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="anything">
+			<digest>Outlet 1: (bang) finished</digest>
+			<description>Sends a bang when the bounce process is complete.</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Logging Outlet</digest>
+			<description>Outputs diagnostic information when the log attribute is enabled.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="polybuffer_prefix" type="symbol" optional="0">
+			<digest>Prefix of the polybuffer~ to reference</digest>
+		</objarg>
+		<objarg name="destination_buffer" type="symbol" optional="0">
+			<digest>Name of the destination buffer~ to reference</digest>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="bang">
+			<digest>Start the bounce process</digest>
+			<description>Triggers normalization of stem buffers and summing into the destination buffer.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="log" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Logging</digest>
+			<description>Enables verbose logging of normalization events and successful attachment to buffers.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="weaver~" />
+		<seealso name="threads~" />
+		<seealso name="crucible" />
+		<seealso name="buildspans" />
+		<seealso name="notify" />
+	</seealsolist>
+</c74object>
