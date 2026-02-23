@@ -4,6 +4,7 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
+#include "../shared/crossfade.h"
 #include <string.h>
 #include <math.h>
 
@@ -21,6 +22,8 @@ typedef struct _bounce {
     long poly_error_sent;
     long dest_error_sent;
     double normalize_to;
+    double low_ms;
+    double high_ms;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
@@ -46,6 +49,14 @@ void ext_main(void *r) {
     CLASS_ATTR_DOUBLE(c, "normalize", 0, t_bounce, normalize_to);
     CLASS_ATTR_LABEL(c, "normalize", 0, "Normalization Target Amplitude");
     CLASS_ATTR_DEFAULT(c, "normalize", 0, "0");
+
+    CLASS_ATTR_DOUBLE(c, "low", 0, t_bounce, low_ms);
+    CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "low", 0, "22.653");
+
+    CLASS_ATTR_DOUBLE(c, "high", 0, t_bounce, high_ms);
+    CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
+    CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
 
     class_register(CLASS_BOX, c);
     bounce_class = c;
@@ -120,6 +131,8 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->poly_error_sent = 0;
         x->dest_error_sent = 0;
         x->normalize_to = 0.0;
+        x->low_ms = 22.653;
+        x->high_ms = 4999.0;
 
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -172,7 +185,7 @@ void bounce_free(t_bounce *x) {
 
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) start bounce");
+        sprintf(s, "Inlet 1: (bang) start bounce, (low/high) set fade limits");
     } else {
         if (a == 0) {
             sprintf(s, "Outlet 1: (bang) finished");
@@ -283,7 +296,25 @@ void bounce_bang(t_bounce *x) {
             continue;
         }
 
-        // 1. Normalize if needed
+        // 1. Find last audio frame by scanning backward
+        long last_audio_frame = -1;
+        for (long f = n_frames_src - 1; f >= 0; f--) {
+            for (long c = 0; c < n_chans_src; c++) {
+                if (samples_src[f * n_chans_src + c] != 0.0f) {
+                    last_audio_frame = f;
+                    break;
+                }
+            }
+            if (last_audio_frame != -1) break;
+        }
+
+        if (last_audio_frame == -1) {
+            buffer_unlocksamples(src_buf);
+            stem_idx++;
+            continue;
+        }
+
+        // 2. Normalize if needed
         double max_abs = 0.0;
         for (long f = 0; f < n_frames_src; f++) {
             for (long c = 0; c < n_chans_src; c++) {
@@ -307,11 +338,40 @@ void bounce_bang(t_bounce *x) {
             buffer_setdirty(src_buf);
         }
 
-        // 2. Add to destination (channel 0)
+        // 3. Add to destination with fades
+        long fade_out_duration_frames = (long)round(x->high_ms * sr_src / 1000.0);
+        long fade_out_start_frame = last_audio_frame - fade_out_duration_frames;
+        if (fade_out_start_frame < 0) fade_out_start_frame = 0;
+
+        t_ramp_state ramp;
+        ramp_init(&ramp, sr_dest, x->high_ms);
+        long long elapsed = 0;
+        int fade_in_triggered = 0;
+        int fade_out_triggered = 0;
+
         for (long f_dest = 0; f_dest < n_frames_dest; f_dest++) {
             long f_src = (long)round((double)f_dest * sr_src / sr_dest);
-            if (f_src >= 0 && f_src < n_frames_src) {
-                samples_dest[f_dest * n_chans_dest] += samples_src[f_src * n_chans_src];
+            if (f_src >= 0 && f_src <= last_audio_frame) {
+                double movement = 0.0;
+                if (!fade_in_triggered) {
+                    movement = -1.0;
+                    fade_in_triggered = 1;
+                } else if (!fade_out_triggered && f_src >= fade_out_start_frame) {
+                    movement = 1.0;
+                    fade_out_triggered = 1;
+                }
+
+                double max_abs_src = 0.0;
+                for (long c = 0; c < n_chans_src; c++) {
+                    double a = fabs((double)samples_src[f_src * n_chans_src + c]);
+                    if (a > max_abs_src) max_abs_src = a;
+                }
+
+                double fade_factor;
+                ramp_process(&ramp, max_abs_src, movement, elapsed, sr_dest, x->low_ms, x->high_ms, &fade_factor);
+
+                samples_dest[f_dest * n_chans_dest] += (float)((double)samples_src[f_src * n_chans_src] * fade_factor);
+                elapsed++;
             }
         }
 
@@ -319,7 +379,7 @@ void bounce_bang(t_bounce *x) {
         stem_idx++;
     }
 
-    // 3. Duplicate channel 0 to all other channels
+    // 4. Duplicate channel 0 to all other channels
     if (n_chans_dest > 1) {
         for (long f = 0; f < n_frames_dest; f++) {
             float val = samples_dest[f * n_chans_dest];
@@ -329,7 +389,7 @@ void bounce_bang(t_bounce *x) {
         }
     }
 
-    // 4. Final normalization of product buffer if requested
+    // 5. Final normalization of product buffer if requested
     if (x->normalize_to != 0.0) {
         double product_max = 0.0;
         for (long i = 0; i < n_frames_dest * n_chans_dest; i++) {

@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="bounce~" module="msp" category="Utility">
-	<digest>Bounces stems from a polybuffer~ into a single buffer~</digest>
+	<digest>Bounces stems from a polybuffer~ into a single buffer~ with dynamic fades</digest>
 	<description>
 		The `bounce~` object takes two mandatory arguments: the name of an external `polybuffer~` containing stem buffers, and the name of an external `buffer~` for the final product.
         When it receives a `bang`, it first normalizes any stem buffers in the `polybuffer~` that exceed the [-1, 1] range to a maximum absolute value of 0.9999999.
         It then sums the first channel of each stem buffer into the first channel of the destination buffer, accounting for sample rate differences.
+        For each stem, a dynamic fade-in is applied at the beginning, and a dynamic fade-out is applied starting from the specified time before the end of the audio.
+        The "end of the audio" is determined by a backward scan for the last non-zero sample in the stem buffer.
         Finally, it copies the content of the first channel of the destination buffer to all its other channels and sends a `bang` when finished.
 	</description>
 	<!--METADATA-->
@@ -44,7 +46,7 @@
 	<methodlist>
 		<method name="bang">
 			<digest>Start the bounce process</digest>
-			<description>Triggers normalization of stem buffers and summing into the destination buffer.</description>
+			<description>Triggers normalization of stem buffers and summing into the destination buffer with dynamic fades.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
@@ -59,6 +61,14 @@
 		<attribute name="normalize" type="double" get="1" set="1" opaque="0">
 			<digest>Normalization Target Amplitude</digest>
 			<description>If set to a non-zero value, the object will normalize the final product buffer to this peak absolute amplitude before finishing.</description>
+		</attribute>
+		<attribute name="low" type="double" get="1" set="1" opaque="0">
+			<digest>Low Limit (ms)</digest>
+			<description>The minimum ramp time for the dynamic crossfade module (default: 22.653 ms).</description>
+		</attribute>
+		<attribute name="high" type="double" get="1" set="1" opaque="0">
+			<digest>High Limit (ms)</digest>
+			<description>The maximum ramp time for the dynamic crossfade module (default: 4999.0 ms). This also determines how many milliseconds before the end of the stem the fade-out begins.</description>
 		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
