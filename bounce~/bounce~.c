@@ -18,8 +18,8 @@ typedef struct _bounce {
     void *bang_outlet;
     long poly_found;
     long dest_found;
-    long poly_warn_sent;
-    long dest_warn_sent;
+    long poly_error_sent;
+    long dest_error_sent;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
@@ -58,10 +58,6 @@ void bounce_check_attachments(t_bounce *x, long report_error) {
     if (x->poly_prefix != _sym_nothing) {
         t_buffer_obj *b = buffer_ref_getobject(x->poly_ref);
         if (!b) {
-            if (!x->poly_warn_sent) {
-                object_warn((t_object *)x, "polybuffer~ '%s' not found, attempting to kick reference", x->poly_prefix->s_name);
-                x->poly_warn_sent = 1;
-            }
             char t1name[256];
             snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
             buffer_ref_set(x->poly_ref, _sym_nothing);
@@ -69,15 +65,16 @@ void bounce_check_attachments(t_bounce *x, long report_error) {
             b = buffer_ref_getobject(x->poly_ref);
         }
         if (b) {
-            x->poly_warn_sent = 0; // Reset flag when buffer is successfully found
+            x->poly_error_sent = 0; // Reset flag when buffer is successfully found
             if (!x->poly_found) {
                 bounce_log(x, "successfully found polybuffer~ '%s' (via %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
                 x->poly_found = 1;
             }
         } else {
             if (x->poly_found) x->poly_found = 0;
-            if (report_error && !x->poly_warn_sent) {
+            if (report_error && !x->poly_error_sent) {
                 object_error((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                x->poly_error_sent = 1;
             }
         }
     }
@@ -86,24 +83,21 @@ void bounce_check_attachments(t_bounce *x, long report_error) {
     if (x->dest_name != _sym_nothing) {
         t_buffer_obj *b = buffer_ref_getobject(x->dest_ref);
         if (!b) {
-            if (!x->dest_warn_sent) {
-                object_warn((t_object *)x, "destination buffer~ '%s' not found, attempting to kick reference", x->dest_name->s_name);
-                x->dest_warn_sent = 1;
-            }
             buffer_ref_set(x->dest_ref, _sym_nothing);
             buffer_ref_set(x->dest_ref, x->dest_name);
             b = buffer_ref_getobject(x->dest_ref);
         }
         if (b) {
-            x->dest_warn_sent = 0; // Reset flag when buffer is successfully found
+            x->dest_error_sent = 0; // Reset flag when buffer is successfully found
             if (!x->dest_found) {
                 bounce_log(x, "successfully found destination buffer~ '%s'", x->dest_name->s_name);
                 x->dest_found = 1;
             }
         } else {
             if (x->dest_found) x->dest_found = 0;
-            if (report_error && !x->dest_warn_sent) {
+            if (report_error && !x->dest_error_sent) {
                 object_error((t_object *)x, "destination buffer~ '%s' not found", x->dest_name->s_name);
+                x->dest_error_sent = 1;
             }
         }
     }
@@ -118,8 +112,8 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->poly_found = 0;
         x->dest_found = 0;
-        x->poly_warn_sent = 0;
-        x->dest_warn_sent = 0;
+        x->poly_error_sent = 0;
+        x->dest_error_sent = 0;
 
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -210,6 +204,13 @@ void bounce_bang(t_bounce *x) {
     for (int retry = 0; retry < 10; retry++) {
         samples_dest = buffer_locksamples(dest_buf);
         if (samples_dest) break;
+
+        // If locking fails, try a kick
+        buffer_ref_set(x->dest_ref, _sym_nothing);
+        buffer_ref_set(x->dest_ref, x->dest_name);
+        dest_buf = buffer_ref_getobject(x->dest_ref);
+        if (!dest_buf) break;
+
         systhread_sleep(1);
     }
 
@@ -248,6 +249,13 @@ void bounce_bang(t_bounce *x) {
         for (int retry = 0; retry < 10; retry++) {
             samples_src = buffer_locksamples(src_buf);
             if (samples_src) break;
+
+            // If locking fails, try a kick
+            buffer_ref_set(src_ref, _sym_nothing);
+            buffer_ref_set(src_ref, s_bufname);
+            src_buf = buffer_ref_getobject(src_ref);
+            if (!src_buf) break;
+
             systhread_sleep(1);
         }
 

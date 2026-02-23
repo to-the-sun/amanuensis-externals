@@ -54,8 +54,8 @@ typedef struct _weaver {
     t_critical lock;
     long max_tracks;
     t_hashtab *pending_silence;
-    long bar_warn_sent;
-    long poly_warn_sent;
+    long bar_error_sent;
+    long poly_error_sent;
     long dict_found;
     long poly_found;
 
@@ -187,10 +187,6 @@ void weaver_check_attachments(t_weaver *x, long report_error) {
     if (x->poly_prefix != _sym_nothing) {
         t_buffer_obj *b = buffer_ref_getobject(x->track1_ref);
         if (!b) {
-            if (!x->poly_warn_sent) {
-                object_warn((t_object *)x, "polybuffer~ '%s' not found, attempting to kick reference", x->poly_prefix->s_name);
-                x->poly_warn_sent = 1;
-            }
             char t1name[256];
             snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
             buffer_ref_set(x->track1_ref, _sym_nothing);
@@ -198,15 +194,16 @@ void weaver_check_attachments(t_weaver *x, long report_error) {
             b = buffer_ref_getobject(x->track1_ref);
         }
         if (b) {
-            x->poly_warn_sent = 0; // Reset flag when buffer is successfully found
+            x->poly_error_sent = 0; // Reset flag when buffer is successfully found
             if (!x->poly_found) {
                 weaver_log(x, "successfully found polybuffer~ '%s' (via %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
                 x->poly_found = 1;
             }
         } else {
             if (x->poly_found) x->poly_found = 0;
-            if (report_error && !x->poly_warn_sent) {
+            if (report_error && !x->poly_error_sent) {
                 object_error((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                x->poly_error_sent = 1;
             }
         }
     }
@@ -306,8 +303,8 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         critical_new(&x->lock);
         x->pending_silence = hashtab_new(0);
-        x->bar_warn_sent = 0;
-        x->poly_warn_sent = 0;
+        x->bar_error_sent = 0;
+        x->poly_error_sent = 0;
 
         x->track_states = hashtab_new(0);
 
@@ -404,19 +401,28 @@ double weaver_get_bar_length(t_weaver *x) {
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
     if (!b) {
-        if (!x->bar_warn_sent) {
-            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
-        }
         // Kick the buffer reference to force re-binding
         buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
         buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
         b = buffer_ref_getobject(x->bar_buffer_ref);
     }
     if (b) {
-        x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
+        x->bar_error_sent = 0; // Reset flag when buffer is successfully found
         critical_enter(0);
-        float *samples = buffer_locksamples(b);
+        float *samples = NULL;
+        for (int retry = 0; retry < 10; retry++) {
+            samples = buffer_locksamples(b);
+            if (samples) break;
+
+            // If locking fails, try a kick
+            buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
+            buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
+            b = buffer_ref_getobject(x->bar_buffer_ref);
+            if (!b) break;
+
+            systhread_sleep(1);
+        }
+
         if (samples) {
             if (buffer_getframecount(b) > 0) {
                 bar_length = (double)samples[0];
@@ -424,6 +430,11 @@ double weaver_get_bar_length(t_weaver *x) {
             buffer_unlocksamples(b);
         }
         critical_exit(0);
+    } else {
+        if (!x->bar_error_sent) {
+            object_error((t_object *)x, "bar buffer~ not found");
+            x->bar_error_sent = 1;
+        }
     }
     return bar_length;
 }
@@ -496,10 +507,16 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 
     critical_enter(0);
     float *samples_dest = NULL;
-    int retries_dest = 0;
-    for (retries_dest = 0; retries_dest < 10; retries_dest++) {
+    for (int retry = 0; retry < 10; retry++) {
         samples_dest = buffer_locksamples(dest_buf);
         if (samples_dest) break;
+
+        // If locking fails, try a kick
+        buffer_ref_set(dest_ref, _sym_nothing);
+        buffer_ref_set(dest_ref, s_bufname);
+        dest_buf = buffer_ref_getobject(dest_ref);
+        if (!dest_buf) break;
+
         systhread_sleep(1);
     }
     if (!samples_dest) {
