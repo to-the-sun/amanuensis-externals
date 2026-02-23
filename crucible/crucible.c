@@ -21,8 +21,7 @@ typedef struct _crucible {
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
-    long bar_error_sent;
-    long bar_found;
+    long bar_warn_sent;
 } t_crucible;
 
 // Function prototypes
@@ -151,8 +150,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
-        x->bar_error_sent = 0;
-        x->bar_found = 0;
+        x->bar_warn_sent = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -490,58 +488,40 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
         // Kick the buffer reference to force re-binding
         buffer_ref_set(x->buffer_ref, _sym_nothing);
         buffer_ref_set(x->buffer_ref, gensym("bar"));
         b = buffer_ref_getobject(x->buffer_ref);
     }
-    if (b) {
-        x->bar_error_sent = 0; // Reset flag when buffer is successfully found
-        if (!x->bar_found) {
-            crucible_log(x, "successfully found bar buffer~");
-            x->bar_found = 1;
-        }
-
-        t_atom_long bar_length = 0;
-        critical_enter(0);
-        float *samples = NULL;
-        for (int retry = 0; retry < 10; retry++) {
-            samples = buffer_locksamples(b);
-            if (samples) break;
-
-            // If locking fails, try a kick
-            buffer_ref_set(x->buffer_ref, _sym_nothing);
-            buffer_ref_set(x->buffer_ref, gensym("bar"));
-            b = buffer_ref_getobject(x->buffer_ref);
-            if (!b) break;
-
-            systhread_sleep(1);
-        }
-
-        if (samples) {
-            if (buffer_getframecount(b) > 0) {
-                bar_length = (t_atom_long)samples[0];
-            }
-            buffer_unlocksamples(b);
-            critical_exit(0);
-        } else {
-            critical_exit(0);
-        }
-
-        if (bar_length > 0) {
-            x->local_bar_length = (double)bar_length;
-            crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
-        }
-
-        return bar_length;
-    } else {
-        if (x->bar_found) x->bar_found = 0;
-        if (!x->bar_error_sent) {
-            object_error((t_object *)x, "bar buffer~ not found");
-            x->bar_error_sent = 1;
-        }
+    if (!b) {
+        object_error((t_object *)x, "bar buffer~ not found");
         return 0;
     }
+    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
+
+    t_atom_long bar_length = 0;
+    critical_enter(0);
+    float *samples = buffer_locksamples(b);
+    if (samples) {
+        if (buffer_getframecount(b) > 0) {
+            bar_length = (t_atom_long)samples[0];
+        }
+        buffer_unlocksamples(b);
+        critical_exit(0);
+    } else {
+        critical_exit(0);
+    }
+
+    if (bar_length > 0) {
+        x->local_bar_length = (double)bar_length;
+        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
+    }
+
+    return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {

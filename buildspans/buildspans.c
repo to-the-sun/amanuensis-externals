@@ -169,8 +169,7 @@ typedef struct _buildspans {
     long visualize;
     double local_bar_length;
     long instance_id;
-    long bar_error_sent;
-    long bar_found;
+    long bar_warn_sent;
     long offset_set;
 } t_buildspans;
 
@@ -225,61 +224,42 @@ long buildspans_get_bar_length(t_buildspans *x) {
 
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
+        if (!x->bar_warn_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
+            x->bar_warn_sent = 1;
+        }
         // Kick the buffer reference to force re-binding
         buffer_ref_set(x->buffer_ref, _sym_nothing);
         buffer_ref_set(x->buffer_ref, (x->s_buffer_name && x->s_buffer_name != _sym_nothing) ? x->s_buffer_name : gensym("bar"));
         b = buffer_ref_getobject(x->buffer_ref);
     }
-    if (b) {
-        x->bar_error_sent = 0; // Reset flag when buffer is successfully found
-        if (!x->bar_found) {
-            buildspans_log(x, "successfully found bar buffer~");
-            x->bar_found = 1;
-        }
-
-        long bar_length = 0;
-        critical_enter(0);
-        float *samples = NULL;
-        for (int retry = 0; retry < 10; retry++) {
-            samples = buffer_locksamples(b);
-            if (samples) break;
-
-            // If locking fails, try a kick
-            buffer_ref_set(x->buffer_ref, _sym_nothing);
-            buffer_ref_set(x->buffer_ref, (x->s_buffer_name && x->s_buffer_name != _sym_nothing) ? x->s_buffer_name : gensym("bar"));
-            b = buffer_ref_getobject(x->buffer_ref);
-            if (!b) break;
-
-            systhread_sleep(1);
-        }
-
-        if (samples) {
-            if (buffer_getframecount(b) > 0) {
-                bar_length = (long)samples[0];
-            }
-            buffer_unlocksamples(b);
-            critical_exit(0);
-        } else {
-            critical_exit(0);
-        }
-
-        if (bar_length <= 0) {
-            return -1; // Value in buffer is not positive.
-        }
-
-        x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-        buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-        buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
-
-        return bar_length;
-    } else {
-        if (x->bar_found) x->bar_found = 0;
-        if (!x->bar_error_sent) {
-            object_error((t_object *)x, "bar buffer~ not found");
-            x->bar_error_sent = 1;
-        }
+    if (!b) {
         return -1; // Buffer object not found.
     }
+    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
+
+    long bar_length = 0;
+    critical_enter(0);
+    float *samples = buffer_locksamples(b);
+    if (samples) {
+        if (buffer_getframecount(b) > 0) {
+            bar_length = (long)samples[0];
+        }
+        buffer_unlocksamples(b);
+        critical_exit(0);
+    } else {
+        critical_exit(0);
+    }
+
+    if (bar_length <= 0) {
+        return -1; // Value in buffer is not positive.
+    }
+
+    x->local_bar_length = (double)bar_length; // Cache retrieved bar length
+    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+    buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+
+    return bar_length;
 }
 
 void buildspans_visualize_memory(t_buildspans *x) {
@@ -504,8 +484,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
-        x->bar_error_sent = 0;
-        x->bar_found = 0;
+        x->bar_warn_sent = 0;
         x->offset_set = 0;
 
         // Process attributes before creating outlets
@@ -1502,10 +1481,8 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
             x->buffer_ref = buffer_ref_new((t_object *)x, s);
         }
         buildspans_log(x, "Buffer set to: %s", s->s_name);
-        x->bar_found = 0;
         if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
             object_error((t_object *)x, "bar buffer~ not found");
-            x->bar_error_sent = 1;
         }
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
