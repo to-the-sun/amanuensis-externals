@@ -56,6 +56,10 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="normalize" type="double" get="1" set="1" opaque="0">
+			<digest>Normalization Target Amplitude</digest>
+			<description>If set to a non-zero value, the object will normalize the final product buffer to this peak absolute amplitude before finishing.</description>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

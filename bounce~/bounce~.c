@@ -20,6 +20,7 @@ typedef struct _bounce {
     long dest_found;
     long poly_error_sent;
     long dest_error_sent;
+    double normalize_to;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
@@ -41,6 +42,10 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_bounce, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+
+    CLASS_ATTR_DOUBLE(c, "normalize", 0, t_bounce, normalize_to);
+    CLASS_ATTR_LABEL(c, "normalize", 0, "Normalization Target Amplitude");
+    CLASS_ATTR_DEFAULT(c, "normalize", 0, "0");
 
     class_register(CLASS_BOX, c);
     bounce_class = c;
@@ -114,6 +119,7 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->dest_found = 0;
         x->poly_error_sent = 0;
         x->dest_error_sent = 0;
+        x->normalize_to = 0.0;
 
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -180,8 +186,6 @@ void bounce_bang(t_bounce *x) {
     bounce_check_attachments(x, 1);
     if (!x->poly_found || !x->dest_found) return;
 
-    critical_enter(0);
-
     t_buffer_obj *dest_buf = buffer_ref_getobject(x->dest_ref);
     if (!dest_buf) {
         buffer_ref_set(x->dest_ref, _sym_nothing);
@@ -190,7 +194,6 @@ void bounce_bang(t_bounce *x) {
     }
 
     if (!dest_buf) {
-        critical_exit(0);
         object_error((t_object *)x, "destination buffer~ %s missing during bounce", x->dest_name->s_name);
         return;
     }
@@ -215,11 +218,11 @@ void bounce_bang(t_bounce *x) {
     }
 
     if (!samples_dest) {
-        critical_exit(0);
         object_error((t_object *)x, "could not lock destination buffer %s", x->dest_name->s_name);
         return;
     }
 
+    critical_enter(0);
     buffer_edit_begin(dest_buf);
 
     // Clear destination
@@ -256,7 +259,22 @@ void bounce_bang(t_bounce *x) {
             src_buf = buffer_ref_getobject(src_ref);
             if (!src_buf) break;
 
+            // Release global lock before sleeping
+            critical_exit(0);
             systhread_sleep(1);
+            critical_enter(0);
+
+            // Re-verify dest_buf hasn't been lost during sleep
+            dest_buf = buffer_ref_getobject(x->dest_ref);
+            if (!dest_buf) {
+                buffer_ref_set(x->dest_ref, _sym_nothing);
+                buffer_ref_set(x->dest_ref, x->dest_name);
+                dest_buf = buffer_ref_getobject(x->dest_ref);
+            }
+            if (!dest_buf) {
+                buffer_unlocksamples(src_buf); // src_buf might be valid but we can't proceed
+                break;
+            }
         }
 
         if (!samples_src) {
@@ -275,6 +293,8 @@ void bounce_bang(t_bounce *x) {
         }
 
         if (max_abs > 1.0) {
+            // Destructive normalization of stems
+            // We are already inside global critical section
             buffer_edit_begin(src_buf);
             double scale = 0.9999999 / max_abs;
             for (long f = 0; f < n_frames_src; f++) {
@@ -309,11 +329,29 @@ void bounce_bang(t_bounce *x) {
         }
     }
 
+    // 4. Final normalization of product buffer if requested
+    if (x->normalize_to != 0.0) {
+        double product_max = 0.0;
+        for (long i = 0; i < n_frames_dest * n_chans_dest; i++) {
+            double a = fabs((double)samples_dest[i]);
+            if (a > product_max) product_max = a;
+        }
+
+        if (product_max > 0.0) {
+            double target = fabs(x->normalize_to);
+            double scale = target / product_max;
+            for (long i = 0; i < n_frames_dest * n_chans_dest; i++) {
+                samples_dest[i] *= (float)scale;
+            }
+            bounce_log(x, "final product normalized to %.7f (was %.7f)", target, product_max);
+        }
+    }
+
     buffer_edit_end(dest_buf, 1);
     buffer_unlocksamples(dest_buf);
     buffer_setdirty(dest_buf);
     critical_exit(0);
 
-    object_free(src_ref);
+    if (src_ref) object_free(src_ref);
     outlet_bang(x->bang_outlet);
 }
