@@ -92,7 +92,7 @@ void bounce_check_attachments(t_bounce *x, long report_error) {
         } else {
             if (x->poly_found) x->poly_found = 0;
             if (report_error && !x->poly_error_sent) {
-                object_error((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                object_warn((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
                 x->poly_error_sent = 1;
             }
         }
@@ -314,6 +314,7 @@ void bounce_bang(t_bounce *x) {
         }
         if (!src_buf) break;
 
+        bounce_log(x, "successfully found stem buffer '%s'", bufname);
         bounce_log(x, "processing stem %d: '%s'", stem_idx, bufname);
 
         long n_frames_src = buffer_getframecount(src_buf);
@@ -355,7 +356,7 @@ void bounce_bang(t_bounce *x) {
         }
 
         if (!samples_src) {
-            bounce_log(x, "Error: could not lock stem buffer %s", bufname);
+            object_warn((t_object *)x, "could not lock stem buffer %s", bufname);
             stem_idx++;
             continue;
         }
