@@ -33,6 +33,11 @@ typedef struct _weaver_track {
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
+    t_buffer_ref *dest_ref;
+    long dest_found;
+    long dest_warn_sent;
+    long src_found[2];
+    long src_error_sent[2];
 } t_weaver_track;
 
 typedef struct _weaver {
@@ -41,7 +46,6 @@ typedef struct _weaver {
     long log;
     void *log_outlet;
     void *signal_outlet;
-    t_hashtab *buffer_refs;
     t_buffer_ref *bar_buffer_ref;
     t_buffer_ref *track1_ref;
 
@@ -54,9 +58,12 @@ typedef struct _weaver {
     t_critical lock;
     long max_tracks;
     t_hashtab *pending_silence;
-    long bar_warn_sent;
+    long bar_found;
+    long bar_error_sent;
     long dict_found;
+    long dict_error_sent;
     long poly_found;
+    long poly_warn_sent;
 
     t_hashtab *track_states;
     double low_ms;
@@ -70,7 +77,7 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms);
-void weaver_check_attachments(t_weaver *x, long report_error);
+void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -100,6 +107,18 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
             tr->src_refs[1] = buffer_ref_new((t_object *)x, _sym_nothing);
+
+            char bufname[256];
+            snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track_id);
+            tr->dest_ref = buffer_ref_new((t_object *)x, gensym(bufname));
+
+            tr->dest_found = 0;
+            tr->dest_warn_sent = 0;
+            tr->src_found[0] = 0;
+            tr->src_found[1] = 0;
+            tr->src_error_sent[0] = 0;
+            tr->src_error_sent[1] = 0;
+
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
     }
@@ -117,6 +136,7 @@ void weaver_clear_track_states(t_weaver *x) {
         if (tr) {
             if (tr->src_refs[0]) object_free(tr->src_refs[0]);
             if (tr->src_refs[1]) object_free(tr->src_refs[1]);
+            if (tr->dest_ref) object_free(tr->dest_ref);
             sysmem_freeptr(tr);
         }
     }
@@ -164,7 +184,7 @@ void weaver_log(t_weaver *x, const char *fmt, ...) {
     va_end(args);
 }
 
-void weaver_check_attachments(t_weaver *x, long report_error) {
+void weaver_check_attachments(t_weaver *x) {
     // Dictionary check
     if (x->audio_dict_name != _sym_nothing) {
         t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
@@ -172,28 +192,47 @@ void weaver_check_attachments(t_weaver *x, long report_error) {
             if (!x->dict_found) {
                 weaver_log(x, "successfully found dictionary '%s'", x->audio_dict_name->s_name);
                 x->dict_found = 1;
+                x->dict_error_sent = 0;
             }
             dictobj_release(d);
         } else {
-            if (x->dict_found) x->dict_found = 0;
-            if (report_error) {
+            x->dict_found = 0;
+            if (!x->dict_error_sent) {
                 object_error((t_object *)x, "dictionary '%s' not found", x->audio_dict_name->s_name);
+                x->dict_error_sent = 1;
             }
+            // Kick for dictionary name symbol
+            t_symbol *tmp = x->audio_dict_name;
+            x->audio_dict_name = _sym_nothing;
+            x->audio_dict_name = tmp;
         }
     }
 
     // Polybuffer check (via track1_ref)
     if (x->poly_prefix != _sym_nothing) {
+        char t1name[256];
+        snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
+        t_symbol *s_t1name = gensym(t1name);
+
         t_buffer_obj *b = buffer_ref_getobject(x->track1_ref);
+        if (!b) {
+            // Kick
+            buffer_ref_set(x->track1_ref, _sym_nothing);
+            buffer_ref_set(x->track1_ref, s_t1name);
+            b = buffer_ref_getobject(x->track1_ref);
+        }
+
         if (b) {
             if (!x->poly_found) {
-                weaver_log(x, "successfully found polybuffer~ '%s' (via %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+                weaver_log(x, "successfully found polybuffer~ '%s' (via %s)", x->poly_prefix->s_name, s_t1name->s_name);
                 x->poly_found = 1;
+                x->poly_warn_sent = 0;
             }
         } else {
-            if (x->poly_found) x->poly_found = 0;
-            if (report_error) {
-                object_error((t_object *)x, "polybuffer~ '%s' not found (could not find %s.1)", x->poly_prefix->s_name, x->poly_prefix->s_name);
+            x->poly_found = 0;
+            if (!x->poly_warn_sent) {
+                object_warn((t_object *)x, "polybuffer~ '%s' not found (could not find %s)", x->poly_prefix->s_name, s_t1name->s_name);
+                x->poly_warn_sent = 1;
             }
         }
     }
@@ -240,7 +279,11 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->fifo_head = 0;
         x->fifo_tail = 0;
         x->dict_found = 0;
+        x->dict_error_sent = 0;
         x->poly_found = 0;
+        x->poly_warn_sent = 0;
+        x->bar_found = 0;
+        x->bar_error_sent = 0;
 
         // Argument 1: dictionary name
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -283,17 +326,12 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         // Initial search for mandatory objects
-        weaver_check_attachments(x, 1);
+        weaver_check_attachments(x);
 
-        x->buffer_refs = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        if (!buffer_ref_getobject(x->bar_buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
 
         critical_new(&x->lock);
         x->pending_silence = hashtab_new(0);
-        x->bar_warn_sent = 0;
 
         x->track_states = hashtab_new(0);
 
@@ -308,18 +346,6 @@ void weaver_free(t_weaver *x) {
     critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
 
-    if (x->buffer_refs) {
-        long num_items = 0;
-        t_symbol **keys = NULL;
-        hashtab_getkeys(x->buffer_refs, &num_items, &keys);
-        for (long i = 0; i < num_items; i++) {
-            t_buffer_ref *ref = NULL;
-            hashtab_lookup(x->buffer_refs, keys[i], (t_object **)&ref);
-            if (ref) object_free(ref);
-        }
-        if (keys) sysmem_freeptr(keys);
-        object_free(x->buffer_refs);
-    }
     if (x->bar_buffer_ref) {
         object_free(x->bar_buffer_ref);
     }
@@ -333,17 +359,6 @@ void weaver_free(t_weaver *x) {
 }
 
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
-    if (x->buffer_refs) {
-        long num_items = 0;
-        t_symbol **keys = NULL;
-        hashtab_getkeys(x->buffer_refs, &num_items, &keys);
-        for (long i = 0; i < num_items; i++) {
-            t_buffer_ref *ref = NULL;
-            hashtab_lookup(x->buffer_refs, keys[i], (t_object **)&ref);
-            if (ref) buffer_ref_notify(ref, s, msg, sender, data);
-        }
-        if (keys) sysmem_freeptr(keys);
-    }
     if (x->track_states) {
         long num_items = 0;
         t_symbol **keys = NULL;
@@ -354,6 +369,7 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
             if (tr) {
                 if (tr->src_refs[0]) buffer_ref_notify(tr->src_refs[0], s, msg, sender, data);
                 if (tr->src_refs[1]) buffer_ref_notify(tr->src_refs[1], s, msg, sender, data);
+                if (tr->dest_ref) buffer_ref_notify(tr->dest_ref, s, msg, sender, data);
             }
         }
         if (keys) sysmem_freeptr(keys);
@@ -390,17 +406,17 @@ double weaver_get_bar_length(t_weaver *x) {
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
     if (!b) {
-        if (!x->bar_warn_sent) {
-            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
-        }
         // Kick the buffer reference to force re-binding
         buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
         buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
         b = buffer_ref_getobject(x->bar_buffer_ref);
     }
     if (b) {
-        x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
+        if (!x->bar_found) {
+            weaver_log(x, "successfully found buffer~ 'bar'");
+            x->bar_found = 1;
+            x->bar_error_sent = 0;
+        }
         critical_enter(0);
         float *samples = buffer_locksamples(b);
         if (samples) {
@@ -410,31 +426,51 @@ double weaver_get_bar_length(t_weaver *x) {
             buffer_unlocksamples(b);
         }
         critical_exit(0);
+    } else {
+        x->bar_found = 0;
+        if (!x->bar_error_sent) {
+            object_error((t_object *)x, "bar buffer~ not found");
+            x->bar_error_sent = 1;
+        }
     }
     return bar_length;
 }
 
 
 void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms) {
-    weaver_check_attachments(x, 0);
+    weaver_check_attachments(x);
 
     double bar_len = weaver_get_bar_length(x);
     if (bar_len <= 0) return;
 
-    // 1. Destination Buffer Lookup
+    // 1. Track State and Destination Buffer Lookup
+    t_weaver_track *tr = weaver_get_track_state(x, track);
+    if (!tr) return;
+
     char bufname[256];
     snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track);
     t_symbol *s_bufname = gensym(bufname);
 
-    t_buffer_ref *dest_ref = NULL;
-    hashtab_lookup(x->buffer_refs, s_bufname, (t_object **)&dest_ref);
-    if (!dest_ref) {
-        dest_ref = buffer_ref_new((t_object *)x, s_bufname);
-        hashtab_store(x->buffer_refs, s_bufname, (t_object *)dest_ref);
-    }
-    t_buffer_obj *dest_buf = buffer_ref_getobject(dest_ref);
+    t_buffer_obj *dest_buf = buffer_ref_getobject(tr->dest_ref);
     if (!dest_buf) {
-        weaver_log(x, "Error: destination buffer %s not found", s_bufname->s_name);
+        // Kick
+        buffer_ref_set(tr->dest_ref, _sym_nothing);
+        buffer_ref_set(tr->dest_ref, s_bufname);
+        dest_buf = buffer_ref_getobject(tr->dest_ref);
+    }
+
+    if (dest_buf) {
+        if (!tr->dest_found) {
+            weaver_log(x, "Track %lld: successfully found destination buffer '%s'", track, s_bufname->s_name);
+            tr->dest_found = 1;
+            tr->dest_warn_sent = 0;
+        }
+    } else {
+        tr->dest_found = 0;
+        if (!tr->dest_warn_sent) {
+            object_warn((t_object *)x, "Track %lld: destination buffer '%s' not found", track, s_bufname->s_name);
+            tr->dest_warn_sent = 1;
+        }
         return;
     }
 
@@ -451,10 +487,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     if (end_frame > n_frames_dest) end_frame = n_frames_dest;
     if (start_frame < 0) start_frame = 0;
 
-    // 2. Track State and Crossfade Trigger
-    t_weaver_track *tr = weaver_get_track_state(x, track);
-    if (!tr) return;
-
+    // 2. Crossfade Trigger
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
     if (tr->busy) {
@@ -467,6 +500,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             int other = 1 - active;
             tr->palette[other] = palette;
             tr->offset[other] = offset_ms;
+            tr->src_found[other] = 0;
+            tr->src_error_sent[other] = 0;
             tr->control = (double)other;
             // Set direction for the crossfade module to trigger on the first sample
             tr->xf.direction = tr->control - tr->xf.last_control;
@@ -496,9 +531,24 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     double sr_src[2] = {0, 0};
 
     for (int i = 0; i < 2; i++) {
+        if (tr->palette[i] == gensym("-") || tr->palette[i] == _sym_nothing) {
+            continue;
+        }
         buffer_ref_set(tr->src_refs[i], tr->palette[i]);
         src_buf[i] = buffer_ref_getobject(tr->src_refs[i]);
+        if (!src_buf[i]) {
+            // Kick
+            buffer_ref_set(tr->src_refs[i], _sym_nothing);
+            buffer_ref_set(tr->src_refs[i], tr->palette[i]);
+            src_buf[i] = buffer_ref_getobject(tr->src_refs[i]);
+        }
+
         if (src_buf[i]) {
+            if (!tr->src_found[i]) {
+                weaver_log(x, "Track %lld: successfully found source buffer '%s'", track, tr->palette[i]->s_name);
+                tr->src_found[i] = 1;
+                tr->src_error_sent[i] = 0;
+            }
             sr_src[i] = buffer_getsamplerate(src_buf[i]);
             if (sr_src[i] <= 0) sr_src[i] = 44100.0;
             n_frames_src[i] = buffer_getframecount(src_buf[i]);
@@ -508,6 +558,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 samples_src[i] = buffer_locksamples(src_buf[i]);
                 if (samples_src[i]) break;
                 systhread_sleep(1);
+            }
+        } else {
+            tr->src_found[i] = 0;
+            if (!tr->src_error_sent[i]) {
+                object_error((t_object *)x, "Track %lld: source buffer '%s' not found", track, tr->palette[i]->s_name);
+                tr->src_error_sent[i] = 1;
             }
         }
     }
@@ -581,6 +637,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
         // Inlet 0: Transcript Dictionary Reference
         x->audio_dict_name = s;
         x->dict_found = 0;
+        x->dict_error_sent = 0;
     }
 }
 
@@ -655,7 +712,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 }
 
 void weaver_audio_qtask(t_weaver *x) {
-    weaver_check_attachments(x, 0);
+    weaver_check_attachments(x);
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;
