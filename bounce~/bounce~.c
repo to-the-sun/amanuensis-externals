@@ -27,12 +27,17 @@ typedef struct _bounce {
     double normalize_to;
     double low_ms;
     double high_ms;
+    t_systhread thread;
+    void *qelem;
+    long busy;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
 void bounce_free(t_bounce *x);
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s);
 void bounce_bang(t_bounce *x);
+void *bounce_worker(t_bounce *x);
+void bounce_qfn(t_bounce *x);
 void bounce_check_attachments(t_bounce *x, long report_error);
 void bounce_log(t_bounce *x, const char *fmt, ...);
 
@@ -68,7 +73,15 @@ void ext_main(void *r) {
 void bounce_log(t_bounce *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vcommon_log(x->log_outlet, x->log, "bounce~", fmt, args);
+    if (systhread_ismainthread() || systhread_istimerthread()) {
+        vcommon_log(x->log_outlet, x->log, "bounce~", fmt, args);
+    } else {
+        if (x->log) {
+            char buf[1024];
+            vsnprintf(buf, 1024, fmt, args);
+            object_post((t_object *)x, "bounce~: %s", buf);
+        }
+    }
     va_end(args);
 }
 
@@ -159,6 +172,9 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->normalize_to = 0.0;
         x->low_ms = 22.653;
         x->high_ms = 4999.0;
+        x->thread = NULL;
+        x->qelem = qelem_new(x, (method)bounce_qfn);
+        x->busy = 0;
 
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -206,6 +222,12 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void bounce_free(t_bounce *x) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+    }
+    if (x->qelem) {
+        qelem_free(x->qelem);
+    }
     if (x->poly_ref) object_free(x->poly_ref);
     if (x->dest_ref) object_free(x->dest_ref);
     if (x->stats_ref) object_free(x->stats_ref);
@@ -223,11 +245,7 @@ void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
     }
 }
 
-void bounce_bang(t_bounce *x) {
-    bounce_log(x, "starting bounce process");
-    bounce_check_attachments(x, 1);
-    if (!x->poly_found || !x->dest_found || !x->stats_found) return;
-
+void *bounce_worker(t_bounce *x) {
     t_buffer_obj *dest_buf = buffer_ref_getobject(x->dest_ref);
     if (!dest_buf) {
         buffer_ref_set(x->dest_ref, _sym_nothing);
@@ -243,8 +261,9 @@ void bounce_bang(t_bounce *x) {
     }
 
     if (!dest_buf || !stats_buf) {
-        object_error((t_object *)x, "mandatory buffer(s) missing during bounce");
-        return;
+        bounce_log(x, "mandatory buffer(s) missing during bounce");
+        qelem_set(x->qelem);
+        return NULL;
     }
 
     // Read end of audio from stats buffer (index 1)
@@ -256,8 +275,9 @@ void bounce_bang(t_bounce *x) {
         }
         buffer_unlocksamples(stats_buf);
     } else {
-        object_error((t_object *)x, "could not lock stats buffer");
-        return;
+        bounce_log(x, "could not lock stats buffer");
+        qelem_set(x->qelem);
+        return NULL;
     }
 
     bounce_log(x, "end of audio point from stats buffer: %.2f ms", ms_end);
@@ -288,8 +308,9 @@ void bounce_bang(t_bounce *x) {
     }
 
     if (!samples_dest) {
-        object_error((t_object *)x, "could not lock destination buffer %s", x->dest_name->s_name);
-        return;
+        bounce_log(x, "could not lock destination buffer %s", x->dest_name->s_name);
+        qelem_set(x->qelem);
+        return NULL;
     }
 
     critical_enter(0);
@@ -356,7 +377,7 @@ void bounce_bang(t_bounce *x) {
         }
 
         if (!samples_src) {
-            object_warn((t_object *)x, "could not lock stem buffer %s", bufname);
+            bounce_log(x, "could not lock stem buffer %s", bufname);
             stem_idx++;
             continue;
         }
@@ -481,6 +502,27 @@ void bounce_bang(t_bounce *x) {
     critical_exit(0);
 
     if (src_ref) object_free(src_ref);
+
+    qelem_set(x->qelem);
+    return NULL;
+}
+
+void bounce_bang(t_bounce *x) {
+    bounce_log(x, "starting bounce process");
+    bounce_check_attachments(x, 1);
+    if (!x->poly_found || !x->dest_found || !x->stats_found) return;
+
+    if (x->busy) {
+        bounce_log(x, "bounce process already in progress, ignoring bang");
+        return;
+    }
+
+    x->busy = 1;
+    systhread_create((method)bounce_worker, x, 0, 0, 0, &x->thread);
+}
+
+void bounce_qfn(t_bounce *x) {
     bounce_log(x, "bounce process complete");
     outlet_bang(x->bang_outlet);
+    x->busy = 0;
 }
