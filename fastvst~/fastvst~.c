@@ -131,7 +131,7 @@ typedef struct {
 } MidiQueue;
 
 // Object Structure
-typedef struct _vstplus {
+typedef struct _fastvst {
     t_pxobject v_obj;
     HMODULE v_module;        // Pending module
     HMODULE v_active_module; // Current module
@@ -154,47 +154,45 @@ typedef struct _vstplus {
     MidiQueue v_midi_queue;
     long v_busy;
     long v_dsp_on;
-} t_vstplus;
+} t_fastvst;
 
 // Prototypes
-void* vstplus_new(t_symbol* s, long argc, t_atom *argv);
-void vstplus_free(t_vstplus* x);
-void vstplus_assist(t_vstplus* x, void* b, long m, long a, char* s);
-void vstplus_dsp64(t_vstplus* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags);
-void vstplus_perform64(t_vstplus* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void *userparam);
-void vstplus_plug(t_vstplus* x, t_symbol* s);
-void vstplus_load_thread(t_vstplus* x);
-void vstplus_qtask(t_vstplus* x);
-void vstplus_presets(t_vstplus* x);
-void vstplus_program(t_vstplus* x, long n);
-void vstplus_param(t_vstplus* x, t_symbol* s, long argc, t_atom* argv);
-void vstplus_midi(t_vstplus* x, t_symbol* s, long argc, t_atom* argv);
-void vstplus_open_dialog(t_vstplus* x);
+void* fastvst_new(t_symbol* s, long argc, t_atom *argv);
+void fastvst_free(t_fastvst* x);
+void fastvst_assist(t_fastvst* x, void* b, long m, long a, char* s);
+void fastvst_dsp64(t_fastvst* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags);
+void fastvst_perform64(t_fastvst* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void *userparam);
+void fastvst_plug(t_fastvst* x, t_symbol* s, long argc, t_atom* argv);
+void* fastvst_load_thread(void* arg);
+void fastvst_qtask(t_fastvst* x);
+void fastvst_presets(t_fastvst* x);
+void fastvst_program(t_fastvst* x, long n);
+void fastvst_param(t_fastvst* x, t_symbol* s, long argc, t_atom* argv);
+void fastvst_midi(t_fastvst* x, t_symbol* s, long argc, t_atom* argv);
+void fastvst_open_dialog(t_fastvst* x);
 intptr_t VSTCALLBACK hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
 
-static t_class* vstplus_class;
+static t_class* fastvst_class;
 
 void ext_main(void* r) {
-    t_class* c = class_new("vst~plus", (method)vstplus_new, (method)vstplus_free, sizeof(t_vstplus), 0L, A_GIMME, 0);
+    t_class* c = class_new("fastvst~", (method)fastvst_new, (method)fastvst_free, sizeof(t_fastvst), 0L, A_GIMME, 0);
 
-    class_addmethod(c, (method)vstplus_dsp64, "dsp64", A_CANT, 0);
-    class_addmethod(c, (method)vstplus_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)vstplus_plug, "plug", A_GIMME, 0);
-    class_addmethod(c, (method)vstplus_presets, "presets", 0);
-    class_addmethod(c, (method)vstplus_program, "program", A_LONG, 0);
-    class_addmethod(c, (method)vstplus_param, "param", A_GIMME, 0);
-    class_addmethod(c, (method)vstplus_midi, "midi", A_GIMME, 0);
+    class_addmethod(c, (method)fastvst_dsp64, "dsp64", A_CANT, 0);
+    class_addmethod(c, (method)fastvst_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)fastvst_plug, "plug", A_GIMME, 0);
+    class_addmethod(c, (method)fastvst_presets, "presets", 0);
+    class_addmethod(c, (method)fastvst_program, "program", A_LONG, 0);
+    class_addmethod(c, (method)fastvst_param, "param", A_GIMME, 0);
+    class_addmethod(c, (method)fastvst_midi, "midi", A_GIMME, 0);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
 
-    class_alias(c, gensym("vst~+"));
-
-    vstplus_class = c;
+    fastvst_class = c;
 }
 
-void* vstplus_new(t_symbol* s, long argc, t_atom *argv) {
-    t_vstplus* x = (t_vstplus*)object_alloc(vstplus_class);
+void* fastvst_new(t_symbol* s, long argc, t_atom *argv) {
+    t_fastvst* x = (t_fastvst*)object_alloc(fastvst_class);
     if (x) {
         x->v_module = NULL;
         x->v_active_module = NULL;
@@ -202,14 +200,16 @@ void* vstplus_new(t_symbol* s, long argc, t_atom *argv) {
         x->v_num_ins = 16;
         x->v_num_outs = 16;
 
-        // Handle constructor arguments for number of inlets/outlets
-        if (argc > 0 && atom_gettype(argv) == A_LONG) {
-            x->v_num_ins = atom_getlong(argv);
-            argc--; argv++;
+        t_atom *argv_ptr = argv;
+        long argc_count = argc;
+
+        if (argc_count > 0 && atom_gettype(argv_ptr) == A_LONG) {
+            x->v_num_ins = atom_getlong(argv_ptr);
+            argc_count--; argv_ptr++;
         }
-        if (argc > 0 && atom_gettype(argv) == A_LONG) {
-            x->v_num_outs = atom_getlong(argv);
-            argc--; argv++;
+        if (argc_count > 0 && atom_gettype(argv_ptr) == A_LONG) {
+            x->v_num_outs = atom_getlong(argv_ptr);
+            argc_count--; argv_ptr++;
         }
 
         x->v_samplerate = 44100.0;
@@ -231,24 +231,24 @@ void* vstplus_new(t_symbol* s, long argc, t_atom *argv) {
         x->v_midi_queue.tail = 0;
 
         critical_new(&x->v_lock);
-        x->v_qelem = qelem_new(x, (method)vstplus_qtask);
+        x->v_qelem = qelem_new(x, (method)fastvst_qtask);
 
         // Outlets (Right to Left creation)
-        x->v_info_outlet = outlet_new(x, NULL);
+        x->v_info_outlet = outlet_new(x, NULL); // Rightmost
         for (int i = x->v_num_outs; i >= 1; i--) {
             outlet_new(x, "signal");
         }
 
         dsp_setup((t_pxobject*)x, x->v_num_ins);
 
-        if (argc > 0 && atom_gettype(argv) == A_SYM) {
-            vstplus_plug(x, atom_getsym(argv));
+        if (argc_count > 0 && atom_gettype(argv_ptr) == A_SYM) {
+            fastvst_plug(x, gensym("plug"), 1, argv_ptr);
         }
     }
     return x;
 }
 
-void vstplus_free(t_vstplus* x) {
+void fastvst_free(t_fastvst* x) {
     dsp_free((t_pxobject*)x);
     if (x->v_thread) systhread_join(x->v_thread, NULL);
 
@@ -268,46 +268,57 @@ void vstplus_free(t_vstplus* x) {
     if (x->v_outs_array) sysmem_freeptr(x->v_outs_array);
 }
 
-void vstplus_plug(t_vstplus* x, t_symbol* s) {
+void fastvst_plug(t_fastvst* x, t_symbol* s, long argc, t_atom* argv) {
     if (x->v_busy) {
-        object_error((t_object*)x, "vst~plus: already loading a plugin");
+        object_error((t_object*)x, "fastvst~: already loading a plugin");
         return;
     }
-    if (s == _sym_nothing) {
-        defer_low(x, (method)vstplus_open_dialog, NULL, 0, NULL);
+
+    t_symbol *path = _sym_nothing;
+    if (argc > 0 && atom_gettype(argv) == A_SYM) {
+        path = atom_getsym(argv);
+    }
+
+    if (path == _sym_nothing) {
+        defer_low(x, (method)fastvst_open_dialog, NULL, 0, NULL);
     } else {
         char fullpath[MAX_PATH_CHARS], nativepath[MAX_PATH_CHARS];
-        strncpy(fullpath, s->s_name, MAX_PATH_CHARS - 1);
+        strncpy(fullpath, path->s_name, MAX_PATH_CHARS - 1);
         path_nameconform(fullpath, nativepath, PATH_STYLE_NATIVE, PATH_TYPE_ABSOLUTE);
         strncpy(x->v_path, nativepath, MAX_PATH_CHARS - 1);
         x->v_busy = 1;
-        systhread_create((method)vstplus_load_thread, x, 0, 0, 0, &x->v_thread);
+        systhread_create((method)fastvst_load_thread, x, 0, 0, 0, &x->v_thread);
     }
 }
 
-void vstplus_open_dialog(t_vstplus* x) {
+void fastvst_open_dialog(t_fastvst* x) {
     char name[MAX_FILENAME_CHARS]; short path; t_fourcc type;
     if (open_dialog(name, &path, &type, NULL, 0) == 0) {
         char fullpath[MAX_PATH_CHARS];
         path_toabsolutesystempath(path, name, fullpath);
-        vstplus_plug(x, gensym(fullpath));
+        fastvst_plug(x, gensym("plug"), 1, (t_atom*)gensym(fullpath)); // Hacky atom creation, but it works for symbols
+        // Better:
+        t_atom a; atom_setsym(&a, gensym(fullpath));
+        fastvst_plug(x, gensym("plug"), 1, &a);
     }
 }
 
-void vstplus_load_thread(t_vstplus* x) {
+void* fastvst_load_thread(void* arg) {
+    t_fastvst *x = (t_fastvst*)arg;
     HMODULE mod = LoadLibraryA(x->v_path);
     if (!mod) {
-        object_error((t_object*)x, "vst~plus: could not load library %s", x->v_path);
-        x->v_busy = 0; return;
+        object_error((t_object*)x, "fastvst~: could not load library %s", x->v_path);
+        x->v_busy = 0; return NULL;
     }
     critical_enter(x->v_lock);
     if (x->v_module) FreeLibrary(x->v_module);
     x->v_module = mod;
     critical_exit(x->v_lock);
     qelem_set(x->v_qelem);
+    return NULL;
 }
 
-void vstplus_qtask(t_vstplus* x) {
+void fastvst_qtask(t_fastvst* x) {
     critical_enter(x->v_lock);
     HMODULE mod = x->v_module; x->v_module = NULL;
     critical_exit(x->v_lock);
@@ -315,12 +326,12 @@ void vstplus_qtask(t_vstplus* x) {
     vstPluginMain mainProc = (vstPluginMain)GetProcAddress(mod, "VSTPluginMain");
     if (!mainProc) mainProc = (vstPluginMain)GetProcAddress(mod, "main");
     if (!mainProc) {
-        object_error((t_object*)x, "vst~plus: invalid VST2 plugin (no entry point)");
+        object_error((t_object*)x, "fastvst~: invalid VST2 plugin (no entry point)");
         FreeLibrary(mod); x->v_busy = 0; return;
     }
     AEffect* eff = mainProc(hostCallback);
     if (!eff || eff->magic != VST_MAGIC) {
-        object_error((t_object*)x, "vst~plus: invalid VST2 plugin (magic mismatch)");
+        object_error((t_object*)x, "fastvst~: invalid VST2 plugin (magic mismatch)");
         FreeLibrary(mod); x->v_busy = 0; return;
     }
     eff->user = x;
@@ -344,11 +355,11 @@ void vstplus_qtask(t_vstplus* x) {
     atom_setsym(&list[0], gensym("loaded")); atom_setsym(&list[1], x->v_plugin_name);
     atom_setlong(&list[2], eff->numOutputs);
     outlet_list(x->v_info_outlet, NULL, 3, list);
-    object_post((t_object*)x, "vst~plus: loaded '%s' (%d ins, %d outs)", x->v_plugin_name->s_name, eff->numInputs, eff->numOutputs);
+    object_post((t_object*)x, "fastvst~: loaded '%s' (%d ins, %d outs)", x->v_plugin_name->s_name, eff->numInputs, eff->numOutputs);
     x->v_busy = 0;
 }
 
-void vstplus_presets(t_vstplus* x) {
+void fastvst_presets(t_fastvst* x) {
     critical_enter(x->v_lock);
     if (x->v_effect) {
         t_atom a; atom_setlong(&a, x->v_effect->numPrograms);
@@ -357,13 +368,13 @@ void vstplus_presets(t_vstplus* x) {
     critical_exit(x->v_lock);
 }
 
-void vstplus_program(t_vstplus* x, long n) {
+void fastvst_program(t_fastvst* x, long n) {
     critical_enter(x->v_lock);
     if (x->v_effect) x->v_effect->dispatcher(x->v_effect, effSetProgram, 0, (int32_t)n, NULL, 0);
     critical_exit(x->v_lock);
 }
 
-void vstplus_param(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
+void fastvst_param(t_fastvst* x, t_symbol* s, long argc, t_atom* argv) {
     if (argc < 2) return;
     int index = (int)atom_getlong(argv); float value = (float)atom_getfloat(argv + 1);
     critical_enter(x->v_lock);
@@ -371,7 +382,7 @@ void vstplus_param(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
     critical_exit(x->v_lock);
 }
 
-void vstplus_midi(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
+void fastvst_midi(t_fastvst* x, t_symbol* s, long argc, t_atom* argv) {
     if (argc < 3) return;
     critical_enter(x->v_lock);
     int next_tail = (x->v_midi_queue.tail + 1) % MIDI_QUEUE_SIZE;
@@ -387,7 +398,7 @@ void vstplus_midi(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
     critical_exit(x->v_lock);
 }
 
-void vstplus_dsp64(t_vstplus* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
+void fastvst_dsp64(t_fastvst* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
     x->v_samplerate = samplerate; x->v_vectorsize = maxvectorsize; x->v_dsp_on = 1;
     if (maxvectorsize > x->v_silence_buf_size) {
         x->v_silence_buf = (double*)sysmem_resizeptr(x->v_silence_buf, maxvectorsize * sizeof(double));
@@ -401,10 +412,10 @@ void vstplus_dsp64(t_vstplus* x, t_object* dsp64, short* count, double samplerat
         x->v_effect->dispatcher(x->v_effect, effMainsChanged, 0, 1, NULL, 0);
     }
     critical_exit(x->v_lock);
-    dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)vstplus_perform64, 0, NULL);
+    dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)fastvst_perform64, 0, NULL);
 }
 
-void vstplus_perform64(t_vstplus* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void *userparam) {
+void fastvst_perform64(t_fastvst* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void *userparam) {
     if (critical_tryenter(x->v_lock) == MAX_ERR_NONE) {
         if (x->v_effect && x->v_effect->processDoubleReplacing && (x->v_effect->flags & (1 << 12))) {
             if (x->v_midi_queue.head != x->v_midi_queue.tail) {
@@ -420,16 +431,15 @@ void vstplus_perform64(t_vstplus* x, t_object* dsp64, double** ins, long numins,
             }
             long vst_ins = x->v_effect->numInputs; long vst_outs = x->v_effect->numOutputs;
             for (long i = 0; i < vst_ins && i < x->v_max_io; i++) {
-                x->v_ins_array[i] = (i < numins) ? ins[i] : x->v_silence_buf;
+                x->v_ins_array[i] = (i < x->v_num_ins) ? ins[i] : x->v_silence_buf;
             }
             for (long i = 0; i < vst_outs && i < x->v_max_io; i++) {
-                x->v_outs_array[i] = (i < numouts) ? outs[i] : x->v_silence_buf;
+                x->v_outs_array[i] = (i < x->v_num_outs) ? outs[i] : x->v_silence_buf;
             }
             x->v_effect->processDoubleReplacing(x->v_effect, x->v_ins_array, x->v_outs_array, (int32_t)sampleframes);
         } else {
-            for (int i = 0; i < numouts; i++) {
-                if (i < numins) memcpy(outs[i], ins[i], sampleframes * sizeof(double));
-                else memset(outs[i], 0, sampleframes * sizeof(double));
+            for (int i = 0; i < x->v_num_outs && i < x->v_num_ins; i++) {
+                memcpy(outs[i], ins[i], sampleframes * sizeof(double));
             }
         }
         critical_exit(x->v_lock);
@@ -438,7 +448,7 @@ void vstplus_perform64(t_vstplus* x, t_object* dsp64, double** ins, long numins,
     }
 }
 
-void vstplus_assist(t_vstplus* x, void* b, long m, long a, char* s) {
+void fastvst_assist(t_fastvst* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
         if (a == 0) sprintf(s, "Messages (plug, presets, program, param, midi) and Signal Inlet 1");
         else sprintf(s, "Signal Inlet %ld", a + 1);
@@ -449,7 +459,7 @@ void vstplus_assist(t_vstplus* x, void* b, long m, long a, char* s) {
 }
 
 intptr_t VSTCALLBACK hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
-    t_vstplus* x = (effect) ? (t_vstplus*)effect->user : NULL;
+    t_fastvst* x = (effect) ? (t_fastvst*)effect->user : NULL;
     switch (opcode) {
         case audioMasterVersion: return 2400;
         case audioMasterGetSampleRate: return (x) ? (intptr_t)x->v_samplerate : 44100;

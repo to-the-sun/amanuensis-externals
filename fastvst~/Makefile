@@ -3,8 +3,8 @@ CFLAGS = -DWIN_VERSION -DC74_X64 -I../max-sdk/source/max-sdk-base/c74support/max
 LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-sdk/source/max-sdk-base/c74support/msp-includes/x64 -lMaxAPI -lMaxAudio
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
-vst~+.mxe64: vst~+.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o "vst~+.mxe64" "vst~+.c" $(COMMON_SOURCES) $(LDFLAGS)
+fastvst~.mxe64: fastvst~.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -o "fastvst~.mxe64" "fastvst~.c" $(COMMON_SOURCES) $(LDFLAGS)
 
 clean:
-	rm -f "vst~+.mxe64"
+	rm -f "fastvst~.mxe64"
