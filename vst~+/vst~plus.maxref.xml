@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
 
-<reference name="vst~+"  type="object" category="Audio, MSP">
+<reference name="vst~plus"  type="object" category="Audio, MSP">
 	<digest>
 		Asynchronous VST2 plugin host.
 	</digest>
 	<description>
-		The <o>vst~+</o> object is an enhanced emulation of the standard <o>vst~</o> object that loads VST2 plugins asynchronously on a background thread. This prevents Max from freezing or stuttering while a large plugin or library is being loaded. It supports 64-bit audio processing, MIDI input, and parameter automation.
+		The <o>vst~plus</o> object is an enhanced emulation of the standard <o>vst~</o> object that loads VST2 plugins asynchronously on a background thread. This prevents Max from freezing or stuttering while a large plugin or library is being loaded. It supports 64-bit audio processing, MIDI input, and parameter automation.
 	</description>
 
 	<!-- METADATA -->
@@ -31,7 +31,6 @@
 			<digest>Signal Inlet 3</digest>
 			<description>Audio input for the third channel.</description>
 		</inlet>
-        <!-- ... and so on up to 16 -->
 	</inletlist>
 
 	<!-- OUTLETS -->
@@ -48,7 +47,6 @@
 			<digest>Signal Outlet 3</digest>
 			<description>Audio output for the third channel.</description>
 		</outlet>
-        <!-- ... up to 16 -->
 		<outlet id="16" type="list">
 			<digest>Info Outlet</digest>
 			<description>Status messages from the object (e.g., loaded, numpresets).</description>
