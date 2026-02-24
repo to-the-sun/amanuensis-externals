@@ -35,7 +35,6 @@ typedef struct _bounce {
     t_buffer_obj *stem_objs[1024];
     int stem_count;
     t_buffer_obj *dest_obj;
-    t_buffer_obj *stats_obj;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
@@ -445,7 +444,7 @@ void *bounce_worker(t_bounce *x) {
 }
 
 void bounce_bang(t_bounce *x) {
-    // 1. Retrieve the length from the stats buffer~ very first thing
+    // 1. Retrieve the length from the stats buffer~ very first thing synchronously
     double ms_end = 0.0;
     t_buffer_obj *stats_buf = buffer_ref_getobject(x->stats_ref);
     if (!stats_buf) {
@@ -453,7 +452,6 @@ void bounce_bang(t_bounce *x) {
         buffer_ref_set(x->stats_ref, gensym("stats"));
         stats_buf = buffer_ref_getobject(x->stats_ref);
     }
-
     if (stats_buf) {
         float *samples_stats = buffer_locksamples(stats_buf);
         if (samples_stats) {
@@ -464,18 +462,19 @@ void bounce_bang(t_bounce *x) {
         }
     }
     x->ms_end = ms_end;
-    x->stats_obj = stats_buf;
 
+    // 2. Check if already busy
+    if (x->busy) {
+        bounce_log(x, "bounce process already in progress, ignoring bang");
+        return;
+    }
+
+    // 3. Normal setup
     bounce_log(x, "starting bounce process");
     bounce_check_attachments(x, 1);
 
     if (!x->poly_found || !x->dest_found || !x->stats_found) {
         bounce_log(x, "mandatory buffer(s) missing during bounce");
-        return;
-    }
-
-    if (x->busy) {
-        bounce_log(x, "bounce process already in progress, ignoring bang");
         return;
     }
 
