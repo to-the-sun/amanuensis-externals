@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="bounce~" module="msp" category="Utility">
-	<digest>Bounces stems from a polybuffer~ into a single buffer~</digest>
+	<digest>Bounces stems from a polybuffer~ into a single buffer~ with dynamic fades and optimized processing</digest>
 	<description>
 		The `bounce~` object takes two mandatory arguments: the name of an external `polybuffer~` containing stem buffers, and the name of an external `buffer~` for the final product.
-        When it receives a `bang`, it first normalizes any stem buffers in the `polybuffer~` that exceed the [-1, 1] range to a maximum absolute value of 0.9999999.
-        It then sums the first channel of each stem buffer into the first channel of the destination buffer, accounting for sample rate differences.
-        Finally, it copies the content of the first channel of the destination buffer to all its other channels and sends a `bang` when finished.
+        Additionally, it requires an external `buffer~` named `stats` to be present in the patcher.
+        When it receives a `bang`, it looks up index 1 (zero-based) of the `stats` buffer to determine the end of the audio in milliseconds.
+        This value is used to bound all processing steps, including normalization, summation, and channel duplication, ensuring that no operations are performed beyond the required duration.
+        It first normalizes any stem buffers in the `polybuffer~` (up to the specified end point) that exceed the [-1, 1] range to a maximum absolute value of 0.9999999.
+        It then sums the first channel of each stem buffer into the first channel of the destination buffer with dynamic fades.
+        A dynamic fade-in is applied at the beginning, and a dynamic fade-out is applied starting from the specified time before the end of the audio (as defined by the `stats` buffer).
+        Finally, it copies the content of the first channel of the destination buffer to all its other channels (up to the end point) and sends a `bang` when finished.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -44,14 +48,14 @@
 	<methodlist>
 		<method name="bang">
 			<digest>Start the bounce process</digest>
-			<description>Triggers normalization of stem buffers and summing into the destination buffer.</description>
+			<description>Triggers normalization of stem buffers and summing into the destination buffer with dynamic fades, using the `stats` buffer to define the processing limit.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Logging</digest>
-			<description>Enables verbose logging of normalization events and successful attachment to buffers.</description>
+			<description>Enables verbose logging of normalization events, buffer attachments, and process milestones.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
@@ -59,6 +63,14 @@
 		<attribute name="normalize" type="double" get="1" set="1" opaque="0">
 			<digest>Normalization Target Amplitude</digest>
 			<description>If set to a non-zero value, the object will normalize the final product buffer to this peak absolute amplitude before finishing.</description>
+		</attribute>
+		<attribute name="low" type="double" get="1" set="1" opaque="0">
+			<digest>Low Limit (ms)</digest>
+			<description>The minimum ramp time for the dynamic crossfade module (default: 22.653 ms).</description>
+		</attribute>
+		<attribute name="high" type="double" get="1" set="1" opaque="0">
+			<digest>High Limit (ms)</digest>
+			<description>The maximum ramp time for the dynamic crossfade module (default: 4999.0 ms). This also determines how many milliseconds before the end of the audio (defined by the `stats` buffer) the fade-out begins.</description>
 		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
