@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<reference name="vst~+"  type="object" category="Audio, MSP">
+	<digest>
+		Asynchronous VST2 plugin host.
+	</digest>
+	<description>
+		The <o>vst~+</o> object is an enhanced emulation of the standard <o>vst~</o> object that loads VST2 plugins asynchronously on a background thread. This prevents Max from freezing or stuttering while a large plugin or library is being loaded. It supports 64-bit audio processing, MIDI input, and parameter automation.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Cycling '74 (Emulation)</metadata>
+		<metadata name="tag">Audio</metadata>
+		<metadata name="tag">MSP</metadata>
+		<metadata name="tag">VST</metadata>
+	</metadatalist>
+
+	<!-- INLETS -->
+	<inletlist>
+		<inlet id="0" type="signal/messages">
+			<digest>Messages and Signal Inlet 1</digest>
+			<description>Accepts control messages (plug, midi, param, presets) and audio input for the first channel.</description>
+		</inlet>
+		<inlet id="1" type="signal">
+			<digest>Signal Inlet 2</digest>
+			<description>Audio input for the second channel.</description>
+		</inlet>
+        <inlet id="2" type="signal">
+			<digest>Signal Inlet 3</digest>
+			<description>Audio input for the third channel.</description>
+		</inlet>
+        <!-- ... and so on up to 16 -->
+	</inletlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Signal Outlet 1</digest>
+			<description>Audio output for the first channel.</description>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>Signal Outlet 2</digest>
+			<description>Audio output for the second channel.</description>
+		</outlet>
+        <outlet id="2" type="signal">
+			<digest>Signal Outlet 3</digest>
+			<description>Audio output for the third channel.</description>
+		</outlet>
+        <!-- ... up to 16 -->
+		<outlet id="16" type="list">
+			<digest>Info Outlet</digest>
+			<description>Status messages from the object (e.g., loaded, numpresets).</description>
+		</outlet>
+	</outletlist>
+
+	<!-- MESSAGES -->
+	<messagelist>
+		<message name="plug">
+			<arglist>
+				<arg name="path" optional="1" type="symbol" />
+			</arglist>
+			<digest>Load a VST plugin</digest>
+			<description>With no arguments, opens a file dialog to choose a VST2 plugin (.dll). With a symbol argument, attempts to load the plugin at the specified path. Loading occurs asynchronously on a separate thread.</description>
+		</message>
+		<message name="presets">
+			<digest>Query number of presets</digest>
+			<description>Outputs the number of programs/presets available in the loaded plugin to the info outlet, prefixed by <m>numpresets</m>.</description>
+		</message>
+		<message name="param">
+			<arglist>
+				<arg name="index" type="int" />
+				<arg name="value" type="float" />
+			</arglist>
+			<digest>Set plugin parameter</digest>
+			<description>Sets the parameter at the specified index (0-based) to the given value (typically 0.0 to 1.0).</description>
+		</message>
+		<message name="midi">
+			<arglist>
+				<arg name="byte1" type="int" />
+				<arg name="byte2" type="int" />
+				<arg name="byte3" type="int" />
+			</arglist>
+			<digest>Send MIDI to plugin</digest>
+			<description>Sends a 3-byte MIDI message to the loaded plugin. Messages are processed at the start of the next audio block.</description>
+		</message>
+	</messagelist>
+
+	<!-- SEEALSO -->
+	<seealsolist>
+		<seealso name="vst~" />
+		<seealso name="amxd~" />
+	</seealsolist>
+
+</reference>

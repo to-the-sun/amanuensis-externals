@@ -123,10 +123,18 @@ typedef struct {
     void* events[2];
 } VstEvents;
 
+#define MIDI_QUEUE_SIZE 1024
+typedef struct {
+    VstMidiEvent events[MIDI_QUEUE_SIZE];
+    int head;
+    int tail;
+} MidiQueue;
+
 // Object Structure
 typedef struct _vstplus {
     t_pxobject v_obj;
-    HMODULE v_module;
+    HMODULE v_module;        // Pending module
+    HMODULE v_active_module; // Current module
     AEffect* v_effect;
     t_critical v_lock;
     t_systhread v_thread;
@@ -142,6 +150,9 @@ typedef struct _vstplus {
     double** v_ins_array;
     double** v_outs_array;
     long v_max_io;
+    MidiQueue v_midi_queue;
+    long v_busy;
+    long v_dsp_on;
 } t_vstplus;
 
 // Prototypes
@@ -160,10 +171,6 @@ void vstplus_open_dialog(t_vstplus* x);
 intptr_t VSTCALLBACK hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
 
 static t_class* vstplus_class;
-
-// External functions from MaxAPI
-extern void patcherdomain_inlets_resize(t_object *x, long n);
-extern void patcherdomain_outlets_resize(t_object *x, long n);
 
 void ext_main(void* r) {
     t_class* c = class_new("vst~+", (method)vstplus_new, (method)vstplus_free, sizeof(t_vstplus), 0L, A_GIMME, 0);
@@ -184,6 +191,7 @@ void* vstplus_new(t_symbol* s, long argc, t_atom *argv) {
     t_vstplus* x = (t_vstplus*)object_alloc(vstplus_class);
     if (x) {
         x->v_module = NULL;
+        x->v_active_module = NULL;
         x->v_effect = NULL;
         x->v_num_ins = 0;
         x->v_num_outs = 0;
@@ -192,21 +200,29 @@ void* vstplus_new(t_symbol* s, long argc, t_atom *argv) {
         x->v_plugin_name = gensym("none");
         x->v_thread = NULL;
         x->v_max_io = 128;
+        x->v_busy = 0;
+        x->v_dsp_on = 0;
 
-        x->v_silence_buf = (double*)sysmem_newptr(2048 * sizeof(double));
-        memset(x->v_silence_buf, 0, 2048 * sizeof(double));
+        x->v_silence_buf = (double*)sysmem_newptr(16384 * sizeof(double));
+        memset(x->v_silence_buf, 0, 16384 * sizeof(double));
 
         x->v_ins_array = (double**)sysmem_newptr(x->v_max_io * sizeof(double*));
         x->v_outs_array = (double**)sysmem_newptr(x->v_max_io * sizeof(double*));
 
+        x->v_midi_queue.head = 0;
+        x->v_midi_queue.tail = 0;
+
         critical_new(&x->v_lock);
         x->v_qelem = qelem_new(x, (method)vstplus_qtask);
 
-        // Default outlets
+        // Outlets (Right to Left creation -> Left to Right appearance)
+        // Order: Info, Sig 16, Sig 15, ..., Sig 1
         x->v_info_outlet = outlet_new(x, NULL);
-        dsp_setup((t_pxobject*)x, 2);
-        outlet_new(x, "signal");
-        outlet_new(x, "signal");
+        for (int i = 16; i >= 1; i--) {
+            outlet_new(x, "signal");
+        }
+
+        dsp_setup((t_pxobject*)x, 16);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
             vstplus_plug(x, atom_getsym(argv));
@@ -222,12 +238,14 @@ void vstplus_free(t_vstplus* x) {
         systhread_join(x->v_thread, NULL);
     }
 
+    critical_enter(x->v_lock);
     if (x->v_effect) {
+        x->v_effect->dispatcher(x->v_effect, effMainsChanged, 0, 0, NULL, 0);
         x->v_effect->dispatcher(x->v_effect, effClose, 0, 0, NULL, 0);
     }
-    if (x->v_module) {
-        FreeLibrary(x->v_module);
-    }
+    if (x->v_active_module) FreeLibrary(x->v_active_module);
+    if (x->v_module) FreeLibrary(x->v_module);
+    critical_exit(x->v_lock);
 
     if (x->v_qelem) qelem_free(x->v_qelem);
     critical_free(x->v_lock);
@@ -238,16 +256,21 @@ void vstplus_free(t_vstplus* x) {
 }
 
 void vstplus_plug(t_vstplus* x, t_symbol* s) {
+    if (x->v_busy) {
+        object_error((t_object*)x, "vst~+: already loading a plugin");
+        return;
+    }
+
     if (s == _sym_nothing) {
         defer_low(x, (method)vstplus_open_dialog, NULL, 0, NULL);
     } else {
-        // Normalize path
         char fullpath[MAX_PATH_CHARS];
         char nativepath[MAX_PATH_CHARS];
         strncpy(fullpath, s->s_name, MAX_PATH_CHARS - 1);
         path_nameconform(fullpath, nativepath, PATH_STYLE_NATIVE, PATH_TYPE_ABSOLUTE);
 
         strncpy(x->v_path, nativepath, MAX_PATH_CHARS - 1);
+        x->v_busy = 1;
         systhread_create((method)vstplus_load_thread, x, 0, 0, 0, &x->v_thread);
     }
 }
@@ -267,23 +290,12 @@ void vstplus_load_thread(t_vstplus* x) {
     HMODULE mod = LoadLibraryA(x->v_path);
     if (!mod) {
         object_error((t_object*)x, "vst~+: could not load library %s", x->v_path);
+        x->v_busy = 0;
         return;
     }
-
-    vstPluginMain mainProc = (vstPluginMain)GetProcAddress(mod, "VSTPluginMain");
-    if (!mainProc) mainProc = (vstPluginMain)GetProcAddress(mod, "main");
-
-    if (!mainProc) {
-        object_error((t_object*)x, "vst~+: could not find entry point in %s", x->v_path);
-        FreeLibrary(mod);
-        return;
-    }
-
-    // We only load the library in the thread.
-    // Initializing the VST (effOpen) should happen on the main thread.
 
     critical_enter(x->v_lock);
-    // Move the handle to the object, but don't set v_effect yet
+    if (x->v_module) FreeLibrary(x->v_module);
     x->v_module = mod;
     critical_exit(x->v_lock);
 
@@ -293,16 +305,29 @@ void vstplus_load_thread(t_vstplus* x) {
 void vstplus_qtask(t_vstplus* x) {
     critical_enter(x->v_lock);
     HMODULE mod = x->v_module;
+    x->v_module = NULL;
     critical_exit(x->v_lock);
 
-    if (!mod) return;
+    if (!mod) {
+        x->v_busy = 0;
+        return;
+    }
 
     vstPluginMain mainProc = (vstPluginMain)GetProcAddress(mod, "VSTPluginMain");
     if (!mainProc) mainProc = (vstPluginMain)GetProcAddress(mod, "main");
 
+    if (!mainProc) {
+        object_error((t_object*)x, "vst~+: invalid VST2 plugin (no entry point)");
+        FreeLibrary(mod);
+        x->v_busy = 0;
+        return;
+    }
+
     AEffect* eff = mainProc(hostCallback);
     if (!eff || eff->magic != VST_MAGIC) {
-        object_error((t_object*)x, "vst~+: invalid VST2 plugin");
+        object_error((t_object*)x, "vst~+: invalid VST2 plugin (magic mismatch)");
+        FreeLibrary(mod);
+        x->v_busy = 0;
         return;
     }
 
@@ -312,19 +337,30 @@ void vstplus_qtask(t_vstplus* x) {
     eff->dispatcher(eff, effSetBlockSize, 0, (int32_t)x->v_vectorsize, NULL, 0);
 
     critical_enter(x->v_lock);
-    if (x->v_effect) {
-        x->v_effect->dispatcher(x->v_effect, effClose, 0, 0, NULL, 0);
-    }
+    AEffect* old_eff = x->v_effect;
+    HMODULE old_mod = x->v_active_module;
+
     x->v_effect = eff;
+    x->v_active_module = mod;
     x->v_num_ins = eff->numInputs;
     x->v_num_outs = eff->numOutputs;
 
     char name[256] = {0};
     eff->dispatcher(eff, effGetEffectName, 0, 0, name, 0);
     x->v_plugin_name = gensym(name);
+
+    if (x->v_dsp_on) eff->dispatcher(eff, effMainsChanged, 0, 1, NULL, 0);
     critical_exit(x->v_lock);
 
-    // Report loading
+    if (old_eff) {
+        old_eff->dispatcher(old_eff, effMainsChanged, 0, 0, NULL, 0);
+        old_eff->dispatcher(old_eff, effClose, 0, 0, NULL, 0);
+    }
+    if (old_mod) FreeLibrary(old_mod);
+
+    x->v_midi_queue.head = 0;
+    x->v_midi_queue.tail = 0;
+
     t_atom list[3];
     atom_setsym(&list[0], gensym("loaded"));
     atom_setsym(&list[1], x->v_plugin_name);
@@ -332,10 +368,7 @@ void vstplus_qtask(t_vstplus* x) {
     outlet_list(x->v_info_outlet, NULL, 3, list);
 
     object_post((t_object*)x, "vst~+: loaded '%s' (%ld ins, %ld outs)", x->v_plugin_name->s_name, x->v_num_ins, x->v_num_outs);
-
-    // Attempt dynamic resize (private API, use with caution)
-    // patcherdomain_inlets_resize((t_object*)x, x->v_num_ins);
-    // patcherdomain_outlets_resize((t_object*)x, x->v_num_outs + 1); // +1 for info outlet
+    x->v_busy = 0;
 }
 
 void vstplus_presets(t_vstplus* x) {
@@ -360,17 +393,17 @@ void vstplus_param(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
 void vstplus_midi(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
     if (argc < 3) return;
     critical_enter(x->v_lock);
-    if (x->v_effect) {
-        VstMidiEvent ev;
-        memset(&ev, 0, sizeof(ev));
-        ev.type = 1; ev.byteSize = sizeof(ev);
-        ev.midiData[0] = (char)atom_getlong(argv);
-        ev.midiData[1] = (char)atom_getlong(argv + 1);
-        ev.midiData[2] = (char)atom_getlong(argv + 2);
-        VstEvents events;
-        events.numEvents = 1; events.reserved = 0;
-        events.events[0] = &ev; events.events[1] = NULL;
-        x->v_effect->dispatcher(x->v_effect, effProcessEvents, 0, 0, &events, 0);
+    int next_tail = (x->v_midi_queue.tail + 1) % MIDI_QUEUE_SIZE;
+    if (next_tail != x->v_midi_queue.head) {
+        VstMidiEvent* ev = &x->v_midi_queue.events[x->v_midi_queue.tail];
+        memset(ev, 0, sizeof(VstMidiEvent));
+        ev->type = 1;
+        ev->byteSize = sizeof(VstMidiEvent);
+        ev->deltaFrames = 0;
+        ev->midiData[0] = (char)atom_getlong(argv);
+        ev->midiData[1] = (char)atom_getlong(argv + 1);
+        ev->midiData[2] = (char)atom_getlong(argv + 2);
+        x->v_midi_queue.tail = next_tail;
     }
     critical_exit(x->v_lock);
 }
@@ -378,6 +411,7 @@ void vstplus_midi(t_vstplus* x, t_symbol* s, long argc, t_atom* argv) {
 void vstplus_dsp64(t_vstplus* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
     x->v_samplerate = samplerate;
     x->v_vectorsize = maxvectorsize;
+    x->v_dsp_on = 1;
     critical_enter(x->v_lock);
     if (x->v_effect) {
         x->v_effect->dispatcher(x->v_effect, effSetSampleRate, 0, 0, NULL, (float)samplerate);
@@ -391,23 +425,30 @@ void vstplus_dsp64(t_vstplus* x, t_object* dsp64, short* count, double samplerat
 void vstplus_perform64(t_vstplus* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void *userparam) {
     if (critical_tryenter(x->v_lock) == MAX_ERR_NONE) {
         if (x->v_effect && x->v_effect->processDoubleReplacing && (x->v_effect->flags & (1 << 12))) {
-            // Safety: Prepare pointer arrays for VST, filling missing with silence
+            if (x->v_midi_queue.head != x->v_midi_queue.tail) {
+                int count = 0;
+                void* ev_ptrs[32];
+                while (x->v_midi_queue.head != x->v_midi_queue.tail && count < 32) {
+                    ev_ptrs[count] = &x->v_midi_queue.events[x->v_midi_queue.head];
+                    x->v_midi_queue.head = (x->v_midi_queue.head + 1) % MIDI_QUEUE_SIZE;
+                    count++;
+                }
+                struct { int32_t numEvents; intptr_t reserved; void* events[32]; } block_evs;
+                block_evs.numEvents = count; block_evs.reserved = 0;
+                for (int i = 0; i < count; i++) block_evs.events[i] = ev_ptrs[i];
+                x->v_effect->dispatcher(x->v_effect, effProcessEvents, 0, 0, &block_evs, 0);
+            }
             long vst_ins = x->v_effect->numInputs;
             long vst_outs = x->v_effect->numOutputs;
-
             for (long i = 0; i < vst_ins && i < x->v_max_io; i++) {
-                x->v_ins_array[i] = (i < numins) ? ins[i] : x->v_silence_buf;
+                x->v_ins_array[i] = (i < 16) ? ins[i] : x->v_silence_buf;
             }
             for (long i = 0; i < vst_outs && i < x->v_max_io; i++) {
-                x->v_outs_array[i] = (i < numouts) ? outs[i] : x->v_silence_buf;
+                x->v_outs_array[i] = (i < 16) ? outs[15 - i] : x->v_silence_buf;
             }
-
             x->v_effect->processDoubleReplacing(x->v_effect, x->v_ins_array, x->v_outs_array, (int32_t)sampleframes);
         } else {
-            for (int i = 0; i < numouts; i++) {
-                if (i < numins) memcpy(outs[i], ins[i], sampleframes * sizeof(double));
-                else memset(outs[i], 0, sampleframes * sizeof(double));
-            }
+            for (int i = 0; i < 16 && i < numouts && i < numins; i++) memcpy(outs[15-i], ins[i], sampleframes * sizeof(double));
         }
         critical_exit(x->v_lock);
     } else {
@@ -420,8 +461,8 @@ void vstplus_assist(t_vstplus* x, void* b, long m, long a, char* s) {
         if (a == 0) sprintf(s, "Messages (plug, presets, param, midi) and Signal Inlet 1");
         else sprintf(s, "Signal Inlet %ld", a + 1);
     } else {
-        if (a == 0) sprintf(s, "Info Outlet");
-        else sprintf(s, "Signal Outlet %ld", a);
+        if (a < 16) sprintf(s, "Signal Outlet %ld", a + 1);
+        else sprintf(s, "Info Outlet");
     }
 }
 
