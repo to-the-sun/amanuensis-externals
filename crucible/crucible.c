@@ -439,27 +439,56 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         if (x->consume && num_defeated > 0) {
             crucible_log(x, "Performing deep delete (consume enabled). %lld bars directly defeated.", (long long)num_defeated);
-            t_symbol **incumbent_keys = NULL;
-            long num_incumbent_keys = 0;
-            dictionary_getkeys(incumbent_track_dict, &num_incumbent_keys, &incumbent_keys);
 
-            for (long i = 0; i < num_incumbent_keys; i++) {
-                t_symbol *inc_bar_sym = incumbent_keys[i];
-                // If not in challenger span, check if it should be consumed
-                if (!dictionary_hasentry(challenger_span_ts_dict, inc_bar_sym)) {
-                    t_dictionary *inc_bar_dict = NULL;
-                    dictionary_getdictionary(incumbent_track_dict, inc_bar_sym, (t_object **)&inc_bar_dict);
-                    if (inc_bar_dict) {
-                        t_atomarray *inc_span_aa = crucible_get_span_as_atomarray(inc_bar_dict);
-                        if (crucible_span_has_loser(inc_span_aa, defeated_dict)) {
-                            crucible_log(x, "  -> Consuming bar %s (part of a defeated span)", inc_bar_sym->s_name);
-                            dictionary_deleteentry(incumbent_track_dict, inc_bar_sym);
+            t_dictionary *to_delete_dict = dictionary_new();
+            t_symbol **defeated_keys = NULL;
+            long num_defeated_keys = 0;
+            dictionary_getkeys(defeated_dict, &num_defeated_keys, &defeated_keys);
+
+            for (long i = 0; i < num_defeated_keys; i++) {
+                t_symbol *defeated_bar_sym = defeated_keys[i];
+                t_dictionary *defeated_bar_dict = NULL;
+                dictionary_getdictionary(incumbent_track_dict, defeated_bar_sym, (t_object **)&defeated_bar_dict);
+                if (defeated_bar_dict) {
+                    t_atomarray *span_aa = crucible_get_span_as_atomarray(defeated_bar_dict);
+                    if (span_aa) {
+                        long span_count = 0;
+                        t_atom *span_atoms = NULL;
+                        atomarray_getatoms(span_aa, &span_count, &span_atoms);
+                        for (long j = 0; j < span_count; j++) {
+                            t_atom_long ts = atom_getlong(span_atoms + j);
+                            char ts_str[64];
+                            snprintf(ts_str, 64, "%lld", (long long)ts);
+                            t_symbol *ts_sym = gensym(ts_str);
+                            if (!dictionary_hasentry(challenger_span_ts_dict, ts_sym)) {
+                                dictionary_appendlong(to_delete_dict, ts_sym, 1);
+                            }
                         }
-                        if (inc_span_aa) object_release((t_object *)inc_span_aa);
+                        object_release((t_object *)span_aa);
                     }
                 }
             }
-            if (incumbent_keys) sysmem_freeptr(incumbent_keys);
+
+            // Now perform the delete
+            t_symbol **delete_keys = NULL;
+            long num_delete_keys = 0;
+            dictionary_getkeys(to_delete_dict, &num_delete_keys, &delete_keys);
+            for (long i = 0; i < num_delete_keys; i++) {
+                t_symbol *del_bar_sym = delete_keys[i];
+                t_dictionary *del_bar_dict = NULL;
+                dictionary_getdictionary(incumbent_track_dict, del_bar_sym, (t_object **)&del_bar_dict);
+                if (del_bar_dict) {
+                    t_atomarray *del_span_aa = crucible_get_span_as_atomarray(del_bar_dict);
+                    if (crucible_span_has_loser(del_span_aa, defeated_dict)) {
+                        crucible_log(x, "  -> Consuming bar %s (part of a defeated span)", del_bar_sym->s_name);
+                        dictionary_deleteentry(incumbent_track_dict, del_bar_sym);
+                    }
+                    if (del_span_aa) object_release((t_object *)del_span_aa);
+                }
+            }
+            if (delete_keys) sysmem_freeptr(delete_keys);
+            if (defeated_keys) sysmem_freeptr(defeated_keys);
+            object_release((t_object *)to_delete_dict);
         }
 
         int song_grew = (max_reach > x->song_reach);
