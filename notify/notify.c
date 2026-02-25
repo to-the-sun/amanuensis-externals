@@ -20,13 +20,6 @@ typedef struct _note {
     double original_absolute;
 } t_note;
 
-typedef struct _bar {
-    t_symbol *palette;
-    t_symbol *track;
-    double bar_ts;
-    long is_cap;
-} t_bar;
-
 typedef struct _notify {
     t_object s_obj;
     t_symbol *dict_name;
@@ -35,12 +28,8 @@ typedef struct _notify {
     void *out_offset;    // Outlet 2 (Index 1)
     void *out_track;     // Outlet 3 (Index 2)
     void *out_palette;   // Outlet 4 (Index 3)
-    void *out_descript;  // Outlet 5 (Index 4)
-    void *out_log;   // Outlet 6 (Rightmost, optional, Index 5)
-    t_buffer_ref *buffer_ref;
-    double local_bar_length;
+    void *out_log;   // Outlet 5 (Rightmost, optional, Index 4)
     long instance_id;
-    long bar_warn_sent;
 } t_notify;
 
 t_class *notify_class;
@@ -50,13 +39,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
 void notify_fill(t_notify *x);
-t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
-int bar_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
-void notify_local_bar_length(t_notify *x, double f);
-long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
     t_class *c;
@@ -66,8 +51,6 @@ void ext_main(void *r) {
     c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
-    class_addmethod(c, (method)notify_notify, "notify", A_CANT, 0);
-    class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
@@ -85,72 +68,13 @@ void notify_log(t_notify *x, const char *fmt, ...) {
     va_end(args);
 }
 
-long notify_get_bar_length(t_notify *x) {
-    if (x->local_bar_length > 0) {
-        return (long)x->local_bar_length;
-    }
-
-    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-    if (!b) {
-        if (!x->bar_warn_sent) {
-            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
-        }
-        // Kick the buffer reference to force re-binding
-        buffer_ref_set(x->buffer_ref, _sym_nothing);
-        buffer_ref_set(x->buffer_ref, gensym("bar"));
-        b = buffer_ref_getobject(x->buffer_ref);
-    }
-    if (!b) {
-        notify_log(x, "bar buffer~ not found");
-        return 0;
-    }
-    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
-
-    long bar_length = 0;
-    critical_enter(0);
-    float *samples = buffer_locksamples(b);
-    if (samples) {
-        if (buffer_getframecount(b) > 0) {
-            bar_length = (long)samples[0];
-        }
-        buffer_unlocksamples(b);
-        critical_exit(0);
-    } else {
-        critical_exit(0);
-    }
-
-    if (bar_length > 0) {
-        x->local_bar_length = (double)bar_length;
-        notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    }
-
-    return bar_length;
-}
-
-void notify_local_bar_length(t_notify *x, double f) {
-    if (f <= 0) {
-        x->local_bar_length = 0;
-    } else {
-        x->local_bar_length = f;
-    }
-    notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
-    notify_log(x, "Local bar length set to: %.2f", f);
-}
-
 void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     t_notify *x = (t_notify *)object_alloc(notify_class);
     if (x) {
         x->dict_name = gensym("");
         x->log = 0;
         x->out_log = NULL;
-        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        if (!buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
-        x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
-        x->bar_warn_sent = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -158,7 +82,6 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->log) {
             x->out_log = outlet_new((t_object *)x, NULL);
         }
-        x->out_descript = outlet_new((t_object *)x, NULL);
         x->out_palette = outlet_new((t_object *)x, NULL);
         x->out_track = outlet_new((t_object *)x, NULL);
         x->out_offset = outlet_new((t_object *)x, NULL);
@@ -167,20 +90,12 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
         }
-
-        floatin((t_object *)x, 1);
     }
     return (x);
 }
 
 void notify_free(t_notify *x) {
-    if (x->buffer_ref) {
-        object_free(x->buffer_ref);
-    }
-}
-
-t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
-    return buffer_ref_notify(x->buffer_ref, s, msg, sender, data);
+    ;
 }
 
 int note_compare(const void *a, const void *b) {
@@ -190,17 +105,6 @@ int note_compare(const void *a, const void *b) {
     // Sort solely by absolute timestamp
     if (noteA->absolute < noteB->absolute) return -1;
     if (noteA->absolute > noteB->absolute) return 1;
-
-    return 0;
-}
-
-int bar_compare(const void *a, const void *b) {
-    t_bar *barA = (t_bar *)a;
-    t_bar *barB = (t_bar *)b;
-
-    // Sort solely by bar timestamp
-    if (barA->bar_ts < barB->bar_ts) return -1;
-    if (barA->bar_ts > barB->bar_ts) return 1;
 
     return 0;
 }
@@ -401,8 +305,6 @@ void notify_bang(t_notify *x) {
         return;
     }
 
-    long bar_length = notify_get_bar_length(x);
-
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -411,11 +313,6 @@ void notify_bang(t_notify *x) {
     long total_notes = 0;
     long notes_capacity = 100;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
-
-    t_bar *all_bars = NULL;
-    long total_bars = 0;
-    long bars_capacity = 50;
-    all_bars = (t_bar *)sysmem_newptr(sizeof(t_bar) * bars_capacity);
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -453,35 +350,6 @@ void notify_bang(t_notify *x) {
                 if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
             } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
-            }
-
-            // Collect THIS bar
-            if (total_bars >= bars_capacity) {
-                bars_capacity *= 2;
-                all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
-            }
-            all_bars[total_bars].palette = palette;
-            all_bars[total_bars].track = track_sym;
-            all_bars[total_bars].bar_ts = bar_ts;
-            all_bars[total_bars].is_cap = 0;
-            total_bars++;
-
-            // Collect NEXT bar if needed
-            if (bar_length > 0) {
-                double next_bar_ts = bar_ts + bar_length;
-                char next_bar_str[64];
-                snprintf(next_bar_str, 64, "%ld", (long)next_bar_ts);
-                if (!dictionary_hasentry(track_dict, gensym(next_bar_str))) {
-                    if (total_bars >= bars_capacity) {
-                        bars_capacity *= 2;
-                        all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
-                    }
-                    all_bars[total_bars].palette = palette;
-                    all_bars[total_bars].track = track_sym;
-                    all_bars[total_bars].bar_ts = next_bar_ts;
-                    all_bars[total_bars].is_cap = 1;
-                    total_bars++;
-                }
             }
 
             t_atom *aa_atoms = NULL;
@@ -532,18 +400,10 @@ void notify_bang(t_notify *x) {
     if (track_keys) sysmem_freeptr(track_keys);
 
     // Sort everything
-    if (total_bars > 1) qsort(all_bars, total_bars, sizeof(t_bar), bar_compare);
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
     // Verbose Manifest Logging
     if (x->log && x->out_log) {
-        for (long i = 0; i < total_bars; i++) {
-            notify_log(x, "Bar Manifest: palette %s, track %s, bar_ts %.2f%s",
-                all_bars[i].palette->s_name,
-                (all_bars[i].track && all_bars[i].track != gensym("")) ? all_bars[i].track->s_name : "0",
-                all_bars[i].bar_ts,
-                all_bars[i].is_cap ? " (cap)" : "");
-        }
         for (long i = 0; i < total_notes; i++) {
             notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f, bar_ts %.2f",
                 all_notes[i].palette->s_name,
@@ -554,16 +414,6 @@ void notify_bang(t_notify *x) {
                 all_notes[i].offset,
                 all_notes[i].bar_ts);
         }
-    }
-
-    // Output sorted bars
-    for (long i = 0; i < total_bars; i++) {
-        t_atom descript_list[3];
-        long track_val = (all_bars[i].track == NULL || all_bars[i].track == gensym("")) ? 0 : atol(all_bars[i].track->s_name);
-        atom_setlong(&descript_list[0], track_val);
-        atom_setfloat(&descript_list[1], all_bars[i].bar_ts);
-        atom_setfloat(&descript_list[2], 0.0);
-        outlet_anything(x->out_descript, all_bars[i].palette, 3, descript_list);
     }
 
     dictionary_clear(dict);
@@ -586,31 +436,27 @@ void notify_bang(t_notify *x) {
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
-    if (all_bars) sysmem_freeptr(all_bars);
     object_release((t_object *)dict);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump. Sorted by Timestamp.");
-        else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Clears dictionary on bang.");
     } else {
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
-                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
-                case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
+                case 4: sprintf(s, "Outlet 5: Logging and Status messages"); break;
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
-                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
             }
         }
     }

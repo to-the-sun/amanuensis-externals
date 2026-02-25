@@ -1,76 +1,85 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="notify" module="max" category="Utility">
-	<digest>Dumps a dictionary of track data into lists</digest>
-	<description>The `notify` object reads from a named dictionary and outputs its content as a series of lists. It is designed to work with the track/bar/palette/offset structure used in this project.</description>
+	<digest>A high-performance dictionary-to-list converter for track and note sequencing</digest>
+	<description>
+		The `notify` object is a specialized utility designed to parse and output sequencing data from a named Max dictionary. It is optimized for a specific hierarchical data structure: Tracks containing Bars, which in turn contain Palette names, Offsets, and arrays of Absolute Timestamps and Scores.
+
+		The object provides two primary modes of operation:
+		1. **Standard Dump (bang)**: Iterates through all tracks and bars, collecting every note and sorting them into a single, chronologically ordered sequence by their absolute timestamps. After the dump, the source dictionary is automatically cleared.
+		2. **Synthesized Fill (fill)**: Analyzes all tracks to find the "global reach" (the maximum timestamp). It then "grows" shorter tracks by looping their content until they match the global reach, ensuring all tracks have a consistent duration for playback or visualization.
+	</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Utility</metadata>
+		<metadata name="tag">Sequencing</metadata>
+		<metadata name="tag">Dictionary</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="bang/fill">
-			<digest>Inlet 1: Control inlet</digest>
+			<digest>Control inlet for triggering data dumps</digest>
 			<description>
-				- bang: Dumps all notes in the dictionary, sorted solely by absolute timestamp.
-				- fill: Performs a specialized dump that synthesizes notes to match the reach of the longest track, sorted solely by absolute timestamp.
+				- **bang**: Triggers a standard dump of the bound dictionary. Notes from all tracks are aggregated, sorted by absolute timestamp, and output sequentially. The dictionary is cleared upon completion.
+				- **fill**: Triggers a synthesized dump. This mode identifies the longest track and extends all other tracks to match its length by repeating their existing notes. Notes are sorted by their synthesized absolute timestamps.
 			</description>
-		</inlet>
-		<inlet id="2" type="float">
-			<digest>Inlet 2: Local Bar Length</digest>
-			<description>Sets the local bar length.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="list">
-			<digest>Outlet 1: Absolute Timestamp and Score</digest>
-			<description>Outputs [absolute_ms, score, original_absolute_ms].</description>
+			<digest>Outlet 1: Sorted Note Data</digest>
+			<description>
+				Outputs a list containing [**synthesized_absolute_ms**, **score**, **original_absolute_ms**].
+				- In `bang` mode, synthesized and original timestamps are identical.
+				- In `fill` mode, the synthesized timestamp reflects the note's position within the extended duration.
+			</description>
 		</outlet>
 		<outlet id="2" type="float">
-			<digest>Outlet 2: Offset</digest>
-			<description>Outputs the offset in milliseconds.</description>
+			<digest>Outlet 2: Note Offset</digest>
+			<description>Outputs the offset value (in milliseconds) associated with the bar containing the current note.</description>
 		</outlet>
 		<outlet id="3" type="int">
-			<digest>Outlet 3: Track</digest>
-			<description>Outputs the track number.</description>
+			<digest>Outlet 3: Track ID</digest>
+			<description>Outputs the integer ID of the track the current note belongs to.</description>
 		</outlet>
 		<outlet id="4" type="symbol">
-			<digest>Outlet 4: Palette</digest>
-			<description>Outputs the palette name.</description>
+			<digest>Outlet 4: Palette Name</digest>
+			<description>Outputs the symbolic name of the palette associated with the current note's bar.</description>
 		</outlet>
-		<outlet id="5" type="list">
-			<digest>Outlet 5: Descript List</digest>
-			<description>Outputs batch initialization messages: [palette, track, bar_ts, 0.0]. This includes "cap" bars automatically generated at the end of each track (bar_ts + bar_length) to mark sequence boundaries and total track duration.</description>
-		</outlet>
-		<outlet id="6" type="anything">
-			<digest>Outlet 6: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides status messages.</description>
+		<outlet id="5" type="anything">
+			<digest>Outlet 5: Logging Outlet</digest>
+			<description>
+				When the `@log` attribute is enabled, this outlet provides detailed verbose information about the processing steps, including track analysis and note duplication details during `fill` operations.
+			</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
 		<objarg name="dictionary-name" type="symbol" optional="1">
-			<digest>Name of the dictionary to read from</digest>
+			<digest>The name of the Max dictionary to be monitored and parsed</digest>
+			<description>The object will attempt to bind to a registered dictionary with this name. If no name is provided at instantiation, it can be set via attributes or by using a `dict` message (if supported by standard dictionary objects).</description>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="bang">
-			<digest>Dump dictionary</digest>
-			<description>Dumps all note data sorted solely by absolute timestamp.</description>
+			<digest>Execute a standard dictionary dump</digest>
+			<description>Reads all note data, sorts it chronologically, outputs it through the primary outlets, and clears the source dictionary.</description>
 		</method>
 		<method name="fill">
-			<digest>Synthesized dump</digest>
-			<description>Dumps data while filling gaps to match global song reach, sorted solely by absolute timestamp.</description>
+			<digest>Execute a synthesized 'filling' dump</digest>
+			<description>Synchronizes track lengths by looping notes to match the longest track's reach, then outputs the aggregated result sorted by time.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="long" size="1">
-			<digest>Enable Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<digest>Enable Verbose Logging to Outlet</digest>
+			<description>
+				When enabled (1), the object will output detailed internal status, operational progress, and note-by-note manifest data to the logging outlet. Note that only critical errors (such as a missing dictionary) are posted directly to the Max console; all other status updates are conditional on this attribute.
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
@@ -81,6 +90,8 @@
 		<seealso name="buildspans" />
 		<seealso name="crucible" />
 		<seealso name="threads~" />
+		<seealso name="weaver~" />
+		<seealso name="bounce~" />
 		<seealso name="growbuffer~" />
 	</seealsolist>
 </c74object>
