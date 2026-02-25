@@ -20,13 +20,6 @@ typedef struct _note {
     double original_absolute;
 } t_note;
 
-typedef struct _bar {
-    t_symbol *palette;
-    t_symbol *track;
-    double bar_ts;
-    long is_cap;
-} t_bar;
-
 typedef struct _notify {
     t_object s_obj;
     t_symbol *dict_name;
@@ -35,8 +28,7 @@ typedef struct _notify {
     void *out_offset;    // Outlet 2 (Index 1)
     void *out_track;     // Outlet 3 (Index 2)
     void *out_palette;   // Outlet 4 (Index 3)
-    void *out_descript;  // Outlet 5 (Index 4)
-    void *out_log;   // Outlet 6 (Rightmost, optional, Index 5)
+    void *out_log;   // Outlet 5 (Rightmost, optional, Index 4)
     t_buffer_ref *buffer_ref;
     double local_bar_length;
     long instance_id;
@@ -53,7 +45,6 @@ void notify_fill(t_notify *x);
 t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
-int bar_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 void notify_local_bar_length(t_notify *x, double f);
 long notify_get_bar_length(t_notify *x);
@@ -158,7 +149,6 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         if (x->log) {
             x->out_log = outlet_new((t_object *)x, NULL);
         }
-        x->out_descript = outlet_new((t_object *)x, NULL);
         x->out_palette = outlet_new((t_object *)x, NULL);
         x->out_track = outlet_new((t_object *)x, NULL);
         x->out_offset = outlet_new((t_object *)x, NULL);
@@ -190,17 +180,6 @@ int note_compare(const void *a, const void *b) {
     // Sort solely by absolute timestamp
     if (noteA->absolute < noteB->absolute) return -1;
     if (noteA->absolute > noteB->absolute) return 1;
-
-    return 0;
-}
-
-int bar_compare(const void *a, const void *b) {
-    t_bar *barA = (t_bar *)a;
-    t_bar *barB = (t_bar *)b;
-
-    // Sort solely by bar timestamp
-    if (barA->bar_ts < barB->bar_ts) return -1;
-    if (barA->bar_ts > barB->bar_ts) return 1;
 
     return 0;
 }
@@ -412,11 +391,6 @@ void notify_bang(t_notify *x) {
     long notes_capacity = 100;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    t_bar *all_bars = NULL;
-    long total_bars = 0;
-    long bars_capacity = 50;
-    all_bars = (t_bar *)sysmem_newptr(sizeof(t_bar) * bars_capacity);
-
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
         t_dictionary *track_dict = NULL;
@@ -453,35 +427,6 @@ void notify_bang(t_notify *x) {
                 if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
             } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
                 palette = atom_getsym(&palette_atom);
-            }
-
-            // Collect THIS bar
-            if (total_bars >= bars_capacity) {
-                bars_capacity *= 2;
-                all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
-            }
-            all_bars[total_bars].palette = palette;
-            all_bars[total_bars].track = track_sym;
-            all_bars[total_bars].bar_ts = bar_ts;
-            all_bars[total_bars].is_cap = 0;
-            total_bars++;
-
-            // Collect NEXT bar if needed
-            if (bar_length > 0) {
-                double next_bar_ts = bar_ts + bar_length;
-                char next_bar_str[64];
-                snprintf(next_bar_str, 64, "%ld", (long)next_bar_ts);
-                if (!dictionary_hasentry(track_dict, gensym(next_bar_str))) {
-                    if (total_bars >= bars_capacity) {
-                        bars_capacity *= 2;
-                        all_bars = (t_bar *)sysmem_resizeptr(all_bars, sizeof(t_bar) * bars_capacity);
-                    }
-                    all_bars[total_bars].palette = palette;
-                    all_bars[total_bars].track = track_sym;
-                    all_bars[total_bars].bar_ts = next_bar_ts;
-                    all_bars[total_bars].is_cap = 1;
-                    total_bars++;
-                }
             }
 
             t_atom *aa_atoms = NULL;
@@ -532,18 +477,10 @@ void notify_bang(t_notify *x) {
     if (track_keys) sysmem_freeptr(track_keys);
 
     // Sort everything
-    if (total_bars > 1) qsort(all_bars, total_bars, sizeof(t_bar), bar_compare);
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
     // Verbose Manifest Logging
     if (x->log && x->out_log) {
-        for (long i = 0; i < total_bars; i++) {
-            notify_log(x, "Bar Manifest: palette %s, track %s, bar_ts %.2f%s",
-                all_bars[i].palette->s_name,
-                (all_bars[i].track && all_bars[i].track != gensym("")) ? all_bars[i].track->s_name : "0",
-                all_bars[i].bar_ts,
-                all_bars[i].is_cap ? " (cap)" : "");
-        }
         for (long i = 0; i < total_notes; i++) {
             notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f, bar_ts %.2f",
                 all_notes[i].palette->s_name,
@@ -554,16 +491,6 @@ void notify_bang(t_notify *x) {
                 all_notes[i].offset,
                 all_notes[i].bar_ts);
         }
-    }
-
-    // Output sorted bars
-    for (long i = 0; i < total_bars; i++) {
-        t_atom descript_list[3];
-        long track_val = (all_bars[i].track == NULL || all_bars[i].track == gensym("")) ? 0 : atol(all_bars[i].track->s_name);
-        atom_setlong(&descript_list[0], track_val);
-        atom_setfloat(&descript_list[1], all_bars[i].bar_ts);
-        atom_setfloat(&descript_list[2], 0.0);
-        outlet_anything(x->out_descript, all_bars[i].palette, 3, descript_list);
     }
 
     dictionary_clear(dict);
@@ -586,31 +513,28 @@ void notify_bang(t_notify *x) {
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
-    if (all_bars) sysmem_freeptr(all_bars);
     object_release((t_object *)dict);
 }
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "Inlet 1: (bang) dump dictionary, (fill) specialized dump. Sorted by Timestamp.");
-        else if (a == 1) sprintf(s, "Inlet 2: (float) Local Bar Length");
+        if (a == 0) sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Clears dictionary on bang.");
+        else if (a == 1) sprintf(s, "Inlet 2: (float) override local_bar_length in ms.");
     } else {
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
-                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
-                case 5: sprintf(s, "Outlet 6: Logging Outlet"); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
+                case 4: sprintf(s, "Outlet 5: Logging and Status messages"); break;
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: Synth Absolute, Score, Original Absolute (list). Sorted by Synth Absolute."); break;
-                case 1: sprintf(s, "Outlet 2: Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Descript List (Batch at Start): <palette> <track> <bar_ts> 0.0. Sorted by Bar Timestamp."); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
+                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
+                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
             }
         }
     }
