@@ -176,6 +176,7 @@ void notify_do_fill(t_notify *x) {
     if (max_bar_all < 0) {
         if (track_keys) sysmem_freeptr(track_keys);
         object_release((t_object *)dict);
+        outlet_bang(x->out_abs_score);
         return;
     }
 
@@ -326,6 +327,7 @@ void notify_do_fill(t_notify *x) {
         atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
         outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
+    outlet_bang(x->out_abs_score);
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
@@ -492,6 +494,7 @@ void notify_do_bang(t_notify *x) {
         atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
         outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
+    outlet_bang(x->out_abs_score);
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
@@ -503,7 +506,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     } else {
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;
                 case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
@@ -511,7 +514,7 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically."); break;
+                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;
                 case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
                 case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
                 case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
