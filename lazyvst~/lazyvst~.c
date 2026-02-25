@@ -73,8 +73,6 @@ typedef struct _lazyvst {
     void *log_outlet;
     HINSTANCE hLib;
     AEffect *effect;
-    long inputs;  // Attribute (pins on box)
-    long outputs; // Attribute (pins on box)
     int v_numInputs;  // Detected from VST
     int v_numOutputs; // Detected from VST
     t_symbol *last_path;
@@ -84,7 +82,6 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 void lazyvst_plug(t_lazyvst *x, t_symbol *s);
-void lazyvst_repatch(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 
@@ -104,19 +101,10 @@ void ext_main(void *r) {
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_plug, "plug", A_SYM, 0);
-    class_addmethod(c, (method)lazyvst_repatch, "repatch", 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_lazyvst, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
-
-    CLASS_ATTR_LONG(c, "inputs", 0, t_lazyvst, inputs);
-    CLASS_ATTR_LABEL(c, "inputs", 0, "Number of Inputs");
-    CLASS_ATTR_DEFAULT(c, "inputs", 0, "16");
-
-    CLASS_ATTR_LONG(c, "outputs", 0, t_lazyvst, outputs);
-    CLASS_ATTR_LABEL(c, "outputs", 0, "Number of Outputs");
-    CLASS_ATTR_DEFAULT(c, "outputs", 0, "16");
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -132,17 +120,15 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->effect = NULL;
         x->v_numInputs = 0;
         x->v_numOutputs = 0;
-        x->inputs = 16;
-        x->outputs = 16;
         x->last_path = _sym_nothing;
 
         attr_args_process(x, argc, argv);
 
-        dsp_setup((t_pxobject *)x, x->inputs);
+        dsp_setup((t_pxobject *)x, 16);
 
         // Outlets (right to left)
         x->log_outlet = outlet_new((t_object *)x, NULL);
-        for (int i = (int)x->outputs - 1; i >= 0; i--) {
+        for (int i = 15; i >= 0; i--) {
             outlet_new((t_object *)x, "signal");
         }
     }
@@ -195,8 +181,8 @@ void lazyvst_plug(t_lazyvst *x, t_symbol *s) {
                 x->v_numOutputs = x->effect->numOutputs;
                 lazyvst_log(x, "plug: successfully loaded %s (%d in, %d out)", path->s_name, x->v_numInputs, x->v_numOutputs);
 
-                if (x->v_numInputs != (int)x->inputs || x->v_numOutputs != (int)x->outputs) {
-                    object_warn((t_object *)x, "I/O count mismatch: VST has %d/%d, object has %ld/%ld. Send 'repatch' to update.", x->v_numInputs, x->v_numOutputs, x->inputs, x->outputs);
+                if (x->v_numInputs != 16 || x->v_numOutputs != 16) {
+                    object_warn((t_object *)x, "I/O count mismatch: VST has %d/%d, object has 16/16.", x->v_numInputs, x->v_numOutputs);
                 }
             } else {
                 object_error((t_object *)x, "plug: library %s is not a valid VST plugin", path->s_name);
@@ -212,15 +198,6 @@ void lazyvst_plug(t_lazyvst *x, t_symbol *s) {
     } else {
         object_error((t_object *)x, "plug: failed to load %s (Error code: %lu)", path->s_name, GetLastError());
     }
-}
-
-void lazyvst_repatch(t_lazyvst *x) {
-    if (x->v_numInputs == 0 && x->v_numOutputs == 0) {
-        object_error((t_object *)x, "repatch: no VST loaded or I/O counts unknown");
-        return;
-    }
-    object_post((t_object *)x, "I/O ports of a Max object cannot be changed dynamically at runtime.");
-    object_post((t_object *)x, "To update ports, recreate the object as [lazyvst~ @inputs %d @outputs %d]", x->v_numInputs, x->v_numOutputs);
 }
 
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -240,9 +217,9 @@ void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
         if (a == 0) sprintf(s, "(signal/symbol) Input 1 / Messages");
         else sprintf(s, "(signal) Input %ld", a + 1);
     } else {
-        if (a == x->outputs) {
+        if (a == 16) {
             sprintf(s, "Logging Outlet");
-        } else if (a < x->outputs) {
+        } else if (a < 16) {
             sprintf(s, "(signal) Output %ld", a + 1);
         }
     }

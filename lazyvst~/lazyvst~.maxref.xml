@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="lazyvst~" module="msp" category="Utility">
-	<digest>A skeleton VST-like object with dynamic I/O support</digest>
+	<digest>A skeleton VST-like object</digest>
 	<description>
-		The `lazyvst~` object is a VST host skeleton. It allows loading VST plugins via the `plug` message and can discover their input and output counts. While the number of ports on the object box is fixed at creation, the `@inputs` and `@outputs` attributes allow you to customize the object's I/O configuration.
+		The `lazyvst~` object is a VST host skeleton. It features 16 signal inlets and 16 signal outlets. It allows loading VST plugins via the `plug` message and can discover their input and output counts for logging purposes.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -33,10 +33,6 @@
 			<digest>Load a VST plugin</digest>
 			<description>Accepts an absolute path to a VST plugin (DLL on Windows). Attempts to load the library, discover its I/O configuration, and logs the result.</description>
 		</method>
-		<method name="repatch">
-			<digest>Request I/O port update</digest>
-			<description>Logs a suggested command to the Max console for recreating the object with the correct number of ports matching the currently loaded VST.</description>
-		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
@@ -49,14 +45,6 @@
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
-		</attribute>
-		<attribute name="inputs" type="long" get="1" set="1" opaque="0">
-			<digest>Number of Inputs</digest>
-			<description>Sets the number of signal inlets at creation (default 16).</description>
-		</attribute>
-		<attribute name="outputs" type="long" get="1" set="1" opaque="0">
-			<digest>Number of Outputs</digest>
-			<description>Sets the number of signal outlets at creation (default 16).</description>
 		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
