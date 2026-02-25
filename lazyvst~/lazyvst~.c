@@ -83,7 +83,7 @@ typedef struct _lazyvst {
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
-void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_plug(t_lazyvst *x, t_symbol *s);
 void lazyvst_repatch(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -103,7 +103,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)lazyvst_plug, "plug", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_plug, "plug", A_SYM, 0);
     class_addmethod(c, (method)lazyvst_repatch, "repatch", 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_lazyvst, log);
@@ -160,15 +160,10 @@ void lazyvst_free(t_lazyvst *x) {
     }
 }
 
-void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
-    t_symbol *path = _sym_nothing;
+void lazyvst_plug(t_lazyvst *x, t_symbol *s) {
+    t_symbol *path = s;
 
-    // Prioritize second argument if it exists to support [plug something "C:/path"]
-    if (argc > 1 && atom_gettype(argv + 1) == A_SYM) {
-        path = atom_getsym(argv + 1);
-    } else if (argc > 0 && atom_gettype(argv) == A_SYM) {
-        path = atom_getsym(argv);
-    } else {
+    if (!path || path == _sym_nothing) {
         object_error((t_object *)x, "plug: missing VST path");
         return;
     }
