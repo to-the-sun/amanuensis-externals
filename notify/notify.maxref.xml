@@ -31,7 +31,7 @@
 		<outlet id="1" type="list">
 			<digest>Outlet 1: Sorted Note Data</digest>
 			<description>
-				Outputs a list containing [**synthesized_absolute_ms**, **score**, **original_absolute_ms**].
+				Outputs a list containing [**synthesized_absolute_ms**, **score**, **original_absolute_ms**]. Sends a bang upon completion.
 				- In `bang` mode, synthesized and original timestamps are identical.
 				- In `fill` mode, the synthesized timestamp reflects the note's position within the extended duration.
 			</description>
@@ -66,11 +66,11 @@
 	<methodlist>
 		<method name="bang">
 			<digest>Execute a standard dictionary dump</digest>
-			<description>Reads all note data, sorts it chronologically, outputs it through the primary outlets, and clears the source dictionary.</description>
+			<description>Reads all note data, sorts it chronologically, outputs it through the primary outlets (followed by a completion bang from the first outlet), and clears the source dictionary.</description>
 		</method>
 		<method name="fill">
 			<digest>Execute a synthesized 'filling' dump</digest>
-			<description>Synchronizes track lengths by looping notes to match the longest track's reach, then outputs the aggregated result sorted by time.</description>
+			<description>Synchronizes track lengths by looping notes to match the longest track's reach, then outputs the aggregated result sorted by time, followed by a completion bang from the first outlet.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
