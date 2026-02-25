@@ -8,6 +8,8 @@
 #include <string.h>
 #include <math.h>
 
+#define BOUNCE_LOG_QUEUE_SIZE 64
+
 typedef struct _bounce {
     t_object b_obj;
     t_symbol *poly_prefix;
@@ -35,6 +37,12 @@ typedef struct _bounce {
     t_buffer_obj *stem_objs[1024];
     int stem_count;
     t_buffer_obj *dest_obj;
+
+    char log_queue[BOUNCE_LOG_QUEUE_SIZE][1024];
+    int log_head;
+    int log_tail;
+    t_critical log_lock;
+    void *log_qelem;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
@@ -43,6 +51,7 @@ void bounce_assist(t_bounce *x, void *b, long m, long a, char *s);
 void bounce_bang(t_bounce *x);
 void *bounce_worker(t_bounce *x);
 void bounce_qfn(t_bounce *x);
+void bounce_log_qfn(t_bounce *x);
 void bounce_check_attachments(t_bounce *x, long report_error);
 void bounce_log(t_bounce *x, const char *fmt, ...);
 
@@ -80,16 +89,22 @@ void ext_main(void *r) {
 }
 
 void bounce_log(t_bounce *x, const char *fmt, ...) {
+    if (!x || !x->log) return;
     va_list args;
     va_start(args, fmt);
     if (systhread_ismainthread() || systhread_istimerthread()) {
         vcommon_log(x->log_outlet, x->log, "bounce~", fmt, args);
     } else {
-        if (x->log) {
-            char buf[1024];
-            vsnprintf(buf, 1024, fmt, args);
-            object_post((t_object *)x, "bounce~: %s", buf);
+        char buf[1024];
+        vsnprintf(buf, 1024, fmt, args);
+        critical_enter(x->log_lock);
+        int next_tail = (x->log_tail + 1) % BOUNCE_LOG_QUEUE_SIZE;
+        if (next_tail != x->log_head) {
+            strncpy(x->log_queue[x->log_tail], buf, 1024);
+            x->log_tail = next_tail;
         }
+        critical_exit(x->log_lock);
+        qelem_set(x->log_qelem);
     }
     va_end(args);
 }
@@ -186,6 +201,11 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->busy = 0;
         x->async_attr = 0;
 
+        x->log_head = 0;
+        x->log_tail = 0;
+        critical_new(&x->log_lock);
+        x->log_qelem = qelem_new(x, (method)bounce_log_qfn);
+
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->poly_prefix = atom_getsym(argv);
@@ -238,6 +258,11 @@ void bounce_free(t_bounce *x) {
     if (x->qelem) {
         qelem_free(x->qelem);
     }
+    if (x->log_qelem) {
+        qelem_free(x->log_qelem);
+    }
+    critical_free(x->log_lock);
+
     if (x->poly_ref) object_free(x->poly_ref);
     if (x->dest_ref) object_free(x->dest_ref);
     if (x->stats_ref) object_free(x->stats_ref);
@@ -264,8 +289,6 @@ void bounce_do_work(t_bounce *x) {
     }
 
     double ms_end = x->ms_end;
-    bounce_log(x, "using end of audio point: %.2f ms", ms_end);
-
     long n_frames_dest = buffer_getframecount(dest_buf);
     long n_chans_dest = buffer_getchannelcount(dest_buf);
     double sr_dest = buffer_getsamplerate(dest_buf);
@@ -275,7 +298,7 @@ void bounce_do_work(t_bounce *x) {
     if (limit_dest > n_frames_dest) limit_dest = n_frames_dest;
     if (limit_dest < 0) limit_dest = 0;
 
-    bounce_log(x, "destination buffer '%s' has %ld frames, %ld channels. processing up to frame %ld", x->dest_name->s_name, n_frames_dest, n_chans_dest, limit_dest);
+    bounce_log(x, "Beginning bounce: summing %d stems into '%s' (%.2f ms, %ld frames)", x->stem_count, x->dest_name->s_name, ms_end, limit_dest);
 
     float *samples_dest = NULL;
     for (int retry = 0; retry < 10; retry++) {
@@ -285,19 +308,22 @@ void bounce_do_work(t_bounce *x) {
     }
 
     if (!samples_dest) {
-        bounce_log(x, "could not lock destination buffer %s", x->dest_name->s_name);
+        bounce_log(x, "Error: could not lock destination buffer '%s'", x->dest_name->s_name);
         return;
     }
 
     buffer_edit_begin(dest_buf);
 
     // Clear destination (up to limit)
+    bounce_log(x, "Clearing destination buffer...");
     memset(samples_dest, 0, limit_dest * n_chans_dest * sizeof(float));
 
-    bounce_log(x, "beginning stem iteration");
+    bounce_log(x, "Processing %d stems...", x->stem_count);
     for (int i = 0; i < x->stem_count; i++) {
         t_buffer_obj *src_buf = x->stem_objs[i];
         if (!src_buf) continue;
+
+        bounce_log(x, "Stem %d/%d: starting processing", i + 1, x->stem_count);
 
         long n_frames_src = buffer_getframecount(src_buf);
         long n_chans_src = buffer_getchannelcount(src_buf);
@@ -316,7 +342,7 @@ void bounce_do_work(t_bounce *x) {
         }
 
         if (!samples_src) {
-            bounce_log(x, "could not lock a stem buffer");
+            bounce_log(x, "Stem %d/%d: Error - could not lock buffer", i + 1, x->stem_count);
             continue;
         }
 
@@ -324,12 +350,10 @@ void bounce_do_work(t_bounce *x) {
         long last_audio_frame = limit_src - 1;
 
         if (last_audio_frame < 0) {
-            bounce_log(x, "a stem end point is at or before start, skipping");
+            bounce_log(x, "Stem %d/%d: skipping (end point before start)", i + 1, x->stem_count);
             buffer_unlocksamples(src_buf);
             continue;
         }
-
-        bounce_log(x, "processing a stem up to frame %ld", last_audio_frame);
 
         // 2. Normalize if needed (up to limit_src)
         double max_abs = 0.0;
@@ -341,6 +365,7 @@ void bounce_do_work(t_bounce *x) {
         }
 
         if (max_abs > 1.0) {
+            bounce_log(x, "Stem %d/%d: peak %.4f exceeds 1.0, normalizing stem buffer", i + 1, x->stem_count, max_abs);
             // Destructive normalization of stems
             // We are already inside global critical section
             buffer_edit_begin(src_buf);
@@ -350,7 +375,6 @@ void bounce_do_work(t_bounce *x) {
                     samples_src[f * n_chans_src + c] *= (float)scale;
                 }
             }
-            bounce_log(x, "normalized a buffer (up to frame %ld), max absolute value was %f", limit_src, max_abs);
             buffer_edit_end(src_buf, 1);
             buffer_setdirty(src_buf);
         }
@@ -360,7 +384,7 @@ void bounce_do_work(t_bounce *x) {
         long fade_out_start_frame = last_audio_frame - fade_out_duration_frames + 1;
         if (fade_out_start_frame < 0) fade_out_start_frame = 0;
 
-        bounce_log(x, "stem fade-out will start at frame %ld", fade_out_start_frame);
+        bounce_log(x, "Stem %d/%d: summing into destination with fades (fade-out starts at frame %ld)", i + 1, x->stem_count, fade_out_start_frame);
 
         t_ramp_state ramp;
         ramp_init(&ramp, sr_dest, x->high_ms);
@@ -368,9 +392,10 @@ void bounce_do_work(t_bounce *x) {
         int fade_in_triggered = 0;
         int fade_out_triggered = 0;
 
-        bounce_log(x, "stem: starting faded summation");
-
         for (long f_dest = 0; f_dest < limit_dest; f_dest++) {
+            if (limit_dest > 1000000 && f_dest > 0 && f_dest % (limit_dest / 4) == 0) {
+                bounce_log(x, "Stem %d/%d: summing... %d%%", i + 1, x->stem_count, (int)(100 * f_dest / limit_dest));
+            }
             long f_src = (long)round((double)f_dest * sr_src / sr_dest);
             if (f_src >= 0 && f_src < limit_src) {
                 double movement = 0.0;
@@ -396,12 +421,12 @@ void bounce_do_work(t_bounce *x) {
             }
         }
 
-        bounce_log(x, "stem summation complete");
+        bounce_log(x, "Stem %d/%d: done", i + 1, x->stem_count);
 
         buffer_unlocksamples(src_buf);
     }
 
-    bounce_log(x, "finished summing stems, duplicating to all channels");
+    bounce_log(x, "Summation complete. Duplicating to %ld channels.", n_chans_dest);
 
     // 4. Duplicate channel 0 to all other channels (up to limit_dest)
     if (n_chans_dest > 1) {
@@ -415,9 +440,13 @@ void bounce_do_work(t_bounce *x) {
 
     // 5. Final normalization of product buffer if requested (up to limit_dest)
     if (x->normalize_to != 0.0) {
-        bounce_log(x, "starting final normalization");
+        bounce_log(x, "Applying final normalization (target: %.2f)...", x->normalize_to);
         double product_max = 0.0;
-        for (long i = 0; i < limit_dest * n_chans_dest; i++) {
+        long total_samples = limit_dest * n_chans_dest;
+        for (long i = 0; i < total_samples; i++) {
+            if (total_samples > 1000000 && i > 0 && i % (total_samples / 4) == 0) {
+                bounce_log(x, "Final normalization: analyzing... %d%%", (int)(100 * i / total_samples));
+            }
             double a = fabs((double)samples_dest[i]);
             if (a > product_max) product_max = a;
         }
@@ -425,10 +454,13 @@ void bounce_do_work(t_bounce *x) {
         if (product_max > 0.0) {
             double target = fabs(x->normalize_to);
             double scale = target / product_max;
-            for (long i = 0; i < limit_dest * n_chans_dest; i++) {
+            for (long i = 0; i < total_samples; i++) {
+                if (total_samples > 1000000 && i > 0 && i % (total_samples / 4) == 0) {
+                    bounce_log(x, "Final normalization: applying... %d%%", (int)(100 * i / total_samples));
+                }
                 samples_dest[i] *= (float)scale;
             }
-            bounce_log(x, "final product normalized to %.7f (was %.7f)", target, product_max);
+            bounce_log(x, "Final product normalized (peak was %.4f)", product_max);
         }
     }
 
@@ -494,10 +526,11 @@ void bounce_bang(t_bounce *x) {
 
     if (x->async_attr) {
         x->busy = 1;
+        bounce_log(x, "Spawning background thread for asynchronous bounce.");
         systhread_create((method)bounce_worker, x, 0, 0, 0, &x->thread);
     } else {
         bounce_do_work(x);
-        bounce_log(x, "bounce process complete");
+        bounce_log(x, "Bounce process finished successfully.");
         outlet_bang(x->bang_outlet);
     }
 }
@@ -507,7 +540,23 @@ void bounce_qfn(t_bounce *x) {
         systhread_join(x->thread, NULL);
         x->thread = NULL;
     }
-    bounce_log(x, "bounce process complete");
+    bounce_log(x, "Bounce process finished successfully.");
     outlet_bang(x->bang_outlet);
     x->busy = 0;
+}
+
+void bounce_log_qfn(t_bounce *x) {
+    char msg[1024];
+    while (1) {
+        critical_enter(x->log_lock);
+        if (x->log_head == x->log_tail) {
+            critical_exit(x->log_lock);
+            break;
+        }
+        strncpy(msg, x->log_queue[x->log_head], 1024);
+        x->log_head = (x->log_head + 1) % BOUNCE_LOG_QUEUE_SIZE;
+        critical_exit(x->log_lock);
+
+        common_log(x->log_outlet, x->log, "bounce~", "%s", msg);
+    }
 }
