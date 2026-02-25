@@ -3,7 +3,7 @@
 <c74object name="lazyvst~" module="msp" category="Utility">
 	<digest>A skeleton VST-like object</digest>
 	<description>
-		The `lazyvst~` object is a skeleton external designed to mimic a VST host or plugin interface. It features 16 signal inlets and 16 signal outlets. Currently, it serves as a placeholder that zeroes out its outputs.
+		The `lazyvst~` object is a skeleton external designed to mimic a VST host or plugin interface. It features 16 signal inlets and 16 signal outlets. It allows loading VST plugins (as dynamic libraries) via the `plug` message and currently zeroes out its outputs.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -120,8 +120,8 @@
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="plug">
-			<digest>Load a plugin path</digest>
-			<description>Accepts a symbol representing a path to a plugin. Currently only logs the path if logging is enabled.</description>
+			<digest>Load a VST plugin from an absolute path</digest>
+			<description>Accepts a symbol representing an absolute path to a VST plugin (DLL on Windows). Attempts to load the library and logs the result if logging is enabled.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>

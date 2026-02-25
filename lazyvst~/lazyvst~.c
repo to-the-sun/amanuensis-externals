@@ -1,3 +1,4 @@
+#include <windows.h>
 #include "ext.h"
 #include "ext_obex.h"
 #include "z_dsp.h"
@@ -8,6 +9,7 @@ typedef struct _lazyvst {
     t_pxobject x_obj;
     long log;
     void *log_outlet;
+    HINSTANCE hLib; // VST library handle
 } t_lazyvst;
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
@@ -48,13 +50,13 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         x->log = 0;
+        x->hLib = NULL;
 
         dsp_setup((t_pxobject *)x, 16); // 16 signal inlets
 
         attr_args_process(x, argc, argv);
 
         // Outlets (right to left)
-        // Log outlet is now permanent to avoid issues when toggling @log at runtime
         x->log_outlet = outlet_new((t_object *)x, NULL);
         for (int i = 15; i >= 0; i--) {
             outlet_new((t_object *)x, "signal");
@@ -65,10 +67,27 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
 
 void lazyvst_free(t_lazyvst *x) {
     dsp_free((t_pxobject *)x);
+    if (x->hLib) {
+        FreeLibrary(x->hLib);
+        x->hLib = NULL;
+    }
 }
 
 void lazyvst_plug(t_lazyvst *x, t_symbol *s) {
-    lazyvst_log(x, "plug: %s", s->s_name);
+    if (x->hLib) {
+        lazyvst_log(x, "unloading previous library");
+        FreeLibrary(x->hLib);
+        x->hLib = NULL;
+    }
+
+    lazyvst_log(x, "plug: attempting to load %s", s->s_name);
+    x->hLib = LoadLibraryA(s->s_name);
+
+    if (x->hLib) {
+        lazyvst_log(x, "plug: successfully loaded %s", s->s_name);
+    } else {
+        object_error((t_object *)x, "plug: failed to load %s (Error code: %lu)", s->s_name, GetLastError());
+    }
 }
 
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
