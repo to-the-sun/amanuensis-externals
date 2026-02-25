@@ -172,8 +172,11 @@ void weaver_schedule_silence(t_weaver *x, t_atom_long track, double ms) {
         tracks = hashtab_new(0);
         hashtab_store(x->pending_silence, s_ms, (t_object*)tracks);
     }
-    // Store track as a pointer key
-    hashtab_store(tracks, (t_symbol*)(size_t)track, (t_object*)1);
+    // Store track as a symbol key
+    char tstr[64];
+    snprintf(tstr, 64, "%lld", (long long)track);
+    t_symbol *s_track = gensym(tstr);
+    hashtab_store(tracks, s_track, (t_object*)1);
 }
 
 // Helper function to send verbose log messages with prefix
@@ -713,6 +716,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
 void weaver_audio_qtask(t_weaver *x) {
     weaver_check_attachments(x);
+    double bar_len = weaver_get_bar_length(x);
+
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;
@@ -737,15 +742,12 @@ void weaver_audio_qtask(t_weaver *x) {
             t_dictionary *s_dict = dictobj_findregistered_retain(x->audio_dict_name);
 
             for (long i = 0; i < num_pt; i++) {
-                t_atom_long track_num = (t_atom_long)(size_t)pt_keys[i];
+                t_symbol *track_sym = pt_keys[i];
+                t_atom_long track_num = atoll(track_sym->s_name);
                 int still_missing = 1;
+                t_dictionary *track_dict = NULL;
 
                 if (s_dict) {
-                    char tstr[64];
-                    snprintf(tstr, 64, "%ld", (long)track_num);
-                    t_symbol *track_sym = gensym(tstr);
-                    t_dictionary *track_dict = NULL;
-
                     if (dictionary_getdictionary(s_dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
                         if (dictionary_hasentry(track_dict, bar_key)) {
                             still_missing = 0;
@@ -755,6 +757,18 @@ void weaver_audio_qtask(t_weaver *x) {
 
                 if (still_missing) {
                     weaver_process_data(x, gensym("-"), track_num, hit.value, 0.0);
+
+                    // If still missing, check the NEXT bar too to continue the silence if necessary
+                    if (track_dict && bar_len > 0) {
+                        double next_bar_ms = hit.value + bar_len;
+                        char next_bar_str[64];
+                        snprintf(next_bar_str, 64, "%ld", (long)next_bar_ms);
+                        t_symbol *next_bar_sym = gensym(next_bar_str);
+
+                        if (!dictionary_hasentry(track_dict, next_bar_sym)) {
+                            weaver_schedule_silence(x, track_num, next_bar_ms);
+                        }
+                    }
                 }
             }
             if (s_dict) dictobj_release(s_dict);
@@ -770,8 +784,6 @@ void weaver_audio_qtask(t_weaver *x) {
             weaver_log(x, "ERROR: dictionary '%s' not found", x->audio_dict_name->s_name);
             continue;
         }
-
-        double bar_len = weaver_get_bar_length(x);
 
         for (int track_val = 1; track_val <= x->max_tracks; track_val++) {
             char tstr[64];
