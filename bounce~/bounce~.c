@@ -27,12 +27,22 @@ typedef struct _bounce {
     double normalize_to;
     double low_ms;
     double high_ms;
+    t_systhread thread;
+    void *qelem;
+    long busy;
+    long async_attr;
+    double ms_end;
+    t_buffer_obj *stem_objs[1024];
+    int stem_count;
+    t_buffer_obj *dest_obj;
 } t_bounce;
 
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
 void bounce_free(t_bounce *x);
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s);
 void bounce_bang(t_bounce *x);
+void *bounce_worker(t_bounce *x);
+void bounce_qfn(t_bounce *x);
 void bounce_check_attachments(t_bounce *x, long report_error);
 void bounce_log(t_bounce *x, const char *fmt, ...);
 
@@ -61,6 +71,10 @@ void ext_main(void *r) {
     CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_bounce, async_attr);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+
     class_register(CLASS_BOX, c);
     bounce_class = c;
 }
@@ -68,7 +82,15 @@ void ext_main(void *r) {
 void bounce_log(t_bounce *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vcommon_log(x->log_outlet, x->log, "bounce~", fmt, args);
+    if (systhread_ismainthread() || systhread_istimerthread()) {
+        vcommon_log(x->log_outlet, x->log, "bounce~", fmt, args);
+    } else {
+        if (x->log) {
+            char buf[1024];
+            vsnprintf(buf, 1024, fmt, args);
+            object_post((t_object *)x, "bounce~: %s", buf);
+        }
+    }
     va_end(args);
 }
 
@@ -159,6 +181,10 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         x->normalize_to = 0.0;
         x->low_ms = 22.653;
         x->high_ms = 4999.0;
+        x->thread = NULL;
+        x->qelem = qelem_new(x, (method)bounce_qfn);
+        x->busy = 0;
+        x->async_attr = 0;
 
         // Arg 1: Polybuffer prefix
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
@@ -206,6 +232,12 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void bounce_free(t_bounce *x) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+    }
+    if (x->qelem) {
+        qelem_free(x->qelem);
+    }
     if (x->poly_ref) object_free(x->poly_ref);
     if (x->dest_ref) object_free(x->dest_ref);
     if (x->stats_ref) object_free(x->stats_ref);
@@ -223,44 +255,16 @@ void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
     }
 }
 
-void bounce_bang(t_bounce *x) {
-    bounce_log(x, "starting bounce process");
-    bounce_check_attachments(x, 1);
-    if (!x->poly_found || !x->dest_found || !x->stats_found) return;
+void bounce_do_work(t_bounce *x) {
+    t_buffer_obj *dest_buf = x->dest_obj;
 
-    t_buffer_obj *dest_buf = buffer_ref_getobject(x->dest_ref);
     if (!dest_buf) {
-        buffer_ref_set(x->dest_ref, _sym_nothing);
-        buffer_ref_set(x->dest_ref, x->dest_name);
-        dest_buf = buffer_ref_getobject(x->dest_ref);
-    }
-
-    t_buffer_obj *stats_buf = buffer_ref_getobject(x->stats_ref);
-    if (!stats_buf) {
-        buffer_ref_set(x->stats_ref, _sym_nothing);
-        buffer_ref_set(x->stats_ref, gensym("stats"));
-        stats_buf = buffer_ref_getobject(x->stats_ref);
-    }
-
-    if (!dest_buf || !stats_buf) {
-        object_error((t_object *)x, "mandatory buffer(s) missing during bounce");
+        bounce_log(x, "mandatory buffer(s) missing during bounce");
         return;
     }
 
-    // Read end of audio from stats buffer (index 1)
-    double ms_end = 0.0;
-    float *samples_stats = buffer_locksamples(stats_buf);
-    if (samples_stats) {
-        if (buffer_getframecount(stats_buf) > 1) {
-            ms_end = (double)samples_stats[1];
-        }
-        buffer_unlocksamples(stats_buf);
-    } else {
-        object_error((t_object *)x, "could not lock stats buffer");
-        return;
-    }
-
-    bounce_log(x, "end of audio point from stats buffer: %.2f ms", ms_end);
+    double ms_end = x->ms_end;
+    bounce_log(x, "using end of audio point: %.2f ms", ms_end);
 
     long n_frames_dest = buffer_getframecount(dest_buf);
     long n_chans_dest = buffer_getchannelcount(dest_buf);
@@ -277,45 +281,23 @@ void bounce_bang(t_bounce *x) {
     for (int retry = 0; retry < 10; retry++) {
         samples_dest = buffer_locksamples(dest_buf);
         if (samples_dest) break;
-
-        // If locking fails, try a kick
-        buffer_ref_set(x->dest_ref, _sym_nothing);
-        buffer_ref_set(x->dest_ref, x->dest_name);
-        dest_buf = buffer_ref_getobject(x->dest_ref);
-        if (!dest_buf) break;
-
         systhread_sleep(1);
     }
 
     if (!samples_dest) {
-        object_error((t_object *)x, "could not lock destination buffer %s", x->dest_name->s_name);
+        bounce_log(x, "could not lock destination buffer %s", x->dest_name->s_name);
         return;
     }
 
-    critical_enter(0);
     buffer_edit_begin(dest_buf);
 
     // Clear destination (up to limit)
     memset(samples_dest, 0, limit_dest * n_chans_dest * sizeof(float));
 
-    t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, _sym_nothing);
-    int stem_idx = 1;
     bounce_log(x, "beginning stem iteration");
-    while (1) {
-        char bufname[256];
-        snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, stem_idx);
-        t_symbol *s_bufname = gensym(bufname);
-        buffer_ref_set(src_ref, s_bufname);
-        t_buffer_obj *src_buf = buffer_ref_getobject(src_ref);
-        if (!src_buf) {
-            buffer_ref_set(src_ref, _sym_nothing);
-            buffer_ref_set(src_ref, s_bufname);
-            src_buf = buffer_ref_getobject(src_ref);
-        }
-        if (!src_buf) break;
-
-        bounce_log(x, "successfully found stem buffer '%s'", bufname);
-        bounce_log(x, "processing stem %d: '%s'", stem_idx, bufname);
+    for (int i = 0; i < x->stem_count; i++) {
+        t_buffer_obj *src_buf = x->stem_objs[i];
+        if (!src_buf) continue;
 
         long n_frames_src = buffer_getframecount(src_buf);
         long n_chans_src = buffer_getchannelcount(src_buf);
@@ -330,34 +312,11 @@ void bounce_bang(t_bounce *x) {
         for (int retry = 0; retry < 10; retry++) {
             samples_src = buffer_locksamples(src_buf);
             if (samples_src) break;
-
-            // If locking fails, try a kick
-            buffer_ref_set(src_ref, _sym_nothing);
-            buffer_ref_set(src_ref, s_bufname);
-            src_buf = buffer_ref_getobject(src_ref);
-            if (!src_buf) break;
-
-            // Release global lock before sleeping
-            critical_exit(0);
             systhread_sleep(1);
-            critical_enter(0);
-
-            // Re-verify dest_buf hasn't been lost during sleep
-            dest_buf = buffer_ref_getobject(x->dest_ref);
-            if (!dest_buf) {
-                buffer_ref_set(x->dest_ref, _sym_nothing);
-                buffer_ref_set(x->dest_ref, x->dest_name);
-                dest_buf = buffer_ref_getobject(x->dest_ref);
-            }
-            if (!dest_buf) {
-                buffer_unlocksamples(src_buf); // src_buf might be valid but we can't proceed
-                break;
-            }
         }
 
         if (!samples_src) {
-            object_warn((t_object *)x, "could not lock stem buffer %s", bufname);
-            stem_idx++;
+            bounce_log(x, "could not lock a stem buffer");
             continue;
         }
 
@@ -365,13 +324,12 @@ void bounce_bang(t_bounce *x) {
         long last_audio_frame = limit_src - 1;
 
         if (last_audio_frame < 0) {
-            bounce_log(x, "stem '%s' end point is at or before start, skipping", bufname);
+            bounce_log(x, "a stem end point is at or before start, skipping");
             buffer_unlocksamples(src_buf);
-            stem_idx++;
             continue;
         }
 
-        bounce_log(x, "stem '%s': processing up to frame %ld", bufname, last_audio_frame);
+        bounce_log(x, "processing a stem up to frame %ld", last_audio_frame);
 
         // 2. Normalize if needed (up to limit_src)
         double max_abs = 0.0;
@@ -392,7 +350,7 @@ void bounce_bang(t_bounce *x) {
                     samples_src[f * n_chans_src + c] *= (float)scale;
                 }
             }
-            bounce_log(x, "normalized buffer '%s' (up to frame %ld), max absolute value was %f", bufname, limit_src, max_abs);
+            bounce_log(x, "normalized a buffer (up to frame %ld), max absolute value was %f", limit_src, max_abs);
             buffer_edit_end(src_buf, 1);
             buffer_setdirty(src_buf);
         }
@@ -402,7 +360,7 @@ void bounce_bang(t_bounce *x) {
         long fade_out_start_frame = last_audio_frame - fade_out_duration_frames + 1;
         if (fade_out_start_frame < 0) fade_out_start_frame = 0;
 
-        bounce_log(x, "stem '%s': fade-out will start at frame %ld", bufname, fade_out_start_frame);
+        bounce_log(x, "stem fade-out will start at frame %ld", fade_out_start_frame);
 
         t_ramp_state ramp;
         ramp_init(&ramp, sr_dest, x->high_ms);
@@ -410,7 +368,7 @@ void bounce_bang(t_bounce *x) {
         int fade_in_triggered = 0;
         int fade_out_triggered = 0;
 
-        bounce_log(x, "stem '%s': starting faded summation", bufname);
+        bounce_log(x, "stem: starting faded summation");
 
         for (long f_dest = 0; f_dest < limit_dest; f_dest++) {
             long f_src = (long)round((double)f_dest * sr_src / sr_dest);
@@ -438,10 +396,9 @@ void bounce_bang(t_bounce *x) {
             }
         }
 
-        bounce_log(x, "stem '%s': summation complete", bufname);
+        bounce_log(x, "stem summation complete");
 
         buffer_unlocksamples(src_buf);
-        stem_idx++;
     }
 
     bounce_log(x, "finished summing stems, duplicating to all channels");
@@ -478,9 +435,79 @@ void bounce_bang(t_bounce *x) {
     buffer_edit_end(dest_buf, 1);
     buffer_unlocksamples(dest_buf);
     buffer_setdirty(dest_buf);
-    critical_exit(0);
+}
 
-    if (src_ref) object_free(src_ref);
+void *bounce_worker(t_bounce *x) {
+    bounce_do_work(x);
+    qelem_set(x->qelem);
+    return NULL;
+}
+
+void bounce_bang(t_bounce *x) {
+    // 1. Retrieve the length from the stats buffer~ very first thing synchronously
+    double ms_end = 0.0;
+    t_buffer_obj *stats_buf = buffer_ref_getobject(x->stats_ref);
+    if (!stats_buf) {
+        buffer_ref_set(x->stats_ref, _sym_nothing);
+        buffer_ref_set(x->stats_ref, gensym("stats"));
+        stats_buf = buffer_ref_getobject(x->stats_ref);
+    }
+    if (stats_buf) {
+        float *samples_stats = buffer_locksamples(stats_buf);
+        if (samples_stats) {
+            if (buffer_getframecount(stats_buf) > 1) {
+                ms_end = (double)samples_stats[1];
+            }
+            buffer_unlocksamples(stats_buf);
+        }
+    }
+    x->ms_end = ms_end;
+
+    // 2. Check if already busy
+    if (x->busy) {
+        bounce_log(x, "bounce process already in progress, ignoring bang");
+        return;
+    }
+
+    // 3. Normal setup
+    bounce_log(x, "starting bounce process");
+    bounce_check_attachments(x, 1);
+
+    if (!x->poly_found || !x->dest_found || !x->stats_found) {
+        bounce_log(x, "mandatory buffer(s) missing during bounce");
+        return;
+    }
+
+    // Pre-collect pointers in main thread
+    x->dest_obj = buffer_ref_getobject(x->dest_ref);
+    x->stem_count = 0;
+    t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, _sym_nothing);
+    for (int i = 1; i <= 1024; i++) {
+        char bufname[256];
+        snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i);
+        buffer_ref_set(src_ref, gensym(bufname));
+        t_buffer_obj *b = buffer_ref_getobject(src_ref);
+        if (!b) break;
+        x->stem_objs[x->stem_count++] = b;
+    }
+    object_free(src_ref);
+
+    if (x->async_attr) {
+        x->busy = 1;
+        systhread_create((method)bounce_worker, x, 0, 0, 0, &x->thread);
+    } else {
+        bounce_do_work(x);
+        bounce_log(x, "bounce process complete");
+        outlet_bang(x->bang_outlet);
+    }
+}
+
+void bounce_qfn(t_bounce *x) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+        x->thread = NULL;
+    }
     bounce_log(x, "bounce process complete");
     outlet_bang(x->bang_outlet);
+    x->busy = 0;
 }
