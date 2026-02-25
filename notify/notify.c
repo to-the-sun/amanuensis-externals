@@ -29,10 +29,7 @@ typedef struct _notify {
     void *out_track;     // Outlet 3 (Index 2)
     void *out_palette;   // Outlet 4 (Index 3)
     void *out_log;   // Outlet 5 (Rightmost, optional, Index 4)
-    t_buffer_ref *buffer_ref;
-    double local_bar_length;
     long instance_id;
-    long bar_warn_sent;
 } t_notify;
 
 t_class *notify_class;
@@ -42,12 +39,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
 void notify_fill(t_notify *x);
-t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
-void notify_local_bar_length(t_notify *x, double f);
-long notify_get_bar_length(t_notify *x);
 
 void ext_main(void *r) {
     t_class *c;
@@ -57,8 +51,6 @@ void ext_main(void *r) {
     c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_fill, "fill", 0);
-    class_addmethod(c, (method)notify_notify, "notify", A_CANT, 0);
-    class_addmethod(c, (method)notify_local_bar_length, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
@@ -76,72 +68,13 @@ void notify_log(t_notify *x, const char *fmt, ...) {
     va_end(args);
 }
 
-long notify_get_bar_length(t_notify *x) {
-    if (x->local_bar_length > 0) {
-        return (long)x->local_bar_length;
-    }
-
-    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-    if (!b) {
-        if (!x->bar_warn_sent) {
-            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
-        }
-        // Kick the buffer reference to force re-binding
-        buffer_ref_set(x->buffer_ref, _sym_nothing);
-        buffer_ref_set(x->buffer_ref, gensym("bar"));
-        b = buffer_ref_getobject(x->buffer_ref);
-    }
-    if (!b) {
-        notify_log(x, "bar buffer~ not found");
-        return 0;
-    }
-    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
-
-    long bar_length = 0;
-    critical_enter(0);
-    float *samples = buffer_locksamples(b);
-    if (samples) {
-        if (buffer_getframecount(b) > 0) {
-            bar_length = (long)samples[0];
-        }
-        buffer_unlocksamples(b);
-        critical_exit(0);
-    } else {
-        critical_exit(0);
-    }
-
-    if (bar_length > 0) {
-        x->local_bar_length = (double)bar_length;
-        notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    }
-
-    return bar_length;
-}
-
-void notify_local_bar_length(t_notify *x, double f) {
-    if (f <= 0) {
-        x->local_bar_length = 0;
-    } else {
-        x->local_bar_length = f;
-    }
-    notify_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
-    notify_log(x, "Local bar length set to: %.2f", f);
-}
-
 void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     t_notify *x = (t_notify *)object_alloc(notify_class);
     if (x) {
         x->dict_name = gensym("");
         x->log = 0;
         x->out_log = NULL;
-        x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-        if (!buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
-        x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
-        x->bar_warn_sent = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -157,20 +90,12 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
         }
-
-        floatin((t_object *)x, 1);
     }
     return (x);
 }
 
 void notify_free(t_notify *x) {
-    if (x->buffer_ref) {
-        object_free(x->buffer_ref);
-    }
-}
-
-t_max_err notify_notify(t_notify *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
-    return buffer_ref_notify(x->buffer_ref, s, msg, sender, data);
+    ;
 }
 
 int note_compare(const void *a, const void *b) {
@@ -380,8 +305,6 @@ void notify_bang(t_notify *x) {
         return;
     }
 
-    long bar_length = notify_get_bar_length(x);
-
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -518,8 +441,7 @@ void notify_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        if (a == 0) sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Clears dictionary on bang.");
-        else if (a == 1) sprintf(s, "Inlet 2: (float) override local_bar_length in ms.");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Clears dictionary on bang.");
     } else {
         if (x->log) {
             switch (a) {

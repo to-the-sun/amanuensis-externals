@@ -25,12 +25,6 @@
 				- **fill**: Triggers a synthesized dump. This mode identifies the longest track and extends all other tracks to match its length by repeating their existing notes. Notes are sorted by their synthesized absolute timestamps.
 			</description>
 		</inlet>
-		<inlet id="2" type="float">
-			<digest>Local Bar Length Override</digest>
-			<description>
-				Accepts a float to set a manual `local_bar_length` in milliseconds. When greater than zero, this value overrides any bar length information that would otherwise be read from the `bar` buffer~. This affects how track boundaries and "caps" are calculated internally.
-			</description>
-		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
@@ -77,10 +71,6 @@
 		<method name="fill">
 			<digest>Execute a synthesized 'filling' dump</digest>
 			<description>Synchronizes track lengths by looping notes to match the longest track's reach, then outputs the aggregated result sorted by time.</description>
-		</method>
-		<method name="ft1">
-			<digest>Set local bar length (Inlet 2)</digest>
-			<description>Sets the `local_bar_length` attribute via a float message sent to the second inlet. A value of 0 or less resets the override, causing the object to look for the `bar` buffer~ instead.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
