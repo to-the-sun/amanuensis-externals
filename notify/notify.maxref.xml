@@ -78,7 +78,7 @@
 		<attribute name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Verbose Logging to Outlet</digest>
 			<description>
-				When enabled (1), the object will output detailed internal status and note-by-note manifest data to the logging outlet. Note that key operational messages (like dump start and completion) are always posted to the Max console regardless of this attribute.
+				When enabled (1), the object will output detailed internal status, operational progress, and note-by-note manifest data to the logging outlet. Note that only critical errors (such as a missing dictionary) are posted directly to the Max console; all other status updates are conditional on this attribute.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
