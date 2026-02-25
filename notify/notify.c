@@ -152,7 +152,7 @@ void notify_fill(t_notify *x) {
     long total_synthetic_added = 0;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms defined by track %s.", num_tracks, max_bar_all, longest_track ? longest_track->s_name : "none");
+    object_post((t_object *)x, "Fill: processing %ld tracks. Global reach %.2f ms defined by track %s.", num_tracks, max_bar_all, longest_track ? longest_track->s_name : "none");
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -417,7 +417,7 @@ void notify_bang(t_notify *x) {
     }
 
     dictionary_clear(dict);
-    notify_log(x, "Dictionary cleared.");
+    object_post((t_object *)x, "Dictionary cleared.");
 
     // Output sorted notes
     for (long i = 0; i < total_notes; i++) {

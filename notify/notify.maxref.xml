@@ -49,9 +49,9 @@
 			<description>Outputs the symbolic name of the palette associated with the current note's bar.</description>
 		</outlet>
 		<outlet id="5" type="anything">
-			<digest>Outlet 5: Logging and Status</digest>
+			<digest>Outlet 5: Logging Outlet</digest>
 			<description>
-				When the `@log` attribute is enabled, this outlet provides detailed verbose information about the processing steps, including track analysis, note duplication during `fill`, and binding status for external references.
+				When the `@log` attribute is enabled, this outlet provides detailed verbose information about the processing steps, including track analysis and note duplication details during `fill` operations.
 			</description>
 		</outlet>
 	</outletlist>
@@ -76,9 +76,9 @@
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="long" size="1">
-			<digest>Enable Verbose Console and Outlet Logging</digest>
+			<digest>Enable Verbose Logging to Outlet</digest>
 			<description>
-				When enabled (1), the object will output internal status messages to the logging outlet and the Max console. This is useful for debugging dictionary structures and verifying the 'fill' logic.
+				When enabled (1), the object will output detailed internal status and note-by-note manifest data to the logging outlet. Note that key operational messages (like dump start and completion) are always posted to the Max console regardless of this attribute.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
