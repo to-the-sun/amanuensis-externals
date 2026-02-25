@@ -5,6 +5,7 @@
 #include "ext_atomarray.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "ext_systhread.h"
 #include "../shared/logging.h"
 #include <string.h>
 #include <stdlib.h>
@@ -30,6 +31,10 @@ typedef struct _notify {
     void *out_palette;   // Outlet 4 (Index 3)
     void *out_log;   // Outlet 5 (Rightmost, optional, Index 4)
     long instance_id;
+    void *q_work;
+    long busy;
+    long async;
+    int job; // 1 = bang, 2 = fill
 } t_notify;
 
 t_class *notify_class;
@@ -39,6 +44,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
 void notify_fill(t_notify *x);
+void notify_qwork(t_notify *x);
+void notify_do_bang(t_notify *x);
+void notify_do_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
@@ -57,6 +65,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_notify, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+
     class_register(CLASS_BOX, c);
     notify_class = c;
 }
@@ -73,8 +85,12 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->dict_name = gensym("");
         x->log = 0;
+        x->async = 0;
         x->out_log = NULL;
         x->instance_id = 1000 + (rand() % 9000);
+        x->q_work = qelem_new(x, (method)notify_qwork);
+        x->busy = 0;
+        x->job = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -95,7 +111,9 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void notify_free(t_notify *x) {
-    ;
+    if (x->q_work) {
+        qelem_free(x->q_work);
+    }
 }
 
 int note_compare(const void *a, const void *b) {
@@ -110,6 +128,21 @@ int note_compare(const void *a, const void *b) {
 }
 
 void notify_fill(t_notify *x) {
+    if (x->async) {
+        if (x->busy) {
+            notify_log(x, "notify is busy, ignoring fill");
+            return;
+        }
+        x->job = 2;
+        x->busy = 1;
+        qelem_set(x->q_work);
+        notify_log(x, "Deferred fill to Main thread.");
+    } else {
+        notify_do_fill(x);
+    }
+}
+
+void notify_do_fill(t_notify *x) {
     t_dictionary *dict = dictobj_findregistered_retain(x->dict_name);
     if (!dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
@@ -299,6 +332,31 @@ void notify_fill(t_notify *x) {
 }
 
 void notify_bang(t_notify *x) {
+    if (x->async) {
+        if (x->busy) {
+            notify_log(x, "notify is busy, ignoring bang");
+            return;
+        }
+        x->job = 1;
+        x->busy = 1;
+        qelem_set(x->q_work);
+        notify_log(x, "Deferred bang to Main thread.");
+    } else {
+        notify_do_bang(x);
+    }
+}
+
+void notify_qwork(t_notify *x) {
+    if (x->job == 1) {
+        notify_do_bang(x);
+    } else if (x->job == 2) {
+        notify_do_fill(x);
+    }
+    x->busy = 0;
+    x->job = 0;
+}
+
+void notify_do_bang(t_notify *x) {
     t_dictionary *dict = dictobj_findregistered_retain(x->dict_name);
     if (!dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
@@ -441,7 +499,7 @@ void notify_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Clears dictionary on bang.");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Supports @async deferral.");
     } else {
         if (x->log) {
             switch (a) {

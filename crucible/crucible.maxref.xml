@@ -67,6 +67,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="async" get="1" set="1" type="long" size="1">
+			<digest>Asynchronous Execution</digest>
+			<description>
+				When enabled (1), processing of incoming data and span comparisons is deferred to the Main (UI) thread. This ensures that the heavy dictionary operations do not block the high-priority Scheduler or audio threads, maintaining timing stability at the cost of slight processing latency.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

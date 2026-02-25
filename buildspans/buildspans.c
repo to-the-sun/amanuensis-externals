@@ -4,6 +4,7 @@
 #include "ext_proto.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "ext_systhread.h"
 #include "../shared/visualize.h"
 #include "../shared/logging.h"
 #include <math.h>
@@ -167,6 +168,7 @@ typedef struct _buildspans {
     void *log_outlet;
     long log;
     long visualize;
+    long async;
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
@@ -180,7 +182,11 @@ void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_track(t_buildspans *x, long n);
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
@@ -465,6 +471,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_buildspans, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+
     class_register(CLASS_BOX, c);
     buildspans_class = c;
 }
@@ -480,6 +490,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_outlet = NULL;
         x->log = 0;
         x->visualize = 0;
+        x->async = 0;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
@@ -525,6 +536,11 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
+    if (x->async && !systhread_ismainthread()) {
+        defer_low(x, (method)buildspans_clear, NULL, 0, NULL);
+        return;
+    }
+
     if (x->building) {
         object_free(x->building);
     }
@@ -543,7 +559,18 @@ void buildspans_clear(t_buildspans *x) {
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc > 0) buildspans_offset(x, atom_getfloat(argv));
+}
+
 void buildspans_offset(t_buildspans *x, double f) {
+    if (x->async && !systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        defer_low(x, (method)buildspans_offset_deferred, NULL, 1, &a);
+        return;
+    }
+
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
 
@@ -713,7 +740,18 @@ void buildspans_offset(t_buildspans *x, double f) {
 }
 
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc > 0) buildspans_track(x, atom_getlong(argv));
+}
+
 void buildspans_track(t_buildspans *x, long n) {
+    if (x->async && !systhread_ismainthread()) {
+        t_atom a;
+        atom_setlong(&a, n);
+        defer_low(x, (method)buildspans_track_deferred, NULL, 1, &a);
+        return;
+    }
+
     x->current_track = n;
     buildspans_log(x, "Track updated to: %ld", n);
 }
@@ -722,6 +760,28 @@ void buildspans_track(t_buildspans *x, long n) {
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
+    if (x->async && !systhread_ismainthread()) {
+        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
+        if (new_argv) {
+            atom_setlong(new_argv, inlet_num);
+            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
+            defer_low(x, (method)buildspans_anything_deferred, s, (short)(argc + 1), new_argv);
+            sysmem_freeptr(new_argv);
+        }
+        return;
+    }
+
+    buildspans_do_anything(x, s, argc, argv, inlet_num);
+}
+
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc > 0) {
+        long inlet_num = atom_getlong(argv);
+        buildspans_do_anything(x, s, argc - 1, argv + 1, inlet_num);
+    }
+}
+
+void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num) {
     // Inlet 3 is the palette symbol inlet
     if (inlet_num == 3) {
         // A standalone symbol is a message with argc=0
@@ -741,6 +801,11 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for list messages on the main inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->async && !systhread_ismainthread()) {
+        defer_low(x, (method)buildspans_list, s, argc, argv);
+        return;
+    }
+
     long bar_length = buildspans_get_bar_length(x);
     if (bar_length <= 0) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
@@ -1305,6 +1370,11 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
 
 void buildspans_bang(t_buildspans *x) {
+    if (x->async && !systhread_ismainthread()) {
+        defer_low(x, (method)buildspans_bang, NULL, 0, NULL);
+        return;
+    }
+
     buildspans_log(x, "Flush triggered by bang for all palettes.");
 
     long num_keys;
@@ -1439,7 +1509,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear");
+                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear. Supports @async deferral.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (float) Offset Timestamp");

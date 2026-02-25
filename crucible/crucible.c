@@ -4,6 +4,7 @@
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
 #include "ext_critical.h"
+#include "ext_systhread.h"
 #include "../shared/logging.h"
 #include <string.h>
 
@@ -19,6 +20,7 @@ typedef struct _crucible {
     t_buffer_ref *buffer_ref;
     long log;
     long consume;
+    long async;
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
@@ -140,6 +142,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "consume", 0, "onoff", "Enable Consume");
     CLASS_ATTR_DEFAULT(c, "consume", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_crucible, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
@@ -156,6 +162,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->log = 0;
         x->consume = 0;
+        x->async = 0;
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
@@ -655,6 +662,11 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->async && !systhread_ismainthread()) {
+        defer_low(x, (method)crucible_anything, s, argc, argv);
+        return;
+    }
+
     if (x->log) {
         char *val_str = crucible_atoms_to_string(argc, argv);
         crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
@@ -753,7 +765,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name"); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name. Supports @async deferral."); break;
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET

@@ -84,6 +84,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="async" get="1" set="1" type="long" size="1">
+			<digest>Asynchronous Execution</digest>
+			<description>
+				When enabled (1), the heavy dictionary processing triggered by 'bang' or 'fill' is moved from the high-priority Scheduler thread to the lower-priority Main (UI) thread using a deferral mechanism. This prevents timing jitter in the audio or scheduler threads during complex data operations, though it may introduce a slight latency in the output.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
