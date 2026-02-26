@@ -154,6 +154,7 @@ void notify_do_fill(t_notify *x) {
     dictionary_getkeys(dict, &num_tracks, &track_keys);
 
     double max_bar_all = -1.0;
+    double min_diff_all = -1.0;
     t_symbol *longest_track = NULL;
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -163,6 +164,19 @@ void notify_do_fill(t_notify *x) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        if (num_bars > 1) {
+            double *ts = (double *)sysmem_newptr(num_bars * sizeof(double));
+            for (long j = 0; j < num_bars; j++) ts[j] = atof(bar_keys[j]->s_name);
+            for (long j = 0; j < num_bars; j++) {
+                for (long k = j + 1; k < num_bars; k++) {
+                    double d = fabs(ts[j] - ts[k]);
+                    if (d > 0.1 && (min_diff_all < 0 || d < min_diff_all)) min_diff_all = d;
+                }
+            }
+            sysmem_freeptr(ts);
+        }
+
         for (long j = 0; j < num_bars; j++) {
             double bar_ts = atof(bar_keys[j]->s_name);
             if (bar_ts > max_bar_all) {
@@ -186,7 +200,8 @@ void notify_do_fill(t_notify *x) {
     long total_synthetic_added = 0;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms defined by track %s.", num_tracks, max_bar_all, longest_track ? longest_track->s_name : "none");
+    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms (inferred bar duration %.2f) defined by track %s.",
+               num_tracks, max_bar_all, min_diff_all, longest_track ? longest_track->s_name : "none");
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -205,16 +220,20 @@ void notify_do_fill(t_notify *x) {
 
         if (max_bar_this == max_bar_all) {
             notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
-        } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
-            notify_log(x, "Track %s is being grown to match %.2f (original length %.2f).", track_sym->s_name, max_bar_all, max_bar_this);
+        } else if (max_bar_this < max_bar_all && max_bar_this >= 0) {
+            double interval = (min_diff_all > 0) ? (max_bar_this + min_diff_all) : max_bar_this;
+            if (interval <= 0) {
+                if (bar_keys) sysmem_freeptr(bar_keys);
+                continue;
+            }
+            notify_log(x, "Track %s is being grown to match %.2f (interval %.2f).", track_sym->s_name, max_bar_all, interval);
             for (long n = 1; ; n++) {
                 int notes_added_this_pass = 0;
                 for (long j = 0; j < num_bars; j++) {
                     t_symbol *bar_sym = bar_keys[j];
                     double bar_ts = atof(bar_sym->s_name);
-                    double synth_bar_ts = bar_ts + n * max_bar_this;
+                    double synth_bar_ts = bar_ts + n * interval;
 
-                    if (synth_bar_ts <= max_bar_this) continue;
                     if (synth_bar_ts > max_bar_all) continue;
 
                     t_dictionary *bar_dict = NULL;
@@ -269,7 +288,7 @@ void notify_do_fill(t_notify *x) {
                         long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
                         for (long k = 0; k < num_notes; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
-                            double synth_abs = orig_abs + n * max_bar_this;
+                            double synth_abs = orig_abs + n * interval;
                             if (total_notes >= notes_capacity) {
                                 notes_capacity *= 2;
                                 all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
