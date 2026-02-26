@@ -230,11 +230,11 @@ void notify_do_fill(t_notify *x) {
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
 
-                    if (synth_bar_ts <= max_bar_this) continue;
-                    if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
-
                     notify_log(x, "Track %s: Considering synthetic bar %.2f. Math: %.2f + (%ld * %.2f) = %.2f. Range: > %.2f and < %.2f.",
                         track_sym->s_name, synth_bar_ts, bar_ts, n, max_bar_this, synth_bar_ts, max_bar_this, max_bar_all);
+
+                    if (synth_bar_ts <= max_bar_this) continue;
+                    if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
 
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
