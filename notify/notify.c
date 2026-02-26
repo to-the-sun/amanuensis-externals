@@ -316,6 +316,9 @@ void notify_do_fill(t_notify *x) {
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
 
+                    notify_log(x, "Track %s: Considering synthetic bar %.2f. Math: %.2f + (%ld * %.2f) = %.2f. Range: > %.2f and < %.2f.",
+                        track_sym->s_name, synth_bar_ts, bar_ts, n, max_bar_this, synth_bar_ts, max_bar_this, max_bar_all);
+
                     if (synth_bar_ts <= max_bar_this) continue;
                     if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
 
@@ -369,15 +372,21 @@ void notify_do_fill(t_notify *x) {
                         }
 
                         long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
+                        notify_log(x, "Track %s: Bar %.2f accepted. Listing %ld original notes to be synthesized:", track_sym->s_name, synth_bar_ts, num_notes);
                         for (long k = 0; k < num_notes; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
+                            double score = atom_getfloat(&scores_atoms[k]);
                             double synth_abs = orig_abs + n * max_bar_this;
+
+                            notify_log(x, "Track %s: Original Note %ld: palette %s, abs %.2f, score %.2f, offset %.2f",
+                                track_sym->s_name, k + 1, palette->s_name, orig_abs, score, offset);
+                            notify_log(x, "Track %s: Synthesized result: %.2f + (%ld * %.2f) = %.2f",
+                                track_sym->s_name, orig_abs, n, max_bar_this, synth_abs);
+
                             if (total_notes >= notes_capacity) {
                                 notes_capacity *= 2;
                                 all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                             }
-                            notify_log(x, "Synthesizing: %.2f + (%ld * %.2f) = %.2f (Original Note: palette %s, score %.2f, offset %.2f)",
-                                orig_abs, n, max_bar_this, synth_abs, palette->s_name, atom_getfloat(&scores_atoms[k]), offset);
                             all_notes[total_notes].absolute = synth_abs;
                             all_notes[total_notes].original_absolute = orig_abs;
                             all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
@@ -389,6 +398,8 @@ void notify_do_fill(t_notify *x) {
                             notes_added_this_pass++;
                             total_synthetic_added++;
                         }
+                    } else {
+                        notify_log(x, "Track %s: Bar %.2f accepted, but contains no notes.", track_sym->s_name, synth_bar_ts);
                     }
                 }
                 if (notes_added_this_pass == 0) break;
