@@ -35,6 +35,7 @@ typedef struct _notify {
     long busy;
     long async;
     int job; // 1 = bang, 2 = fill
+    double fill_max_bar_all;
     t_buffer_ref *bar_ref;
     long bar_connected;
 } t_notify;
@@ -45,7 +46,7 @@ t_class *notify_class;
 void *notify_new(t_symbol *s, long argc, t_atom *argv);
 void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
-void notify_fill(t_notify *x);
+void notify_int(t_notify *x, long n);
 void notify_qwork(t_notify *x);
 void notify_do_bang(t_notify *x);
 void notify_do_fill(t_notify *x);
@@ -60,7 +61,7 @@ void ext_main(void *r) {
 
     c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
-    class_addmethod(c, (method)notify_fill, "fill", 0);
+    class_addmethod(c, (method)notify_int, "int", A_LONG, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
@@ -140,7 +141,8 @@ int note_compare(const void *a, const void *b) {
     return 0;
 }
 
-void notify_fill(t_notify *x) {
+void notify_int(t_notify *x, long n) {
+    x->fill_max_bar_all = (double)n;
     if (x->async) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring fill");
@@ -149,7 +151,7 @@ void notify_fill(t_notify *x) {
         x->job = 2;
         x->busy = 1;
         qelem_set(x->q_work);
-        notify_log(x, "Deferred fill to Main thread.");
+        notify_log(x, "Deferred fill (reach %.2f) to Main thread.", x->fill_max_bar_all);
     } else {
         notify_do_fill(x);
     }
@@ -191,34 +193,7 @@ void notify_do_fill(t_notify *x) {
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
 
-    double max_bar_all = -1.0;
-    t_symbol *longest_track = NULL;
-    for (long i = 0; i < num_tracks; i++) {
-        t_dictionary *track_dict = NULL;
-        dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict);
-        if (!track_dict) continue;
-
-        long num_bars = 0;
-        t_symbol **bar_keys = NULL;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-        for (long j = 0; j < num_bars; j++) {
-            double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts > max_bar_all) {
-                max_bar_all = bar_ts;
-                longest_track = track_keys[i];
-            }
-        }
-        if (bar_keys) sysmem_freeptr(bar_keys);
-    }
-
-    if (max_bar_all < 0) {
-        if (track_keys) sysmem_freeptr(track_keys);
-        object_release((t_object *)dict);
-        outlet_bang(x->out_abs_score);
-        return;
-    }
-
-    max_bar_all += bar_length; // Incorporate bar_length
+    double max_bar_all = x->fill_max_bar_all;
 
     t_note *all_notes = NULL;
     long total_notes = 0;
@@ -226,7 +201,7 @@ void notify_do_fill(t_notify *x) {
     long total_synthetic_added = 0;
     all_notes = (t_note *)sysmem_newptr(sizeof(t_note) * notes_capacity);
 
-    notify_log(x, "Fill: processing %ld tracks. Global reach %.2f ms (including bar_length %.2f) defined by track %s.", num_tracks, max_bar_all, bar_length, longest_track ? longest_track->s_name : "none");
+    notify_log(x, "Fill: processing %ld tracks. Target reach %.2f ms.", num_tracks, max_bar_all);
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -244,68 +219,7 @@ void notify_do_fill(t_notify *x) {
         }
         if (max_bar_this >= 0) max_bar_this += bar_length; // Incorporate bar_length
 
-        // Log original notes for this track before synthesis
-        if (x->log && x->out_log) {
-            notify_log(x, "Track %s: Listing original notes.", track_sym->s_name);
-            for (long j = 0; j < num_bars; j++) {
-                t_symbol *bar_sym = bar_keys[j];
-                t_dictionary *bar_dict = NULL;
-                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-                if (!bar_dict) continue;
-
-                double offset = 0;
-                t_atomarray *offset_aa = NULL;
-                t_atom offset_atom;
-                if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
-                    t_atom o_atom;
-                    if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) offset = atom_getfloat(&o_atom);
-                } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
-                    offset = atom_getfloat(&offset_atom);
-                }
-
-                t_symbol *palette = gensym("");
-                t_atomarray *palette_aa = NULL;
-                t_atom palette_atom;
-                if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
-                    t_atom p_atom;
-                    if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
-                } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
-                    palette = atom_getsym(&palette_atom);
-                }
-
-                t_atom *aa_atoms = NULL;
-                long aa_len = 0;
-                t_atomarray *absolutes_aa = NULL;
-                t_atom absolute_atom;
-                if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&absolutes_aa) == MAX_ERR_NONE && absolutes_aa) {
-                    atomarray_getatoms(absolutes_aa, &aa_len, &aa_atoms);
-                } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &absolute_atom) == MAX_ERR_NONE) {
-                    aa_atoms = &absolute_atom;
-                    aa_len = 1;
-                }
-
-                if (aa_len > 0) {
-                    t_atom *scores_atoms = NULL;
-                    long scores_len = 0;
-                    t_atomarray *scores_aa = NULL;
-                    t_atom score_atom;
-                    if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
-                        atomarray_getatoms(scores_aa, &scores_len, &scores_atoms);
-                    } else if (dictionary_getatom(bar_dict, gensym("scores"), &score_atom) == MAX_ERR_NONE) {
-                        scores_atoms = &score_atom;
-                        scores_len = 1;
-                    }
-
-                    long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
-                    for (long k = 0; k < num_notes; k++) {
-                        notify_log(x, "Track %s: Original Note: palette %s, abs %.2f, score %.2f, offset %.2f",
-                            track_sym->s_name, palette->s_name, atom_getfloat(&aa_atoms[k]), atom_getfloat(&scores_atoms[k]), offset);
-                    }
-                }
-            }
-        }
-
-        if (max_bar_this == max_bar_all) {
+        if (max_bar_this >= max_bar_all) {
             notify_log(x, "Track %s is a reference track (length %.2f). No duplication needed.", track_sym->s_name, max_bar_all);
         } else if (max_bar_this < max_bar_all && max_bar_this > 0) {
             notify_log(x, "Track %s (length %.2f) < Global Reach (%.2f). Growing with period %.2f.", track_sym->s_name, max_bar_this, max_bar_all, max_bar_this);
@@ -315,6 +229,9 @@ void notify_do_fill(t_notify *x) {
                     t_symbol *bar_sym = bar_keys[j];
                     double bar_ts = atof(bar_sym->s_name);
                     double synth_bar_ts = bar_ts + n * max_bar_this;
+
+                    notify_log(x, "Track %s: Considering synthetic bar %.2f. Math: %.2f + (%ld * %.2f) = %.2f. Range: > %.2f and < %.2f.",
+                        track_sym->s_name, synth_bar_ts, bar_ts, n, max_bar_this, synth_bar_ts, max_bar_this, max_bar_all);
 
                     if (synth_bar_ts <= max_bar_this) continue;
                     if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
@@ -369,15 +286,21 @@ void notify_do_fill(t_notify *x) {
                         }
 
                         long num_notes = (aa_len < scores_len) ? aa_len : scores_len;
+                        notify_log(x, "Track %s: Bar %.2f accepted. Listing %ld original notes to be synthesized:", track_sym->s_name, synth_bar_ts, num_notes);
                         for (long k = 0; k < num_notes; k++) {
                             double orig_abs = atom_getfloat(&aa_atoms[k]);
+                            double score = atom_getfloat(&scores_atoms[k]);
                             double synth_abs = orig_abs + n * max_bar_this;
+
+                            notify_log(x, "Track %s: Original Note %ld: palette %s, abs %.2f, score %.2f, offset %.2f",
+                                track_sym->s_name, k + 1, palette->s_name, orig_abs, score, offset);
+                            notify_log(x, "Track %s: Synthesized result: %.2f + (%ld * %.2f) = %.2f",
+                                track_sym->s_name, orig_abs, n, max_bar_this, synth_abs);
+
                             if (total_notes >= notes_capacity) {
                                 notes_capacity *= 2;
                                 all_notes = (t_note *)sysmem_resizeptr(all_notes, sizeof(t_note) * notes_capacity);
                             }
-                            notify_log(x, "Synthesizing: %.2f + (%ld * %.2f) = %.2f (Original Note: palette %s, score %.2f, offset %.2f)",
-                                orig_abs, n, max_bar_this, synth_abs, palette->s_name, atom_getfloat(&scores_atoms[k]), offset);
                             all_notes[total_notes].absolute = synth_abs;
                             all_notes[total_notes].original_absolute = orig_abs;
                             all_notes[total_notes].score = atom_getfloat(&scores_atoms[k]);
@@ -389,6 +312,8 @@ void notify_do_fill(t_notify *x) {
                             notes_added_this_pass++;
                             total_synthetic_added++;
                         }
+                    } else {
+                        notify_log(x, "Track %s: Bar %.2f accepted, but contains no notes.", track_sym->s_name, synth_bar_ts);
                     }
                 }
                 if (notes_added_this_pass == 0) break;
@@ -604,7 +529,7 @@ void notify_do_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Supports @async deferral.");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @async deferral.");
     } else {
         if (x->log) {
             switch (a) {
