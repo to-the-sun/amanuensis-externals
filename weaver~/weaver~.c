@@ -570,12 +570,15 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         tr->offset[active] = rel_offset;
         tr->src_found[active] = 0;
         tr->src_error_sent[active] = 0;
+        tr->control = (double)active;
 
         // Force ramps to solid states (Slot 0 ON if active==0, Slot 1 ON if active==1)
         tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
         tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
         tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
         tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
+        tr->xf.last_control = tr->control;
+        tr->xf.direction = 0.0;
         tr->busy = 0;
 
         weaver_log(x, "Track %lld: Main ramp loop jump to %.2f ms (%s@%.2f)", track, bar_ms, palette->s_name, offset_ms);
@@ -911,13 +914,15 @@ void weaver_audio_qtask(t_weaver *x) {
 
                     // If still missing, check the NEXT bar too to continue the silence if necessary
                     if (track_dict && bar_len > 0) {
-                        double next_bar_ms = hit.value + bar_len;
-                        char next_bar_str[64];
-                        snprintf(next_bar_str, 64, "%ld", (long)next_bar_ms);
-                        t_symbol *next_bar_sym = gensym(next_bar_str);
+                        double next_bar_ms_abs = hit.value + bar_len;
+                        double next_bar_ms_rel = atof(bar_key->s_name) + bar_len;
+                        if (tr && next_bar_ms_rel >= tr->track_length) next_bar_ms_rel = 0.0;
+                        char next_bar_rel_str[64];
+                        snprintf(next_bar_rel_str, 64, "%ld", (long)next_bar_ms_rel);
+                        t_symbol *next_bar_rel_sym = gensym(next_bar_rel_str);
 
-                        if (!dictionary_hasentry(track_dict, next_bar_sym)) {
-                            weaver_schedule_silence(x, track_num, next_bar_ms);
+                        if (!dictionary_hasentry(track_dict, next_bar_rel_sym)) {
+                        weaver_schedule_silence(x, target_track, next_bar_ms_abs);
                         }
                     }
                 }
@@ -976,6 +981,23 @@ void weaver_audio_qtask(t_weaver *x) {
                 if (tr) {
                     double next_bar_ms_abs = hit.value + bar_len;
                     double next_bar_ms_rel = atof(bar_key->s_name) + bar_len;
+                    if (next_bar_ms_rel >= tr->track_length) next_bar_ms_rel = 0.0;
+                    char next_bar_rel_str[64];
+                    snprintf(next_bar_rel_str, 64, "%ld", (long)next_bar_ms_rel);
+                    t_symbol *next_bar_rel_sym = gensym(next_bar_rel_str);
+
+                    if (!dictionary_hasentry(track_dict, next_bar_rel_sym)) {
+                        weaver_schedule_silence(x, target_track, next_bar_ms_abs);
+                    }
+                }
+            } else if (is_bar_0) {
+                // Bar 0 is missing: force silence
+                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0);
+
+                // Schedule the NEXT silence cap if the next bar is missing
+                if (tr) {
+                    double next_bar_ms_abs = hit.value + bar_len;
+                    double next_bar_ms_rel = bar_len;
                     if (next_bar_ms_rel >= tr->track_length) next_bar_ms_rel = 0.0;
                     char next_bar_rel_str[64];
                     snprintf(next_bar_rel_str, 64, "%ld", (long)next_bar_ms_rel);
