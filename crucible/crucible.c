@@ -202,6 +202,8 @@ void crucible_free(t_crucible *x) {
 }
 
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict) {
+    t_atom_long bar_length = crucible_get_bar_length(x);
+    crucible_log(x, "crucible_output_bar_data: utilizing bar_length %lld", (long long)bar_length);
     if (!bar_dict) return;
 
     t_atom *span_atoms = NULL;
@@ -294,6 +296,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
+    t_atom_long bar_length = crucible_get_bar_length(x);
+    crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->incumbent_dict_name->s_name);
@@ -601,20 +605,25 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
     }
 
     if (bar_length > 0) {
+        if (bar_length != (t_atom_long)x->local_bar_length) {
+            crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
+        }
         x->local_bar_length = (double)bar_length;
-        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
     }
 
     return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
+    long long old_bar_length = (long long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
     }
-    crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
+    if ((long long)x->local_bar_length != old_bar_length) {
+        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
+    }
 }
 
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {

@@ -38,6 +38,7 @@ typedef struct _notify {
     double fill_max_bar_all;
     t_buffer_ref *bar_ref;
     long bar_connected;
+    double bar_length;
 } t_notify;
 
 t_class *notify_class;
@@ -96,6 +97,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->job = 0;
         x->bar_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->bar_connected = 0;
+        x->bar_length = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -187,6 +189,13 @@ void notify_do_fill(t_notify *x) {
             bar_length = tab[0];
             buffer_unlocksamples(bar_obj);
         }
+    }
+
+    notify_log(x, "notify_do_fill: utilizing bar_length %.2f", bar_length);
+    if (bar_length != x->bar_length) {
+        notify_log(x, "thread %ld: bar_length changed to %.2f", x->instance_id, bar_length);
+        notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
+        x->bar_length = bar_length;
     }
 
     long num_tracks = 0;
@@ -390,6 +399,34 @@ void notify_do_bang(t_notify *x) {
     if (!dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
         return;
+    }
+
+    double bar_length = 0;
+    t_buffer_obj *bar_obj = buffer_ref_getobject(x->bar_ref);
+    if (!bar_obj) {
+        buffer_ref_set(x->bar_ref, _sym_nothing);
+        buffer_ref_set(x->bar_ref, gensym("bar"));
+        x->bar_connected = 0;
+        bar_obj = buffer_ref_getobject(x->bar_ref); // Try again after kick
+    }
+
+    if (bar_obj) {
+        if (!x->bar_connected) {
+            x->bar_connected = 1;
+            notify_log(x, "Successfully connected to buffer 'bar'");
+        }
+        float *tab = buffer_locksamples(bar_obj);
+        if (tab) {
+            bar_length = tab[0];
+            buffer_unlocksamples(bar_obj);
+        }
+    }
+
+    notify_log(x, "notify_do_bang: utilizing bar_length %.2f", bar_length);
+    if (bar_length != x->bar_length) {
+        notify_log(x, "thread %ld: bar_length changed to %.2f", x->instance_id, bar_length);
+        notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
+        x->bar_length = bar_length;
     }
 
     long num_tracks = 0;

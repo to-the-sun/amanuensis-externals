@@ -261,9 +261,11 @@ long buildspans_get_bar_length(t_buildspans *x) {
         return -1; // Value in buffer is not positive.
     }
 
+    if (bar_length != (long)x->local_bar_length) {
+        buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+        buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+    }
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
 }
@@ -571,6 +573,9 @@ void buildspans_offset(t_buildspans *x, double f) {
         return;
     }
 
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
+
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
 
@@ -807,6 +812,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
     if (bar_length <= 0) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
         return;
@@ -970,6 +976,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
@@ -1375,6 +1382,9 @@ void buildspans_bang(t_buildspans *x) {
         return;
     }
 
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
+
     buildspans_log(x, "Flush triggered by bang for all palettes.");
 
     long num_keys;
@@ -1418,6 +1428,8 @@ void buildspans_bang(t_buildspans *x) {
 }
 
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_flush: utilizing bar_length %ld", bar_length);
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -1560,12 +1572,15 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
+    long old_bar_length = (long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
     }
-    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    if ((long)x->local_bar_length != old_bar_length) {
+        buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 
