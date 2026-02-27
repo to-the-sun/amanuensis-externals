@@ -53,6 +53,7 @@ void notify_do_bang(t_notify *x);
 void notify_do_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
+int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 
 void ext_main(void *r) {
@@ -143,6 +144,17 @@ int note_compare(const void *a, const void *b) {
     return 0;
 }
 
+int bar_key_compare(const void *a, const void *b) {
+    t_symbol *symA = *(t_symbol **)a;
+    t_symbol *symB = *(t_symbol **)b;
+    double valA = atof(symA->s_name);
+    double valB = atof(symB->s_name);
+
+    if (valA < valB) return -1;
+    if (valA > valB) return 1;
+    return 0;
+}
+
 void notify_int(t_notify *x, long n) {
     x->fill_max_bar_all = (double)n;
     if (x->async) {
@@ -222,9 +234,9 @@ void notify_do_fill(t_notify *x) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-        for (long j = 0; j < num_bars; j++) {
-            double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts > max_bar_this) max_bar_this = bar_ts;
+        if (num_bars > 1) qsort(bar_keys, num_bars, sizeof(t_symbol *), bar_key_compare);
+        if (num_bars > 0) {
+            max_bar_this = atof(bar_keys[num_bars - 1]->s_name);
         }
         if (max_bar_this >= 0) max_bar_this += bar_length; // Incorporate bar_length
 
@@ -243,7 +255,7 @@ void notify_do_fill(t_notify *x) {
                         track_sym->s_name, synth_bar_ts, bar_ts, n, max_bar_this, synth_bar_ts, max_bar_this, max_bar_all);
 
                     if (synth_bar_ts <= max_bar_this) continue;
-                    if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
+                    if (synth_bar_ts >= max_bar_all) break; // Non-inclusive filtering, sorted bars allow early exit
 
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -447,6 +459,7 @@ void notify_do_bang(t_notify *x) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        if (num_bars > 1) qsort(bar_keys, num_bars, sizeof(t_symbol *), bar_key_compare);
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
