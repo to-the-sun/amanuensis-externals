@@ -68,6 +68,7 @@ typedef struct _weaver {
     t_weaver_track *track_cache[256];
     long track_cache_count;
     long update_pending;
+    t_atom_long last_dict_count;
     double cached_bar_len;
     t_hashtab *pending_silence;
     long bar_found;
@@ -159,6 +160,13 @@ void weaver_update_all_track_lengths(t_weaver *x) {
 
     t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
     if (!dict) return;
+
+    t_atom_long current_count = dictionary_getentrycount(dict);
+    if (current_count == x->last_dict_count && x->last_dict_count > 0) {
+        dictobj_release(dict);
+        return;
+    }
+    x->last_dict_count = current_count;
 
     for (long i = 0; i < x->track_cache_count; i++) {
         t_weaver_track *tr = x->track_cache[i];
@@ -347,6 +355,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->audio_dict_name = _sym_nothing;
         x->last_scan_val = -1.0;
         x->update_pending = 0;
+        x->last_dict_count = -1;
         x->fifo_head = 0;
         x->fifo_tail = 0;
         x->dict_found = 0;
@@ -577,16 +586,16 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
     }
 
-    critical_enter(0);
     float *samples_dest = NULL;
     int retries_dest = 0;
     for (retries_dest = 0; retries_dest < 10; retries_dest++) {
+        critical_enter(0);
         samples_dest = buffer_locksamples(dest_buf);
         if (samples_dest) break;
+        critical_exit(0);
         systhread_sleep(1);
     }
     if (!samples_dest) {
-        critical_exit(0);
         weaver_log(x, "Error: could not lock destination buffer %s", s_bufname->s_name);
         return;
     }
@@ -625,7 +634,14 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             for (int retry = 0; retry < 10; retry++) {
                 samples_src[i] = buffer_locksamples(src_buf[i]);
                 if (samples_src[i]) break;
+                // Since we already hold critical lock for dest_buf, we must be careful.
+                // But we don't hold it yet! We exited after dest lock fail.
+                // Wait, if we are here, we CURRENTLY HOLD critical lock from the successful dest lock.
+                // We should release it if we are going to sleep.
+                critical_exit(0);
                 systhread_sleep(1);
+                critical_enter(0);
+                // After re-entering, we assume dest_buf is still valid because we have it locked.
             }
         } else {
             tr->src_found[i] = 0;
@@ -637,19 +653,26 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     }
 
     // Weave loop with crossfade and nearest-neighbor sample rate conversion
+    double ratio_src[2] = {0, 0};
+    double offset_frames_src[2] = {0, 0};
+    for (int i = 0; i < 2; i++) {
+        if (src_buf[i]) {
+            ratio_src[i] = sr_src[i] / sr_dest;
+            offset_frames_src[i] = tr->offset[i] * sr_src[i] / 1000.0;
+        }
+    }
+
     for (long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
         long f_abs = start_frame_abs + i_frame;
         long f = f_abs % n_frames_dest;
         if (f < 0) f += n_frames_dest;
 
-        double current_ms = (double)f_abs * 1000.0 / sr_dest;
         double max_abs[2] = {0.0, 0.0};
         long f_src[2] = {-1, -1};
 
         for (int i = 0; i < 2; i++) {
             if (samples_src[i]) {
-                double src_ms = current_ms + tr->offset[i];
-                f_src[i] = (long)round(src_ms * sr_src[i] / 1000.0);
+                f_src[i] = (long)round((double)f_abs * ratio_src[i] + offset_frames_src[i]);
                 if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
                     for (long c = 0; c < n_chans_src[i]; c++) {
                         double a = fabs((double)samples_src[i][f_src[i] * n_chans_src[i] + c]);
@@ -673,6 +696,14 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         tr->xf.last_control = tr->control;
         tr->xf.elapsed++;
         tr->busy = !finished;
+
+        // Optimization: if both fades are 0, we can skip
+        if (f1 <= 0.0 && f2 <= 0.0) {
+            for (long c = 0; c < n_chans_dest; c++) {
+                samples_dest[f * n_chans_dest + c] = 0.0f;
+            }
+            continue;
+        }
 
         // Apply fades to all destination channels
         for (long c = 0; c < n_chans_dest; c++) {
@@ -865,8 +896,10 @@ void weaver_audio_qtask(t_weaver *x) {
     weaver_check_attachments(x);
     x->cached_bar_len = weaver_get_bar_length(x);
     double bar_len = x->cached_bar_len;
+    int processed_count = 0;
+    const int max_bars_per_task = 4;
 
-    while (x->fifo_head != x->fifo_tail) {
+    while (x->fifo_head != x->fifo_tail && processed_count < max_bars_per_task) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;
 
@@ -925,6 +958,7 @@ void weaver_audio_qtask(t_weaver *x) {
 
                 if (still_missing) {
                     weaver_process_data(x, gensym("-"), track_num, hit.value, 0.0);
+                    processed_count++;
 
                     // If still missing, check the NEXT bar too to continue the silence if necessary
                     if (track_dict && bar_len > 0) {
@@ -987,6 +1021,7 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 weaver_process_data(x, palette, target_track, hit.value, offset);
+                processed_count++;
 
                 // Silence Cap logic: schedule silence if the next bar (in dictionary) is missing
                 // We use the absolute time for scheduling to maintain tracking across loops
@@ -1005,5 +1040,9 @@ void weaver_audio_qtask(t_weaver *x) {
             }
         }
         dictobj_release(dict);
+    }
+
+    if (x->fifo_head != x->fifo_tail) {
+        qelem_set(x->audio_qelem);
     }
 }
