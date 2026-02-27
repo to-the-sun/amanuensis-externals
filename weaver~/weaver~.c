@@ -45,6 +45,7 @@ typedef struct _weaver_track {
     long src_error_sent[2];
     double track_length;
     double last_track_scan;
+    double last_track_length;
 } t_weaver_track;
 
 typedef struct _weaver {
@@ -132,6 +133,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_error_sent[1] = 0;
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
+            tr->last_track_length = -1.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -177,7 +179,10 @@ void weaver_update_all_track_lengths(t_weaver *x) {
             }
             if (keys) dictionary_freekeys(track_dict, num_keys, keys);
             tr->track_length = max_bar + bar_len;
-            weaver_log(x, "Track %ld length updated to %.2f ms (max bar %.2f + bar length %.2f)", i + 1, tr->track_length, max_bar, bar_len);
+            if (tr->track_length != tr->last_track_length) {
+                weaver_log(x, "Track %ld length updated to %.2f ms (max bar %.2f + bar length %.2f)", i + 1, tr->track_length, max_bar, bar_len);
+                tr->last_track_length = tr->track_length;
+            }
         } else {
             tr->track_length = 1000.0; // Default if no data
         }
@@ -752,8 +757,10 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                     for (long v = 0; v <= floor_curr; v++) {
                         int nt = (x->fifo_tail + 1) % 4096;
                         if (nt != x->fifo_head) {
+                            char bstr[64];
+                            snprintf(bstr, 64, "%ld", v);
+                            x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
                             x->hit_bars[x->fifo_tail].bar.value = (double)v;
-                            x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
                             x->fifo_tail = nt;
@@ -765,11 +772,16 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         // Trigger bars from last scan to track end
                         long floor_last = (long)floor(tr->last_track_scan);
                         long floor_end = (long)floor(tr->track_length);
+                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                        if (tr_scan >= tr->last_track_scan) cycle_base -= tr->track_length; // It was the main ramp that looped
+
                         for (long v = floor_last + 1; v <= floor_end; v++) {
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
-                                x->hit_bars[x->fifo_tail].bar.value = (double)v;
-                                x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                char bstr[64];
+                                snprintf(bstr, 64, "%ld", v);
+                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                                x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)v;
                                 x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                 x->hit_bars[x->fifo_tail].track_id = t + 1;
                                 x->fifo_tail = nt;
@@ -778,8 +790,10 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         // Trigger bar 0
                         int next_tail = (x->fifo_tail + 1) % 4096;
                         if (next_tail != x->fifo_head) {
-                            x->hit_bars[x->fifo_tail].bar.value = 0.0;
-                            x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                            char bstr[64];
+                            snprintf(bstr, 64, "0");
+                            x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                            x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length;
                             x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
                             x->fifo_tail = next_tail;
@@ -789,8 +803,10 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         for (long v = 1; v <= floor_curr; v++) {
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
-                                x->hit_bars[x->fifo_tail].bar.value = (double)v;
-                                x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                char bstr[64];
+                                snprintf(bstr, 64, "%ld", v);
+                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                                x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length + (double)v;
                                 x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                 x->hit_bars[x->fifo_tail].track_id = t + 1;
                                 x->fifo_tail = nt;
@@ -804,8 +820,10 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                             for (long v = floor_last + 1; v <= floor_curr; v++) {
                                 int next_tail = (x->fifo_tail + 1) % 4096;
                                 if (next_tail != x->fifo_head) {
-                                    x->hit_bars[x->fifo_tail].bar.value = (double)v;
-                                    x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                    char bstr[64];
+                                    snprintf(bstr, 64, "%ld", v);
+                                    x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                                    x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length + (double)v;
                                     x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                     x->hit_bars[x->fifo_tail].track_id = t + 1;
                                     x->fifo_tail = next_tail;
@@ -853,9 +871,19 @@ void weaver_audio_qtask(t_weaver *x) {
             bar_key = gensym(bstr);
         }
 
+        t_weaver_track *tr = NULL;
+        if (target_track > 0 && target_track <= x->track_cache_count) {
+            tr = x->track_cache[target_track - 1];
+        }
+
+        // Use hit.value (absolute time) as the key for pending silence to ensure uniqueness across loops
+        char abs_str[64];
+        snprintf(abs_str, 64, "%ld", (long)hit.value);
+        t_symbol *abs_key = gensym(abs_str);
+
         // Check for scheduled silence caps at this millisecond
         t_hashtab *pending_tracks = NULL;
-        if (hashtab_lookup(x->pending_silence, bar_key, (t_object**)&pending_tracks) == MAX_ERR_NONE && pending_tracks) {
+        if (hashtab_lookup(x->pending_silence, abs_key, (t_object**)&pending_tracks) == MAX_ERR_NONE && pending_tracks) {
             long num_pt = 0;
             t_symbol **pt_keys = NULL;
             hashtab_getkeys(pending_tracks, &num_pt, &pt_keys);
@@ -905,7 +933,7 @@ void weaver_audio_qtask(t_weaver *x) {
             if (hashtab_getsize(pending_tracks) == 0) {
                 hashtab_clear(pending_tracks);
                 object_free(pending_tracks);
-                hashtab_delete(x->pending_silence, bar_key);
+                hashtab_delete(x->pending_silence, abs_key);
             }
         }
 
@@ -944,14 +972,19 @@ void weaver_audio_qtask(t_weaver *x) {
 
                 weaver_process_data(x, palette, target_track, hit.value, offset);
 
-                // Silence Cap logic: schedule silence if the next bar is missing from the dictionary
-                double next_bar_ms = hit.value + bar_len;
-                char next_bar_str[64];
-                snprintf(next_bar_str, 64, "%ld", (long)next_bar_ms);
-                t_symbol *next_bar_sym = gensym(next_bar_str);
+                // Silence Cap logic: schedule silence if the next bar (in dictionary) is missing
+                // We use the absolute time for scheduling to maintain tracking across loops
+                if (tr) {
+                    double next_bar_ms_abs = hit.value + bar_len;
+                    double next_bar_ms_rel = atof(bar_key->s_name) + bar_len;
+                    if (next_bar_ms_rel >= tr->track_length) next_bar_ms_rel = 0.0;
+                    char next_bar_rel_str[64];
+                    snprintf(next_bar_rel_str, 64, "%ld", (long)next_bar_ms_rel);
+                    t_symbol *next_bar_rel_sym = gensym(next_bar_rel_str);
 
-                if (!dictionary_hasentry(track_dict, next_bar_sym)) {
-                    weaver_schedule_silence(x, target_track, next_bar_ms);
+                    if (!dictionary_hasentry(track_dict, next_bar_rel_sym)) {
+                        weaver_schedule_silence(x, target_track, next_bar_ms_abs);
+                    }
                 }
             }
         }
