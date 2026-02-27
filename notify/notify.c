@@ -33,7 +33,7 @@ typedef struct _notify {
     long instance_id;
     void *q_work;
     long busy;
-    long async;
+    long defer;
     int job; // 1 = bang, 2 = fill
     t_buffer_ref *bar_ref;
     long bar_connected;
@@ -67,9 +67,9 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
-    CLASS_ATTR_LONG(c, "async", 0, t_notify, async);
-    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
-    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_LONG(c, "defer", 0, t_notify, defer);
+    CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
+    CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
     class_register(CLASS_BOX, c);
     notify_class = c;
@@ -87,7 +87,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->dict_name = gensym("");
         x->log = 0;
-        x->async = 0;
+        x->defer = 0;
         x->out_log = NULL;
         x->instance_id = 1000 + (rand() % 9000);
         x->q_work = qelem_new(x, (method)notify_qwork);
@@ -141,7 +141,7 @@ int note_compare(const void *a, const void *b) {
 }
 
 void notify_fill(t_notify *x) {
-    if (x->async) {
+    if (x->defer) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring fill");
             return;
@@ -436,7 +436,7 @@ void notify_do_fill(t_notify *x) {
 }
 
 void notify_bang(t_notify *x) {
-    if (x->async) {
+    if (x->defer) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring bang");
             return;
@@ -604,7 +604,7 @@ void notify_do_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Supports @async deferral.");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (fill) synthesized fill and sort. Supports @defer deferral.");
     } else {
         if (x->log) {
             switch (a) {
