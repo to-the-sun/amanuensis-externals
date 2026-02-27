@@ -606,7 +606,7 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 
     if (bar_length > 0) {
         if (bar_length != (t_atom_long)x->local_bar_length) {
-            crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
+            crucible_log(x, "bar_length changed to %lld", (long long)bar_length);
         }
         x->local_bar_length = (double)bar_length;
     }
@@ -622,7 +622,7 @@ void crucible_local_bar_length(t_crucible *x, double f) {
         x->local_bar_length = f;
     }
     if ((long long)x->local_bar_length != old_bar_length) {
-        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
+        crucible_log(x, "bar_length changed to %lld", (long long)x->local_bar_length);
     }
 }
 

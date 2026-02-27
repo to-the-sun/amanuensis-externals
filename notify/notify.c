@@ -193,7 +193,7 @@ void notify_do_fill(t_notify *x) {
 
     notify_log(x, "notify_do_fill: utilizing bar_length %.2f", bar_length);
     if (bar_length != x->bar_length) {
-        notify_log(x, "thread %ld: bar_length changed to %.2f", x->instance_id, bar_length);
+        notify_log(x, "bar_length changed to %.2f", bar_length);
         notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
         x->bar_length = bar_length;
     }
@@ -424,7 +424,7 @@ void notify_do_bang(t_notify *x) {
 
     notify_log(x, "notify_do_bang: utilizing bar_length %.2f", bar_length);
     if (bar_length != x->bar_length) {
-        notify_log(x, "thread %ld: bar_length changed to %.2f", x->instance_id, bar_length);
+        notify_log(x, "bar_length changed to %.2f", bar_length);
         notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
         x->bar_length = bar_length;
     }

@@ -262,7 +262,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     }
 
     if (bar_length != (long)x->local_bar_length) {
-        buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
+        buildspans_log(x, "bar_length changed to %ld", bar_length);
         buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
     }
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
@@ -1579,7 +1579,7 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
         x->local_bar_length = f;
     }
     if ((long)x->local_bar_length != old_bar_length) {
-        buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+        buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
