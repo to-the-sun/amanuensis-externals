@@ -33,11 +33,12 @@ typedef struct _notify {
     long instance_id;
     void *q_work;
     long busy;
-    long async;
+    long defer;
     int job; // 1 = bang, 2 = fill
     double fill_max_bar_all;
     t_buffer_ref *bar_ref;
     long bar_connected;
+    double bar_length;
 } t_notify;
 
 t_class *notify_class;
@@ -52,6 +53,7 @@ void notify_do_bang(t_notify *x);
 void notify_do_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 int note_compare(const void *a, const void *b);
+int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 
 void ext_main(void *r) {
@@ -68,9 +70,9 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
-    CLASS_ATTR_LONG(c, "async", 0, t_notify, async);
-    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
-    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_LONG(c, "defer", 0, t_notify, defer);
+    CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
+    CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
     class_register(CLASS_BOX, c);
     notify_class = c;
@@ -88,7 +90,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->dict_name = gensym("");
         x->log = 0;
-        x->async = 0;
+        x->defer = 0;
         x->out_log = NULL;
         x->instance_id = 1000 + (rand() % 9000);
         x->q_work = qelem_new(x, (method)notify_qwork);
@@ -96,6 +98,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->job = 0;
         x->bar_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         x->bar_connected = 0;
+        x->bar_length = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -141,9 +144,20 @@ int note_compare(const void *a, const void *b) {
     return 0;
 }
 
+int bar_key_compare(const void *a, const void *b) {
+    t_symbol *symA = *(t_symbol **)a;
+    t_symbol *symB = *(t_symbol **)b;
+    double valA = atof(symA->s_name);
+    double valB = atof(symB->s_name);
+
+    if (valA < valB) return -1;
+    if (valA > valB) return 1;
+    return 0;
+}
+
 void notify_int(t_notify *x, long n) {
     x->fill_max_bar_all = (double)n;
-    if (x->async) {
+    if (x->defer) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring fill");
             return;
@@ -189,6 +203,13 @@ void notify_do_fill(t_notify *x) {
         }
     }
 
+    notify_log(x, "notify_do_fill: utilizing bar_length %.2f", bar_length);
+    if (bar_length != x->bar_length) {
+        notify_log(x, "bar_length changed to %.2f", bar_length);
+        notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
+        x->bar_length = bar_length;
+    }
+
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -213,9 +234,9 @@ void notify_do_fill(t_notify *x) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-        for (long j = 0; j < num_bars; j++) {
-            double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts > max_bar_this) max_bar_this = bar_ts;
+        if (num_bars > 1) qsort(bar_keys, num_bars, sizeof(t_symbol *), bar_key_compare);
+        if (num_bars > 0) {
+            max_bar_this = atof(bar_keys[num_bars - 1]->s_name);
         }
         if (max_bar_this >= 0) max_bar_this += bar_length; // Incorporate bar_length
 
@@ -234,7 +255,7 @@ void notify_do_fill(t_notify *x) {
                         track_sym->s_name, synth_bar_ts, bar_ts, n, max_bar_this, synth_bar_ts, max_bar_this, max_bar_all);
 
                     if (synth_bar_ts <= max_bar_this) continue;
-                    if (synth_bar_ts >= max_bar_all) continue; // Non-inclusive filtering
+                    if (synth_bar_ts >= max_bar_all) break; // Non-inclusive filtering, sorted bars allow early exit
 
                     t_dictionary *bar_dict = NULL;
                     dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
@@ -361,7 +382,7 @@ void notify_do_fill(t_notify *x) {
 }
 
 void notify_bang(t_notify *x) {
-    if (x->async) {
+    if (x->defer) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring bang");
             return;
@@ -392,6 +413,34 @@ void notify_do_bang(t_notify *x) {
         return;
     }
 
+    double bar_length = 0;
+    t_buffer_obj *bar_obj = buffer_ref_getobject(x->bar_ref);
+    if (!bar_obj) {
+        buffer_ref_set(x->bar_ref, _sym_nothing);
+        buffer_ref_set(x->bar_ref, gensym("bar"));
+        x->bar_connected = 0;
+        bar_obj = buffer_ref_getobject(x->bar_ref); // Try again after kick
+    }
+
+    if (bar_obj) {
+        if (!x->bar_connected) {
+            x->bar_connected = 1;
+            notify_log(x, "Successfully connected to buffer 'bar'");
+        }
+        float *tab = buffer_locksamples(bar_obj);
+        if (tab) {
+            bar_length = tab[0];
+            buffer_unlocksamples(bar_obj);
+        }
+    }
+
+    notify_log(x, "notify_do_bang: utilizing bar_length %.2f", bar_length);
+    if (bar_length != x->bar_length) {
+        notify_log(x, "bar_length changed to %.2f", bar_length);
+        notify_log(x, "Retrieved bar length %.2f from buffer and cached it.", bar_length);
+        x->bar_length = bar_length;
+    }
+
     long num_tracks = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks, &track_keys);
@@ -410,6 +459,7 @@ void notify_do_bang(t_notify *x) {
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        if (num_bars > 1) qsort(bar_keys, num_bars, sizeof(t_symbol *), bar_key_compare);
 
         for (long j = 0; j < num_bars; j++) {
             t_symbol *bar_sym = bar_keys[j];
@@ -529,7 +579,7 @@ void notify_do_bang(t_notify *x) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @async deferral.");
+        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @defer deferral.");
     } else {
         if (x->log) {
             switch (a) {

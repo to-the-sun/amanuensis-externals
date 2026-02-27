@@ -168,7 +168,7 @@ typedef struct _buildspans {
     void *log_outlet;
     long log;
     long visualize;
-    long async;
+    long defer;
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
@@ -261,9 +261,11 @@ long buildspans_get_bar_length(t_buildspans *x) {
         return -1; // Value in buffer is not positive.
     }
 
+    if (bar_length != (long)x->local_bar_length) {
+        buildspans_log(x, "bar_length changed to %ld", bar_length);
+        buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
+    }
     x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, bar_length);
-    buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
 
     return bar_length;
 }
@@ -471,9 +473,9 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
-    CLASS_ATTR_LONG(c, "async", 0, t_buildspans, async);
-    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
-    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_LONG(c, "defer", 0, t_buildspans, defer);
+    CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
+    CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
     class_register(CLASS_BOX, c);
     buildspans_class = c;
@@ -490,7 +492,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_outlet = NULL;
         x->log = 0;
         x->visualize = 0;
-        x->async = 0;
+        x->defer = 0;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
@@ -536,7 +538,7 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)buildspans_clear, NULL, 0, NULL);
         return;
     }
@@ -564,12 +566,15 @@ void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         t_atom a;
         atom_setfloat(&a, f);
         defer_low(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
+
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
 
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
@@ -745,7 +750,7 @@ void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom 
 }
 
 void buildspans_track(t_buildspans *x, long n) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         t_atom a;
         atom_setlong(&a, n);
         defer_low(x, (method)buildspans_track_deferred, NULL, 1, &a);
@@ -760,7 +765,7 @@ void buildspans_track(t_buildspans *x, long n) {
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
@@ -801,12 +806,13 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 
 // Handler for list messages on the main inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)buildspans_list, s, argc, argv);
         return;
     }
 
     long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
     if (bar_length <= 0) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
         return;
@@ -970,6 +976,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
@@ -1370,10 +1377,13 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
 
 void buildspans_bang(t_buildspans *x) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)buildspans_bang, NULL, 0, NULL);
         return;
     }
+
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
 
     buildspans_log(x, "Flush triggered by bang for all palettes.");
 
@@ -1418,6 +1428,8 @@ void buildspans_bang(t_buildspans *x) {
 }
 
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_flush: utilizing bar_length %ld", bar_length);
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -1509,7 +1521,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear. Supports @async deferral.");
+                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear. Supports @defer deferral.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (float) Offset Timestamp");
@@ -1560,12 +1572,15 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
+    long old_bar_length = (long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
     }
-    buildspans_log(x, "thread %ld: bar_length changed to %ld", x->instance_id, (long)x->local_bar_length);
+    if ((long)x->local_bar_length != old_bar_length) {
+        buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
+    }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 

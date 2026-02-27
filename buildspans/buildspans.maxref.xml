@@ -104,8 +104,8 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
-		<attribute name="async" get="1" set="1" type="long" size="1">
-			<digest>Asynchronous Execution</digest>
+		<attribute name="defer" get="1" set="1" type="long" size="1">
+			<digest>Deferred Execution</digest>
 			<description>
 				When enabled (1), state-changing operations and span building logic are moved to the Main (UI) thread using deferral. This ensures that the heavy computational work involved in managing the transcript dictionary does not interfere with the precision of the Scheduler or audio processing.
 			</description>

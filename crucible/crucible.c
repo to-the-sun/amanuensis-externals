@@ -20,7 +20,7 @@ typedef struct _crucible {
     t_buffer_ref *buffer_ref;
     long log;
     long consume;
-    long async;
+    long defer;
     t_atom_long song_reach;
     double local_bar_length;
     long instance_id;
@@ -142,9 +142,9 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "consume", 0, "onoff", "Enable Consume");
     CLASS_ATTR_DEFAULT(c, "consume", 0, "0");
 
-    CLASS_ATTR_LONG(c, "async", 0, t_crucible, async);
-    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
-    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_LONG(c, "defer", 0, t_crucible, defer);
+    CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
+    CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
     class_register(CLASS_BOX, c);
     crucible_class = c;
@@ -162,7 +162,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         }
         x->log = 0;
         x->consume = 0;
-        x->async = 0;
+        x->defer = 0;
         x->song_reach = 0;
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
@@ -202,6 +202,8 @@ void crucible_free(t_crucible *x) {
 }
 
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict) {
+    t_atom_long bar_length = crucible_get_bar_length(x);
+    crucible_log(x, "crucible_output_bar_data: utilizing bar_length %lld", (long long)bar_length);
     if (!bar_dict) return;
 
     t_atom *span_atoms = NULL;
@@ -294,6 +296,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
+    t_atom_long bar_length = crucible_get_bar_length(x);
+    crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->incumbent_dict_name->s_name);
@@ -601,20 +605,25 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
     }
 
     if (bar_length > 0) {
+        if (bar_length != (t_atom_long)x->local_bar_length) {
+            crucible_log(x, "bar_length changed to %lld", (long long)bar_length);
+        }
         x->local_bar_length = (double)bar_length;
-        crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)bar_length);
     }
 
     return bar_length;
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
+    long long old_bar_length = (long long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
     } else {
         x->local_bar_length = f;
     }
-    crucible_log(x, "thread %ld: bar_length changed to %lld", x->instance_id, (long long)x->local_bar_length);
+    if ((long long)x->local_bar_length != old_bar_length) {
+        crucible_log(x, "bar_length changed to %lld", (long long)x->local_bar_length);
+    }
 }
 
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
@@ -662,7 +671,7 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->async && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)crucible_anything, s, argc, argv);
         return;
     }
@@ -765,7 +774,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name. Supports @async deferral."); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name. Supports @defer deferral."); break;
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
