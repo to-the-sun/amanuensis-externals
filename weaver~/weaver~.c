@@ -68,6 +68,7 @@ typedef struct _weaver {
     t_weaver_track *track_cache[256];
     long track_cache_count;
     long update_pending;
+    double cached_bar_len;
     t_hashtab *pending_silence;
     long bar_found;
     long bar_error_sent;
@@ -179,7 +180,7 @@ void weaver_update_all_track_lengths(t_weaver *x) {
             }
             if (keys) dictionary_freekeys(track_dict, num_keys, keys);
             tr->track_length = max_bar + bar_len;
-            if (tr->track_length != tr->last_track_length) {
+            if (fabs(tr->track_length - tr->last_track_length) > 0.001) {
                 weaver_log(x, "Track %ld length updated to %.2f ms (max bar %.2f + bar length %.2f)", i + 1, tr->track_length, max_bar, bar_len);
                 tr->last_track_length = tr->track_length;
             }
@@ -406,6 +407,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->pending_silence = hashtab_new(0);
 
         x->track_states = hashtab_new(0);
+        x->cached_bar_len = weaver_get_bar_length(x);
 
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)weaver_audio_qtask);
@@ -558,23 +560,21 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     // 2. Crossfade Trigger
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
-    if (tr->busy) {
-        weaver_log(x, "Track %lld: busy at %.2f ms, skipping transition to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
+    double rel_offset = offset_ms - bar_ms;
+
+    int active = (int)round(tr->control);
+    if (palette == tr->palette[active] && rel_offset == tr->offset[active]) {
+        // Same source, no action needed
     } else {
-        int active = (int)round(tr->control);
-        if (palette == tr->palette[active] && offset_ms == tr->offset[active]) {
-            // Same source, no action needed
-        } else {
-            int other = 1 - active;
-            tr->palette[other] = palette;
-            tr->offset[other] = offset_ms;
-            tr->src_found[other] = 0;
-            tr->src_error_sent[other] = 0;
-            tr->control = (double)other;
-            // Set direction for the crossfade module to trigger on the first sample
-            tr->xf.direction = tr->control - tr->xf.last_control;
-            weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
-        }
+        int other = 1 - active;
+        tr->palette[other] = palette;
+        tr->offset[other] = rel_offset;
+        tr->src_found[other] = 0;
+        tr->src_error_sent[other] = 0;
+        tr->control = (double)other;
+        // Set direction for the crossfade module to trigger on the first sample
+        tr->xf.direction = tr->control - tr->xf.last_control;
+        weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
     }
 
     critical_enter(0);
@@ -745,22 +745,27 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 }
             }
 
+            double bar_len = x->cached_bar_len;
+
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
-                if (!tr) continue;
+                if (!tr || bar_len <= 0) continue;
 
                 double tr_scan = fmod(current_scan, tr->track_length);
 
                 if (tr->last_track_scan == -1.0) {
                     // Trigger initial bars up to current position
-                    long floor_curr = (long)floor(tr_scan);
-                    for (long v = 0; v <= floor_curr; v++) {
+                    long floor_curr = (long)floor(tr_scan / bar_len);
+                    for (long v_step = 0; v_step <= floor_curr; v_step++) {
+                        double v = (double)v_step * bar_len;
+                        if (v >= tr->track_length) break;
+
                         int nt = (x->fifo_tail + 1) % 4096;
                         if (nt != x->fifo_head) {
                             char bstr[64];
-                            snprintf(bstr, 64, "%ld", v);
+                            snprintf(bstr, 64, "%ld", (long)v);
                             x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                            x->hit_bars[x->fifo_tail].bar.value = (double)v;
+                            x->hit_bars[x->fifo_tail].bar.value = v;
                             x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
                             x->fifo_tail = nt;
@@ -769,61 +774,71 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 } else {
                     if (tr_scan < tr->last_track_scan || current_scan < last_scan) {
                         // Track wrapped around OR main ramp wrapped around
-                        // Trigger bars from last scan to track end
-                        long floor_last = (long)floor(tr->last_track_scan);
-                        long floor_end = (long)floor(tr->track_length);
-                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                        if (tr_scan >= tr->last_track_scan) cycle_base -= tr->track_length; // It was the main ramp that looped
+                        // 1. Trigger remaining bars in the OLD track cycle
+                        long floor_last = (long)floor(tr->last_track_scan / bar_len);
+                        long floor_end = (long)floor((tr->track_length - 0.001) / bar_len);
+                        double old_cycle_base = floor(last_scan / tr->track_length) * tr->track_length;
 
-                        for (long v = floor_last + 1; v <= floor_end; v++) {
+                        for (long v_step = floor_last + 1; v_step <= floor_end; v_step++) {
+                            double v = (double)v_step * bar_len;
+                            if (v >= tr->track_length) break;
+
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
                                 char bstr[64];
-                                snprintf(bstr, 64, "%ld", v);
+                                snprintf(bstr, 64, "%ld", (long)v);
                                 x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)v;
+                                x->hit_bars[x->fifo_tail].bar.value = old_cycle_base + v;
                                 x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                 x->hit_bars[x->fifo_tail].track_id = t + 1;
                                 x->fifo_tail = nt;
                             }
                         }
-                        // Trigger bar 0
-                        int next_tail = (x->fifo_tail + 1) % 4096;
-                        if (next_tail != x->fifo_head) {
+                        // 2. Trigger bar 0 in the NEW track cycle
+                        double new_cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                        int nt_zero = (x->fifo_tail + 1) % 4096;
+                        if (nt_zero != x->fifo_head) {
                             char bstr[64];
                             snprintf(bstr, 64, "0");
                             x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                            x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length;
+                            x->hit_bars[x->fifo_tail].bar.value = new_cycle_base;
                             x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
-                            x->fifo_tail = next_tail;
+                            x->fifo_tail = nt_zero;
                         }
-                        // Trigger bars from 1 to current position
-                        long floor_curr = (long)floor(tr_scan);
-                        for (long v = 1; v <= floor_curr; v++) {
+                        // 3. Trigger bars from 1.0 to current position in the NEW track cycle
+                        long floor_curr = (long)floor(tr_scan / bar_len);
+                        for (long v_step = 1; v_step <= floor_curr; v_step++) {
+                            double v = (double)v_step * bar_len;
+                            if (v >= tr->track_length) break;
+
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
                                 char bstr[64];
-                                snprintf(bstr, 64, "%ld", v);
+                                snprintf(bstr, 64, "%ld", (long)v);
                                 x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length + (double)v;
+                                x->hit_bars[x->fifo_tail].bar.value = new_cycle_base + v;
                                 x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                 x->hit_bars[x->fifo_tail].track_id = t + 1;
                                 x->fifo_tail = nt;
                             }
                         }
                     } else if (tr_scan > tr->last_track_scan) {
-                        long floor_last = (long)floor(tr->last_track_scan);
-                        long floor_curr = (long)floor(tr_scan);
+                        long floor_last = (long)floor(tr->last_track_scan / bar_len);
+                        long floor_curr = (long)floor(tr_scan / bar_len);
 
                         if (floor_curr > floor_last) {
-                            for (long v = floor_last + 1; v <= floor_curr; v++) {
+                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                            for (long v_step = floor_last + 1; v_step <= floor_curr; v_step++) {
+                                double v = (double)v_step * bar_len;
+                                if (v >= tr->track_length) break;
+
                                 int next_tail = (x->fifo_tail + 1) % 4096;
                                 if (next_tail != x->fifo_head) {
                                     char bstr[64];
-                                    snprintf(bstr, 64, "%ld", v);
+                                    snprintf(bstr, 64, "%ld", (long)v);
                                     x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                    x->hit_bars[x->fifo_tail].bar.value = floor(current_scan / tr->track_length) * tr->track_length + (double)v;
+                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + v;
                                     x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                     x->hit_bars[x->fifo_tail].track_id = t + 1;
                                     x->fifo_tail = next_tail;
@@ -848,7 +863,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
 void weaver_audio_qtask(t_weaver *x) {
     weaver_check_attachments(x);
-    double bar_len = weaver_get_bar_length(x);
+    x->cached_bar_len = weaver_get_bar_length(x);
+    double bar_len = x->cached_bar_len;
 
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
