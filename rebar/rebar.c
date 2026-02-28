@@ -463,7 +463,6 @@ void ext_main(void *r) {
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
 
-    class_addmethod(c, (method)rebar_bang, "bang", 0);
     class_addmethod(c, (method)rebar_int, "int", A_LONG, 0);
     class_addmethod(c, (method)rebar_assist, "assist", A_CANT, 0);
 
@@ -560,17 +559,15 @@ void rebar_free(t_rebar *x) {
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
 }
 
-void rebar_bang(t_rebar *x) {
-    rebar_notify_bang(x->notify_inst);
-}
-
 void rebar_int(t_rebar *x, long n) {
-    rebar_notify_int(x->notify_inst, n);
+    rebar_buildspans_local_bar_length(x->buildspans_inst, (double)n);
+    rebar_crucible_local_bar_length(x->crucible_inst, (double)n);
+    rebar_notify_bang(x->notify_inst);
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) dump transcript, (int) fill transcript to reach. Coordinates buildspans and crucible.");
+        sprintf(s, "Inlet 1: (int) Set bar length and trigger coordinated dump.");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data List [palette, track, bar, offset] and Reach Lists from Crucible"); break;
