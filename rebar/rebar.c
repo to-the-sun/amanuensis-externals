@@ -593,7 +593,7 @@ void rebar_int(t_rebar *x, long n) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Set bar length and trigger coordinated dump.");
+    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data List [palette, track, bar, offset] and Reach Lists from Crucible"); break;

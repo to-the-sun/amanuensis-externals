@@ -1,16 +1,22 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="rebar" module="max" category="Utility">
-	<digest>A high-level coordinator for transcript processing and span comparison</digest>
+	<digest>A high-level coordinator for transcript processing and span comparison with dictionary isolation</digest>
 	<description>
 		The `rebar` object is a composite utility that encapsulates and coordinates the `notify`, `buildspans`, and `crucible` modules into a single, tightly-coupled workflow. It is designed to process a transcript dictionary, organize its notes into rated bars and spans, and selectively merge them into a destination "incumbent" dictionary based on their quality.
 
+		To ensure data integrity, `rebar` utilizes an internal **dictionary isolation** mechanism. All processing occurs within a private temporary dictionary, and results are only committed back to the user-specified dictionary upon completion of the entire pipeline.
+
+		**Execution Model:**
+		- The `rebar` object itself always operates **synchronously** on the calling thread.
+		- If the `@defer` attribute is enabled, the internal sub-modules (`notify`, `buildspans`, `crucible`) will operate in a deferred, asynchronous, or multi-threaded fashion, but the `rebar` management logic (triggering, copying, and final committing of data) remains synchronous.
+
 		Upon receiving an integer (bar length) in its first inlet, `rebar` performs the following coordinated steps:
-		1. Sets the local bar length for its internal `buildspans` and `crucible` modules.
-		2. Triggers a dump of the specified transcript dictionary (via the internal `notify` module).
-		3. Routes the resulting note stream through `buildspans` to aggregate bars and calculate span ratings.
-		4. Routes completed spans into `crucible`, where they are compared against the incumbent dictionary.
-		5. Merges winning (higher-rated) spans into the incumbent dictionary and outputs the results.
+		1. Synchronously copies the contents of the user-specified dictionary to an internal temporary dictionary.
+		2. Sets the local bar length for its internal modules.
+		3. Triggers a dump of the temporary dictionary (via the internal `notify` module).
+		4. Routes the resulting note stream through `buildspans` and `crucible` using the temporary dictionary as the source and destination.
+		5. Once the pipeline has finished, synchronously copies the updated contents of the temporary dictionary back to the user dictionary, overwriting its previous state.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -22,9 +28,9 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="int">
-			<digest>Set bar length and trigger coordinated processing</digest>
+			<digest>Set bar length and trigger coordinated isolated processing</digest>
 			<description>
-				Accepts an integer representing the bar length (in milliseconds). This value is passed to the internal `buildspans` and `crucible` modules, followed immediately by a command to dump and process the transcript dictionary.
+				Accepts an integer representing the bar length (in milliseconds). This synchronously initiates the dictionary isolation workflow: copying the user dictionary to temporary memory, setting sub-module bar lengths, and triggering the coordinated dump and comparison sequence.
 			</description>
 		</inlet>
 	</inletlist>
@@ -52,15 +58,15 @@
 	<!--ARGUMENTS-->
 	<objarglist>
 		<objarg name="dictionary-name" type="symbol" optional="0">
-			<digest>The name of the Max dictionary to be used for both input (transcript) and output (incumbent)</digest>
-			<description>The object will attempt to bind its internal modules to a registered dictionary with this name. This dictionary serves as the source for the `notify` module and the destination (incumbent) for the `crucible` module.</description>
+			<digest>The name of the Max dictionary to be used for isolated processing</digest>
+			<description>This dictionary serves as the source and destination for the coordinated workflow. Contents are copied to temporary memory during processing to ensure isolation.</description>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="int">
-			<digest>Trigger coordinated processing pipeline</digest>
-			<description>Sets the internal bar length to the provided value and initiates the sequence: Dump Transcript -> Build Spans -> Compare/Merge into Incumbent.</description>
+			<digest>Trigger coordinated isolated processing pipeline</digest>
+			<description>Initiates the sequence: Copy User -> Temp -> Coordinated Processing -> Commit back to User.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
@@ -75,9 +81,9 @@
 			</attributelist>
 		</attribute>
 		<attribute name="defer" get="1" set="1" type="long" size="1">
-			<digest>Deferred Execution</digest>
+			<digest>Deferred Execution for Sub-Modules</digest>
 			<description>
-				When enabled (1), moves the processing to the Main (UI) thread for all internal modules, preventing timing jitter in the high-priority threads.
+				When enabled (1), internal sub-module processing is moved to the Main (UI) thread. The `rebar` wrapper itself remains synchronous regardless of this setting.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
@@ -86,7 +92,7 @@
 		<attribute name="consume" get="1" set="1" type="long" size="1">
 			<digest>Enable Deep Delete (Crucible)</digest>
 			<description>
-				When enabled (1), enables the 'deep delete' logic in the internal `crucible` module, ensuring that defeated spans are thoroughly removed from the incumbent dictionary.
+				When enabled (1), enables the 'deep delete' logic in the internal `crucible` module for thorough removal of defeated spans.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
