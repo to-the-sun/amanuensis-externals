@@ -505,14 +505,9 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->incumbent_dict_name = gensym("");
         x->transcript_dict_name = gensym("");
 
-        int arg_idx = 0;
-        if (arg_idx < argc && atom_gettype(argv + arg_idx) == A_SYM && strncmp(atom_getsym(argv + arg_idx)->s_name, "@", 1) != 0) {
-            x->transcript_dict_name = atom_getsym(argv + arg_idx);
-            arg_idx++;
-        }
-        if (arg_idx < argc && atom_gettype(argv + arg_idx) == A_SYM && strncmp(atom_getsym(argv + arg_idx)->s_name, "@", 1) != 0) {
-            x->incumbent_dict_name = atom_getsym(argv + arg_idx);
-            arg_idx++;
+        if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
+            x->transcript_dict_name = atom_getsym(argv);
+            x->incumbent_dict_name = atom_getsym(argv);
         }
 
         attr_args_process(x, argc, argv);
