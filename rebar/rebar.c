@@ -32,8 +32,8 @@ typedef struct _rebar {
     long consume;
     long visualize;
 
-    t_symbol *incumbent_dict_name;
-    t_symbol *transcript_dict_name;
+    t_symbol *user_dict_name;
+    t_symbol *tmp_dict_name;
 } t_rebar;
 
 static t_class *rebar_class;
@@ -43,18 +43,19 @@ static t_critical g_rebar_crit;
 static t_rebar *g_instantiating_rebar = NULL;
 static int g_current_mod_hint = 0; // 0=notify, 1=buildspans, 2=crucible
 
-// Capture real Max SDK functions before we shadow them
-typedef void *(*t_outlet_new_fn)(void *x, char *classname);
-typedef void *(*t_bangout_fn)(void *x);
-typedef void *(*t_intout_fn)(void *x);
-typedef void *(*t_floatout_fn)(void *x);
-typedef void *(*t_listout_fn)(void *x);
+// Capture real Max SDK functions
+typedef void *(*t_outlet_new_fn)(t_object *x, char *classname);
+typedef void *(*t_bangout_fn)(t_object *x);
+typedef void *(*t_intout_fn)(t_object *x);
+typedef void *(*t_floatout_fn)(t_object *x);
+typedef void *(*t_listout_fn)(t_object *x);
 
-static t_outlet_new_fn sdk_outlet_new = (t_outlet_new_fn)outlet_new;
-static t_bangout_fn sdk_bangout = (t_bangout_fn)bangout;
-static t_intout_fn sdk_intout = (t_intout_fn)intout;
-static t_floatout_fn sdk_floatout = (t_floatout_fn)floatout;
-static t_listout_fn sdk_listout = (t_listout_fn)listout;
+// These will be initialized in ext_main
+static t_outlet_new_fn sdk_outlet_new = NULL;
+static t_bangout_fn sdk_bangout = NULL;
+static t_intout_fn sdk_intout = NULL;
+static t_floatout_fn sdk_floatout = NULL;
+static t_listout_fn sdk_listout = NULL;
 
 // --- Virtual Outlet Management ---
 
@@ -194,7 +195,11 @@ void rebar_intercept_outlet_bang(void *o);
 
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...);
 
-// --- Symbol Renaming to avoid collisions ---
+// --- Coordination Prototypes ---
+void rebar_request_copy_back(t_rebar *x);
+void rebar_do_copy_back(t_rebar *x);
+
+// --- Symbol Renaming ---
 
 #define notify_class rebar_notify_class
 #define note_compare rebar_note_compare
@@ -225,7 +230,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
 #define buildspans_do_anything rebar_buildspans_do_anything
 #define buildspans_anything_deferred rebar_buildspans_anything_deferred
 #define buildspans_assist rebar_buildspans_assist
-#define buildspans_bang rebar_buildspans_bang
+#define buildspans_bang module_buildspans_bang
 #define buildspans_flush rebar_buildspans_flush
 #define buildspans_end_track_span rebar_buildspans_end_track_span
 #define buildspans_prune_span rebar_buildspans_prune_span
@@ -264,7 +269,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
 #define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
 #define crucible_span_has_loser rebar_crucible_span_has_loser
 
-// --- Redefine Max API for modules ---
+// --- Redefine Max API ---
 
 #define outlet_new(x, c) rebar_intercept_outlet_new(x, c)
 #define bangout(x) rebar_intercept_bangout(x)
@@ -301,11 +306,10 @@ void *rebar_intercept_outlet_new(void *x, const char *classname) {
     t_rebar *rebar = g_instantiating_rebar;
     critical_exit(g_rebar_crit);
 
-    if (!rebar) return sdk_outlet_new(x, (char *)classname);
-    if (x == (void *)rebar) return sdk_outlet_new(x, (char *)classname);
+    if (!rebar) return sdk_outlet_new((t_object *)x, (char *)classname);
+    if (x == (void *)rebar) return sdk_outlet_new((t_object *)x, (char *)classname);
 
-    t_mod_type type = (t_mod_type)g_current_mod_hint;
-    return register_virt_outlet(x, type);
+    return register_virt_outlet(x, (t_mod_type)g_current_mod_hint);
 }
 
 void *rebar_intercept_bangout(void *x) { return rebar_intercept_outlet_new(x, NULL); }
@@ -316,42 +320,39 @@ void *rebar_intercept_listout(void *x) { return rebar_intercept_outlet_new(x, NU
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...) {
     char private_name[256];
     snprintf(private_name, 256, "rebar_%s_internal", name);
-
-    // We assume most class_new calls in these modules use standard arguments.
-    // Redefining class_new is mostly to avoid global name collisions for the internal classes.
     #undef class_new
     t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, type, 0);
     #define class_new rebar_intercept_class_new
     return c;
 }
 
+// Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
+void rebar_buildspans_bang(t_buildspans *x) {
+    module_buildspans_bang(x);
+    // When module_buildspans_bang returns, its immediate work (including synchronous crucible) is done.
+    // If it deferred itself, the recursive call to module_buildspans_bang will also land here.
+    if (systhread_ismainthread()) {
+        t_rebar *rebar = get_rebar(x);
+        if (rebar) rebar_request_copy_back(rebar);
+    }
+}
+
 void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) {
-        outlet_anything(o, s, ac, av);
-        return;
-    }
+    if (!vo) { outlet_anything(o, s, ac, av); return; }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 3) {
-            rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
-        } else if (vo->index == 4) {
-            if (x->out_log) outlet_anything(x->out_log, s, ac, av);
-        }
+        if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
+        else if (vo->index == 4 && x->out_log) outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == 2) {
-            rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        } else if (vo->index == 3) {
-             if (x->out_log) outlet_anything(x->out_log, s, ac, av);
-        }
+        if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        else if (vo->index == 3 && x->out_log) outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0) outlet_anything(x->out_data, s, ac, av);
         else if (vo->index == 1) outlet_anything(x->out_fill, s, ac, av);
-        else if (vo->index == 3) {
-             if (x->out_log) outlet_anything(x->out_log, s, ac, av);
-        }
+        else if (vo->index == 3 && x->out_log) outlet_anything(x->out_log, s, ac, av);
     }
 }
 
@@ -362,9 +363,7 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 0) {
-            rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
-        }
+        if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0) outlet_list(x->out_data, s, ac, av);
     }
@@ -377,9 +376,7 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 2) {
-            rebar_buildspans_track(x->buildspans_inst, (long)n);
-        }
+        if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 2) outlet_int(x->out_reach, n);
     }
@@ -392,9 +389,7 @@ void rebar_intercept_outlet_float(void *o, double f) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 1) {
-            rebar_buildspans_offset(x->buildspans_inst, f);
-        }
+        if (vo->index == 1) rebar_buildspans_offset(x->buildspans_inst, f);
     }
 }
 
@@ -405,9 +400,7 @@ void rebar_intercept_outlet_bang(void *o) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 0) {
-            rebar_buildspans_bang(x->buildspans_inst);
-        }
+        if (vo->index == 0) rebar_buildspans_bang(x->buildspans_inst);
     }
 }
 
@@ -415,7 +408,6 @@ void rebar_intercept_outlet_bang(void *o) {
 
 void *rebar_new(t_symbol *s, long argc, t_atom *argv);
 void rebar_free(t_rebar *x);
-void rebar_bang(t_rebar *x);
 void rebar_int(t_rebar *x, long n);
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s);
 
@@ -459,6 +451,12 @@ void ext_main(void *r) {
     critical_new(&g_rebar_crit);
     common_symbols_init();
 
+    sdk_outlet_new = (t_outlet_new_fn)object_getmethod(gensym("outlet_new")->s_thing, gensym("outlet_new"));
+    sdk_bangout = (t_bangout_fn)object_getmethod(gensym("bangout")->s_thing, gensym("bangout"));
+    sdk_intout = (t_intout_fn)object_getmethod(gensym("intout")->s_thing, gensym("intout"));
+    sdk_floatout = (t_floatout_fn)object_getmethod(gensym("floatout")->s_thing, gensym("floatout"));
+    sdk_listout = (t_listout_fn)object_getmethod(gensym("listout")->s_thing, gensym("listout"));
+
     #undef class_new
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
@@ -501,12 +499,17 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->defer = 0;
         x->consume = 0;
         x->visualize = 0;
-        x->incumbent_dict_name = gensym("");
-        x->transcript_dict_name = gensym("");
+        x->user_dict_name = gensym("");
+        x->tmp_dict_name = gensym("");
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
-            x->transcript_dict_name = atom_getsym(argv);
-            x->incumbent_dict_name = atom_getsym(argv);
+            x->user_dict_name = atom_getsym(argv);
+            char tmp_name[256];
+            snprintf(tmp_name, 256, "_rebar_tmp_%p", x);
+            x->tmp_dict_name = gensym(tmp_name);
+            t_dictionary *d = dictionary_new();
+            dictobj_register(d, &x->tmp_dict_name);
+            object_release((t_object *)d);
         }
 
         attr_args_process(x, argc, argv);
@@ -520,20 +523,18 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
 
-        t_atom notify_args[1];
-        atom_setsym(notify_args, x->transcript_dict_name);
-        g_current_mod_hint = 0;
-        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 1, notify_args);
+        t_atom args[1];
+        atom_setsym(args, x->tmp_dict_name);
+        g_current_mod_hint = (int)MOD_NOTIFY;
+        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 1, args);
         register_module(x->notify_inst, x);
 
-        g_current_mod_hint = 1;
+        g_current_mod_hint = (int)MOD_BUILDSPANS;
         x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 0, NULL);
         register_module(x->buildspans_inst, x);
 
-        t_atom crucible_args[1];
-        atom_setsym(crucible_args, x->incumbent_dict_name);
-        g_current_mod_hint = 2;
-        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, crucible_args);
+        g_current_mod_hint = (int)MOD_CRUCIBLE;
+        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
         register_module(x->crucible_inst, x);
 
         g_instantiating_rebar = NULL;
@@ -541,11 +542,9 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->notify_inst->log = x->log;
         x->notify_inst->defer = x->defer;
-
         x->buildspans_inst->log = x->log;
         x->buildspans_inst->defer = x->defer;
         x->buildspans_inst->visualize = x->visualize;
-
         x->crucible_inst->log = x->log;
         x->crucible_inst->defer = x->defer;
         x->crucible_inst->consume = x->consume;
@@ -557,18 +556,45 @@ void rebar_free(t_rebar *x) {
     if (x->notify_inst) { unregister_module(x->notify_inst); unregister_outlets(x->notify_inst); rebar_notify_free(x->notify_inst); }
     if (x->buildspans_inst) { unregister_module(x->buildspans_inst); unregister_outlets(x->buildspans_inst); rebar_buildspans_free(x->buildspans_inst); }
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
+
+    t_dictionary *d = dictobj_findregistered_retain(x->tmp_dict_name);
+    if (d) { dictobj_unregister(d); object_release((t_object *)d); }
+}
+
+void rebar_request_copy_back(t_rebar *x) {
+    if (x->defer) defer_low(x, (method)rebar_do_copy_back, NULL, 0, NULL);
+    else rebar_do_copy_back(x);
+}
+
+void rebar_do_copy_back(t_rebar *x) {
+    t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
+    t_dictionary *tmp_dict = dictobj_findregistered_retain(x->tmp_dict_name);
+    if (user_dict && tmp_dict) {
+        dictionary_clear(user_dict);
+        dictionary_copyentries(tmp_dict, user_dict, NULL);
+    }
+    if (user_dict) object_release((t_object *)user_dict);
+    if (tmp_dict) object_release((t_object *)tmp_dict);
 }
 
 void rebar_int(t_rebar *x, long n) {
+    t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
+    t_dictionary *tmp_dict = dictobj_findregistered_retain(x->tmp_dict_name);
+    if (user_dict && tmp_dict) {
+        dictionary_clear(tmp_dict);
+        dictionary_copyentries(user_dict, tmp_dict, NULL);
+    }
+    if (user_dict) object_release((t_object *)user_dict);
+    if (tmp_dict) object_release((t_object *)tmp_dict);
+
     rebar_buildspans_local_bar_length(x->buildspans_inst, (double)n);
     rebar_crucible_local_bar_length(x->crucible_inst, (double)n);
     rebar_notify_bang(x->notify_inst);
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (int) Set bar length and trigger coordinated dump.");
-    } else {
+    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Set bar length and trigger coordinated dump.");
+    else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data List [palette, track, bar, offset] and Reach Lists from Crucible"); break;
             case 1: sprintf(s, "Outlet 2: Fill bang from Crucible"); break;
