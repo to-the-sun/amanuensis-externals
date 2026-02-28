@@ -583,8 +583,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 
         weaver_log(x, "Track %lld: Main ramp loop jump to %.2f ms (%s@%.2f)", track, bar_ms, palette->s_name, offset_ms);
     } else {
-        int change = (palette != tr->palette[active] || rel_offset != tr->offset[active]);
-        if (is_bar_0 || change) {
+        t_symbol *s_silence = gensym("-");
+        int is_silence = (palette == s_silence || palette == _sym_nothing);
+
+        int change = (palette != tr->palette[active] || (rel_offset != tr->offset[active] && !is_silence));
+
+        if ((is_bar_0 && !is_silence) || change) {
             int other = 1 - active;
             tr->palette[other] = palette;
             tr->offset[other] = rel_offset;
