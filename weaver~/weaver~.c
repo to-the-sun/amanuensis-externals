@@ -755,18 +755,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
         for (int i = 0; i < sampleframes; i++) {
             double current_scan = in[i] + 9.0; // 9ms lookahead
 
-            if (last_scan != -1.0 && current_scan < last_scan) {
-                // Main ramp wrapped around: Update track lengths
-                if (!x->update_pending) {
-                    int next_tail = (x->fifo_tail + 1) % 4096;
-                    if (next_tail != x->fifo_head) {
-                        x->hit_bars[x->fifo_tail].type = TYPE_UPDATE_LENGTHS;
-                        x->fifo_tail = next_tail;
-                        x->update_pending = 1;
-                    }
-                }
-            }
-
             double bar_len = x->cached_bar_len;
 
             for (long t = 0; t < x->track_cache_count; t++) {
@@ -842,6 +830,18 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                     }
                 }
                 tr->last_track_scan = tr_scan;
+            }
+
+            if (last_scan != -1.0 && current_scan < last_scan) {
+                // Main ramp wrapped around: Update track lengths
+                if (!x->update_pending) {
+                    int next_tail = (x->fifo_tail + 1) % 4096;
+                    if (next_tail != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].type = TYPE_UPDATE_LENGTHS;
+                        x->fifo_tail = next_tail;
+                        x->update_pending = 1;
+                    }
+                }
             }
 
             last_scan = current_scan;
