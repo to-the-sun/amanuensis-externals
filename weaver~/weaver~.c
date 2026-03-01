@@ -989,7 +989,19 @@ void weaver_audio_qtask(t_weaver *x) {
                     offset = atom_getfloat(&o_atom);
                 }
 
-                weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, is_bar_0);
+                t_atomarray *span_aa = NULL;
+                t_atom s_atom;
+                double current_bar_ts = atof(bar_key->s_name);
+                double span_start = current_bar_ts;
+                if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                    if (atomarray_getindex(span_aa, 0, &s_atom) == MAX_ERR_NONE) span_start = atom_getfloat(&s_atom);
+                } else if (dictionary_getatom(bar_dict, gensym("span"), &s_atom) == MAX_ERR_NONE) {
+                    span_start = atom_getfloat(&s_atom);
+                }
+
+                double corrected_offset = offset + (current_bar_ts - span_start);
+
+                weaver_process_data(x, palette, target_track, hit.value, corrected_offset, no_crossfade, is_bar_0);
 
                 // Silence Cap logic: schedule silence if the next bar (in dictionary) is missing
                 // We use the absolute time for scheduling to maintain tracking across loops
