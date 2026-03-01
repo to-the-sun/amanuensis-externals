@@ -23,6 +23,7 @@ typedef struct _bar_cache {
 #define TYPE_DATA 0
 #define TYPE_SWEEP 1
 #define TYPE_UPDATE_LENGTHS 2
+#define TYPE_LOOP 3
 
 typedef struct _fifo_entry {
     t_bar_cache bar;
@@ -54,7 +55,7 @@ typedef struct _weaver {
     t_symbol *poly_prefix;
     long log;
     void *log_outlet;
-    void *signal_outlet;
+    void *loop_outlet;
     t_buffer_ref *bar_buffer_ref;
     t_buffer_ref *track1_ref;
 
@@ -389,7 +390,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         } else {
             x->log_outlet = NULL;
         }
-        x->signal_outlet = outlet_new((t_object *)x, "signal");
+        x->loop_outlet = outlet_new((t_object *)x, NULL);
 
         if (x->poly_prefix != _sym_nothing) {
             char t1name[256];
@@ -466,12 +467,12 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     } else { // ASSIST_OUTLET
         if (x->log) {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
+                case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
                 case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
             }
         } else {
             switch (a) {
-                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
+                case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
             }
         }
     }
@@ -748,14 +749,11 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
-    double *out = outs[0];
     double last_scan = x->last_scan_val;
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         for (int i = 0; i < sampleframes; i++) {
             double current_scan = in[i] + 9.0; // 9ms lookahead
-
-            out[i] = current_scan; // Output scan head position (ms)
 
             if (last_scan != -1.0 && current_scan < last_scan) {
                 // Main ramp wrapped around: Update track lengths
@@ -798,6 +796,14 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                     }
                 } else {
                     if (tr_scan < tr->last_track_scan || current_scan < last_scan) {
+                        // Notify track loop
+                        int nt_loop = (x->fifo_tail + 1) % 4096;
+                        if (nt_loop != x->fifo_head) {
+                            x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
+                            x->hit_bars[x->fifo_tail].track_id = t + 1;
+                            x->fifo_tail = nt_loop;
+                        }
+
                         // Track wrapped around OR main ramp wrapped around
                         // Trigger bar 0 in the NEW track cycle
                         double new_cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
@@ -861,6 +867,11 @@ void weaver_audio_qtask(t_weaver *x) {
         if (hit_entry.type == TYPE_UPDATE_LENGTHS) {
             weaver_update_all_track_lengths(x);
             x->update_pending = 0;
+            continue;
+        }
+
+        if (hit_entry.type == TYPE_LOOP) {
+            outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
             continue;
         }
 
