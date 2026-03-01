@@ -19,9 +19,9 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="1" type="signal">
-			<digest>Outlet 1: Scan Head Position (ms)</digest>
-			<description>Outputs the current position of the 9ms lookahead scan head in milliseconds.</description>
+		<outlet id="1" type="int">
+			<digest>Outlet 1: Track ID on Loop</digest>
+			<description>Whenever a track's individual ramp loops (including when the main ramp loops), it outputs an integer corresponding to that track ID.</description>
 		</outlet>
 		<outlet id="2" type="anything">
 			<digest>Outlet 2: Logging Outlet</digest>
