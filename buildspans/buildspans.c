@@ -190,6 +190,8 @@ void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_at
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
+void buildspans_flush_track(t_buildspans *x, long track_num);
+void buildspans_run_cleanup(t_buildspans *x);
 void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym);
 void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep);
 void buildspans_visualize_memory(t_buildspans *x);
@@ -797,6 +799,12 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
             // If it has arguments, it's a list starting with a symbol, which we don't handle here.
             object_error((t_object *)x, "Palette inlet expects a single symbol, but received a list.");
         }
+    } else if (inlet_num == 0) {
+        if (s == gensym("flush") && argc > 0 && atom_gettype(argv) == A_LONG) {
+            buildspans_flush_track(x, atom_getlong(argv));
+        } else {
+            object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
+        }
     } else {
         // Post an error for unhandled messages on other inlets to avoid silent failures.
         object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
@@ -950,28 +958,83 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (keys) sysmem_freeptr(keys);
     sysmem_freeptr(unique_track_syms);
 
-    // --- Deferred Cleanup ---
-    long num_ended_tracks;
-    t_symbol **ended_track_keys;
-    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
-    if (ended_track_keys) {
-        for (long i = 0; i < num_ended_tracks; i++) {
-            // Re-parse the palette and track from the deferred key "pal::track"
-            char *pal_str = NULL;
-            char *track_str = strstr(ended_track_keys[i]->s_name, "::");
-            if (track_str) {
-                size_t pal_len = track_str - ended_track_keys[i]->s_name;
-                pal_str = (char *)sysmem_newptr(pal_len + 1);
-                strncpy(pal_str, ended_track_keys[i]->s_name, pal_len);
-                pal_str[pal_len] = '\0';
-                track_str += 2;
-                buildspans_cleanup_track_offset_if_needed(x, gensym(pal_str), gensym(track_str));
-                sysmem_freeptr(pal_str);
+    buildspans_run_cleanup(x);
+}
+
+void buildspans_flush_track(t_buildspans *x, long track_num) {
+    long bar_length = buildspans_get_bar_length(x);
+    buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (!keys) return;
+
+    // 1. Identify all unique tracks for this track number across all palettes
+    long track_count = 0;
+    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+    t_symbol **palette_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
+    char track_prefix[32];
+    snprintf(track_prefix, 32, "%ld-", track_num);
+
+    for (long i = 0; i < num_keys; i++) {
+        char *key_pal, *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
+            if (strncmp(key_track, track_prefix, strlen(track_prefix)) == 0) {
+                int found = 0;
+                for(long j=0; j<track_count; ++j) {
+                    if (strcmp(track_syms[j]->s_name, key_track) == 0 && strcmp(palette_syms[j]->s_name, key_pal) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    track_syms[track_count] = gensym(key_track);
+                    palette_syms[track_count] = gensym(key_pal);
+                    track_count++;
+                }
+            }
+            sysmem_freeptr(key_pal);
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
+        }
+    }
+
+    // 2. For each identified track, perform deferred rating check and end the span.
+    for (long i = 0; i < track_count; i++) {
+        t_symbol *track_sym = track_syms[i];
+        t_symbol *palette_sym = palette_syms[i];
+
+        // Find the last bar for this track.
+        long last_bar_timestamp = -1;
+        for (long j = 0; j < num_keys; j++) {
+            char *key_pal, *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                    long bar_val = atol(key_bar);
+                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                        last_bar_timestamp = bar_val;
+                    }
+                }
+                sysmem_freeptr(key_pal);
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
             }
         }
-        sysmem_freeptr(ended_track_keys);
+
+        if (last_bar_timestamp != -1) {
+            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
+        }
+
+        buildspans_end_track_span(x, palette_sym, track_sym);
     }
-    dictionary_clear(x->tracks_ended_in_current_event);
+
+    sysmem_freeptr(track_syms);
+    sysmem_freeptr(palette_syms);
+    sysmem_freeptr(keys);
+
+    buildspans_run_cleanup(x);
 }
 
 
@@ -1375,6 +1438,30 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
     dictionary_appendsym(x->tracks_ended_in_current_event, gensym(deferred_key), 0);
 }
 
+void buildspans_run_cleanup(t_buildspans *x) {
+    long num_ended_tracks;
+    t_symbol **ended_track_keys;
+    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
+    if (ended_track_keys) {
+        for (long i = 0; i < num_ended_tracks; i++) {
+            // Re-parse the palette and track from the deferred key "pal::track"
+            char *pal_str = NULL;
+            char *track_str = strstr(ended_track_keys[i]->s_name, "::");
+            if (track_str) {
+                size_t pal_len = track_str - ended_track_keys[i]->s_name;
+                pal_str = (char *)sysmem_newptr(pal_len + 1);
+                strncpy(pal_str, ended_track_keys[i]->s_name, pal_len);
+                pal_str[pal_len] = '\0';
+                track_str += 2;
+                buildspans_cleanup_track_offset_if_needed(x, gensym(pal_str), gensym(track_str));
+                sysmem_freeptr(pal_str);
+            }
+        }
+        sysmem_freeptr(ended_track_keys);
+    }
+    dictionary_clear(x->tracks_ended_in_current_event);
+}
+
 
 void buildspans_bang(t_buildspans *x) {
     if (x->defer && !systhread_ismainthread()) {
@@ -1492,28 +1579,7 @@ void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
     sysmem_freeptr(track_syms);
     sysmem_freeptr(keys);
 
-    // --- Deferred Cleanup ---
-    long num_ended_tracks;
-    t_symbol **ended_track_keys;
-    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
-    if (ended_track_keys) {
-        for (long i = 0; i < num_ended_tracks; i++) {
-            // Re-parse the palette and track from the deferred key "pal::track"
-            char *pal_str = NULL;
-            char *track_str = strstr(ended_track_keys[i]->s_name, "::");
-            if (track_str) {
-                size_t pal_len = track_str - ended_track_keys[i]->s_name;
-                pal_str = (char *)sysmem_newptr(pal_len + 1);
-                strncpy(pal_str, ended_track_keys[i]->s_name, pal_len);
-                pal_str[pal_len] = '\0';
-                track_str += 2;
-                buildspans_cleanup_track_offset_if_needed(x, gensym(pal_str), gensym(track_str));
-                sysmem_freeptr(pal_str);
-            }
-        }
-        sysmem_freeptr(ended_track_keys);
-    }
-    dictionary_clear(x->tracks_ended_in_current_event);
+    buildspans_run_cleanup(x);
 }
 
 
@@ -1521,7 +1587,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush, (clear) Clear. Supports @defer deferral.");
+                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush All, (flush <int>) Flush Track, (clear) Clear. Supports @defer deferral.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (float) Offset Timestamp");

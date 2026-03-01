@@ -76,6 +76,13 @@
 			<digest>Flush all spans</digest>
 			<description>Immediately ends and outputs all currently open spans for all tracks.</description>
 		</method>
+		<method name="flush">
+			<arglist>
+				<arg name="track-number" type="int" optional="0" />
+			</arglist>
+			<digest>Flush specific track</digest>
+			<description>Immediately ends and outputs all currently open spans for the specified track across all palettes.</description>
+		</method>
 		<method name="clear">
 			<digest>Reset internal state</digest>
 			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults.</description>
