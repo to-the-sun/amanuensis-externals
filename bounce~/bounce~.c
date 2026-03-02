@@ -227,11 +227,7 @@ void *bounce_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Outlets (Right-to-Left)
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        } else {
-            x->log_outlet = NULL;
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->bang_outlet = outlet_new((t_object *)x, NULL);
 
         // Init buffer refs
@@ -272,10 +268,9 @@ void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (bang) start bounce, (low/high) set fade limits");
     } else {
-        if (a == 0) {
-            sprintf(s, "Outlet 1: (bang) finished");
-        } else {
-            sprintf(s, "Outlet 2: (anything) Logging Outlet");
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: (bang) finished"); break;
+            case 1: sprintf(s, "Outlet 2: (anything) Logging Outlet"); break;
         }
     }
 }

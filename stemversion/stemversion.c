@@ -42,9 +42,7 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->outlet = outlet_new((t_object *)x, "symbol");
     }
     return (x);
@@ -80,15 +78,9 @@ void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (bang) Output Current Timestamp");
     } else { // ASSIST_OUTLET
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])"); break;
-                case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])"); break;
+            case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
         }
     }
 }
