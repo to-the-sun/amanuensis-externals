@@ -22,6 +22,7 @@ typedef struct _crucible {
     long consume;
     long defer;
     t_atom_long song_reach;
+    t_dictionary *track_reaches_dict;
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
@@ -164,6 +165,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->consume = 0;
         x->defer = 0;
         x->song_reach = 0;
+        x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
@@ -195,6 +197,9 @@ void crucible_free(t_crucible *x) {
     }
     if (x->span_tracker_dict) {
         object_release((t_object *)x->span_tracker_dict);
+    }
+    if (x->track_reaches_dict) {
+        object_release((t_object *)x->track_reaches_dict);
     }
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
@@ -502,7 +507,19 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             object_release((t_object *)to_delete_dict);
         }
 
+        t_atom_long current_track_reach = 0;
+        dictionary_getlong(x->track_reaches_dict, track_sym, &current_track_reach);
+
+        int track_grew = (max_reach > current_track_reach);
         int song_grew = (max_reach > x->song_reach);
+
+        if (track_grew) {
+            if (dictionary_hasentry(x->track_reaches_dict, track_sym)) {
+                dictionary_deleteentry(x->track_reaches_dict, track_sym);
+            }
+            dictionary_appendlong(x->track_reaches_dict, track_sym, max_reach);
+        }
+
         t_atom_long old_song_reach = x->song_reach;
         if (song_grew) {
             x->song_reach = max_reach;
@@ -534,12 +551,22 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         if (challenger_span_ts_dict) object_release((t_object *)challenger_span_ts_dict);
 
         // Standard Max right-to-left outlet firing order:
-        // Reach Int (Index 2) -> Fill (Index 1) -> Data (Index 0)
-        if (song_grew) {
+        // Reach Lists (Index 2) -> Fill (Index 1) -> Data (Index 0)
+        if (song_grew || track_grew) {
             if (x->outlet_reach_int) {
-                outlet_int(x->outlet_reach_int, (t_atom_long)x->song_reach);
+                if (song_grew) {
+                    t_atom reach_atom;
+                    atom_setlong(&reach_atom, (t_atom_long)x->song_reach);
+                    outlet_anything(x->outlet_reach_int, gensym("song"), 1, &reach_atom);
+                }
+                if (track_grew) {
+                    t_atom reach_list[2];
+                    atom_setlong(reach_list, (t_atom_long)atol(track_sym->s_name));
+                    atom_setlong(reach_list + 1, max_reach);
+                    outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                }
             }
-            if (x->outlet_fill) {
+            if (song_grew && x->outlet_fill) {
                 outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
             }
         }
@@ -782,14 +809,14 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
                 case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
-                case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
+                case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
                 case 3: sprintf(s, "Outlet 4: Logging Outlet"); break;
             }
         } else {
             switch (a) {
                 case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
                 case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
-                case 2: sprintf(s, "Outlet 3: Reach (int)"); break;
+                case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
             }
         }
     }

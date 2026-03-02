@@ -29,9 +29,9 @@
 			<digest>Outlet 2: Fill signal</digest>
 			<description>Outputs 'fill' when the song grows.</description>
 		</outlet>
-		<outlet id="3" type="int">
-			<digest>Outlet 3: Reach integer</digest>
-			<description>Outputs the current global reach of the song.</description>
+		<outlet id="3" type="list">
+			<digest>Outlet 3: Reach lists (song/track)</digest>
+			<description>Outputs the current reach of the song (song [reach]) or track ([track_id] [reach]) when growth is detected.</description>
 		</outlet>
 		<outlet id="4" type="anything">
 			<digest>Outlet 4: Logging (Optional)</digest>
