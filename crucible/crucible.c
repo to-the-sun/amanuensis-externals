@@ -714,7 +714,15 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->track_reaches_dict) {
             dictionary_clear(x->track_reaches_dict);
         }
-        crucible_log(x, "Internal reach data cleared.");
+        if (x->challenger_dict) {
+            dictionary_clear(x->challenger_dict);
+        }
+        if (x->span_tracker_dict) {
+            dictionary_clear(x->span_tracker_dict);
+        }
+        x->local_bar_length = 0;
+        x->bar_warn_sent = 0;
+        crucible_log(x, "Internal state cleared.");
         return;
     }
 
@@ -810,7 +818,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name, (clear) reset reaches. Supports @defer deferral."); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name, (clear) reset internal state. Supports @defer deferral."); break;
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
