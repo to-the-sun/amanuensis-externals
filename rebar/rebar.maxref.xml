@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="rebar" module="max" category="Utility">
+	<digest>A high-level coordinator for transcript processing and span comparison with dictionary isolation</digest>
+	<description>
+		The `rebar` object is a composite utility that encapsulates and coordinates the `notify`, `buildspans`, and `crucible` modules into a single, tightly-coupled workflow. It is designed to process a transcript dictionary, organize its notes into rated bars and spans, and selectively merge them into a destination "incumbent" dictionary based on their quality.
+
+		To ensure data integrity, `rebar` utilizes an internal **dictionary isolation** mechanism. All processing occurs within a private temporary dictionary, and results are only committed back to the user-specified dictionary upon completion of the entire pipeline.
+
+		**Execution Model:**
+		- The `rebar` object itself always operates **synchronously** on the calling thread.
+		- If the `@defer` attribute is enabled, the internal sub-modules (`notify`, `buildspans`, `crucible`) will operate in a deferred, asynchronous, or multi-threaded fashion, but the `rebar` management logic (triggering, copying, and final committing of data) remains synchronous.
+
+		Upon receiving an integer (bar length) in its first inlet, `rebar` performs the following coordinated steps:
+		1. Synchronously copies the contents of the user-specified dictionary to an internal temporary dictionary.
+		2. Sets the local bar length for its internal modules.
+		3. Triggers a dump of the temporary dictionary (via the internal `notify` module).
+		4. Routes the resulting note stream through `buildspans` and `crucible` using the temporary dictionary as the source and destination.
+		5. Once the pipeline has finished, synchronously copies the updated contents of the temporary dictionary back to the user dictionary, overwriting its previous state.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+		<metadata name="tag">Sequencing</metadata>
+		<metadata name="tag">Dictionary</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="int">
+			<digest>Set bar length and trigger coordinated isolated processing</digest>
+			<description>
+				Accepts an integer representing the bar length (in milliseconds). This synchronously initiates the dictionary isolation workflow: copying the user dictionary to temporary memory, setting sub-module bar lengths, and triggering the coordinated dump and comparison sequence.
+			</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="list/anything">
+			<digest>Outlet 1: Data and Reach Lists</digest>
+			<description>Outputs the final data for winning bars and reach-update messages from the internal `crucible` module.</description>
+		</outlet>
+		<outlet id="2" type="bang">
+			<digest>Outlet 2: Fill Bang</digest>
+			<description>Sends a bang whenever a new span win causes the total song reach to grow.</description>
+		</outlet>
+		<outlet id="3" type="int">
+			<digest>Outlet 3: Reach Update</digest>
+			<description>Outputs the updated total duration (reach) of the incumbent dictionary in milliseconds.</description>
+		</outlet>
+		<outlet id="4" type="anything">
+			<digest>Outlet 4: Consolidated Logging</digest>
+			<description>
+				When the `@log` attribute is enabled, this outlet provides detailed verbose information from all three internal modules (`notify`, `buildspans`, and `crucible`).
+			</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="dictionary-name" type="symbol" optional="0">
+			<digest>The name of the Max dictionary to be used for isolated processing</digest>
+			<description>This dictionary serves as the source and destination for the coordinated workflow. Contents are copied to temporary memory during processing to ensure isolation.</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="int">
+			<digest>Trigger coordinated isolated processing pipeline</digest>
+			<description>Initiates the sequence: Copy User -> Temp -> Coordinated Processing -> Commit back to User.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>
+				When enabled (1), enables verbose logging for all internal sub-modules and directs the output to the fourth outlet.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="defer" get="1" set="1" type="long" size="1">
+			<digest>Deferred Execution for Sub-Modules</digest>
+			<description>
+				When enabled (1), internal sub-module processing is moved to the Main (UI) thread. The `rebar` wrapper itself remains synchronous regardless of this setting.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="consume" get="1" set="1" type="long" size="1">
+			<digest>Enable Deep Delete (Crucible)</digest>
+			<description>
+				When enabled (1), enables the 'deep delete' logic in the internal `crucible` module for thorough removal of defeated spans.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="visualize" get="1" set="1" type="long" size="1">
+			<digest>Enable Visualization (Buildspans)</digest>
+			<description>
+				When enabled (1), enables the visualization output for the internal `buildspans` module.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="notify" />
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="threads~" />
+		<seealso name="weaver~" />
+		<seealso name="bounce~" />
+	</seealsolist>
+</c74object>
