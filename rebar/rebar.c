@@ -369,18 +369,15 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    int total = count_outlets(vo->owner);
-
-    if (vo->type == MOD_NOTIFY) {
-        if (vo->index == total - 4) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
-        else if (vo->index == 0 && total > 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+    if (vo->index == 0) { // All modules now have log outlet at index 0
+        if (x->log && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+    } else if (vo->type == MOD_NOTIFY) {
+        if (vo->index == 1) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
     } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == total - 3) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        else if (vo->index == 0 && total > 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == 1) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == total - 1) sdk_outlet_anything(x->out_data, s, ac, av);
-        else if (vo->index == total - 2) sdk_outlet_anything(x->out_fill, s, ac, av);
-        else if (vo->index == 0 && total > 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == 3) sdk_outlet_anything(x->out_data, s, ac, av);
+        else if (vo->index == 2) sdk_outlet_anything(x->out_fill, s, ac, av);
     }
 }
 
@@ -390,12 +387,10 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    int total = count_outlets(vo->owner);
-
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == total - 1) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+        if (vo->index == 4) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == total - 1) sdk_outlet_list(x->out_data, s, ac, av);
+        if (vo->index == 3) sdk_outlet_list(x->out_data, s, ac, av);
     }
 }
 
@@ -405,12 +400,10 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    int total = count_outlets(vo->owner);
-
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == total - 3) rebar_buildspans_track(x->buildspans_inst, (long)n);
+        if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == total - 3) sdk_outlet_int(x->out_reach, n);
+        if (vo->index == 1) sdk_outlet_int(x->out_reach, n);
     }
 }
 
@@ -420,10 +413,8 @@ void rebar_intercept_outlet_float(void *o, double f) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    int total = count_outlets(vo->owner);
-
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == total - 2) rebar_buildspans_offset(x->buildspans_inst, f);
+        if (vo->index == 3) rebar_buildspans_offset(x->buildspans_inst, f);
     }
 }
 
@@ -433,10 +424,8 @@ void rebar_intercept_outlet_bang(void *o) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    int total = count_outlets(vo->owner);
-
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == total - 1) rebar_buildspans_bang(x->buildspans_inst);
+        if (vo->index == 4) rebar_buildspans_bang(x->buildspans_inst);
     }
 }
 
@@ -556,8 +545,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        x->out_log = NULL;
-        if (x->log) x->out_log = sdk_outlet_new((t_object *)x, NULL);
+        x->out_log = sdk_outlet_new((t_object *)x, NULL);
         x->out_reach = sdk_intout((t_object *)x);
         x->out_fill = sdk_bangout((t_object *)x);
         x->out_data = sdk_listout((t_object *)x);

@@ -179,9 +179,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Outlets are created from right to left
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
         x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
         x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
@@ -822,19 +820,11 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
-                case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
-                case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
-                case 3: sprintf(s, "Outlet 4: Logging Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
-                case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
-                case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
+            case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
+            case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
+            case 3: sprintf(s, "Outlet 4: Logging Outlet"); break;
         }
     }
 }

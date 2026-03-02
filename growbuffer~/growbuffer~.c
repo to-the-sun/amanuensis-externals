@@ -82,9 +82,7 @@ void *growbuffer_new(t_symbol *s, long argc, t_atom *argv) {
 		attr_args_process(x, argc, argv);
 
 		// Outlets are created from right to left
-		if (x->log) {
-			x->log_outlet = outlet_new((t_object *)x, NULL);
-		}
+		x->log_outlet = outlet_new((t_object *)x, NULL);
 		x->b_outlet = outlet_new((t_object *)x, NULL);
 
 		x->b_proxy = proxy_new(x, 1, &x->b_inletnum);
@@ -297,21 +295,13 @@ void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
 				break;
 		}
 	} else {
-		if (x->log) {
-			switch (a) {
-				case 0:
-					sprintf(s, "Outlet 1: Status and Error Messages");
-					break;
-				case 1:
-					sprintf(s, "Outlet 2: Logging Outlet");
-					break;
-			}
-		} else {
-			switch (a) {
-				case 0:
-					sprintf(s, "Outlet 1: Status and Error Messages");
-					break;
-			}
+		switch (a) {
+			case 0:
+				sprintf(s, "Outlet 1: Status and Error Messages");
+				break;
+			case 1:
+				sprintf(s, "Outlet 2: Logging Outlet");
+				break;
 		}
 	}
 }

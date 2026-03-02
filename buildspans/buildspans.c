@@ -515,9 +515,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         floatin((t_object *)x, 1);  // Offset
 
         // Outlets are created from right to left
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         visualize_init();
         x->out_bar_data = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = intout((t_object *)x);
@@ -1603,19 +1601,11 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 break;
         }
     } else { // ASSIST_OUTLET
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
-                case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
-                case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
-                case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
-                case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
-                case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
+            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
+            case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
         }
     }
 }

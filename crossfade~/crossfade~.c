@@ -71,9 +71,7 @@ void *crossfade_new(t_symbol *s, long argc, t_atom *argv) {
         // No, the reviewer said "The leftmost outlet created with outlet_new corresponds to outs[0]".
         // So I'll create them in order: mix1, mix2, sum, busy, and then log.
 
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         outlet_new((t_object *)x, "signal"); // busy (Outlet 4 or 5)
         outlet_new((t_object *)x, "signal"); // sum (Outlet 3 or 4)
         outlet_new((t_object *)x, "signal"); // mix2 (Outlet 2 or 3)
@@ -128,21 +126,12 @@ void crossfade_assist(t_crossfade *x, void *b, long m, long a, char *s) {
             case 2: sprintf(s, "(signal) Source 2"); break;
         }
     } else {
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "(signal) Mix 1"); break;
-                case 1: sprintf(s, "(signal) Mix 2"); break;
-                case 2: sprintf(s, "(signal) Sum"); break;
-                case 3: sprintf(s, "(signal) Busy"); break;
-                case 4: sprintf(s, "Logging Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "(signal) Mix 1"); break;
-                case 1: sprintf(s, "(signal) Mix 2"); break;
-                case 2: sprintf(s, "(signal) Sum"); break;
-                case 3: sprintf(s, "(signal) Busy"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "(signal) Mix 1"); break;
+            case 1: sprintf(s, "(signal) Mix 2"); break;
+            case 2: sprintf(s, "(signal) Sum"); break;
+            case 3: sprintf(s, "(signal) Busy"); break;
+            case 4: sprintf(s, "Logging Outlet"); break;
         }
     }
 }

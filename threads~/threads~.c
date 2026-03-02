@@ -168,11 +168,7 @@ void *threads_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Create outlets from right to left
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        } else {
-            x->log_outlet = NULL;
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->signal_outlet = outlet_new((t_object *)x, "signal");
 
         if (x->poly_prefix == _sym_nothing) {
@@ -278,15 +274,9 @@ void threads_assist(t_threads *x, void *b, long m, long a, char *s) {
             case 2: sprintf(s, "Inlet 3 (list): palette-index pairs, (symbol) clear"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
-                case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1 (signal): Scan Head Position (ms)"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
         }
     }
 }

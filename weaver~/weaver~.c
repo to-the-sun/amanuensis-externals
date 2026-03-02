@@ -348,11 +348,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         weaver_update_track_cache(x);
 
         // Create outlets from right to left
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        } else {
-            x->log_outlet = NULL;
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->loop_outlet = outlet_new((t_object *)x, NULL);
 
         if (x->poly_prefix != _sym_nothing) {
@@ -432,15 +428,9 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Inlet 2 (list): [track_id, length] updates track length"); break;
         }
     } else { // ASSIST_OUTLET
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
-                case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
         }
     }
 }

@@ -103,9 +103,7 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // Outlets are created from right to left
-        if (x->log) {
-            x->out_log = outlet_new((t_object *)x, NULL);
-        }
+        x->out_log = outlet_new((t_object *)x, NULL);
 
         t_buffer_obj *bar_obj = buffer_ref_getobject(x->bar_ref);
         if (!bar_obj) {
@@ -349,7 +347,7 @@ void notify_do_fill(t_notify *x) {
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
     // Verbose Manifest Logging
-    if (x->log && x->out_log) {
+    if (x->log) {
         for (long i = 0; i < total_notes; i++) {
             notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f",
                 all_notes[i].palette->s_name,
@@ -540,7 +538,7 @@ void notify_do_bang(t_notify *x) {
     if (total_notes > 1) qsort(all_notes, total_notes, sizeof(t_note), note_compare);
 
     // Verbose Manifest Logging
-    if (x->log && x->out_log) {
+    if (x->log) {
         for (long i = 0; i < total_notes; i++) {
             notify_log(x, "Note Manifest: palette %s, absolute %.2f (orig: %.2f), score %.2f, track %s, offset %.2f, bar_ts %.2f",
                 all_notes[i].palette->s_name,
@@ -581,21 +579,12 @@ void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @defer deferral.");
     } else {
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;
-                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
-                case 4: sprintf(s, "Outlet 5: Logging and Status messages"); break;
-            }
-        } else {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;
-                case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
-                case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
-                case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;
+            case 1: sprintf(s, "Outlet 2: Note Offset (float)"); break;
+            case 2: sprintf(s, "Outlet 3: Track ID (int)"); break;
+            case 3: sprintf(s, "Outlet 4: Palette Name (symbol)"); break;
+            case 4: sprintf(s, "Outlet 5: Logging and Status messages"); break;
         }
     }
 }

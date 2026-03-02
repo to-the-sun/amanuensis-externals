@@ -113,9 +113,7 @@ void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        if (x->log) {
-            x->log_outlet = outlet_new((t_object *)x, NULL);
-        }
+        x->log_outlet = outlet_new((t_object *)x, NULL);
     }
     return (x);
 }
@@ -124,10 +122,8 @@ void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) 
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (create <path>) Create Project from Template");
     } else {
-        if (x->log) {
-            switch (a) {
-                case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;
-            }
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;
         }
     }
 }
