@@ -126,6 +126,18 @@ static t_virt_outlet *get_virt_outlet(void *fake) {
     return vo;
 }
 
+static int count_outlets(void *owner) {
+    int count = 0;
+    critical_enter(g_rebar_crit);
+    t_outlet_node *curr = g_outlet_registry;
+    while (curr) {
+        if (curr->vo.owner == owner) count++;
+        curr = curr->next;
+    }
+    critical_exit(g_rebar_crit);
+    return count;
+}
+
 static void unregister_outlets(void *owner) {
     critical_enter(g_rebar_crit);
     t_outlet_node **curr = &g_outlet_registry;
@@ -357,18 +369,18 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
+    int total = count_outlets(vo->owner);
+
     if (vo->type == MOD_NOTIFY) {
-        // DISCONNECTED FOR TESTING
-        // if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
-        if (vo->index == 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == total - 4) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
+        else if (vo->index == 0 && total > 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_BUILDSPANS) {
-        // DISCONNECTED FOR TESTING
-        // if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == total - 3) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        else if (vo->index == 0 && total > 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 0) sdk_outlet_anything(x->out_data, s, ac, av);
-        else if (vo->index == 1) sdk_outlet_anything(x->out_fill, s, ac, av);
-        else if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == total - 1) sdk_outlet_anything(x->out_data, s, ac, av);
+        else if (vo->index == total - 2) sdk_outlet_anything(x->out_fill, s, ac, av);
+        else if (vo->index == 0 && total > 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     }
 }
 
@@ -378,11 +390,12 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
+    int total = count_outlets(vo->owner);
+
     if (vo->type == MOD_NOTIFY) {
-        // DISCONNECTED FOR TESTING
-        // if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+        if (vo->index == total - 1) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 0) sdk_outlet_list(x->out_data, s, ac, av);
+        if (vo->index == total - 1) sdk_outlet_list(x->out_data, s, ac, av);
     }
 }
 
@@ -392,11 +405,12 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
+    int total = count_outlets(vo->owner);
+
     if (vo->type == MOD_NOTIFY) {
-        // DISCONNECTED FOR TESTING
-        // if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
+        if (vo->index == total - 3) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 2) sdk_outlet_int(x->out_reach, n);
+        if (vo->index == total - 3) sdk_outlet_int(x->out_reach, n);
     }
 }
 
@@ -406,9 +420,10 @@ void rebar_intercept_outlet_float(void *o, double f) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
+    int total = count_outlets(vo->owner);
+
     if (vo->type == MOD_NOTIFY) {
-        // DISCONNECTED FOR TESTING
-        // if (vo->index == 1) rebar_buildspans_offset(x->buildspans_inst, f);
+        if (vo->index == total - 2) rebar_buildspans_offset(x->buildspans_inst, f);
     }
 }
 
@@ -418,9 +433,10 @@ void rebar_intercept_outlet_bang(void *o) {
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
+    int total = count_outlets(vo->owner);
+
     if (vo->type == MOD_NOTIFY) {
-        // KEEP BANG COORDINATION TO TRIGGER COPY-BACK TEST
-        if (vo->index == 0) rebar_buildspans_bang(x->buildspans_inst);
+        if (vo->index == total - 1) rebar_buildspans_bang(x->buildspans_inst);
     }
 }
 
@@ -532,7 +548,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->user_dict_name = atom_getsym(argv);
             char tmp_name[256];
-            snprintf(tmp_name, 256, "_rebar_tmp_%p", x);
+            snprintf(tmp_name, 256, "rebar_tmp_%p", x);
             x->tmp_dict_name = gensym(tmp_name);
             x->tmp_dict_ptr = dictionary_new();
             dictobj_register(x->tmp_dict_ptr, &x->tmp_dict_name);
