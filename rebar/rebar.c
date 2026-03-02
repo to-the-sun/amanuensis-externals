@@ -44,8 +44,7 @@ static t_critical g_rebar_crit;
 static t_rebar *g_instantiating_rebar = NULL;
 static int g_current_mod_hint = 0; // 0=notify, 1=buildspans, 2=crucible
 
-// --- Real Max SDK Function Pointers ---
-
+// Capture real Max SDK functions
 typedef void *(*t_outlet_new_fn)(t_object *x, char *classname);
 typedef void *(*t_bangout_fn)(t_object *x);
 typedef void *(*t_intout_fn)(t_object *x);
@@ -211,6 +210,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
 // --- Coordination Prototypes ---
 void rebar_request_copy_back(t_rebar *x);
 void rebar_do_copy_back(t_rebar *x);
+void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 
 // --- Symbol Renaming ---
 
@@ -339,6 +339,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
     return c;
 }
 
+// Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
 void rebar_buildspans_bang(t_buildspans *x) {
     module_buildspans_bang(x);
     if (systhread_ismainthread()) {
@@ -357,11 +358,13 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
-        else if (vo->index == 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        // DISCONNECTED FOR TESTING
+        // if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
+        if (vo->index == 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        else if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
+        // DISCONNECTED FOR TESTING
+        // if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0) sdk_outlet_anything(x->out_data, s, ac, av);
         else if (vo->index == 1) sdk_outlet_anything(x->out_fill, s, ac, av);
@@ -376,7 +379,8 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+        // DISCONNECTED FOR TESTING
+        // if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0) sdk_outlet_list(x->out_data, s, ac, av);
     }
@@ -389,7 +393,8 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
+        // DISCONNECTED FOR TESTING
+        // if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 2) sdk_outlet_int(x->out_reach, n);
     }
@@ -402,7 +407,8 @@ void rebar_intercept_outlet_float(void *o, double f) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 1) rebar_buildspans_offset(x->buildspans_inst, f);
+        // DISCONNECTED FOR TESTING
+        // if (vo->index == 1) rebar_buildspans_offset(x->buildspans_inst, f);
     }
 }
 
@@ -413,6 +419,7 @@ void rebar_intercept_outlet_bang(void *o) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
+        // KEEP BANG COORDINATION TO TRIGGER COPY-BACK TEST
         if (vo->index == 0) rebar_buildspans_bang(x->buildspans_inst);
     }
 }
@@ -592,7 +599,7 @@ void rebar_do_copy_back(t_rebar *x) {
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
         dictionary_clear(user_dict);
-        dictionary_copyentries(tmp_dict, user_dict, NULL);
+        rebar_copy_dictionary(tmp_dict, user_dict);
     }
     if (user_dict) object_release((t_object *)user_dict);
 }
@@ -602,13 +609,24 @@ void rebar_int(t_rebar *x, long n) {
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
         dictionary_clear(tmp_dict);
-        dictionary_copyentries(user_dict, tmp_dict, NULL);
+        rebar_copy_dictionary(user_dict, tmp_dict);
     }
     if (user_dict) object_release((t_object *)user_dict);
 
     rebar_buildspans_local_bar_length(x->buildspans_inst, (double)n);
     rebar_crucible_local_bar_length(x->crucible_inst, (double)n);
     rebar_notify_bang(x->notify_inst);
+}
+
+void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
+    if (!src || !dst) return;
+    long num_keys = 0;
+    t_symbol **keys = NULL;
+    dictionary_getkeys(src, &num_keys, &keys);
+    if (keys) {
+        dictionary_copyentries(src, dst, keys);
+        sysmem_freeptr(keys);
+    }
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
