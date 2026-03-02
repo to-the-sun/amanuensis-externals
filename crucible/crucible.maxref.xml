@@ -50,6 +50,10 @@
 			<digest>Process incoming data</digest>
 			<description>Parses hierarchical selectors and manages comparison logic.</description>
 		</method>
+		<method name="clear">
+			<digest>Clear internal reach data</digest>
+			<description>Resets the internal song reach and per-track reaches to zero.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
