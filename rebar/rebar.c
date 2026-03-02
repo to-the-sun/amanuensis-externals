@@ -34,6 +34,7 @@ typedef struct _rebar {
 
     t_symbol *user_dict_name;
     t_symbol *tmp_dict_name;
+    t_dictionary *tmp_dict_ptr;
 } t_rebar;
 
 static t_class *rebar_class;
@@ -502,14 +503,14 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->user_dict_name = gensym("");
         x->tmp_dict_name = gensym("");
 
+        x->tmp_dict_ptr = NULL;
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->user_dict_name = atom_getsym(argv);
             char tmp_name[256];
             snprintf(tmp_name, 256, "_rebar_tmp_%p", x);
             x->tmp_dict_name = gensym(tmp_name);
-            t_dictionary *d = dictionary_new();
-            dictobj_register(d, &x->tmp_dict_name);
-            object_release((t_object *)d);
+            x->tmp_dict_ptr = dictionary_new();
+            dictobj_register(x->tmp_dict_ptr, &x->tmp_dict_name);
         }
 
         attr_args_process(x, argc, argv);
@@ -557,8 +558,10 @@ void rebar_free(t_rebar *x) {
     if (x->buildspans_inst) { unregister_module(x->buildspans_inst); unregister_outlets(x->buildspans_inst); rebar_buildspans_free(x->buildspans_inst); }
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
 
-    t_dictionary *d = dictobj_findregistered_retain(x->tmp_dict_name);
-    if (d) { dictobj_unregister(d); object_release((t_object *)d); }
+    if (x->tmp_dict_ptr) {
+        dictobj_unregister(x->tmp_dict_ptr);
+        object_release((t_object *)x->tmp_dict_ptr);
+    }
 }
 
 void rebar_request_copy_back(t_rebar *x) {
