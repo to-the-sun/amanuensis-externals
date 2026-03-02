@@ -5,6 +5,7 @@
 #include "ext_buffer.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
+#include "ext_proto.h"
 #include "../shared/logging.h"
 #include "../shared/visualize.h"
 
@@ -35,6 +36,7 @@ typedef struct _rebar {
     t_symbol *user_dict_name;
     t_symbol *tmp_dict_name;
     t_dictionary *tmp_dict_ptr;
+    double start_time;
 } t_rebar;
 
 static t_class *rebar_class;
@@ -223,6 +225,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
 void rebar_request_copy_back(t_rebar *x);
 void rebar_do_copy_back(t_rebar *x);
 void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
+void rebar_log(t_rebar *x, const char *fmt, ...);
 
 // --- Symbol Renaming ---
 
@@ -442,6 +445,13 @@ void rebar_intercept_outlet_bang(void *o) {
 
 // --- Rebar Object Methods ---
 
+void rebar_log(t_rebar *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->out_log, x->log, "rebar", fmt, args);
+    va_end(args);
+}
+
 void *rebar_new(t_symbol *s, long argc, t_atom *argv);
 void rebar_free(t_rebar *x);
 void rebar_int(t_rebar *x, long n);
@@ -556,8 +566,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        x->out_log = NULL;
-        if (x->log) x->out_log = sdk_outlet_new((t_object *)x, NULL);
+        x->out_log = sdk_outlet_new((t_object *)x, NULL);
         x->out_reach = sdk_intout((t_object *)x);
         x->out_fill = sdk_bangout((t_object *)x);
         x->out_data = sdk_listout((t_object *)x);
@@ -565,18 +574,24 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
 
-        t_atom args[1];
+        t_atom args[3];
         atom_setsym(args, x->tmp_dict_name);
+        atom_setsym(args + 1, gensym("@log"));
+        atom_setlong(args + 2, 1);
+
         g_current_mod_hint = (int)MOD_NOTIFY;
-        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 1, args);
+        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 3, args);
         register_module(x->notify_inst, x);
 
+        t_atom buildspans_args[2];
+        atom_setsym(buildspans_args, gensym("@log"));
+        atom_setlong(buildspans_args + 1, 1);
         g_current_mod_hint = (int)MOD_BUILDSPANS;
-        x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 0, NULL);
+        x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 2, buildspans_args);
         register_module(x->buildspans_inst, x);
 
         g_current_mod_hint = (int)MOD_CRUCIBLE;
-        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
+        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 3, args);
         register_module(x->crucible_inst, x);
 
         g_instantiating_rebar = NULL;
@@ -611,6 +626,7 @@ void rebar_request_copy_back(t_rebar *x) {
 }
 
 void rebar_do_copy_back(t_rebar *x) {
+    rebar_log(x, "Starting copy back to user dictionary...");
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
@@ -618,9 +634,18 @@ void rebar_do_copy_back(t_rebar *x) {
         rebar_copy_dictionary(tmp_dict, user_dict);
     }
     if (user_dict) object_release((t_object *)user_dict);
+
+    double end_time = systimer_gettime();
+    double elapsed = end_time - x->start_time;
+    rebar_log(x, "Isolated coordination dump complete. Total time: %.2f ms", elapsed);
+    if (x->out_data) outlet_bang(x->out_data);
 }
 
 void rebar_int(t_rebar *x, long n) {
+    x->start_time = systimer_gettime();
+    rebar_log(x, "Starting isolated coordinated dump with bar length %ld...", n);
+    rebar_log(x, "Copying to temporary dictionary...");
+
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
@@ -640,7 +665,28 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
     t_symbol **keys = NULL;
     dictionary_getkeys(src, &num_keys, &keys);
     if (keys) {
-        dictionary_copyentries(src, dst, keys);
+        for (long i = 0; i < num_keys; i++) {
+            t_symbol *key = keys[i];
+            t_atom val;
+            if (dictionary_getatom(src, key, &val) == MAX_ERR_NONE) {
+                if (atom_gettype(&val) == A_OBJ) {
+                    t_object *obj = atom_getobj(&val);
+                    if (obj) {
+                        if (object_classname_compare(obj, gensym("dictionary"))) {
+                            t_dictionary *nested_src = (t_dictionary *)obj;
+                            t_dictionary *nested_dest = rebar_dictionary_deep_copy(nested_src);
+                            if (nested_dest) dictionary_appenddictionary(dst, key, (t_object *)nested_dest);
+                        } else if (object_classname_compare(obj, gensym("atomarray"))) {
+                            t_atomarray *aa_src = (t_atomarray *)obj;
+                            t_atomarray *aa_dest = rebar_atomarray_deep_copy(aa_src);
+                            if (aa_dest) dictionary_appendatomarray(dst, key, (t_object *)aa_dest);
+                        }
+                    }
+                } else {
+                    dictionary_appendatom(dst, key, &val);
+                }
+            }
+        }
         sysmem_freeptr(keys);
     }
 }
@@ -649,7 +695,7 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
     else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Data List [palette, track, bar, offset] and Reach Lists from Crucible"); break;
+            case 0: sprintf(s, "Outlet 1: Data and Reach Lists from Crucible. Sends bang when finished."); break;
             case 1: sprintf(s, "Outlet 2: Fill bang from Crucible"); break;
             case 2: sprintf(s, "Outlet 3: Reach (int) from Crucible"); break;
             case 3: sprintf(s, "Outlet 4: Logging and Status messages"); break;
