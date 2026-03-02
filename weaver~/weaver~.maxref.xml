@@ -3,7 +3,7 @@
 <c74object name="weaver~" module="msp" category="Utility">
 	<digest>Writes incoming track data into a polybuffer~</digest>
 	<description>
-		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~`. It monitors an incoming time ramp signal on its inlet. Each track loops individually based on its own length, derived as `main_ramp % track_length` (with a 9ms lookahead). Track lengths are calculated as the maximum bar timestamp found in the track's dictionary plus the current `bar_length` (from a "bar" buffer), and are updated every time the main ramp loops. When a track-specific ramp crosses an integer, the object looks up the corresponding bar in an external transcript dictionary. Each bar entry in the dictionary defines a `palette` (the name of an external buffer~) and an `offset`. The object then blends a continuous segment of audio from that palette buffer into the member of the `polybuffer~` corresponding to the track, using sample-accurate crossfading for smooth transitions.
+		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~`. It monitors an incoming time ramp signal on its first inlet. Each track loops individually based on its own length, derived as `main_ramp % track_length` (with a 9ms lookahead). Track lengths are manually specified via a list of `[track_id, length]` on the second inlet. When a track-specific ramp crosses an integer, the object looks up the corresponding bar in an external transcript dictionary. Each bar entry in the dictionary defines a `palette` (the name of an external buffer~) and an `offset`. The object then blends a continuous segment of audio from that palette buffer into the member of the `polybuffer~` corresponding to the track, using sample-accurate crossfading for smooth transitions.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -15,6 +15,10 @@
 		<inlet id="1" type="signal">
 			<digest>Main time ramp (signal)</digest>
 			<description>Accepts an audio signal treated as the main time ramp in milliseconds. Each track derives its own looping ramp from this signal. Integer crossings and ramp wrap-arounds on the track-specific ramps trigger dictionary lookups to weave audio.</description>
+		</inlet>
+		<inlet id="2" type="list">
+			<digest>Track Length Updates (list)</digest>
+			<description>Accepts a two-item list consisting of a track ID (integer) and a track length (float/integer) in milliseconds. This updates the looping length for the specified track.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
@@ -42,6 +46,10 @@
 		<method name="anything">
 			<digest>Change transcript dictionary or set maximum tracks</digest>
 			<description>Accepts a symbol to change the name of the transcript dictionary being referenced. Also accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
+		</method>
+		<method name="list">
+			<digest>Update individual track lengths</digest>
+			<description>Accepts a two-item list [track_id, length] on the second inlet to set the loop length for a specific track in milliseconds.</description>
 		</method>
 		<method name="dsp64">
 			<digest>DSP method</digest>
