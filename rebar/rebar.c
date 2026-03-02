@@ -44,19 +44,31 @@ static t_critical g_rebar_crit;
 static t_rebar *g_instantiating_rebar = NULL;
 static int g_current_mod_hint = 0; // 0=notify, 1=buildspans, 2=crucible
 
-// Capture real Max SDK functions
+// --- Real Max SDK Function Pointers ---
+
 typedef void *(*t_outlet_new_fn)(t_object *x, char *classname);
 typedef void *(*t_bangout_fn)(t_object *x);
 typedef void *(*t_intout_fn)(t_object *x);
 typedef void *(*t_floatout_fn)(t_object *x);
 typedef void *(*t_listout_fn)(t_object *x);
 
-// These will be initialized in ext_main
+typedef void *(*t_outlet_anything_fn)(t_outlet *o, t_symbol *s, short ac, t_atom *av);
+typedef void *(*t_outlet_list_fn)(t_outlet *o, t_symbol *s, short ac, t_atom *av);
+typedef void *(*t_outlet_int_fn)(t_outlet *o, t_atom_long n);
+typedef void *(*t_outlet_float_fn)(t_outlet *o, double f);
+typedef void *(*t_outlet_bang_fn)(t_outlet *o);
+
 static t_outlet_new_fn sdk_outlet_new = NULL;
 static t_bangout_fn sdk_bangout = NULL;
 static t_intout_fn sdk_intout = NULL;
 static t_floatout_fn sdk_floatout = NULL;
 static t_listout_fn sdk_listout = NULL;
+
+static t_outlet_anything_fn sdk_outlet_anything = NULL;
+static t_outlet_list_fn sdk_outlet_list = NULL;
+static t_outlet_int_fn sdk_outlet_int = NULL;
+static t_outlet_float_fn sdk_outlet_float = NULL;
+static t_outlet_bang_fn sdk_outlet_bang = NULL;
 
 // --- Virtual Outlet Management ---
 
@@ -327,11 +339,8 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
     return c;
 }
 
-// Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
 void rebar_buildspans_bang(t_buildspans *x) {
     module_buildspans_bang(x);
-    // When module_buildspans_bang returns, its immediate work (including synchronous crucible) is done.
-    // If it deferred itself, the recursive call to module_buildspans_bang will also land here.
     if (systhread_ismainthread()) {
         t_rebar *rebar = get_rebar(x);
         if (rebar) rebar_request_copy_back(rebar);
@@ -340,52 +349,55 @@ void rebar_buildspans_bang(t_buildspans *x) {
 
 void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) { outlet_anything(o, s, ac, av); return; }
+    if (!vo) {
+        if (sdk_outlet_anything) sdk_outlet_anything(o, s, ac, av);
+        return;
+    }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
-        else if (vo->index == 4 && x->out_log) outlet_anything(x->out_log, s, ac, av);
+        else if (vo->index == 4 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_BUILDSPANS) {
         if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        else if (vo->index == 3 && x->out_log) outlet_anything(x->out_log, s, ac, av);
+        else if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 0) outlet_anything(x->out_data, s, ac, av);
-        else if (vo->index == 1) outlet_anything(x->out_fill, s, ac, av);
-        else if (vo->index == 3 && x->out_log) outlet_anything(x->out_log, s, ac, av);
+        if (vo->index == 0) sdk_outlet_anything(x->out_data, s, ac, av);
+        else if (vo->index == 1) sdk_outlet_anything(x->out_fill, s, ac, av);
+        else if (vo->index == 3 && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     }
 }
 
 void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) { outlet_list(o, s, ac, av); return; }
+    if (!vo) { if (sdk_outlet_list) sdk_outlet_list(o, s, ac, av); return; }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 0) outlet_list(x->out_data, s, ac, av);
+        if (vo->index == 0) sdk_outlet_list(x->out_data, s, ac, av);
     }
 }
 
 void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) { outlet_int(o, n); return; }
+    if (!vo) { if (sdk_outlet_int) sdk_outlet_int(o, n); return; }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 2) outlet_int(x->out_reach, n);
+        if (vo->index == 2) sdk_outlet_int(x->out_reach, n);
     }
 }
 
 void rebar_intercept_outlet_float(void *o, double f) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) { outlet_float(o, f); return; }
+    if (!vo) { if (sdk_outlet_float) sdk_outlet_float(o, f); return; }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
@@ -396,7 +408,7 @@ void rebar_intercept_outlet_float(void *o, double f) {
 
 void rebar_intercept_outlet_bang(void *o) {
     t_virt_outlet *vo = get_virt_outlet(o);
-    if (!vo) { outlet_bang(o); return; }
+    if (!vo) { if (sdk_outlet_bang) sdk_outlet_bang(o); return; }
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
@@ -457,6 +469,12 @@ void ext_main(void *r) {
     sdk_intout = (t_intout_fn)object_getmethod(gensym("intout")->s_thing, gensym("intout"));
     sdk_floatout = (t_floatout_fn)object_getmethod(gensym("floatout")->s_thing, gensym("floatout"));
     sdk_listout = (t_listout_fn)object_getmethod(gensym("listout")->s_thing, gensym("listout"));
+
+    sdk_outlet_anything = (t_outlet_anything_fn)object_getmethod(gensym("outlet_anything")->s_thing, gensym("outlet_anything"));
+    sdk_outlet_list = (t_outlet_list_fn)object_getmethod(gensym("outlet_list")->s_thing, gensym("outlet_list"));
+    sdk_outlet_int = (t_outlet_int_fn)object_getmethod(gensym("outlet_int")->s_thing, gensym("outlet_int"));
+    sdk_outlet_float = (t_outlet_float_fn)object_getmethod(gensym("outlet_float")->s_thing, gensym("outlet_float"));
+    sdk_outlet_bang = (t_outlet_bang_fn)object_getmethod(gensym("outlet_bang")->s_thing, gensym("outlet_bang"));
 
     #undef class_new
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
@@ -571,24 +589,22 @@ void rebar_request_copy_back(t_rebar *x) {
 
 void rebar_do_copy_back(t_rebar *x) {
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
-    t_dictionary *tmp_dict = dictobj_findregistered_retain(x->tmp_dict_name);
+    t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
         dictionary_clear(user_dict);
         dictionary_copyentries(tmp_dict, user_dict, NULL);
     }
     if (user_dict) object_release((t_object *)user_dict);
-    if (tmp_dict) object_release((t_object *)tmp_dict);
 }
 
 void rebar_int(t_rebar *x, long n) {
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
-    t_dictionary *tmp_dict = dictobj_findregistered_retain(x->tmp_dict_name);
+    t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
         dictionary_clear(tmp_dict);
         dictionary_copyentries(user_dict, tmp_dict, NULL);
     }
     if (user_dict) object_release((t_object *)user_dict);
-    if (tmp_dict) object_release((t_object *)tmp_dict);
 
     rebar_buildspans_local_bar_length(x->buildspans_inst, (double)n);
     rebar_crucible_local_bar_length(x->crucible_inst, (double)n);
