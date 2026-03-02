@@ -37,6 +37,7 @@ typedef struct _weaver_track {
     t_crossfade_state xf;
     t_symbol *palette[2];
     double offset[2];
+    double abs_offset[2];
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -117,8 +118,10 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
             tr->palette[0] = gensym("-");
             tr->offset[0] = 0.0;
+            tr->abs_offset[0] = -1.0;
             tr->palette[1] = gensym("-");
             tr->offset[1] = 0.0;
+            tr->abs_offset[1] = -1.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -569,6 +572,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         // Main ramp loop jump: update active source immediately, no crossfade
         tr->palette[active] = palette;
         tr->offset[active] = rel_offset;
+        tr->abs_offset[active] = offset_ms;
         tr->src_found[active] = 0;
         tr->src_error_sent[active] = 0;
         tr->control = (double)active;
@@ -587,12 +591,13 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         t_symbol *s_silence = gensym("-");
         int is_silence = (palette == s_silence || palette == _sym_nothing);
 
-        int change = (palette != tr->palette[active] || (rel_offset != tr->offset[active] && !is_silence));
+        int change = (palette != tr->palette[active] || (offset_ms != tr->abs_offset[active] && !is_silence));
 
         if ((is_bar_0 && !is_silence) || change) {
             int other = 1 - active;
             tr->palette[other] = palette;
             tr->offset[other] = rel_offset;
+            tr->abs_offset[other] = offset_ms;
             tr->src_found[other] = 0;
             tr->src_error_sent[other] = 0;
             tr->control = (double)other;
