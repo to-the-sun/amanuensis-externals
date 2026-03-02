@@ -22,8 +22,7 @@ typedef struct _bar_cache {
 
 #define TYPE_DATA 0
 #define TYPE_SWEEP 1
-#define TYPE_UPDATE_LENGTHS 2
-#define TYPE_LOOP 3
+#define TYPE_LOOP 2
 
 typedef struct _fifo_entry {
     t_bar_cache bar;
@@ -48,7 +47,6 @@ typedef struct _weaver_track {
     long src_error_sent[2];
     double track_length;
     double last_track_scan;
-    double last_track_length;
 } t_weaver_track;
 
 typedef struct _weaver {
@@ -70,7 +68,8 @@ typedef struct _weaver {
     long max_tracks;
     t_weaver_track *track_cache[256];
     long track_cache_count;
-    long update_pending;
+    void *proxy;
+    long proxy_id;
     double cached_bar_len;
     t_hashtab *pending_silence;
     long bar_found;
@@ -87,6 +86,7 @@ typedef struct _weaver {
 
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
+void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
@@ -102,7 +102,6 @@ void weaver_schedule_silence(t_weaver *x, t_atom_long track, double ms);
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
-void weaver_update_all_track_lengths(t_weaver *x);
 
 static t_class *weaver_class;
 
@@ -139,7 +138,6 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_error_sent[1] = 0;
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
-            tr->last_track_length = -1.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -158,44 +156,6 @@ void weaver_update_track_cache(t_weaver *x) {
     }
 }
 
-void weaver_update_all_track_lengths(t_weaver *x) {
-    double bar_len = weaver_get_bar_length(x);
-    if (bar_len <= 0) return;
-
-    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
-    if (!dict) return;
-
-    for (long i = 0; i < x->track_cache_count; i++) {
-        t_weaver_track *tr = x->track_cache[i];
-        if (!tr) continue;
-
-        char tstr[64];
-        snprintf(tstr, 64, "%ld", i + 1);
-        t_symbol *track_sym = gensym(tstr);
-        t_dictionary *track_dict = NULL;
-
-        if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-            long num_keys = 0;
-            t_symbol **keys = NULL;
-            dictionary_getkeys(track_dict, &num_keys, &keys);
-            double max_bar = 0.0;
-            for (long k = 0; k < num_keys; k++) {
-                double val = atof(keys[k]->s_name);
-                if (val > max_bar) max_bar = val;
-            }
-            if (keys) dictionary_freekeys(track_dict, num_keys, keys);
-            tr->track_length = max_bar + bar_len;
-            if (fabs(tr->track_length - tr->last_track_length) > 0.001) {
-                weaver_log(x, "Track %ld length updated to %.2f ms (max bar %.2f + bar length %.2f)", i + 1, tr->track_length, max_bar, bar_len);
-                tr->last_track_length = tr->track_length;
-            }
-        } else {
-            tr->track_length = 1000.0; // Default if no data
-        }
-    }
-
-    dictobj_release(dict);
-}
 
 void weaver_clear_track_states(t_weaver *x) {
     if (!x->track_states) return;
@@ -318,6 +278,7 @@ void ext_main(void *r) {
     t_class *c = class_new("weaver~", (method)weaver_new, (method)weaver_free, sizeof(t_weaver), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)weaver_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)weaver_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)weaver_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)weaver_assist, "assist", A_CANT, 0);
@@ -351,7 +312,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_scan_val = -1.0;
-        x->update_pending = 0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
         x->dict_found = 0;
@@ -414,6 +374,8 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->track_states = hashtab_new(0);
         x->cached_bar_len = weaver_get_bar_length(x);
 
+        x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
+
         dsp_setup((t_pxobject *)x, 1);
         x->audio_qelem = qelem_new(x, (method)weaver_audio_qtask);
     }
@@ -424,6 +386,7 @@ void weaver_free(t_weaver *x) {
     dsp_free((t_pxobject *)x);
     critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
+    if (x->proxy) object_free(x->proxy);
 
     if (x->bar_buffer_ref) {
         object_free(x->bar_buffer_ref);
@@ -466,6 +429,7 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), (symbol) Dictionary Name, tracks (int)"); break;
+            case 1: sprintf(s, "Inlet 2 (list): [track_id, length] updates track length"); break;
         }
     } else { // ASSIST_OUTLET
         if (x->log) {
@@ -730,6 +694,25 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 }
 
 
+void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 1) {
+        if (argc >= 2) {
+            long track_id = atom_getlong(argv);
+            double length = atom_getfloat(argv + 1);
+            if (track_id > 0) {
+                t_weaver_track *tr = weaver_get_track_state(x, track_id);
+                if (tr) {
+                    critical_enter(x->lock);
+                    tr->track_length = length;
+                    critical_exit(x->lock);
+                    weaver_log(x, "Track %ld length manually updated to %.2f ms", track_id, length);
+                }
+            }
+        }
+    }
+}
+
 void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
 
@@ -837,17 +820,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 tr->last_track_scan = tr_scan;
             }
 
-            if (last_scan != -1.0 && current_scan < last_scan) {
-                // Main ramp wrapped around: Update track lengths
-                if (!x->update_pending) {
-                    int next_tail = (x->fifo_tail + 1) % 4096;
-                    if (next_tail != x->fifo_head) {
-                        x->hit_bars[x->fifo_tail].type = TYPE_UPDATE_LENGTHS;
-                        x->fifo_tail = next_tail;
-                        x->update_pending = 1;
-                    }
-                }
-            }
 
             last_scan = current_scan;
         }
@@ -869,11 +841,6 @@ void weaver_audio_qtask(t_weaver *x) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;
 
-        if (hit_entry.type == TYPE_UPDATE_LENGTHS) {
-            weaver_update_all_track_lengths(x);
-            x->update_pending = 0;
-            continue;
-        }
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
