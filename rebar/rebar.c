@@ -556,8 +556,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        x->out_log = NULL;
-        if (x->log) x->out_log = sdk_outlet_new((t_object *)x, NULL);
+        x->out_log = sdk_outlet_new((t_object *)x, NULL);
         x->out_reach = sdk_intout((t_object *)x);
         x->out_fill = sdk_bangout((t_object *)x);
         x->out_data = sdk_listout((t_object *)x);
@@ -565,18 +564,21 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
 
-        t_atom args[1];
+        t_atom args[3];
         atom_setsym(args, x->tmp_dict_name);
+        atom_setsym(args + 1, gensym("@log"));
+        atom_setlong(args + 2, 1);
+
         g_current_mod_hint = (int)MOD_NOTIFY;
-        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 1, args);
+        x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 3, args);
         register_module(x->notify_inst, x);
 
         g_current_mod_hint = (int)MOD_BUILDSPANS;
-        x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 0, NULL);
+        x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 2, args + 1);
         register_module(x->buildspans_inst, x);
 
         g_current_mod_hint = (int)MOD_CRUCIBLE;
-        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
+        x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 3, args);
         register_module(x->crucible_inst, x);
 
         g_instantiating_rebar = NULL;

@@ -51,7 +51,7 @@
 		<outlet id="4" type="anything">
 			<digest>Outlet 4: Consolidated Logging</digest>
 			<description>
-				When the `@log` attribute is enabled, this outlet provides detailed verbose information from all three internal modules (`notify`, `buildspans`, and `crucible`).
+				Provides detailed verbose information from all three internal modules (`notify`, `buildspans`, and `crucible`) when the `@log` attribute is enabled.
 			</description>
 		</outlet>
 	</outletlist>
