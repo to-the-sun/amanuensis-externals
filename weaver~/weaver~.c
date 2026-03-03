@@ -855,6 +855,12 @@ void weaver_audio_qtask(t_weaver *x) {
             tr = x->track_cache[target_track - 1];
         }
 
+        if (tr && tr->busy) {
+            int active = (int)round(tr->control);
+            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 0);
+            continue;
+        }
+
         // Use hit.value (absolute time) as the key for pending silence to ensure uniqueness across loops
         char abs_str[64];
         snprintf(abs_str, 64, "%ld", (long)hit.value);
