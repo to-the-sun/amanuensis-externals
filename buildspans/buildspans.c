@@ -842,7 +842,6 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (!x->offset_set) {
         x->current_offset = calc_timestamp;
-        x->offset_set = 1;
         buildspans_log(x, "Offset not set. Automatically initializing offset to calc_timestamp: %.2f", x->current_offset);
     }
 
