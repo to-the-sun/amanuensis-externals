@@ -369,15 +369,18 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
     t_rebar *x = get_rebar(vo->owner);
     if (!x) return;
 
-    if (vo->index == 0) { // All modules now have log outlet at index 0
-        if (x->log && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
-    } else if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 1) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
+    if (vo->type == MOD_NOTIFY) {
+        if (vo->index == 0) rebar_buildspans_bang(x->buildspans_inst);
+        else if (vo->index == 3) rebar_buildspans_do_anything(x->buildspans_inst, s, (long)ac, av, 3);
+        else if (vo->index == 4 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == 1) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        if (vo->index == 2) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        else if (vo->index == 3 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 3) sdk_outlet_anything(x->out_data, s, ac, av);
-        else if (vo->index == 2) sdk_outlet_anything(x->out_fill, s, ac, av);
+        if (vo->index == 0) sdk_outlet_anything(x->out_data, s, ac, av);
+        else if (vo->index == 1) sdk_outlet_anything(x->out_fill, s, ac, av);
+        else if (vo->index == 2) sdk_outlet_anything(x->out_reach, s, ac, av);
+        else if (vo->index == 3 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, ac, av);
     }
 }
 
@@ -388,9 +391,10 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 4) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+        if (vo->index == 0) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 3) sdk_outlet_list(x->out_data, s, ac, av);
+        if (vo->index == 0) sdk_outlet_list(x->out_data, s, ac, av);
+        else if (vo->index == 2) sdk_outlet_list(x->out_reach, s, ac, av);
     }
 }
 
@@ -403,7 +407,7 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
     } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 1) sdk_outlet_int(x->out_reach, n);
+        if (vo->index == 2) sdk_outlet_int(x->out_reach, n);
     }
 }
 
@@ -414,7 +418,7 @@ void rebar_intercept_outlet_float(void *o, double f) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 3) rebar_buildspans_offset(x->buildspans_inst, f);
+        if (vo->index == 1) rebar_buildspans_offset(x->buildspans_inst, f);
     }
 }
 
@@ -425,7 +429,7 @@ void rebar_intercept_outlet_bang(void *o) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 4) rebar_buildspans_bang(x->buildspans_inst);
+        if (vo->index == 0) rebar_buildspans_bang(x->buildspans_inst);
     }
 }
 
@@ -476,17 +480,17 @@ void ext_main(void *r) {
     critical_new(&g_rebar_crit);
     common_symbols_init();
 
-    sdk_outlet_new = (t_outlet_new_fn)object_getmethod(gensym("outlet_new")->s_thing, gensym("outlet_new"));
-    sdk_bangout = (t_bangout_fn)object_getmethod(gensym("bangout")->s_thing, gensym("bangout"));
-    sdk_intout = (t_intout_fn)object_getmethod(gensym("intout")->s_thing, gensym("intout"));
-    sdk_floatout = (t_floatout_fn)object_getmethod(gensym("floatout")->s_thing, gensym("floatout"));
-    sdk_listout = (t_listout_fn)object_getmethod(gensym("listout")->s_thing, gensym("listout"));
+    sdk_outlet_new = (t_outlet_new_fn)(outlet_new);
+    sdk_bangout = (t_bangout_fn)(bangout);
+    sdk_intout = (t_intout_fn)(intout);
+    sdk_floatout = (t_floatout_fn)(floatout);
+    sdk_listout = (t_listout_fn)(listout);
 
-    sdk_outlet_anything = (t_outlet_anything_fn)object_getmethod(gensym("outlet_anything")->s_thing, gensym("outlet_anything"));
-    sdk_outlet_list = (t_outlet_list_fn)object_getmethod(gensym("outlet_list")->s_thing, gensym("outlet_list"));
-    sdk_outlet_int = (t_outlet_int_fn)object_getmethod(gensym("outlet_int")->s_thing, gensym("outlet_int"));
-    sdk_outlet_float = (t_outlet_float_fn)object_getmethod(gensym("outlet_float")->s_thing, gensym("outlet_float"));
-    sdk_outlet_bang = (t_outlet_bang_fn)object_getmethod(gensym("outlet_bang")->s_thing, gensym("outlet_bang"));
+    sdk_outlet_anything = (t_outlet_anything_fn)(outlet_anything);
+    sdk_outlet_list = (t_outlet_list_fn)(outlet_list);
+    sdk_outlet_int = (t_outlet_int_fn)(outlet_int);
+    sdk_outlet_float = (t_outlet_float_fn)(outlet_float);
+    sdk_outlet_bang = (t_outlet_bang_fn)(outlet_bang);
 
     #undef class_new
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
@@ -546,9 +550,9 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         x->out_log = sdk_outlet_new((t_object *)x, NULL);
-        x->out_reach = sdk_intout((t_object *)x);
-        x->out_fill = sdk_bangout((t_object *)x);
-        x->out_data = sdk_listout((t_object *)x);
+        x->out_reach = sdk_outlet_new((t_object *)x, NULL);
+        x->out_fill = sdk_outlet_new((t_object *)x, NULL);
+        x->out_data = sdk_outlet_new((t_object *)x, NULL);
 
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
@@ -637,9 +641,9 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
     else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Data List [palette, track, bar, offset] and Reach Lists from Crucible"); break;
-            case 1: sprintf(s, "Outlet 2: Fill bang from Crucible"); break;
-            case 2: sprintf(s, "Outlet 3: Reach (int) from Crucible"); break;
+            case 0: sprintf(s, "Outlet 1: Data and Reach Lists from Crucible"); break;
+            case 1: sprintf(s, "Outlet 2: Fill bang/message from Crucible"); break;
+            case 2: sprintf(s, "Outlet 3: Reach Lists (song/track) from Crucible"); break;
             case 3: sprintf(s, "Outlet 4: Logging and Status messages"); break;
         }
     }
