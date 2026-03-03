@@ -36,7 +36,6 @@ typedef struct _weaver_track {
     t_crossfade_state xf;
     t_symbol *palette[2];
     double offset[2];
-    double abs_offset[2];
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -116,11 +115,9 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
         if (tr) {
             crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
             tr->palette[0] = gensym("-");
-            tr->offset[0] = 0.0;
-            tr->abs_offset[0] = -1.0;
+            tr->offset[0] = -1.0;
             tr->palette[1] = gensym("-");
-            tr->offset[1] = 0.0;
-            tr->abs_offset[1] = -1.0;
+            tr->offset[1] = -1.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -519,45 +516,47 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     // 2. Crossfade Trigger
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
-    double rel_offset = offset_ms - bar_ms;
-
     int active = (int)round(tr->control);
-    if (no_crossfade) {
-        // Main ramp loop jump: update active source immediately, no crossfade
-        tr->palette[active] = palette;
-        tr->offset[active] = rel_offset;
-        tr->abs_offset[active] = offset_ms;
-        tr->src_found[active] = 0;
-        tr->src_error_sent[active] = 0;
-        tr->control = (double)active;
+    if (is_bar_0) {
+        if (no_crossfade) {
+            // Main song ramp loop: jump immediately
+            tr->palette[active] = palette;
+            tr->offset[active] = offset_ms;
+            tr->src_found[active] = 0;
+            tr->src_error_sent[active] = 0;
+            tr->control = (double)active;
 
-        // Force ramps to solid states (Slot 0 ON if active==0, Slot 1 ON if active==1)
-        tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
-        tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
-        tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
-        tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
-        tr->xf.last_control = tr->control;
-        tr->xf.direction = 0.0;
-        tr->busy = 0;
-
-        weaver_log(x, "Track %lld: Main ramp loop jump to %.2f ms (%s@%.2f)", track, bar_ms, palette->s_name, offset_ms);
-    } else {
-        t_symbol *s_silence = gensym("-");
-        int is_silence = (palette == s_silence || palette == _sym_nothing);
-
-        int change = (palette != tr->palette[active] || (offset_ms != tr->abs_offset[active] && !is_silence));
-
-        if ((is_bar_0 && !is_silence) || change) {
+            // Force ramps to solid states (Slot 0 ON if active==0, Slot 1 ON if active==1)
+            tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
+            tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
+            tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
+            tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
+            tr->xf.last_control = tr->control;
+            tr->xf.direction = 0.0;
+            tr->busy = 0;
+            weaver_log(x, "Track %lld: Main song ramp loop jump to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
+        } else {
+            // Track loop: crossfade
             int other = 1 - active;
             tr->palette[other] = palette;
-            tr->offset[other] = rel_offset;
-            tr->abs_offset[other] = offset_ms;
+            tr->offset[other] = offset_ms;
             tr->src_found[other] = 0;
             tr->src_error_sent[other] = 0;
             tr->control = (double)other;
-            // Set direction for the crossfade module to trigger on the first sample
             tr->xf.direction = tr->control - tr->xf.last_control;
-            weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f (is_bar_0=%d)", track, bar_ms, palette->s_name, offset_ms, is_bar_0);
+            weaver_log(x, "Track %lld: Track loop crossfade to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
+        }
+    } else {
+        int change = (palette != tr->palette[active] || offset_ms != tr->offset[active]);
+        if (change) {
+            int other = 1 - active;
+            tr->palette[other] = palette;
+            tr->offset[other] = offset_ms;
+            tr->src_found[other] = 0;
+            tr->src_error_sent[other] = 0;
+            tr->control = (double)other;
+            tr->xf.direction = tr->control - tr->xf.last_control;
+            weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
         }
     }
 
@@ -627,12 +626,13 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         if (f < 0) f += n_frames_dest;
 
         double current_ms = (double)f_abs * 1000.0 / sr_dest;
+        double track_ramp_ms = fmod(current_ms, tr->track_length);
         double max_abs[2] = {0.0, 0.0};
         long f_src[2] = {-1, -1};
 
         for (int i = 0; i < 2; i++) {
             if (samples_src[i]) {
-                double src_ms = current_ms + tr->offset[i];
+                double src_ms = tr->offset[i] + track_ramp_ms;
                 f_src[i] = (long)round(src_ms * sr_src[i] / 1000.0);
                 if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
                     for (long c = 0; c < n_chans_src[i]; c++) {
