@@ -181,6 +181,7 @@ void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_offset(t_buildspans *x, double f);
+t_max_err buildspans_offset_set(t_buildspans *x, void *attr, long argc, t_atom *argv);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
@@ -479,6 +480,11 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
     CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
+    CLASS_ATTR_DOUBLE(c, "offset", 0, t_buildspans, current_offset);
+    CLASS_ATTR_LABEL(c, "offset", 0, "Global Offset");
+    CLASS_ATTR_ACCESSORS(c, "offset", NULL, (method)buildspans_offset_set);
+    CLASS_ATTR_SAVE(c, "offset", 0);
+
     class_register(CLASS_BOX, c);
     buildspans_class = c;
 }
@@ -556,34 +562,59 @@ void buildspans_clear(t_buildspans *x) {
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->offset_set = 0;
-    buildspans_log(x, "buildspans cleared.");
+    buildspans_log(x, "buildspans cleared. offset_set reset to 0, current_offset reset to %.2f.", x->current_offset);
     buildspans_visualize_memory(x);
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc > 0) buildspans_offset(x, atom_getfloat(argv));
+    if (argc > 0) {
+        double f = atom_getfloat(argv);
+        buildspans_log(x, "buildspans_offset_deferred: Updating offset to %.2f on Main thread.", f);
+        buildspans_offset(x, f);
+    }
+}
+
+t_max_err buildspans_offset_set(t_buildspans *x, void *attr, long argc, t_atom *argv) {
+    if (argc && argv) {
+        double f = atom_getfloat(argv);
+        buildspans_log(x, "@offset attribute set to %.2f", f);
+        buildspans_offset(x, f);
+    }
+    return MAX_ERR_NONE;
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
     if (x->defer && !systhread_ismainthread()) {
+        buildspans_log(x, "buildspans_offset: Deferring offset update to %.2f to Main thread.", f);
         t_atom a;
         atom_setfloat(&a, f);
         defer_low(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
 
+    buildspans_log(x, "buildspans_offset: Received offset update to %.2f", f);
+    buildspans_log(x, "Current state: offset_set=%ld, current_offset=%.2f", x->offset_set, x->current_offset);
+
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
+    // buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
 
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
 
+    buildspans_log(x, "Rounded values for duplication check: new=%ld, old=%ld", new_rounded_offset, old_rounded_offset);
+
     // Only duplicate if the rounded offset is different and the old offset was not the initial default.
-    if (new_rounded_offset == old_rounded_offset || !x->offset_set) {
+    if (!x->offset_set) {
         x->current_offset = f;
         x->offset_set = 1;
-        buildspans_log(x, "Global offset updated to: %.2f. No duplication.", f);
+        buildspans_log(x, "First explicit offset received. Global offset initialized to: %.2f. Skipping duplication.", f);
+        return;
+    }
+
+    if (new_rounded_offset == old_rounded_offset) {
+        x->current_offset = f;
+        buildspans_log(x, "Global offset updated to: %.2f. Rounded offset (%ld) unchanged. Skipping duplication.", f, new_rounded_offset);
         return;
     }
 
@@ -842,8 +873,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (!x->offset_set) {
         x->current_offset = calc_timestamp;
-        x->offset_set = 1;
-        buildspans_log(x, "Offset not set. Automatically initializing offset to calc_timestamp: %.2f", x->current_offset);
+        // The offset is automatically initialized from incoming notes until an explicit
+        // manual offset is received via the inlet or attribute, which will then set offset_set to 1.
+        buildspans_log(x, "CONTINGENCY: Global offset not set. Automatically initializing offset to calc_timestamp: %.2f", x->current_offset);
     }
 
     buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);

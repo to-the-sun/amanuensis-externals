@@ -104,6 +104,12 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="offset" get="1" set="1" type="double" size="1">
+			<digest>Global Offset</digest>
+			<description>
+				Sets the high-precision global offset in milliseconds. Setting this attribute triggers the same span duplication logic as sending a float to the second inlet.
+			</description>
+		</attribute>
 		<attribute name="visualize" get="1" set="1" type="long" size="1">
 			<digest>Enable Visualization</digest>
 			<description>When enabled (1), the object sends JSON data to the connected visualization script.</description>
