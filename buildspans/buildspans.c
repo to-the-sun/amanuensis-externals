@@ -172,7 +172,6 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
-    long offset_set;
 } t_buildspans;
 
 // Function prototypes
@@ -500,7 +499,6 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
-        x->offset_set = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -555,8 +553,7 @@ void buildspans_clear(t_buildspans *x) {
     x->current_offset = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
-    x->offset_set = 0;
-    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0, offset_set reset to 0).");
+    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
 
@@ -573,7 +570,7 @@ void buildspans_offset(t_buildspans *x, double f) {
         return;
     }
 
-    buildspans_log(x, "buildspans_offset received: %.2f (current_offset: %.2f, offset_set: %ld)", f, x->current_offset, x->offset_set);
+    buildspans_log(x, "buildspans_offset received: %.2f (current_offset: %.2f)", f, x->current_offset);
 
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
@@ -582,12 +579,11 @@ void buildspans_offset(t_buildspans *x, double f) {
     long old_rounded_offset = (long)round(x->current_offset);
 
     // Only duplicate if the rounded offset is different and the old offset was not the initial default.
-    if (new_rounded_offset == old_rounded_offset || !x->offset_set) {
-        x->current_offset = f;
-        if (!x->offset_set) {
-            buildspans_log(x, "offset_set initialized to 1 (via buildspans_offset).");
+    if (new_rounded_offset == old_rounded_offset || x->current_offset <= 0.0) {
+        if (x->current_offset <= 0.0) {
+            buildspans_log(x, "Global offset initialized via buildspans_offset.");
         }
-        x->offset_set = 1;
+        x->current_offset = f;
         buildspans_log(x, "Global offset updated to: %.2f. No duplication.", f);
         return;
     }
@@ -845,10 +841,10 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    if (!x->offset_set) {
+    if (x->current_offset <= 0.0) {
         double old_offset = x->current_offset;
         x->current_offset = calc_timestamp;
-        buildspans_log(x, "Offset not set. Automatically initializing offset to calc_timestamp: %.2f (previously %.2f). This will repeat for every incoming note until an explicit offset is received.", x->current_offset, old_offset);
+        buildspans_log(x, "Offset not set (current_offset <= 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
     }
 
     buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);
