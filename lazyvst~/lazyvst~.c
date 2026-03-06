@@ -5,6 +5,8 @@
 
 #define kEffectMagic 0x56737450
 
+#pragma pack(push, 8)
+
 struct AEffect;
 
 typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
@@ -33,17 +35,24 @@ typedef struct AEffect {
     int32_t version;
     void* processReplacing;
     void* processDoubleReplacing;
+    char future[56];
 } AEffect;
+
+#pragma pack(pop)
 
 typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
 
 enum {
     effOpen = 0,
     effClose,
-    effGetEffectName = 45
+    effGetEffectName = 45,
+    effGetProductString = 48
 };
 
 intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
+    if (opcode == 1) { // audioMasterVersion
+        return 2400;
+    }
     return 0;
 }
 
@@ -83,7 +92,7 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                 post("lazyvst~: File size: %lld bytes", size.QuadPart);
                 post("lazyvst~: Attributes: 0x%lx", fileInfo.dwFileAttributes);
 
-                x->h_module = LoadLibraryA(path);
+                x->h_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
                 if (x->h_module) {
                     post("lazyvst~: Successfully loaded library at address %p", x->h_module);
 
@@ -104,6 +113,11 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                             memset(effectName, 0, 256);
                             effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
 
+                            if (effectName[0] == '\0') {
+                                // Fallback to Product String
+                                effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
+                            }
+
                             if (effectName[0] != '\0') {
                                 post("lazyvst~: VST Name: %s", effectName);
                             } else {
@@ -111,8 +125,10 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                             }
 
                             effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
+                        } else if (effect) {
+                            post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
                         } else {
-                            post("lazyvst~: Failed to instantiate VST or invalid magic number.");
+                            post("lazyvst~: Entry point returned NULL.");
                         }
                     } else {
                         post("lazyvst~: VST entry point NOT FOUND.");
