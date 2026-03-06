@@ -1,6 +1,51 @@
 #include <windows.h>
+#include <stdint.h>
 #include "ext.h"
 #include "ext_obex.h"
+
+#define kEffectMagic 0x56737450
+
+struct AEffect;
+
+typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+typedef intptr_t (VstDispatcherProc)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+
+typedef struct AEffect {
+    int32_t magic;
+    VstDispatcherProc* dispatcher;
+    void* process;
+    void* setParameter;
+    void* getParameter;
+    int32_t numPrograms;
+    int32_t numParams;
+    int32_t numInputs;
+    int32_t numOutputs;
+    int32_t flags;
+    intptr_t resvd1;
+    intptr_t resvd2;
+    int32_t initialDelay;
+    int32_t realQualities;
+    int32_t offQualities;
+    float ioRatio;
+    void* object;
+    void* user;
+    int32_t uniqueID;
+    int32_t version;
+    void* processReplacing;
+    void* processDoubleReplacing;
+} AEffect;
+
+typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
+
+enum {
+    effOpen = 0,
+    effClose,
+    effGetEffectName = 45
+};
+
+intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
+    return 0;
+}
 
 typedef struct _lazyvst {
     t_object x_obj;
@@ -42,13 +87,36 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                 if (x->h_module) {
                     post("lazyvst~: Successfully loaded library at address %p", x->h_module);
 
-                    FARPROC main_ptr = GetProcAddress(x->h_module, "main");
-                    FARPROC vmain_ptr = GetProcAddress(x->h_module, "VSTPluginMain");
-                    FARPROC gpf_ptr = GetProcAddress(x->h_module, "GetPluginFactory");
+                    VstPluginMainProc* main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
+                    if (!main_ptr) {
+                        main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
+                    }
 
-                    post("lazyvst~: Entry point 'main': %s", main_ptr ? "FOUND" : "NOT FOUND");
-                    post("lazyvst~: Entry point 'VSTPluginMain': %s", vmain_ptr ? "FOUND" : "NOT FOUND");
-                    post("lazyvst~: Entry point 'GetPluginFactory': %s", gpf_ptr ? "FOUND" : "NOT FOUND");
+                    if (main_ptr) {
+                        post("lazyvst~: VST entry point found.");
+                        AEffect* effect = main_ptr((VstHostCallback*)hostCallback);
+                        if (effect && effect->magic == kEffectMagic) {
+                            post("lazyvst~: VST instance created successfully.");
+
+                            effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
+
+                            char effectName[256];
+                            memset(effectName, 0, 256);
+                            effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
+
+                            if (effectName[0] != '\0') {
+                                post("lazyvst~: VST Name: %s", effectName);
+                            } else {
+                                post("lazyvst~: VST Name: [Unknown]");
+                            }
+
+                            effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
+                        } else {
+                            post("lazyvst~: Failed to instantiate VST or invalid magic number.");
+                        }
+                    } else {
+                        post("lazyvst~: VST entry point NOT FOUND.");
+                    }
                 } else {
                     post("lazyvst~: Failed to load library: %s (Error %lu)", path, GetLastError());
                 }
