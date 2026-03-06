@@ -124,6 +124,15 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                                 post("lazyvst~: VST Name: [Unknown]");
                             }
 
+                            post("lazyvst~: Programs: %d", effect->numPrograms);
+                            post("lazyvst~: Parameters: %d", effect->numParams);
+                            post("lazyvst~: Inputs: %d", effect->numInputs);
+                            post("lazyvst~: Outputs: %d", effect->numOutputs);
+                            post("lazyvst~: Initial Delay: %d", effect->initialDelay);
+                            post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
+                            post("lazyvst~: VST Version: %d", effect->version);
+                            post("lazyvst~: Flags: 0x%08X", effect->flags);
+
                             effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
                         } else if (effect) {
                             post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
