@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="lazyvst~" module="msp" category="Utility">
-	<digest>A minimal VST metadata utility</digest>
+	<digest>A VST metadata utility</digest>
 	<description>
-		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its first argument. Upon creation, it identifies the file and posts metadata such as size and attributes directly to the Max console without loading the plugin into memory.
+		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its first argument. Upon creation, it identifies the file, posts metadata such as size and attributes, and instantiates the plugin to retrieve and post its internal Effect Name (as it would appear in a title bar) directly to the Max console.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
