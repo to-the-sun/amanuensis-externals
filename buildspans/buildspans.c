@@ -199,6 +199,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
+void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
 double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output);
@@ -591,7 +592,39 @@ void buildspans_offset(t_buildspans *x, double f) {
     // Update the global offset first
     double old_offset = x->current_offset;
     x->current_offset = f;
-    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Duplicating one span for each active track.", f, new_rounded_offset);
+    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld).", f, new_rounded_offset);
+
+    // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
+    // Conduct a modified discontiguity check for every track across every palette BEFORE duplication.
+    long num_keys_check;
+    t_symbol **keys_check;
+    dictionary_getkeys(x->building, &num_keys_check, &keys_check);
+    if (keys_check) {
+        t_dictionary *unique_pal_tracks = dictionary_new();
+        for (long i = 0; i < num_keys_check; i++) {
+            char *pal_str, *track_str, *bar_str, *prop_str;
+            if (parse_hierarchical_key(keys_check[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                char combined[512];
+                snprintf(combined, 512, "%s::%s", pal_str, track_str);
+                t_symbol *combined_sym = gensym(combined);
+                if (!dictionary_hasentry(unique_pal_tracks, combined_sym)) {
+                    dictionary_appendsym(unique_pal_tracks, combined_sym, _sym_nothing);
+                    const char *dash = strchr(track_str, '-');
+                    if (dash) {
+                        double track_offset = (double)atol(dash + 1);
+                        long relative_f = (long)round(f - track_offset);
+                        buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
+                    }
+                }
+                sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+            }
+        }
+        object_free(unique_pal_tracks);
+        sysmem_freeptr(keys_check);
+        buildspans_run_cleanup(x);
+    }
+
+    buildspans_log(x, "Duplicating one span for each active track on palette %s.", x->current_palette->s_name);
 
     long num_keys;
     t_symbol **keys;
@@ -1037,6 +1070,66 @@ void buildspans_flush_track(t_buildspans *x, long track_num) {
 }
 
 
+void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long relative_comparison_val) {
+    long bar_length = buildspans_get_bar_length(x);
+    if (bar_length <= 0) return;
+
+    // Find the most recent bar for the current track
+    long last_bar_timestamp = -1;
+    long num_keys;
+    t_symbol **keys;
+    dictionary_getkeys(x->building, &num_keys, &keys);
+    if (keys) {
+        for (long i = 0; i < num_keys; i++) {
+            char *key_pal, *key_track, *key_bar, *key_prop;
+            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
+                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                    long bar_val = atol(key_bar);
+                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                        last_bar_timestamp = bar_val;
+                    }
+                }
+                sysmem_freeptr(key_pal);
+                sysmem_freeptr(key_track);
+                sysmem_freeptr(key_bar);
+                sysmem_freeptr(key_prop);
+            }
+        }
+        sysmem_freeptr(keys);
+    }
+
+    if (last_bar_timestamp != -1) {
+        buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
+
+        // Re-find the most recent bar after potential pruning
+        long most_recent_bar_after_rating_check = -1;
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            for (long i = 0; i < num_keys; i++) {
+                char *key_pal, *key_track, *key_bar, *key_prop;
+                if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
+                    if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                        long bar_val = atol(key_bar);
+                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
+                            most_recent_bar_after_rating_check = bar_val;
+                        }
+                    }
+                    sysmem_freeptr(key_pal);
+                    sysmem_freeptr(key_track);
+                    sysmem_freeptr(key_bar);
+                    sysmem_freeptr(key_prop);
+                }
+            }
+            sysmem_freeptr(keys);
+        }
+
+        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > most_recent_bar_after_rating_check + bar_length) {
+            buildspans_log(x, "Discontiguous gap detected. Comparison value %ld is more than %ldms after last bar %ld.", relative_comparison_val, bar_length, most_recent_bar_after_rating_check);
+            buildspans_end_track_span(x, palette_sym, track_sym);
+        }
+    }
+}
+
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
     buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
@@ -1078,35 +1171,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // --- Deferred span ending logic (only if a new bar is detected) ---
     if (is_new_bar && last_bar_timestamp != -1) {
-        buildspans_deferred_rating_check(x, x->current_palette, track_sym, last_bar_timestamp);
-
-        // Discontiguity check: find the most recent bar for this track AGAIN
-        // as the deferred check might have pruned some bars.
-        long most_recent_bar_after_rating_check = -1;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *key_pal, *key_track, *key_bar, *key_prop;
-                if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                    if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                        long bar_val = atol(key_bar);
-                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
-                            most_recent_bar_after_rating_check = bar_val;
-                        }
-                    }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                }
-            }
-            sysmem_freeptr(keys);
-        }
-
-        if (most_recent_bar_after_rating_check != -1 && bar_timestamp_val > most_recent_bar_after_rating_check + bar_length) {
-            buildspans_log(x, "Discontiguous bar detected. New bar %ld is more than %ldms after last bar %ld.", bar_timestamp_val, bar_length, most_recent_bar_after_rating_check);
-            buildspans_end_track_span(x, x->current_palette, track_sym);
-        }
+        buildspans_check_discontiguity(x, x->current_palette, track_sym, bar_timestamp_val);
     }
 
     // --- ADD OR UPDATE BAR ---
@@ -2104,7 +2169,7 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
     }
 
     if (latest_absolute < offset_val) {
-        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
+        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is strictly before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
         return 0;
     }
 
