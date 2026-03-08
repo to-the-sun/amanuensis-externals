@@ -3,7 +3,7 @@
 <c74object name="lazyvst~" module="msp" category="Utility">
 	<digest>A VST metadata utility</digest>
 	<description>
-		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its first argument. Upon creation, it identifies the file, posts metadata such as size and attributes, and instantiates the plugin to retrieve and post its internal Effect Name (as it would appear in a title bar) directly to the Max console.
+		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its first argument. Upon creation, it identifies the file, posts metadata such as size and attributes, and instantiates the plugin to retrieve and post its internal Effect Name (as it would appear in a title bar) to the logging outlet. This process occurs asynchronously in a background thread to prevent blocking the Max UI or scheduler.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -11,9 +11,23 @@
 		<metadata name="tag">Utility</metadata>
 	</metadatalist>
 	<!--INLETS-->
-	<inletlist />
+	<inletlist>
+		<inlet id="0" type="symbol">
+			<digest>Absolute path to VST plugin</digest>
+			<description>The absolute file path to the 64-bit Windows VST plugin (.dll) to be scanned.</description>
+		</inlet>
+	</inletlist>
 	<!--OUTLETS-->
-	<outletlist />
+	<outletlist>
+		<outlet id="0" type="bang">
+			<digest>Loading complete</digest>
+			<description>A bang is sent when the background scanning process has finished.</description>
+		</outlet>
+		<outlet id="1" type="anything">
+			<digest>Logging outlet</digest>
+			<description>Detailed status messages and VST metadata are sent here if the @log attribute is enabled.</description>
+		</outlet>
+	</outletlist>
 	<!--ARGUMENTS-->
 	<argumentlist>
 		<argument name="path" type="symbol" optional="0">
@@ -23,7 +37,14 @@
 	<!--MESSAGES-->
 	<methodlist />
 	<!--ATTRIBUTES-->
-	<attributelist />
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Logging</digest>
+			<description>
+				Enables (1) or disables (0) verbose logging of the VST metadata and loading process to the logging outlet.
+			</description>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="weaver~" />
