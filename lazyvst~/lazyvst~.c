@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "ext.h"
 #include "ext_obex.h"
+#include "ext_systhread.h"
 
 #define kEffectMagic 0x56737450
 
@@ -59,10 +60,13 @@ intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t v
 typedef struct _lazyvst {
     t_object x_obj;
     HMODULE h_module;
+    t_systhread thread;
+    char path[2048];
 } t_lazyvst;
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
+void *lazyvst_worker(t_lazyvst *x);
 
 static t_class *lazyvst_class;
 
@@ -73,81 +77,92 @@ void ext_main(void *r) {
     lazyvst_class = c;
 }
 
+void *lazyvst_worker(t_lazyvst *x) {
+    const char *path = x->path;
+
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExA(path, GetFileExInfoStandard, &fileInfo)) {
+        LARGE_INTEGER size;
+        size.LowPart = fileInfo.nFileSizeLow;
+        size.HighPart = fileInfo.nFileSizeHigh;
+
+        post("lazyvst~: Identified file: %s", path);
+        post("lazyvst~: File size: %lld bytes", size.QuadPart);
+        post("lazyvst~: Attributes: 0x%lx", fileInfo.dwFileAttributes);
+
+        x->h_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (x->h_module) {
+            post("lazyvst~: Successfully loaded library at address %p", x->h_module);
+
+            VstPluginMainProc* main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
+            if (!main_ptr) {
+                main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
+            }
+
+            if (main_ptr) {
+                post("lazyvst~: VST entry point found.");
+                AEffect* effect = main_ptr((VstHostCallback*)hostCallback);
+                if (effect && effect->magic == kEffectMagic) {
+                    post("lazyvst~: VST instance created successfully.");
+
+                    effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
+
+                    char effectName[256];
+                    memset(effectName, 0, 256);
+                    effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
+
+                    if (effectName[0] == '\0') {
+                        // Fallback to Product String
+                        effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
+                    }
+
+                    if (effectName[0] != '\0') {
+                        post("lazyvst~: VST Name: %s", effectName);
+                    } else {
+                        post("lazyvst~: VST Name: [Unknown]");
+                    }
+
+                    post("lazyvst~: Programs: %d", effect->numPrograms);
+                    post("lazyvst~: Parameters: %d", effect->numParams);
+                    post("lazyvst~: Inputs: %d", effect->numInputs);
+                    post("lazyvst~: Outputs: %d", effect->numOutputs);
+                    post("lazyvst~: Initial Delay: %d", effect->initialDelay);
+                    post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
+                    post("lazyvst~: VST Version: %d", effect->version);
+                    post("lazyvst~: Flags: 0x%08X", effect->flags);
+
+                    effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
+                } else if (effect) {
+                    post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
+                } else {
+                    post("lazyvst~: Entry point returned NULL.");
+                }
+            } else {
+                post("lazyvst~: VST entry point NOT FOUND.");
+            }
+        } else {
+            post("lazyvst~: Failed to load library: %s (Error %lu)", path, GetLastError());
+        }
+    } else {
+        post("lazyvst~: Could not identify file: %s (Error %lu)", path, GetLastError());
+    }
+    return NULL;
+}
+
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
 
     if (x) {
         x->h_module = NULL;
+        x->thread = NULL;
+        x->path[0] = '\0';
+
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
             t_symbol *path_sym = atom_getsym(argv);
-            const char *path = path_sym->s_name;
+            strncpy(x->path, path_sym->s_name, 2048);
+            x->path[2047] = '\0';
 
-            WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-            if (GetFileAttributesExA(path, GetFileExInfoStandard, &fileInfo)) {
-                LARGE_INTEGER size;
-                size.LowPart = fileInfo.nFileSizeLow;
-                size.HighPart = fileInfo.nFileSizeHigh;
-
-                post("lazyvst~: Identified file: %s", path);
-                post("lazyvst~: File size: %lld bytes", size.QuadPart);
-                post("lazyvst~: Attributes: 0x%lx", fileInfo.dwFileAttributes);
-
-                x->h_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-                if (x->h_module) {
-                    post("lazyvst~: Successfully loaded library at address %p", x->h_module);
-
-                    VstPluginMainProc* main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
-                    if (!main_ptr) {
-                        main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
-                    }
-
-                    if (main_ptr) {
-                        post("lazyvst~: VST entry point found.");
-                        AEffect* effect = main_ptr((VstHostCallback*)hostCallback);
-                        if (effect && effect->magic == kEffectMagic) {
-                            post("lazyvst~: VST instance created successfully.");
-
-                            effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
-
-                            char effectName[256];
-                            memset(effectName, 0, 256);
-                            effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
-
-                            if (effectName[0] == '\0') {
-                                // Fallback to Product String
-                                effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
-                            }
-
-                            if (effectName[0] != '\0') {
-                                post("lazyvst~: VST Name: %s", effectName);
-                            } else {
-                                post("lazyvst~: VST Name: [Unknown]");
-                            }
-
-                            post("lazyvst~: Programs: %d", effect->numPrograms);
-                            post("lazyvst~: Parameters: %d", effect->numParams);
-                            post("lazyvst~: Inputs: %d", effect->numInputs);
-                            post("lazyvst~: Outputs: %d", effect->numOutputs);
-                            post("lazyvst~: Initial Delay: %d", effect->initialDelay);
-                            post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
-                            post("lazyvst~: VST Version: %d", effect->version);
-                            post("lazyvst~: Flags: 0x%08X", effect->flags);
-
-                            effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
-                        } else if (effect) {
-                            post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
-                        } else {
-                            post("lazyvst~: Entry point returned NULL.");
-                        }
-                    } else {
-                        post("lazyvst~: VST entry point NOT FOUND.");
-                    }
-                } else {
-                    post("lazyvst~: Failed to load library: %s (Error %lu)", path, GetLastError());
-                }
-            } else {
-                post("lazyvst~: Could not identify file: %s (Error %lu)", path, GetLastError());
-            }
+            systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
         } else {
             post("lazyvst~: No valid path argument provided.");
         }
@@ -156,6 +171,10 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void lazyvst_free(t_lazyvst *x) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+        x->thread = NULL;
+    }
     if (x->h_module) {
         FreeLibrary(x->h_module);
         x->h_module = NULL;
