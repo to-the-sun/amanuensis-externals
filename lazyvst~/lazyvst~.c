@@ -1,8 +1,10 @@
 #include <windows.h>
 #include <stdint.h>
+#include <string.h>
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_systhread.h"
+#include "z_dsp.h"
 
 #define kEffectMagic 0x56737450
 
@@ -73,7 +75,7 @@ intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t v
 }
 
 typedef struct _lazyvst {
-    t_object x_obj;
+    t_pxobject x_obj;
     HMODULE h_module;
     t_systhread thread;
     char path[2048];
@@ -81,6 +83,8 @@ typedef struct _lazyvst {
     HWND hwnd;
     t_qelem *q_instantiate;
     VstPluginMainProc* main_ptr;
+    long num_inputs;
+    long num_outputs;
 } t_lazyvst;
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
@@ -89,6 +93,10 @@ void *lazyvst_worker(t_lazyvst *x);
 void lazyvst_open(t_lazyvst *x);
 void lazyvst_do_open(t_lazyvst *x);
 void lazyvst_do_instantiate(t_lazyvst *x);
+void lazyvst_get_counts(t_lazyvst *x);
+void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
+void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
+void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 
 static t_class *lazyvst_class;
 
@@ -149,7 +157,10 @@ void ext_main(void *r) {
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
+    class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
+    class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
+    class_dspinit(c);
     class_register(CLASS_BOX, c);
     lazyvst_class = c;
 
@@ -247,6 +258,55 @@ void *lazyvst_worker(t_lazyvst *x) {
     return NULL;
 }
 
+void lazyvst_get_counts(t_lazyvst *x) {
+    x->num_inputs = 0;
+    x->num_outputs = 0;
+
+    if (x->path[0] == '\0') return;
+
+    HMODULE h_mod = LoadLibraryExA(x->path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (h_mod) {
+        VstPluginMainProc* main_p = (VstPluginMainProc*)GetProcAddress(h_mod, "VSTPluginMain");
+        if (!main_p) {
+            main_p = (VstPluginMainProc*)GetProcAddress(h_mod, "main");
+        }
+
+        if (main_p) {
+            AEffect* effect = main_p((VstHostCallback*)hostCallback);
+            if (effect && effect->magic == kEffectMagic) {
+                x->num_inputs = (long)effect->numInputs;
+                x->num_outputs = (long)effect->numOutputs;
+                effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
+            }
+        }
+        FreeLibrary(h_mod);
+    }
+}
+
+void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)lazyvst_perform64, 0, NULL);
+}
+
+void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+    for (int i = 0; i < numouts; i++) {
+        if (outs[i]) {
+            memset(outs[i], 0, sizeof(double) * sampleframes);
+        }
+    }
+}
+
+void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
+    if (m == ASSIST_INLET) {
+        if (a == 0) {
+            sprintf(s, "Inlet %ld (signal/messages)", a + 1);
+        } else {
+            sprintf(s, "Inlet %ld (signal)", a + 1);
+        }
+    } else {
+        sprintf(s, "Outlet %ld (signal)", a + 1);
+    }
+}
+
 void lazyvst_do_instantiate(t_lazyvst *x) {
     if (x->main_ptr) {
         AEffect* effect = x->main_ptr((VstHostCallback*)hostCallback);
@@ -296,6 +356,8 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->path[0] = '\0';
         x->effect = NULL;
         x->hwnd = NULL;
+        x->num_inputs = 0;
+        x->num_outputs = 0;
         x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
@@ -303,8 +365,17 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
             strncpy(x->path, path_sym->s_name, 2048);
             x->path[2047] = '\0';
 
+            lazyvst_get_counts(x);
+
+            dsp_setup((t_pxobject *)x, x->num_inputs);
+
+            for (long i = 0; i < x->num_outputs; i++) {
+                outlet_new((t_object *)x, "signal");
+            }
+
             systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
         } else {
+            dsp_setup((t_pxobject *)x, 0);
             post("lazyvst~: No valid path argument provided.");
         }
     }
@@ -312,6 +383,8 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void lazyvst_free(t_lazyvst *x) {
+    dsp_free((t_pxobject *)x);
+
     if (x->q_instantiate) {
         qelem_free(x->q_instantiate);
         x->q_instantiate = NULL;

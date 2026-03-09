@@ -11,9 +11,19 @@
 		<metadata name="tag">Utility</metadata>
 	</metadatalist>
 	<!--INLETS-->
-	<inletlist />
+	<inletlist>
+		<inlet id="0" type="signal/messages">
+			<digest>Main Signal Input / Messages</digest>
+			<description>The first inlet accepts signals and control messages. Subsequent inlets are signal-only and correspond to the VST's audio inputs.</description>
+		</inlet>
+	</inletlist>
 	<!--OUTLETS-->
-	<outletlist />
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Audio Output</digest>
+			<description>The outlets correspond to the VST's audio outputs.</description>
+		</outlet>
+	</outletlist>
 	<!--ARGUMENTS-->
 	<argumentlist>
 		<argument name="path" type="symbol" optional="0">
