@@ -39,6 +39,13 @@ typedef struct AEffect {
     char future[56];
 } AEffect;
 
+typedef struct ERect {
+    int16_t top;
+    int16_t left;
+    int16_t bottom;
+    int16_t right;
+} ERect;
+
 #pragma pack(pop)
 
 typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
@@ -46,8 +53,16 @@ typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
 enum {
     effOpen = 0,
     effClose,
+    effEditGetRect = 13,
+    effEditOpen = 14,
+    effEditClose = 15,
+    effEditIdle = 19,
     effGetEffectName = 45,
     effGetProductString = 48
+};
+
+enum {
+    effFlagsHasEditor = 1 << 0
 };
 
 intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
@@ -62,19 +77,137 @@ typedef struct _lazyvst {
     HMODULE h_module;
     t_systhread thread;
     char path[2048];
+    AEffect* effect;
+    HWND hwnd;
+    t_qelem *q_instantiate;
+    VstPluginMainProc* main_ptr;
 } t_lazyvst;
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
 void *lazyvst_worker(t_lazyvst *x);
+void lazyvst_open(t_lazyvst *x);
+void lazyvst_do_open(t_lazyvst *x);
+void lazyvst_do_instantiate(t_lazyvst *x);
 
 static t_class *lazyvst_class;
+
+LRESULT CALLBACK VstWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    t_lazyvst *x = (t_lazyvst *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+    switch (msg) {
+        case WM_NCCREATE: {
+            LPCREATESTRUCT lpcs = (LPCREATESTRUCT)lParam;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)lpcs->lpCreateParams);
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
+        case WM_CLOSE:
+            if (x && x->effect) {
+                x->effect->dispatcher(x->effect, effEditClose, 0, 0, NULL, 0.0f);
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            if (x) {
+                KillTimer(hwnd, 1);
+                x->hwnd = NULL;
+            }
+            return 0;
+        case WM_TIMER:
+            if (x && x->effect) {
+                x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
+            }
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void lazyvst_register_window_class() {
+    WNDCLASSEX wcex;
+    if (GetClassInfoEx(GetModuleHandle(NULL), "LazyVstWin", &wcex)) return;
+
+    memset(&wcex, 0, sizeof(WNDCLASSEX));
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+    wcex.lpfnWndProc = VstWndProc;
+    wcex.hInstance = GetModuleHandle(NULL);
+    wcex.lpszClassName = "LazyVstWin";
+    wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    RegisterClassEx(&wcex);
+}
 
 void ext_main(void *r) {
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
+    class_addmethod(c, (method)lazyvst_open, "open", 0);
+
     class_register(CLASS_BOX, c);
     lazyvst_class = c;
+
+    lazyvst_register_window_class();
+}
+
+void lazyvst_open(t_lazyvst *x) {
+    defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
+}
+
+void lazyvst_do_open(t_lazyvst *x) {
+    if (!x->effect) {
+        post("lazyvst~: VST not loaded yet.");
+        return;
+    }
+
+    if (!(x->effect->flags & effFlagsHasEditor)) {
+        post("lazyvst~: VST does not have an editor.");
+        return;
+    }
+
+    if (x->hwnd) {
+        ShowWindow(x->hwnd, SW_SHOW);
+        SetForegroundWindow(x->hwnd);
+        return;
+    }
+
+    ERect* rect = NULL;
+    x->effect->dispatcher(x->effect, effEditGetRect, 0, 0, &rect, 0.0f);
+
+    if (rect) {
+        int width = rect->right - rect->left;
+        int height = rect->bottom - rect->top;
+
+        x->hwnd = CreateWindowEx(
+            0,
+            "LazyVstWin",
+            "VST GUI",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            CW_USEDEFAULT, CW_USEDEFAULT,
+            width + 16, height + 39, // Add some space for title bar and borders
+            NULL,
+            NULL,
+            GetModuleHandle(NULL),
+            (LPVOID)x
+        );
+
+        if (x->hwnd) {
+            x->effect->dispatcher(x->effect, effEditOpen, 0, 0, x->hwnd, 0.0f);
+            ShowWindow(x->hwnd, SW_SHOW);
+            SetForegroundWindow(x->hwnd);
+            SetTimer(x->hwnd, 1, 20, NULL);
+        } else {
+            post("lazyvst~: Failed to create window.");
+        }
+    } else {
+        post("lazyvst~: Failed to get editor rect.");
+    }
 }
 
 void *lazyvst_worker(t_lazyvst *x) {
@@ -94,49 +227,14 @@ void *lazyvst_worker(t_lazyvst *x) {
         if (x->h_module) {
             post("lazyvst~: Successfully loaded library at address %p", x->h_module);
 
-            VstPluginMainProc* main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
-            if (!main_ptr) {
-                main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
+            x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
+            if (!x->main_ptr) {
+                x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
             }
 
-            if (main_ptr) {
+            if (x->main_ptr) {
                 post("lazyvst~: VST entry point found.");
-                AEffect* effect = main_ptr((VstHostCallback*)hostCallback);
-                if (effect && effect->magic == kEffectMagic) {
-                    post("lazyvst~: VST instance created successfully.");
-
-                    effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
-
-                    char effectName[256];
-                    memset(effectName, 0, 256);
-                    effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
-
-                    if (effectName[0] == '\0') {
-                        // Fallback to Product String
-                        effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
-                    }
-
-                    if (effectName[0] != '\0') {
-                        post("lazyvst~: VST Name: %s", effectName);
-                    } else {
-                        post("lazyvst~: VST Name: [Unknown]");
-                    }
-
-                    post("lazyvst~: Programs: %d", effect->numPrograms);
-                    post("lazyvst~: Parameters: %d", effect->numParams);
-                    post("lazyvst~: Inputs: %d", effect->numInputs);
-                    post("lazyvst~: Outputs: %d", effect->numOutputs);
-                    post("lazyvst~: Initial Delay: %d", effect->initialDelay);
-                    post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
-                    post("lazyvst~: VST Version: %d", effect->version);
-                    post("lazyvst~: Flags: 0x%08X", effect->flags);
-
-                    effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
-                } else if (effect) {
-                    post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
-                } else {
-                    post("lazyvst~: Entry point returned NULL.");
-                }
+                qelem_set(x->q_instantiate);
             } else {
                 post("lazyvst~: VST entry point NOT FOUND.");
             }
@@ -149,6 +247,46 @@ void *lazyvst_worker(t_lazyvst *x) {
     return NULL;
 }
 
+void lazyvst_do_instantiate(t_lazyvst *x) {
+    if (x->main_ptr) {
+        AEffect* effect = x->main_ptr((VstHostCallback*)hostCallback);
+        if (effect && effect->magic == kEffectMagic) {
+            post("lazyvst~: VST instance created successfully on main thread.");
+            x->effect = effect;
+
+            effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
+
+            char effectName[256];
+            memset(effectName, 0, 256);
+            effect->dispatcher(effect, effGetEffectName, 0, 0, effectName, 0.0f);
+
+            if (effectName[0] == '\0') {
+                // Fallback to Product String
+                effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
+            }
+
+            if (effectName[0] != '\0') {
+                post("lazyvst~: VST Name: %s", effectName);
+            } else {
+                post("lazyvst~: VST Name: [Unknown]");
+            }
+
+            post("lazyvst~: Programs: %d", effect->numPrograms);
+            post("lazyvst~: Parameters: %d", effect->numParams);
+            post("lazyvst~: Inputs: %d", effect->numInputs);
+            post("lazyvst~: Outputs: %d", effect->numOutputs);
+            post("lazyvst~: Initial Delay: %d", effect->initialDelay);
+            post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
+            post("lazyvst~: VST Version: %d", effect->version);
+            post("lazyvst~: Flags: 0x%08X", effect->flags);
+        } else if (effect) {
+            post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
+        } else {
+            post("lazyvst~: Entry point returned NULL.");
+        }
+    }
+}
+
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
 
@@ -156,6 +294,9 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->h_module = NULL;
         x->thread = NULL;
         x->path[0] = '\0';
+        x->effect = NULL;
+        x->hwnd = NULL;
+        x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
             t_symbol *path_sym = atom_getsym(argv);
@@ -171,10 +312,26 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void lazyvst_free(t_lazyvst *x) {
+    if (x->q_instantiate) {
+        qelem_free(x->q_instantiate);
+        x->q_instantiate = NULL;
+    }
+
     if (x->thread) {
         systhread_join(x->thread, NULL);
         x->thread = NULL;
     }
+
+    if (x->effect) {
+        if (x->hwnd) {
+            x->effect->dispatcher(x->effect, effEditClose, 0, 0, NULL, 0.0f);
+            DestroyWindow(x->hwnd);
+            x->hwnd = NULL;
+        }
+        x->effect->dispatcher(x->effect, effClose, 0, 0, NULL, 0.0f);
+        x->effect = NULL;
+    }
+
     if (x->h_module) {
         FreeLibrary(x->h_module);
         x->h_module = NULL;

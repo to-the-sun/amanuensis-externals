@@ -21,7 +21,14 @@
 		</argument>
 	</argumentlist>
 	<!--MESSAGES-->
-	<methodlist />
+	<methodlist>
+		<method name="open">
+			<digest>Open the VST plugin's GUI editor window</digest>
+			<description>
+				The <m>open</m> message opens the graphical user interface (GUI) of the VST plugin in a separate Win32 window. This requires that the VST plugin has an editor available. If the editor is already open, it brings the window to the front.
+			</description>
+		</method>
+	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist />
 	<!--SEEALSO-->
