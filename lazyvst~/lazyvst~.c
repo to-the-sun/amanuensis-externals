@@ -14,6 +14,8 @@ struct AEffect;
 
 typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
 typedef intptr_t (VstDispatcherProc)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+typedef void (VstProcessProc)(struct AEffect* effect, float** inputs, float** outputs, int32_t sampleframes);
+typedef void (VstProcessDoubleProc)(struct AEffect* effect, double** inputs, double** outputs, int32_t sampleframes);
 
 typedef struct AEffect {
     int32_t magic;
@@ -55,6 +57,9 @@ typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
 enum {
     effOpen = 0,
     effClose,
+    effSetSampleRate = 10,
+    effSetBlockSize = 11,
+    effMainsChanged = 12,
     effEditGetRect = 13,
     effEditOpen = 14,
     effEditClose = 15,
@@ -64,7 +69,9 @@ enum {
 };
 
 enum {
-    effFlagsHasEditor = 1 << 0
+    effFlagsHasEditor = 1 << 0,
+    effFlagsCanReplacing = 1 << 4,
+    effFlagsCanDoubleReplacing = 1 << 12
 };
 
 intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
@@ -85,6 +92,15 @@ typedef struct _lazyvst {
     VstPluginMainProc* main_ptr;
     long num_inputs;
     long num_outputs;
+
+    float** f_ins;
+    float** f_outs;
+    float* f_in_data;
+    float* f_out_data;
+    long f_buffer_size;
+
+    double cur_sr;
+    long cur_ms;
 } t_lazyvst;
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
@@ -284,13 +300,80 @@ void lazyvst_get_counts(t_lazyvst *x) {
 }
 
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+    x->cur_sr = samplerate;
+    x->cur_ms = maxvectorsize;
+
+    if (maxvectorsize > x->f_buffer_size) {
+        if (x->f_in_data) sysmem_freeptr(x->f_in_data);
+        if (x->f_out_data) sysmem_freeptr(x->f_out_data);
+
+        if (x->num_inputs > 0) {
+            x->f_in_data = (float*)sysmem_newptr(sizeof(float) * maxvectorsize * x->num_inputs);
+        } else {
+            x->f_in_data = NULL;
+        }
+
+        if (x->num_outputs > 0) {
+            x->f_out_data = (float*)sysmem_newptr(sizeof(float) * maxvectorsize * x->num_outputs);
+        } else {
+            x->f_out_data = NULL;
+        }
+        x->f_buffer_size = maxvectorsize;
+    }
+
+    if (x->effect) {
+        x->effect->dispatcher(x->effect, effSetSampleRate, 0, 0, NULL, (float)samplerate);
+        x->effect->dispatcher(x->effect, effSetBlockSize, 0, maxvectorsize, NULL, 0.0f);
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
+    }
+
     dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)lazyvst_perform64, 0, NULL);
 }
 
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
-    for (int i = 0; i < numouts; i++) {
-        if (outs[i]) {
-            memset(outs[i], 0, sizeof(double) * sampleframes);
+    if (!x->effect) {
+        for (int i = 0; i < numouts; i++) {
+            if (outs[i]) {
+                memset(outs[i], 0, sizeof(double) * sampleframes);
+            }
+        }
+        return;
+    }
+
+    if (x->effect->flags & effFlagsCanDoubleReplacing) {
+        ((VstProcessDoubleProc*)x->effect->processDoubleReplacing)(x->effect, ins, outs, (int32_t)sampleframes);
+    } else if (x->effect->flags & effFlagsCanReplacing) {
+        if (x->f_ins && x->f_outs && x->f_in_data && x->f_out_data) {
+            for (int i = 0; i < x->num_inputs; i++) {
+                x->f_ins[i] = x->f_in_data + (i * x->f_buffer_size);
+                if (i < numins && ins[i]) {
+                    for (int j = 0; j < sampleframes; j++) {
+                        x->f_ins[i][j] = (float)ins[i][j];
+                    }
+                } else {
+                    memset(x->f_ins[i], 0, sizeof(float) * sampleframes);
+                }
+            }
+
+            for (int i = 0; i < x->num_outputs; i++) {
+                x->f_outs[i] = x->f_out_data + (i * x->f_buffer_size);
+            }
+
+            ((VstProcessProc*)x->effect->processReplacing)(x->effect, x->f_ins, x->f_outs, (int32_t)sampleframes);
+
+            for (int i = 0; i < x->num_outputs; i++) {
+                if (i < numouts && outs[i]) {
+                    for (int j = 0; j < sampleframes; j++) {
+                        outs[i][j] = (double)x->f_outs[i][j];
+                    }
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < numouts; i++) {
+            if (outs[i]) {
+                memset(outs[i], 0, sizeof(double) * sampleframes);
+            }
         }
     }
 }
@@ -298,12 +381,12 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages)", a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
         } else {
-            sprintf(s, "Inlet %ld (signal)", a + 1);
+            sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld (signal)", a + 1);
+        sprintf(s, "Outlet %ld (signal): VST Output %ld", a + 1, a + 1);
     }
 }
 
@@ -312,9 +395,16 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
         AEffect* effect = x->main_ptr((VstHostCallback*)hostCallback);
         if (effect && effect->magic == kEffectMagic) {
             post("lazyvst~: VST instance created successfully on main thread.");
+            effect->user = x;
             x->effect = effect;
 
             effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
+
+            if (x->cur_sr > 0) {
+                effect->dispatcher(effect, effSetSampleRate, 0, 0, NULL, (float)x->cur_sr);
+                effect->dispatcher(effect, effSetBlockSize, 0, x->cur_ms, NULL, 0.0f);
+                effect->dispatcher(effect, effMainsChanged, 0, 1, NULL, 0.0f);
+            }
 
             char effectName[256];
             memset(effectName, 0, 256);
@@ -358,6 +448,13 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->hwnd = NULL;
         x->num_inputs = 0;
         x->num_outputs = 0;
+        x->f_ins = NULL;
+        x->f_outs = NULL;
+        x->f_in_data = NULL;
+        x->f_out_data = NULL;
+        x->f_buffer_size = 0;
+        x->cur_sr = 0;
+        x->cur_ms = 0;
         x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
@@ -366,6 +463,13 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
             x->path[2047] = '\0';
 
             lazyvst_get_counts(x);
+
+            if (x->num_inputs > 0) {
+                x->f_ins = (float**)sysmem_newptr(sizeof(float*) * x->num_inputs);
+            }
+            if (x->num_outputs > 0) {
+                x->f_outs = (float**)sysmem_newptr(sizeof(float*) * x->num_outputs);
+            }
 
             dsp_setup((t_pxobject *)x, x->num_inputs);
 
@@ -396,6 +500,7 @@ void lazyvst_free(t_lazyvst *x) {
     }
 
     if (x->effect) {
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
         if (x->hwnd) {
             x->effect->dispatcher(x->effect, effEditClose, 0, 0, NULL, 0.0f);
             DestroyWindow(x->hwnd);
@@ -404,6 +509,11 @@ void lazyvst_free(t_lazyvst *x) {
         x->effect->dispatcher(x->effect, effClose, 0, 0, NULL, 0.0f);
         x->effect = NULL;
     }
+
+    if (x->f_ins) sysmem_freeptr(x->f_ins);
+    if (x->f_outs) sysmem_freeptr(x->f_outs);
+    if (x->f_in_data) sysmem_freeptr(x->f_in_data);
+    if (x->f_out_data) sysmem_freeptr(x->f_out_data);
 
     if (x->h_module) {
         FreeLibrary(x->h_module);
