@@ -767,6 +767,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         if (nt_loop != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
+                            x->hit_bars[x->fifo_tail].no_crossfade = (current_scan < last_scan);
                             x->fifo_tail = nt_loop;
                         }
 
@@ -831,14 +832,21 @@ void weaver_audio_qtask(t_weaver *x) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
         x->fifo_head = (x->fifo_head + 1) % 4096;
 
+        long target_track = hit_entry.track_id;
+        int no_crossfade = hit_entry.no_crossfade;
+        t_weaver_track *tr = NULL;
+        if (target_track > 0 && target_track <= x->track_cache_count) {
+            tr = x->track_cache[target_track - 1];
+        }
 
         if (hit_entry.type == TYPE_LOOP) {
-            outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
+            if (!tr || !tr->busy || no_crossfade) {
+                outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
+            }
             continue;
         }
 
         t_bar_cache hit = hit_entry.bar;
-        long target_track = hit_entry.track_id;
 
         // DATA Hit logic
         t_symbol *bar_key = hit.sym;
@@ -847,15 +855,9 @@ void weaver_audio_qtask(t_weaver *x) {
             snprintf(bstr, 64, "%ld", (long)hit.value);
             bar_key = gensym(bstr);
         }
-        int no_crossfade = hit_entry.no_crossfade;
         int is_bar_0 = (bar_key == gensym("0"));
 
-        t_weaver_track *tr = NULL;
-        if (target_track > 0 && target_track <= x->track_cache_count) {
-            tr = x->track_cache[target_track - 1];
-        }
-
-        if (tr && tr->busy) {
+        if (tr && tr->busy && !no_crossfade) {
             int active = (int)round(tr->control);
             weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 0);
             continue;
