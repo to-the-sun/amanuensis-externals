@@ -517,6 +517,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
     int active = (int)round(tr->control);
+    int change = (palette != tr->palette[active] || offset_ms != tr->offset[active]);
+
     if (is_bar_0) {
         if (no_crossfade) {
             // Main song ramp loop: jump immediately
@@ -535,7 +537,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             tr->xf.direction = 0.0;
             tr->busy = 0;
             weaver_log(x, "Track %lld: Main song ramp loop jump to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
-        } else {
+        } else if (change || !tr->busy) {
             // Track loop: crossfade
             int other = 1 - active;
             tr->palette[other] = palette;
@@ -547,7 +549,6 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             weaver_log(x, "Track %lld: Track loop crossfade to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
         }
     } else {
-        int change = (palette != tr->palette[active] || offset_ms != tr->offset[active]);
         if (change) {
             int other = 1 - active;
             tr->palette[other] = palette;
@@ -840,9 +841,7 @@ void weaver_audio_qtask(t_weaver *x) {
         }
 
         if (hit_entry.type == TYPE_LOOP) {
-            if (!tr || !tr->busy || no_crossfade) {
-                outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
-            }
+            outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
             continue;
         }
 
