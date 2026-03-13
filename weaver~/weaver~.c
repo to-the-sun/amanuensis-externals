@@ -10,6 +10,7 @@
 #include "z_dsp.h"
 #include "../shared/logging.h"
 #include "../shared/crossfade.h"
+#include "../shared/visualize.h"
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
@@ -52,6 +53,7 @@ typedef struct _weaver {
     t_pxobject t_obj;
     t_symbol *poly_prefix;
     long log;
+    long visualize;
     void *log_outlet;
     void *loop_outlet;
     t_buffer_ref *bar_buffer_ref;
@@ -280,6 +282,10 @@ void ext_main(void *r) {
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)weaver_assist, "assist", A_CANT, 0);
 
+    CLASS_ATTR_LONG(c, "visualize", 0, t_weaver, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+
     CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
     CLASS_ATTR_DEFAULT(c, "tracks", 0, "4");
@@ -305,8 +311,10 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
     t_weaver *x = (t_weaver *)object_alloc(weaver_class);
 
     if (x) {
+        visualize_init();
         x->poly_prefix = _sym_nothing;
         x->log = 0;
+        x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_scan_val = -1.0;
         x->fifo_head = 0;
@@ -377,6 +385,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
 void weaver_free(t_weaver *x) {
     dsp_free((t_pxobject *)x);
+    visualize_cleanup();
     critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
     if (x->proxy) object_free(x->proxy);
@@ -672,6 +681,13 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 mix2 = (double)samples_src[1][f_src[1] * n_chans_src[1] + c] * f2;
             }
             samples_dest[f * n_chans_dest + c] = (float)(mix1 + mix2);
+        }
+
+        if (x->visualize && (f % 512 == 0)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "{\"track\": %lld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f}",
+                     (long long)track, current_ms, f1, f2);
+            visualize(msg);
         }
     }
 
