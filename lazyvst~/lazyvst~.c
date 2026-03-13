@@ -64,6 +64,8 @@ enum {
     effEditOpen = 14,
     effEditClose = 15,
     effEditIdle = 19,
+    effSetChunk = 24,
+    effGetChunk = 23,
     effGetEffectName = 45,
     effGetProductString = 48
 };
@@ -71,6 +73,7 @@ enum {
 enum {
     effFlagsHasEditor = 1 << 0,
     effFlagsCanReplacing = 1 << 4,
+    effFlagsProgramChunks = 1 << 5,
     effFlagsCanDoubleReplacing = 1 << 12
 };
 
@@ -113,6 +116,9 @@ void lazyvst_get_counts(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s);
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s);
+unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
 
@@ -173,6 +179,7 @@ void ext_main(void *r) {
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
+    class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_SYM, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
@@ -381,13 +388,131 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld. Messages: open, snapshot [path]", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
         sprintf(s, "Outlet %ld (signal): VST Output %ld", a + 1, a + 1);
     }
+}
+
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s) {
+    defer_low(x, (method)lazyvst_do_snapshot, s, 0, NULL);
+}
+
+unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
+    static const int B64index[256] = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,  0, 63,
+        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
+        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63,
+        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
+    };
+
+    const char *p = in;
+    const char *dot = strchr(in, '.');
+    if (dot) {
+        // Check if prefix is numeric
+        int is_numeric = 1;
+        for (const char *q = in; q < dot; q++) {
+            if (*q < '0' || *q > '9') {
+                is_numeric = 0;
+                break;
+            }
+        }
+        if (is_numeric) p = dot + 1;
+    }
+
+    size_t in_len = strlen(p);
+    if (in_len == 0) return NULL;
+
+    size_t max_out_len = (in_len * 3) / 4 + 2;
+    unsigned char *out = (unsigned char *)sysmem_newptr(max_out_len);
+    if (!out) return NULL;
+
+    size_t j = 0;
+    uint32_t buffer = 0;
+    int bits = 0;
+
+    for (size_t i = 0; i < in_len; i++) {
+        int val = B64index[(unsigned char)p[i]];
+        if (val != -1) {
+            buffer = (buffer << 6) | val;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out[j++] = (buffer >> bits) & 0xFF;
+            }
+        } else if (p[i] == '=') {
+            break;
+        }
+    }
+
+    *out_len = j;
+    return out;
+}
+
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s) {
+    if (!x->effect) {
+        post("lazyvst~: No VST plugin loaded to apply snapshot.");
+        return;
+    }
+
+    short path = 0;
+    char filename[MAX_FILENAME_CHARS];
+    if (path_frompathname(s->s_name, &path, filename)) {
+        post("lazyvst~: Could not resolve snapshot path: %s", s->s_name);
+        return;
+    }
+
+    t_dictionary *d = NULL;
+    if (dictionary_read(filename, path, &d) || !d) {
+        error("lazyvst~: Could not read snapshot file: %s", filename);
+        return;
+    }
+
+    t_dictionary *snapshot_dict = NULL;
+    if (dictionary_getdictionary(d, gensym("snapshot"), (t_object **)&snapshot_dict) || !snapshot_dict) {
+        error("lazyvst~: No 'snapshot' dictionary found in file.");
+        object_free(d);
+        return;
+    }
+
+    const char *blob_str = NULL;
+    if (dictionary_getstring(snapshot_dict, gensym("blob"), &blob_str) || !blob_str) {
+        error("lazyvst~: No 'blob' string found in snapshot.");
+        object_free(d);
+        return;
+    }
+
+    t_atom_long is_bank = 0;
+    dictionary_getlong(snapshot_dict, gensym("isbank"), &is_bank);
+
+    size_t decoded_size = 0;
+    unsigned char *decoded_ptr = lazyvst_base64_decode(blob_str, &decoded_size);
+
+    if (decoded_ptr && decoded_size > 0) {
+        // VST effSetChunk: index 0 = bank, 1 = program
+        intptr_t index = is_bank ? 0 : 1;
+        x->effect->dispatcher(x->effect, effSetChunk, (int32_t)index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+    } else {
+        error("lazyvst~: Failed to decode snapshot blob.");
+    }
+
+    if (d) object_free(d);
+    if (decoded_ptr) sysmem_freeptr(decoded_ptr);
 }
 
 void lazyvst_do_instantiate(t_lazyvst *x) {
