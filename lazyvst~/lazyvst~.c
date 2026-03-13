@@ -57,6 +57,8 @@ typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
 enum {
     effOpen = 0,
     effClose,
+    effSetProgram = 2,
+    effGetProgram = 3,
     effSetSampleRate = 10,
     effSetBlockSize = 11,
     effMainsChanged = 12,
@@ -119,6 +121,7 @@ void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_bang(t_lazyvst *x);
+void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -182,12 +185,13 @@ void lazyvst_open(t_lazyvst *x) {
 
 void ext_main(void *r) {
     common_symbols_init();
-    post("lazyvst~: ext_main called (snapshot-debug-v4)");
+    post("lazyvst~: ext_main called (snapshot-debug-v5)");
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
     class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", 0);
+    class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
@@ -200,6 +204,10 @@ void ext_main(void *r) {
 
 void lazyvst_bang(t_lazyvst *x) {
     post("lazyvst~: bang received");
+}
+
+void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    post("lazyvst~: UNHANDLED message received: %s (argc=%ld)", s->s_name, argc);
 }
 
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
@@ -547,10 +555,20 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (decoded_ptr && decoded_size > 0) {
         // VST effSetChunk: index 0 = bank, 1 = program
-        intptr_t index = is_bank ? 0 : 1;
-        post("lazyvst~: Restoring state (index=%ld, size=%zu bytes)", (long)index, decoded_size);
-        x->effect->dispatcher(x->effect, effSetChunk, (int32_t)index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
-        post("lazyvst~: VST state restored.");
+        intptr_t chunk_index = is_bank ? 0 : 1;
+        post("lazyvst~: Restoring state (index=%ld, size=%zu bytes)", (long)chunk_index, decoded_size);
+        intptr_t ret = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)chunk_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+        post("lazyvst~: VST state restored (ret=%ld).", (long)ret);
+
+        // Force a refresh by re-setting the current program
+        intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
+        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+        post("lazyvst~: Forced state refresh on program %ld.", (long)cur_prog);
+
+        // If editor is open, signal idle to update GUI
+        if (x->hwnd) {
+            x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
+        }
     } else {
         post("lazyvst~: ERROR - Failed to decode snapshot blob.");
     }
