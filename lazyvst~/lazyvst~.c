@@ -116,8 +116,9 @@ void lazyvst_get_counts(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
-void lazyvst_snapshot(t_lazyvst *x, t_symbol *s);
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_bang(t_lazyvst *x);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -175,11 +176,18 @@ void lazyvst_register_window_class() {
     RegisterClassEx(&wcex);
 }
 
+void lazyvst_open(t_lazyvst *x) {
+    defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
+}
+
 void ext_main(void *r) {
+    common_symbols_init();
+    post("lazyvst~: ext_main called (snapshot-debug-v4)");
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
-    class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_SYM, 0);
+    class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_bang, "bang", 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
@@ -190,8 +198,24 @@ void ext_main(void *r) {
     lazyvst_register_window_class();
 }
 
-void lazyvst_open(t_lazyvst *x) {
-    defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
+void lazyvst_bang(t_lazyvst *x) {
+    post("lazyvst~: bang received");
+}
+
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    t_symbol *path = NULL;
+    if (argc > 0 && argv[0].a_type == A_SYM) {
+        path = atom_getsym(argv);
+    } else if (s != gensym("snapshot")) {
+        path = s;
+    }
+
+    if (path) {
+        post("lazyvst~: Received snapshot message for: %s", path->s_name);
+        defer_low(x, (method)lazyvst_do_snapshot, path, 0, NULL);
+    } else {
+        post("lazyvst~: snapshot message received but no path provided (argc=%ld, s=%s)", argc, s ? s->s_name : "NULL");
+    }
 }
 
 void lazyvst_do_open(t_lazyvst *x) {
@@ -397,9 +421,6 @@ void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     }
 }
 
-void lazyvst_snapshot(t_lazyvst *x, t_symbol *s) {
-    defer_low(x, (method)lazyvst_do_snapshot, s, 0, NULL);
-}
 
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
     static const int B64index[256] = {
@@ -465,6 +486,7 @@ unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
 }
 
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    post("lazyvst~: Executing deferred snapshot for %s", s->s_name);
     if (!x->effect) {
         post("lazyvst~: ERROR - No VST plugin loaded to apply snapshot.");
         return;
@@ -483,6 +505,7 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
         post("lazyvst~: ERROR - Could not resolve snapshot path: %s", s->s_name);
         return;
     }
+    post("lazyvst~: Snapshot file resolved to ID %d, Name %s", path, filename);
 
     t_dictionary *d = NULL;
     err = dictionary_read(filename, path, &d);
@@ -490,6 +513,7 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
         post("lazyvst~: ERROR - Could not read snapshot file (Error %d): %s", err, filename);
         return;
     }
+    post("lazyvst~: Snapshot dictionary read successfully.");
 
     t_dictionary *snapshot_dict = NULL;
     if (dictionary_getdictionary(d, gensym("snapshot"), (t_object **)&snapshot_dict) || !snapshot_dict) {
@@ -524,7 +548,9 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     if (decoded_ptr && decoded_size > 0) {
         // VST effSetChunk: index 0 = bank, 1 = program
         intptr_t index = is_bank ? 0 : 1;
+        post("lazyvst~: Restoring state (index=%ld, size=%zu bytes)", (long)index, decoded_size);
         x->effect->dispatcher(x->effect, effSetChunk, (int32_t)index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+        post("lazyvst~: VST state restored.");
     } else {
         post("lazyvst~: ERROR - Failed to decode snapshot blob.");
     }
@@ -582,6 +608,7 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
+    post("lazyvst~: new instance created");
 
     if (x) {
         x->h_module = NULL;
