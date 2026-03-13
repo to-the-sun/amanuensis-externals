@@ -48,10 +48,17 @@ def process_text(text):
             pkt = json.loads(line)
             if "clear" in pkt:
                 with state_lock:
-                    data_points.clear()
-                    tracks_seen.clear()
-                    global_max_ms = 0.0
-                print("!!! Visualizer state cleared via TCP !!!")
+                    track_to_clear = pkt.get("track")
+                    if track_to_clear is not None:
+                        # Clear specific track data
+                        data_points[:] = [p for p in data_points if p.get("track") != track_to_clear]
+                        print(f"!!! Visualizer track {track_to_clear} cleared via TCP !!!")
+                    else:
+                        # Global clear
+                        data_points.clear()
+                        tracks_seen.clear()
+                        global_max_ms = 0.0
+                        print("!!! Visualizer state cleared via TCP !!!")
                 sys.stdout.flush()
                 continue
 

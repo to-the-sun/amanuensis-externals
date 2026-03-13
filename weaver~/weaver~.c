@@ -47,6 +47,7 @@ typedef struct _weaver_track {
     long src_error_sent[2];
     double track_length;
     double last_track_scan;
+    double last_visualize_ms;
 } t_weaver_track;
 
 typedef struct _weaver {
@@ -137,6 +138,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_error_sent[1] = 0;
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
+            tr->last_visualize_ms = -1000.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -683,11 +685,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             samples_dest[f * n_chans_dest + c] = (float)(mix1 + mix2);
         }
 
-        if (x->visualize && (f % 512 == 0)) {
+        if (x->visualize && (current_ms >= tr->last_visualize_ms + 100.0 || current_ms < tr->last_visualize_ms)) {
             char msg[256];
             snprintf(msg, sizeof(msg), "{\"track\": %lld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f}",
                      (long long)track, current_ms, f1, f2);
             visualize(msg);
+            tr->last_visualize_ms = current_ms;
         }
     }
 
@@ -846,6 +849,7 @@ void weaver_audio_qtask(t_weaver *x) {
     weaver_check_attachments(x);
     x->cached_bar_len = weaver_get_bar_length(x);
     double bar_len = x->cached_bar_len;
+    int clear_sent = 0;
 
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
@@ -860,6 +864,18 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
+            if (x->visualize) {
+                if (hit_entry.no_crossfade) {
+                    if (!clear_sent) {
+                        visualize("{\"clear\": 1}");
+                        clear_sent = 1;
+                    }
+                } else {
+                    char clr_msg[128];
+                    snprintf(clr_msg, sizeof(clr_msg), "{\"clear\": 1, \"track\": %ld}", hit_entry.track_id);
+                    visualize(clr_msg);
+                }
+            }
             continue;
         }
 
