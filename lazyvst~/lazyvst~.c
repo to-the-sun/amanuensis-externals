@@ -68,6 +68,8 @@ enum {
     effEditIdle = 19,
     effSetChunk = 24,
     effGetChunk = 23,
+    effBeginSetProgram = 67,
+    effEndSetProgram = 68,
     effGetEffectName = 45,
     effGetProductString = 48
 };
@@ -451,23 +453,23 @@ unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
     };
 
     const char *p = in;
+    size_t expected_len = 0;
     const char *dot = strchr(in, '.');
     if (dot) {
-        // Check if prefix is numeric
-        int is_numeric = 1;
-        for (const char *q = in; q < dot; q++) {
-            if (*q < '0' || *q > '9') {
-                is_numeric = 0;
-                break;
-            }
+        char prefix[32];
+        size_t plen = dot - in;
+        if (plen < 31) {
+            strncpy(prefix, in, plen);
+            prefix[plen] = '\0';
+            expected_len = (size_t)atol(prefix);
+            if (expected_len > 0) p = dot + 1;
         }
-        if (is_numeric) p = dot + 1;
     }
 
     size_t in_len = strlen(p);
     if (in_len == 0) return NULL;
 
-    size_t max_out_len = (in_len * 3) / 4 + 2;
+    size_t max_out_len = expected_len ? expected_len : (in_len * 3) / 4 + 2;
     unsigned char *out = (unsigned char *)sysmem_newptr(max_out_len);
     if (!out) return NULL;
 
@@ -482,7 +484,9 @@ unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
             bits += 6;
             if (bits >= 8) {
                 bits -= 8;
-                out[j++] = (buffer >> bits) & 0xFF;
+                if (expected_len == 0 || j < expected_len) {
+                    out[j++] = (buffer >> bits) & 0xFF;
+                }
             }
         } else if (p[i] == '=') {
             break;
@@ -554,16 +558,40 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     unsigned char *decoded_ptr = lazyvst_base64_decode(blob_str, &decoded_size);
 
     if (decoded_ptr && decoded_size > 0) {
+        // Hex dump diagnostics (first 16 bytes)
+        char dump[64];
+        char *dptr = dump;
+        for (int k = 0; k < 16 && k < (int)decoded_size; k++) {
+            dptr += sprintf(dptr, "%02X ", decoded_ptr[k]);
+        }
+        post("lazyvst~: Decoded state head: %s", dump);
+
         // VST effSetChunk: index 0 = bank, 1 = program
         intptr_t chunk_index = is_bank ? 0 : 1;
-        post("lazyvst~: Restoring state (index=%ld, size=%zu bytes)", (long)chunk_index, decoded_size);
+
+        post("lazyvst~: Applying state (index=%ld, size=%zu bytes)...", (long)chunk_index, decoded_size);
+
+        // Standard VST chunk restoration sequence
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
+        x->effect->dispatcher(x->effect, effBeginSetProgram, 0, 0, NULL, 0.0f);
+
         intptr_t ret = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)chunk_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
-        post("lazyvst~: VST state restored (ret=%ld).", (long)ret);
+
+        x->effect->dispatcher(x->effect, effEndSetProgram, 0, 0, NULL, 0.0f);
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
+
+        post("lazyvst~: VST state applied (ret=%ld).", (long)ret);
+
+        // Fallback for 1-program plugins (many ignore index 1)
+        if (ret == 0 && chunk_index == 1) {
+            post("lazyvst~: Warning - dispatcher returned 0 for program chunk. Trying index 0 (bank)...");
+            ret = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+            post("lazyvst~: Fallback bank restore ret=%ld", (long)ret);
+        }
 
         // Force a refresh by re-setting the current program
         intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
         x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
-        post("lazyvst~: Forced state refresh on program %ld.", (long)cur_prog);
 
         // If editor is open, signal idle to update GUI
         if (x->hwnd) {
