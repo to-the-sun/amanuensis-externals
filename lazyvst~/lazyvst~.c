@@ -10,6 +10,21 @@
 
 #pragma pack(push, 8)
 
+typedef struct VstTimeInfo {
+    double samplePos;
+    double sampleRate;
+    double nanoSeconds;
+    double ppqPos;
+    double tempo;
+    double barStartPos;
+    double cycleStartPos;
+    double cycleEndPos;
+    int32_t timeSigNumerator;
+    int32_t timeSigDenominator;
+    int32_t samplesToNextClock;
+    int32_t flags;
+} VstTimeInfo;
+
 struct AEffect;
 
 typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
@@ -57,6 +72,10 @@ typedef AEffect* (VstPluginMainProc)(VstHostCallback* audioMaster);
 enum {
     effOpen = 0,
     effClose,
+    effSetProgram = 2,
+    effGetProgram = 3,
+    effGetParam = 4,
+    effSetParam = 5,
     effSetSampleRate = 10,
     effSetBlockSize = 11,
     effMainsChanged = 12,
@@ -64,6 +83,10 @@ enum {
     effEditOpen = 14,
     effEditClose = 15,
     effEditIdle = 19,
+    effSetChunk = 24,
+    effGetChunk = 23,
+    effBeginSetProgram = 67,
+    effEndSetProgram = 68,
     effGetEffectName = 45,
     effGetProductString = 48
 };
@@ -71,14 +94,61 @@ enum {
 enum {
     effFlagsHasEditor = 1 << 0,
     effFlagsCanReplacing = 1 << 4,
+    effFlagsProgramChunks = 1 << 5,
     effFlagsCanDoubleReplacing = 1 << 12
 };
 
+enum {
+    audioMasterVersion = 1,
+    audioMasterGetTime = 7,
+    audioMasterGetVendorString = 32,
+    audioMasterGetProductString = 33,
+    audioMasterGetVendorVersion = 34,
+    audioMasterCanDo = 37,
+    audioMasterGetLanguage = 38
+};
+
 intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
-    if (opcode == 1) { // audioMasterVersion
-        return 2400;
+    static VstTimeInfo timeInfo = { 0 };
+    timeInfo.sampleRate = 44100.0;
+    timeInfo.tempo = 120.0;
+    timeInfo.timeSigNumerator = 4;
+    timeInfo.timeSigDenominator = 4;
+    timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
+
+    // Comprehensive host call tracing
+    if (opcode != audioMasterGetTime) {
+        post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
     }
-    return 0;
+
+    switch (opcode) {
+        case audioMasterVersion:
+            return 2400;
+        case audioMasterGetTime:
+            return (intptr_t)&timeInfo;
+        case audioMasterGetVendorString:
+            if (ptr) strcpy((char*)ptr, "Jules");
+            return 1;
+        case audioMasterGetProductString:
+            if (ptr) strcpy((char*)ptr, "lazyvst~");
+            return 1;
+        case audioMasterGetVendorVersion:
+            return 1000;
+        case audioMasterGetLanguage:
+            return 1; // English
+        case audioMasterCanDo:
+            if (ptr) {
+                const char* canDo = (const char*)ptr;
+                if (strcmp(canDo, "sendVstEvents") == 0 ||
+                    strcmp(canDo, "sendVstMidiEvent") == 0 ||
+                    strcmp(canDo, "supplyIdle") == 0) {
+                    return 1;
+                }
+            }
+            return 0;
+        default:
+            return 0;
+    }
 }
 
 typedef struct _lazyvst {
@@ -113,6 +183,13 @@ void lazyvst_get_counts(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_bang(t_lazyvst *x);
+void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_getchunk(t_lazyvst *x, long isbank);
+unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
 
@@ -169,10 +246,21 @@ void lazyvst_register_window_class() {
     RegisterClassEx(&wcex);
 }
 
+void lazyvst_open(t_lazyvst *x) {
+    defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
+}
+
 void ext_main(void *r) {
+    common_symbols_init();
+    post("lazyvst~: ext_main called (snapshot-debug-v5)");
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
+    class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
+    class_addmethod(c, (method)lazyvst_bang, "bang", 0);
+    class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
@@ -183,8 +271,57 @@ void ext_main(void *r) {
     lazyvst_register_window_class();
 }
 
-void lazyvst_open(t_lazyvst *x) {
-    defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
+void lazyvst_bang(t_lazyvst *x) {
+    post("lazyvst~: bang received");
+}
+
+void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    post("lazyvst~: UNHANDLED message received: %s (argc=%ld)", s->s_name, argc);
+}
+
+void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (!x->effect) return;
+    if (argc < 1) return;
+
+    int32_t opcode = (int32_t)atom_getlong(argv);
+    int32_t index = (argc > 1) ? (int32_t)atom_getlong(argv + 1) : 0;
+    intptr_t value = (argc > 2) ? (intptr_t)atom_getlong(argv + 2) : 0;
+
+    post("lazyvst~: Manual VST dispatch: op=%d, idx=%d, val=%ld", opcode, index, (long)value);
+    intptr_t ret = x->effect->dispatcher(x->effect, opcode, index, value, NULL, 0.0f);
+    post("lazyvst~: Result: %ld", (long)ret);
+}
+
+void lazyvst_getchunk(t_lazyvst *x, long isbank) {
+    if (!x->effect) return;
+    void *ptr = NULL;
+    intptr_t size = x->effect->dispatcher(x->effect, effGetChunk, (int32_t)isbank, 0, &ptr, 0.0f);
+    post("lazyvst~: Current chunk (isbank=%ld): size=%ld, ptr=%p", isbank, (long)size, ptr);
+    if (ptr && size > 0) {
+        char dump[64];
+        char *dptr = dump;
+        unsigned char *bptr = (unsigned char *)ptr;
+        for (int k = 0; k < 16 && k < (int)size; k++) {
+            dptr += sprintf(dptr, "%02X ", bptr[k]);
+        }
+        post("lazyvst~: Chunk head: %s", dump);
+    }
+}
+
+void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    t_symbol *path = NULL;
+    if (argc > 0 && argv[0].a_type == A_SYM) {
+        path = atom_getsym(argv);
+    } else if (s != gensym("snapshot")) {
+        path = s;
+    }
+
+    if (path) {
+        post("lazyvst~: Received snapshot message for: %s", path->s_name);
+        defer_low(x, (method)lazyvst_do_snapshot, path, 0, NULL);
+    } else {
+        post("lazyvst~: snapshot message received but no path provided (argc=%ld, s=%s)", argc, s ? s->s_name : "NULL");
+    }
 }
 
 void lazyvst_do_open(t_lazyvst *x) {
@@ -381,13 +518,201 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld. Messages: open, snapshot [path]", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
         sprintf(s, "Outlet %ld (signal): VST Output %ld", a + 1, a + 1);
     }
+}
+
+
+unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
+    static const int B64index[256] = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,  0, 63,
+        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
+        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63,
+        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
+    };
+
+    const char *p = in;
+    size_t expected_len = 0;
+    const char *dot = strchr(in, '.');
+    if (dot) {
+        char prefix[32];
+        size_t plen = dot - in;
+        if (plen < 31) {
+            strncpy(prefix, in, plen);
+            prefix[plen] = '\0';
+            expected_len = (size_t)atol(prefix);
+            if (expected_len > 0) p = dot + 1;
+        }
+    }
+
+    size_t in_len = strlen(p);
+    if (in_len == 0) return NULL;
+
+    size_t max_out_len = expected_len ? expected_len : (in_len * 3) / 4 + 2;
+    unsigned char *out = (unsigned char *)sysmem_newptr(max_out_len);
+    if (!out) return NULL;
+
+    size_t j = 0;
+    uint32_t buffer = 0;
+    int bits = 0;
+
+    for (size_t i = 0; i < in_len; i++) {
+        int val = B64index[(unsigned char)p[i]];
+        if (val != -1) {
+            buffer = (buffer << 6) | val;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                if (expected_len == 0 || j < expected_len) {
+                    out[j++] = (buffer >> bits) & 0xFF;
+                }
+            }
+        } else if (p[i] == '=') {
+            break;
+        }
+    }
+
+    *out_len = j;
+    return out;
+}
+
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    post("lazyvst~: Executing deferred snapshot for %s", s->s_name);
+    if (!x->effect) {
+        post("lazyvst~: ERROR - No VST plugin loaded to apply snapshot.");
+        return;
+    }
+
+    if (!(x->effect->flags & effFlagsProgramChunks)) {
+        post("lazyvst~: ERROR - VST does not support state chunks.");
+        return;
+    }
+
+    short path = 0;
+    char filename[MAX_FILENAME_CHARS];
+    t_max_err err;
+
+    if (path_frompathname(s->s_name, &path, filename)) {
+        post("lazyvst~: ERROR - Could not resolve snapshot path: %s", s->s_name);
+        return;
+    }
+    post("lazyvst~: Snapshot file resolved to ID %d, Name %s", path, filename);
+
+    t_dictionary *d = NULL;
+    err = dictionary_read(filename, path, &d);
+    if (err || !d) {
+        post("lazyvst~: ERROR - Could not read snapshot file (Error %d): %s", err, filename);
+        return;
+    }
+    post("lazyvst~: Snapshot dictionary read successfully.");
+
+    t_dictionary *snapshot_dict = NULL;
+    if (dictionary_getdictionary(d, gensym("snapshot"), (t_object **)&snapshot_dict) || !snapshot_dict) {
+        post("lazyvst~: ERROR - No 'snapshot' sub-dictionary found.");
+
+        long numkeys = 0;
+        t_symbol **keys = NULL;
+        dictionary_getkeys(d, &numkeys, &keys);
+        if (keys) {
+            post("lazyvst~: Top-level keys found:");
+            for (int i = 0; i < numkeys; i++) post("  %s", keys[i]->s_name);
+            dictionary_freekeys(d, numkeys, keys);
+        }
+
+        object_free(d);
+        return;
+    }
+
+    const char *blob_str = NULL;
+    if (dictionary_getstring(snapshot_dict, gensym("blob"), &blob_str) || !blob_str) {
+        post("lazyvst~: ERROR - No 'blob' string found in snapshot.");
+        object_free(d);
+        return;
+    }
+
+    t_atom_long is_bank = 0;
+    dictionary_getlong(snapshot_dict, gensym("isbank"), &is_bank);
+
+    t_atom_long saved_id = 0;
+    if (dictionary_getlong(snapshot_dict, gensym("pluginsaveduniqueid"), &saved_id) == MAX_ERR_NONE) {
+        if (saved_id != 0 && saved_id != (t_atom_long)x->effect->uniqueID) {
+            post("lazyvst~: WARNING - Snapshot uniqueID (0x%08llX) does not match plugin uniqueID (0x%08X)", saved_id, x->effect->uniqueID);
+        }
+    }
+
+    size_t decoded_size = 0;
+    unsigned char *decoded_ptr = lazyvst_base64_decode(blob_str, &decoded_size);
+
+    if (decoded_ptr && decoded_size > 0) {
+        // Hex dump diagnostics (first 16 bytes)
+        char dump[64];
+        char *dptr = dump;
+        for (int k = 0; k < 16 && k < (int)decoded_size; k++) {
+            dptr += sprintf(dptr, "%02X ", decoded_ptr[k]);
+        }
+        post("lazyvst~: Decoded state head: %s", dump);
+
+        // VST effSetChunk: index 0 = bank, 1 = program
+        intptr_t chunk_index = is_bank ? 0 : 1;
+
+        post("lazyvst~: Applying state (index=%ld, size=%zu bytes)...", (long)chunk_index, decoded_size);
+
+        // Comprehensive VST state restoration sequence
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
+
+        intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
+        x->effect->dispatcher(x->effect, effBeginSetProgram, 0, 0, NULL, 0.0f);
+
+        // Some plugins require effSetProgram *before* effSetChunk
+        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+
+        intptr_t ret = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)chunk_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+
+        x->effect->dispatcher(x->effect, effEndSetProgram, 0, 0, NULL, 0.0f);
+
+        // Re-set program again after chunk to ensure update
+        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
+
+        post("lazyvst~: VST state applied (ret=%ld).", (long)ret);
+
+        // Fallback for plugins that ignore program chunks
+        if (ret == 0 && chunk_index == 1) {
+            post("lazyvst~: Warning - dispatcher returned 0 for program chunk. Trying index 0 (bank)...");
+            ret = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+            post("lazyvst~: Fallback bank restore ret=%ld", (long)ret);
+            // Refresh again after fallback
+            x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+        }
+
+        // If editor is open, signal idle multiple times to ensure GUI update
+        if (x->hwnd) {
+            for (int i=0; i<5; i++) x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
+        }
+    } else {
+        post("lazyvst~: ERROR - Failed to decode snapshot blob.");
+    }
+
+    if (d) object_free(d);
+    if (decoded_ptr) sysmem_freeptr(decoded_ptr);
 }
 
 void lazyvst_do_instantiate(t_lazyvst *x) {
@@ -439,6 +764,7 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
+    post("lazyvst~: new instance created");
 
     if (x) {
         x->h_module = NULL;
