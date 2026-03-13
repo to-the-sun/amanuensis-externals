@@ -57,6 +57,13 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="visualize" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Visualization</digest>
+			<description>When enabled, sends real-time crossfade ramp positions to the visualization script.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
 			<digest>Number of Tracks</digest>
 			<description>The maximum number of tracks to process from the transcript dictionary (default is 4).</description>
