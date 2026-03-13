@@ -117,7 +117,7 @@ void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerat
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s);
-void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s);
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -464,35 +464,53 @@ unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len) {
     return out;
 }
 
-void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s) {
+void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     if (!x->effect) {
-        post("lazyvst~: No VST plugin loaded to apply snapshot.");
+        post("lazyvst~: ERROR - No VST plugin loaded to apply snapshot.");
+        return;
+    }
+
+    if (!(x->effect->flags & effFlagsProgramChunks)) {
+        post("lazyvst~: ERROR - VST does not support state chunks.");
         return;
     }
 
     short path = 0;
     char filename[MAX_FILENAME_CHARS];
+    t_max_err err;
+
     if (path_frompathname(s->s_name, &path, filename)) {
-        post("lazyvst~: Could not resolve snapshot path: %s", s->s_name);
+        post("lazyvst~: ERROR - Could not resolve snapshot path: %s", s->s_name);
         return;
     }
 
     t_dictionary *d = NULL;
-    if (dictionary_read(filename, path, &d) || !d) {
-        error("lazyvst~: Could not read snapshot file: %s", filename);
+    err = dictionary_read(filename, path, &d);
+    if (err || !d) {
+        post("lazyvst~: ERROR - Could not read snapshot file (Error %d): %s", err, filename);
         return;
     }
 
     t_dictionary *snapshot_dict = NULL;
     if (dictionary_getdictionary(d, gensym("snapshot"), (t_object **)&snapshot_dict) || !snapshot_dict) {
-        error("lazyvst~: No 'snapshot' dictionary found in file.");
+        post("lazyvst~: ERROR - No 'snapshot' sub-dictionary found.");
+
+        long numkeys = 0;
+        t_symbol **keys = NULL;
+        dictionary_getkeys(d, &numkeys, &keys);
+        if (keys) {
+            post("lazyvst~: Top-level keys found:");
+            for (int i = 0; i < numkeys; i++) post("  %s", keys[i]->s_name);
+            dictionary_freekeys(d, numkeys, keys);
+        }
+
         object_free(d);
         return;
     }
 
     const char *blob_str = NULL;
     if (dictionary_getstring(snapshot_dict, gensym("blob"), &blob_str) || !blob_str) {
-        error("lazyvst~: No 'blob' string found in snapshot.");
+        post("lazyvst~: ERROR - No 'blob' string found in snapshot.");
         object_free(d);
         return;
     }
@@ -508,7 +526,7 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s) {
         intptr_t index = is_bank ? 0 : 1;
         x->effect->dispatcher(x->effect, effSetChunk, (int32_t)index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
     } else {
-        error("lazyvst~: Failed to decode snapshot blob.");
+        post("lazyvst~: ERROR - Failed to decode snapshot blob.");
     }
 
     if (d) object_free(d);
