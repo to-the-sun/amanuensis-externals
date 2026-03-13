@@ -74,6 +74,8 @@ enum {
     effClose,
     effSetProgram = 2,
     effGetProgram = 3,
+    effGetParam = 4,
+    effSetParam = 5,
     effSetSampleRate = 10,
     effSetBlockSize = 11,
     effMainsChanged = 12,
@@ -113,6 +115,11 @@ intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t v
     timeInfo.timeSigNumerator = 4;
     timeInfo.timeSigDenominator = 4;
     timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
+
+    // Comprehensive host call tracing
+    if (opcode != audioMasterGetTime) {
+        post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
+    }
 
     switch (opcode) {
         case audioMasterVersion:
@@ -180,6 +187,8 @@ void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_bang(t_lazyvst *x);
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_getchunk(t_lazyvst *x, long isbank);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -248,6 +257,8 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
     class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", 0);
     class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
@@ -266,6 +277,35 @@ void lazyvst_bang(t_lazyvst *x) {
 
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     post("lazyvst~: UNHANDLED message received: %s (argc=%ld)", s->s_name, argc);
+}
+
+void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (!x->effect) return;
+    if (argc < 1) return;
+
+    int32_t opcode = (int32_t)atom_getlong(argv);
+    int32_t index = (argc > 1) ? (int32_t)atom_getlong(argv + 1) : 0;
+    intptr_t value = (argc > 2) ? (intptr_t)atom_getlong(argv + 2) : 0;
+
+    post("lazyvst~: Manual VST dispatch: op=%d, idx=%d, val=%ld", opcode, index, (long)value);
+    intptr_t ret = x->effect->dispatcher(x->effect, opcode, index, value, NULL, 0.0f);
+    post("lazyvst~: Result: %ld", (long)ret);
+}
+
+void lazyvst_getchunk(t_lazyvst *x, long isbank) {
+    if (!x->effect) return;
+    void *ptr = NULL;
+    intptr_t size = x->effect->dispatcher(x->effect, effGetChunk, (int32_t)isbank, 0, &ptr, 0.0f);
+    post("lazyvst~: Current chunk (isbank=%ld): size=%ld, ptr=%p", isbank, (long)size, ptr);
+    if (ptr && size > 0) {
+        char dump[64];
+        char *dptr = dump;
+        unsigned char *bptr = (unsigned char *)ptr;
+        for (int k = 0; k < 16 && k < (int)size; k++) {
+            dptr += sprintf(dptr, "%02X ", bptr[k]);
+        }
+        post("lazyvst~: Chunk head: %s", dump);
+    }
 }
 
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
@@ -640,11 +680,14 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
         intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
         x->effect->dispatcher(x->effect, effBeginSetProgram, 0, 0, NULL, 0.0f);
 
+        // Some plugins require effSetProgram *before* effSetChunk
+        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+
         intptr_t ret = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)chunk_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
 
         x->effect->dispatcher(x->effect, effEndSetProgram, 0, 0, NULL, 0.0f);
 
-        // Explicitly re-set program to force internal updates
+        // Re-set program again after chunk to ensure update
         x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
 
         x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
