@@ -23,11 +23,12 @@ FPS = 60
 data_points = []
 tracks_seen = set()
 global_max_ms = 0.0
+main_ramp_duration = 5000.0 # Default fallback
 
 state_lock = threading.Lock()
 
 def process_text(text):
-    global global_max_ms
+    global global_max_ms, main_ramp_duration
     if not text:
         return
 
@@ -48,17 +49,15 @@ def process_text(text):
             pkt = json.loads(line)
             if "clear" in pkt:
                 with state_lock:
-                    track_to_clear = pkt.get("track")
-                    if track_to_clear is not None:
-                        # Clear specific track data
-                        data_points[:] = [p for p in data_points if p.get("track") != track_to_clear]
-                        print(f"!!! Visualizer track {track_to_clear} cleared via TCP !!!")
-                    else:
-                        # Global clear
-                        data_points.clear()
-                        tracks_seen.clear()
-                        global_max_ms = 0.0
-                        print("!!! Visualizer state cleared via TCP !!!")
+                    # Capture the max MS as the new main ramp duration before clearing
+                    if global_max_ms > 0:
+                        main_ramp_duration = global_max_ms
+
+                    # Always perform global clear as requested
+                    data_points.clear()
+                    tracks_seen.clear()
+                    global_max_ms = 0.0
+                    print(f"!!! Visualizer state cleared via TCP. New scale: {main_ramp_duration:.0f}ms !!!")
                 sys.stdout.flush()
                 continue
 
@@ -123,7 +122,7 @@ def handle_client(sock):
     sock.close()
 
 def run_gui():
-    global global_max_ms
+    global global_max_ms, main_ramp_duration
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE)
     pygame.display.set_caption("Weaver~ Crossfade Visualizer")
@@ -155,10 +154,11 @@ def run_gui():
         with state_lock:
             points = list(data_points)
             tracks = sorted(list(tracks_seen))
-            max_ms = global_max_ms
+            current_max_ms = global_max_ms
+            current_main_ramp_duration = main_ramp_duration
 
         # Status text
-        status_text = status_font.render(f"Tracks: {len(tracks)} Points: {len(points)}  [Press 'C' to clear]", True, (150, 150, 150))
+        status_text = status_font.render(f"Tracks: {len(tracks)} Points: {len(points)} Duration: {current_main_ramp_duration:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
         screen.blit(status_text, (WINDOW_SIZE[0] - status_text.get_width() - 20, 20))
 
         if not tracks:
@@ -166,10 +166,9 @@ def run_gui():
             clock.tick(FPS)
             continue
 
-        # Scroll window: show last 5 seconds (5000 ms)
-        view_width_ms = 5000.0
-        display_max_ms = max_ms
-        display_min_ms = max(0, display_max_ms - view_width_ms)
+        # Use the fixed duration from the last full ramp (or current max if it's larger)
+        view_width_ms = max(current_main_ramp_duration, current_max_ms)
+        display_min_ms = 0.0
 
         left_pad = 80
         right_pad = 50

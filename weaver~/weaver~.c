@@ -864,17 +864,9 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
-            if (x->visualize) {
-                if (hit_entry.no_crossfade) {
-                    if (!clear_sent) {
-                        visualize("{\"clear\": 1}");
-                        clear_sent = 1;
-                    }
-                } else {
-                    char clr_msg[128];
-                    snprintf(clr_msg, sizeof(clr_msg), "{\"clear\": 1, \"track\": %ld}", hit_entry.track_id);
-                    visualize(clr_msg);
-                }
+            if (x->visualize && hit_entry.no_crossfade && !clear_sent) {
+                visualize("{\"clear\": 1}");
+                clear_sent = 1;
             }
             continue;
         }
