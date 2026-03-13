@@ -10,6 +10,21 @@
 
 #pragma pack(push, 8)
 
+typedef struct VstTimeInfo {
+    double samplePos;
+    double sampleRate;
+    double nanoSeconds;
+    double ppqPos;
+    double tempo;
+    double barStartPos;
+    double cycleStartPos;
+    double cycleEndPos;
+    int32_t timeSigNumerator;
+    int32_t timeSigDenominator;
+    int32_t samplesToNextClock;
+    int32_t flags;
+} VstTimeInfo;
+
 struct AEffect;
 
 typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
@@ -81,11 +96,52 @@ enum {
     effFlagsCanDoubleReplacing = 1 << 12
 };
 
+enum {
+    audioMasterVersion = 1,
+    audioMasterGetTime = 7,
+    audioMasterGetVendorString = 32,
+    audioMasterGetProductString = 33,
+    audioMasterGetVendorVersion = 34,
+    audioMasterCanDo = 37,
+    audioMasterGetLanguage = 38
+};
+
 intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
-    if (opcode == 1) { // audioMasterVersion
-        return 2400;
+    static VstTimeInfo timeInfo = { 0 };
+    timeInfo.sampleRate = 44100.0;
+    timeInfo.tempo = 120.0;
+    timeInfo.timeSigNumerator = 4;
+    timeInfo.timeSigDenominator = 4;
+    timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
+
+    switch (opcode) {
+        case audioMasterVersion:
+            return 2400;
+        case audioMasterGetTime:
+            return (intptr_t)&timeInfo;
+        case audioMasterGetVendorString:
+            if (ptr) strcpy((char*)ptr, "Jules");
+            return 1;
+        case audioMasterGetProductString:
+            if (ptr) strcpy((char*)ptr, "lazyvst~");
+            return 1;
+        case audioMasterGetVendorVersion:
+            return 1000;
+        case audioMasterGetLanguage:
+            return 1; // English
+        case audioMasterCanDo:
+            if (ptr) {
+                const char* canDo = (const char*)ptr;
+                if (strcmp(canDo, "sendVstEvents") == 0 ||
+                    strcmp(canDo, "sendVstMidiEvent") == 0 ||
+                    strcmp(canDo, "supplyIdle") == 0) {
+                    return 1;
+                }
+            }
+            return 0;
+        default:
+            return 0;
     }
-    return 0;
 }
 
 typedef struct _lazyvst {
@@ -554,6 +610,13 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     t_atom_long is_bank = 0;
     dictionary_getlong(snapshot_dict, gensym("isbank"), &is_bank);
 
+    t_atom_long saved_id = 0;
+    if (dictionary_getlong(snapshot_dict, gensym("pluginsaveduniqueid"), &saved_id) == MAX_ERR_NONE) {
+        if (saved_id != 0 && saved_id != (t_atom_long)x->effect->uniqueID) {
+            post("lazyvst~: WARNING - Snapshot uniqueID (0x%08llX) does not match plugin uniqueID (0x%08X)", saved_id, x->effect->uniqueID);
+        }
+    }
+
     size_t decoded_size = 0;
     unsigned char *decoded_ptr = lazyvst_base64_decode(blob_str, &decoded_size);
 
@@ -571,31 +634,35 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
 
         post("lazyvst~: Applying state (index=%ld, size=%zu bytes)...", (long)chunk_index, decoded_size);
 
-        // Standard VST chunk restoration sequence
+        // Comprehensive VST state restoration sequence
         x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
+
+        intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
         x->effect->dispatcher(x->effect, effBeginSetProgram, 0, 0, NULL, 0.0f);
 
         intptr_t ret = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)chunk_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
 
         x->effect->dispatcher(x->effect, effEndSetProgram, 0, 0, NULL, 0.0f);
+
+        // Explicitly re-set program to force internal updates
+        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
+
         x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
 
         post("lazyvst~: VST state applied (ret=%ld).", (long)ret);
 
-        // Fallback for 1-program plugins (many ignore index 1)
+        // Fallback for plugins that ignore program chunks
         if (ret == 0 && chunk_index == 1) {
             post("lazyvst~: Warning - dispatcher returned 0 for program chunk. Trying index 0 (bank)...");
             ret = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
             post("lazyvst~: Fallback bank restore ret=%ld", (long)ret);
+            // Refresh again after fallback
+            x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
         }
 
-        // Force a refresh by re-setting the current program
-        intptr_t cur_prog = x->effect->dispatcher(x->effect, effGetProgram, 0, 0, NULL, 0.0f);
-        x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
-
-        // If editor is open, signal idle to update GUI
+        // If editor is open, signal idle multiple times to ensure GUI update
         if (x->hwnd) {
-            x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
+            for (int i=0; i<5; i++) x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
         }
     } else {
         post("lazyvst~: ERROR - Failed to decode snapshot blob.");
