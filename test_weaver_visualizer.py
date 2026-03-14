@@ -18,7 +18,13 @@ def test_visualizer():
 
     # Send some ramp data for track 1 and 2
     for i in range(100):
-        ms = i * 100.0
+        ms = i * 10.0 # 10ms steps
+
+        if i == 25:
+            sock.sendall(b'{"track": 1, "ms": 250.0, "label": "kick@100", "f2": 0.0}\n')
+        if i == 50:
+            sock.sendall(b'{"track": 2, "ms": 500.0, "label": "snare@200", "f2": 1.0}\n')
+
         # Track 1: f1 goes 0->1, f2 goes 1->0
         f1 = i / 100.0
         f2 = 1.0 - f1
@@ -30,6 +36,14 @@ def test_visualizer():
         sock.sendall((json.dumps(pkt1) + "\n").encode())
         sock.sendall((json.dumps(pkt2) + "\n").encode())
         time.sleep(0.01)
+
+    print("Sending track-specific clear for track 1...")
+    sock.sendall(b'{"clear": 1, "track": 1}\n')
+    time.sleep(0.5)
+
+    print("Sending global clear...")
+    sock.sendall(b'{"clear": 1}\n')
+    time.sleep(0.5)
 
     print("Test data sent.")
     sock.close()
