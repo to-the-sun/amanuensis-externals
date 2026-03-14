@@ -21,9 +21,9 @@ def test_visualizer():
         ms = i * 10.0 # 10ms steps
 
         if i == 25:
-            sock.sendall(b'{"track": 1, "ms": 250.0, "label": "kick@100"}\n')
+            sock.sendall(b'{"track": 1, "ms": 250.0, "label": "kick@100", "f2": 0.0}\n')
         if i == 50:
-            sock.sendall(b'{"track": 2, "ms": 500.0, "label": "snare@200"}\n')
+            sock.sendall(b'{"track": 2, "ms": 500.0, "label": "snare@200", "f2": 1.0}\n')
 
         # Track 1: f1 goes 0->1, f2 goes 1->0
         f1 = i / 100.0

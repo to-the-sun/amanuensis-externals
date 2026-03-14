@@ -66,7 +66,12 @@ def process_text(text):
 
             if all(k in pkt for k in ["track", "ms", "label"]):
                 with state_lock:
-                    labels.append({"track": pkt["track"], "ms": pkt["ms"], "text": pkt["label"]})
+                    labels.append({
+                        "track": pkt["track"],
+                        "ms": pkt["ms"],
+                        "text": pkt["label"],
+                        "f2": pkt.get("f2", 0.0)
+                    })
                     tracks_seen.add(pkt["track"])
                     if len(labels) > 1000:
                         labels.pop(0)
@@ -195,46 +200,18 @@ def run_gui():
         row_full_h = graph_h / max(1, num_rows)
         row_graph_h = row_full_h - row_spacing
 
-        # Draw rows
+        # 1. Background rectangles for all rows
         for i, t in enumerate(tracks):
             y_full = top_pad + i * row_full_h
             y_graph = y_full + row_spacing / 2
-
             if i % 2 == 0:
                 pygame.draw.rect(screen, (35, 35, 42), (left_pad, y_graph, graph_w, row_graph_h))
 
-            # Boundary lines for the buffered row
-            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph), (left_pad + graph_w, y_graph), 1)
-            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph + row_graph_h), (left_pad + graph_w, y_graph + row_graph_h), 1)
-
-            label = label_font.render(f"Track {t}", True, (200, 200, 200))
-            screen.blit(label, (10, y_graph + row_graph_h/2 - 7))
-
-        # Draw time axis at the bottom
-        axis_y = top_pad + graph_h
-        pygame.draw.line(screen, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)
-        num_ticks = 10
-        for i in range(num_ticks + 1):
-            tick_ms = display_min_ms + (i / num_ticks) * view_width_ms
-            tick_x = left_pad + (i / num_ticks) * graph_w
-            pygame.draw.line(screen, (200, 200, 200), (int(tick_x), axis_y), (int(tick_x), axis_y + 5), 2)
-            tick_label = font.render(f"{tick_ms:.0f} ms", True, (200, 200, 200))
-            screen.blit(tick_label, (int(tick_x) - tick_label.get_width()/2, axis_y + 10))
-
-        # Filter and draw lines for each track
+        # 2. Colored crossfade lines (f1 and f2) - Layer 0 (Bottom)
         for i, t in enumerate(tracks):
             y_full = top_pad + i * row_full_h
             row_top = y_full + row_spacing / 2
             row_bottom = row_top + row_graph_h
-
-            # Draw crossfade labels first (so they are under the lines if they overlap)
-            track_labels = [l for l in point_labels if l["track"] == t]
-            for l in track_labels:
-                lx = left_pad + (l["ms"] / view_width_ms) * graph_w
-                if left_pad <= lx <= left_pad + graph_w:
-                    pygame.draw.line(screen, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
-                    txt = font.render(l["text"], True, (180, 180, 200))
-                    screen.blit(txt, (int(lx) + 3, row_top + 2))
 
             track_points = [p for p in points if p["track"] == t]
             if len(track_points) < 2:
@@ -254,6 +231,52 @@ def run_gui():
                 pygame.draw.lines(screen, (100, 255, 100), False, f1_points, 2) # Green for f1
             if len(f2_points) >= 2:
                 pygame.draw.lines(screen, (255, 100, 100), False, f2_points, 2) # Red for f2
+
+        # 3. Crossfade labels (vertical lines and text) - Layer 1
+        for i, t in enumerate(tracks):
+            y_full = top_pad + i * row_full_h
+            row_top = y_full + row_spacing / 2
+            row_bottom = row_top + row_graph_h
+
+            track_labels = [l for l in point_labels if l["track"] == t]
+            for l in track_labels:
+                lx = left_pad + (l["ms"] / view_width_ms) * graph_w
+                if left_pad <= lx <= left_pad + graph_w:
+                    pygame.draw.line(screen, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
+                    txt = font.render(l["text"], True, (180, 180, 200))
+
+                    # Position based on f2 (Slot 1) state at initiation
+                    # f2 at 0.0 (Slot 0 active) -> TOP
+                    # f2 at 1.0 (Slot 1 active) -> BOTTOM
+                    if l.get("f2", 0.0) < 0.5:
+                        ty = row_top + 2
+                    else:
+                        ty = row_bottom - 12 # Roughly font height
+
+                    screen.blit(txt, (int(lx) + 3, ty))
+
+        # 4. Row boundary lines and Track ID labels - Layer 2
+        for i, t in enumerate(tracks):
+            y_full = top_pad + i * row_full_h
+            y_graph = y_full + row_spacing / 2
+
+            # Boundary lines for the buffered row
+            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph), (left_pad + graph_w, y_graph), 1)
+            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph + row_graph_h), (left_pad + graph_w, y_graph + row_graph_h), 1)
+
+            label = label_font.render(f"Track {t}", True, (200, 200, 200))
+            screen.blit(label, (10, y_graph + row_graph_h/2 - 7))
+
+        # 5. Main time axis and status text - Layer 3 (Top)
+        axis_y = top_pad + graph_h
+        pygame.draw.line(screen, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)
+        num_ticks = 10
+        for i in range(num_ticks + 1):
+            tick_ms = display_min_ms + (i / num_ticks) * view_width_ms
+            tick_x = left_pad + (i / num_ticks) * graph_w
+            pygame.draw.line(screen, (200, 200, 200), (int(tick_x), axis_y), (int(tick_x), axis_y + 5), 2)
+            tick_label = font.render(f"{tick_ms:.0f} ms", True, (200, 200, 200))
+            screen.blit(tick_label, (int(tick_x) - tick_label.get_width()/2, axis_y + 10))
 
         pygame.display.flip()
         clock.tick(FPS)

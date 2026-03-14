@@ -561,8 +561,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 weaver_log(x, "Track %lld: Track loop crossfade to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
                 if (x->visualize) {
                     char l_msg[256];
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\"}",
-                             (long long)track, bar_ms, palette->s_name, offset_ms);
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"f2\": %.1f}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms, (double)active);
                     visualize(l_msg);
                 }
             }
@@ -578,8 +578,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
                 if (x->visualize) {
                     char l_msg[256];
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\"}",
-                             (long long)track, bar_ms, palette->s_name, offset_ms);
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"f2\": %.1f}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms, (double)active);
                     visualize(l_msg);
                 }
             }
