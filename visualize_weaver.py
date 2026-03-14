@@ -21,6 +21,8 @@ FPS = 60
 # State
 # Each entry: {"track": T, "ms": M, "f1": F1, "f2": F2}
 data_points = []
+# Each entry: {"track": T, "ms": M, "text": "Label"}
+labels = []
 tracks_seen = set()
 global_max_ms = 0.0
 main_ramp_duration = 5000.0 # Default fallback
@@ -55,10 +57,19 @@ def process_text(text):
 
                     # Always perform global clear as requested
                     data_points.clear()
+                    labels.clear()
                     tracks_seen.clear()
                     global_max_ms = 0.0
                     print(f"!!! Visualizer state cleared via TCP. New scale: {main_ramp_duration:.0f}ms !!!")
                 sys.stdout.flush()
+                continue
+
+            if all(k in pkt for k in ["track", "ms", "label"]):
+                with state_lock:
+                    labels.append({"track": pkt["track"], "ms": pkt["ms"], "text": pkt["label"]})
+                    tracks_seen.add(pkt["track"])
+                    if len(labels) > 1000:
+                        labels.pop(0)
                 continue
 
             valid = all(k in pkt for k in ["track", "ms", "f1", "f2"])
@@ -153,6 +164,7 @@ def run_gui():
 
         with state_lock:
             points = list(data_points)
+            point_labels = list(labels)
             tracks = sorted(list(tracks_seen))
             current_max_ms = global_max_ms
             current_main_ramp_duration = main_ramp_duration
@@ -174,24 +186,29 @@ def run_gui():
         right_pad = 50
         top_pad = 60
         bottom_pad = 60
+        row_spacing = 20 # Buffer zone between graphs
 
         graph_w = WINDOW_SIZE[0] - left_pad - right_pad
         graph_h = WINDOW_SIZE[1] - top_pad - bottom_pad
 
         num_rows = len(tracks)
-        row_h = graph_h / max(1, num_rows)
+        row_full_h = graph_h / max(1, num_rows)
+        row_graph_h = row_full_h - row_spacing
 
         # Draw rows
         for i, t in enumerate(tracks):
-            y = top_pad + i * row_h
-            if i % 2 == 0:
-                pygame.draw.rect(screen, (35, 35, 42), (left_pad, y, graph_w, row_h))
-            pygame.draw.line(screen, (60, 60, 70), (left_pad, y), (left_pad + graph_w, y), 1)
-            label = label_font.render(f"Track {t}", True, (200, 200, 200))
-            screen.blit(label, (10, y + row_h/2 - 7))
+            y_full = top_pad + i * row_full_h
+            y_graph = y_full + row_spacing / 2
 
-            # Baseline (0.0 fade)
-            pygame.draw.line(screen, (50, 50, 50), (left_pad, y + row_h), (left_pad + graph_w, y + row_h), 1)
+            if i % 2 == 0:
+                pygame.draw.rect(screen, (35, 35, 42), (left_pad, y_graph, graph_w, row_graph_h))
+
+            # Boundary lines for the buffered row
+            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph), (left_pad + graph_w, y_graph), 1)
+            pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph + row_graph_h), (left_pad + graph_w, y_graph + row_graph_h), 1)
+
+            label = label_font.render(f"Track {t}", True, (200, 200, 200))
+            screen.blit(label, (10, y_graph + row_graph_h/2 - 7))
 
         # Draw time axis at the bottom
         axis_y = top_pad + graph_h
@@ -206,10 +223,20 @@ def run_gui():
 
         # Filter and draw lines for each track
         for i, t in enumerate(tracks):
-            row_top = top_pad + i * row_h
-            row_bottom = row_top + row_h
+            y_full = top_pad + i * row_full_h
+            row_top = y_full + row_spacing / 2
+            row_bottom = row_top + row_graph_h
 
-            track_points = [p for p in points if p["track"] == t and p["ms"] >= display_min_ms]
+            # Draw crossfade labels first (so they are under the lines if they overlap)
+            track_labels = [l for l in point_labels if l["track"] == t]
+            for l in track_labels:
+                lx = left_pad + (l["ms"] / view_width_ms) * graph_w
+                if left_pad <= lx <= left_pad + graph_w:
+                    pygame.draw.line(screen, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
+                    txt = font.render(l["text"], True, (180, 180, 200))
+                    screen.blit(txt, (int(lx) + 3, row_top + 2))
+
+            track_points = [p for p in points if p["track"] == t]
             if len(track_points) < 2:
                 continue
 
@@ -217,9 +244,9 @@ def run_gui():
             f2_points = []
 
             for p in track_points:
-                x = left_pad + (p["ms"] - display_min_ms) / view_width_ms * graph_w
-                y_f1 = row_bottom - p["f1"] * row_h
-                y_f2 = row_bottom - p["f2"] * row_h
+                x = left_pad + (p["ms"] / view_width_ms) * graph_w
+                y_f1 = row_bottom - p["f1"] * row_graph_h
+                y_f2 = row_bottom - p["f2"] * row_graph_h
                 f1_points.append((int(x), int(y_f1)))
                 f2_points.append((int(x), int(y_f2)))
 

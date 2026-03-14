@@ -559,6 +559,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
                 weaver_log(x, "Track %lld: Track loop crossfade to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
+                if (x->visualize) {
+                    char l_msg[256];
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\"}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms);
+                    visualize(l_msg);
+                }
             }
         } else {
             if (change) {
@@ -570,6 +576,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
                 weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
+                if (x->visualize) {
+                    char l_msg[256];
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\"}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms);
+                    visualize(l_msg);
+                }
             }
         }
     }

@@ -19,6 +19,12 @@ def test_visualizer():
     # Send some ramp data for track 1 and 2
     for i in range(100):
         ms = i * 10.0 # 10ms steps
+
+        if i == 25:
+            sock.sendall(b'{"track": 1, "ms": 250.0, "label": "kick@100"}\n')
+        if i == 50:
+            sock.sendall(b'{"track": 2, "ms": 500.0, "label": "snare@200"}\n')
+
         # Track 1: f1 goes 0->1, f2 goes 1->0
         f1 = i / 100.0
         f2 = 1.0 - f1
