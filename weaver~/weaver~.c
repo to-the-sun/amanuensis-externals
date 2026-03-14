@@ -765,7 +765,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         for (int i = 0; i < sampleframes; i++) {
-            double current_scan = in[i] + 9.0; // 9ms lookahead
+            double current_scan = in[i];
 
             double bar_len = x->cached_bar_len;
 
