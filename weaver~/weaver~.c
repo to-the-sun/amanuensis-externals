@@ -519,12 +519,13 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     if (sr_dest <= 0) sr_dest = sys_getsr();
     if (sr_dest <= 0) sr_dest = 44100.0;
 
-    long n_frames_dest = buffer_getframecount(dest_buf);
+    long long n_frames_dest = buffer_getframecount(dest_buf);
     long n_chans_dest = buffer_getchannelcount(dest_buf);
-    long start_frame_abs = (long)round(bar_ms * sr_dest / 1000.0);
-    long n_frames_to_weave = (long)round(bar_len * sr_dest / 1000.0);
+    long long start_frame_abs = (long long)round(bar_ms * sr_dest / 1000.0);
+    long long n_frames_to_weave = (long long)round(bar_len * sr_dest / 1000.0);
 
     // 2. Crossfade Trigger
+    tr->xf.elapsed = start_frame_abs;
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
     if (!skip_trigger) {
@@ -603,7 +604,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     // Source buffers setup using cached refs
     t_buffer_obj *src_buf[2] = {NULL, NULL};
     float *samples_src[2] = {NULL, NULL};
-    long n_frames_src[2] = {0, 0};
+    long long n_frames_src[2] = {0, 0};
     long n_chans_src[2] = {0, 0};
     double sr_src[2] = {0, 0};
 
@@ -646,20 +647,21 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     }
 
     // Weave loop with crossfade and nearest-neighbor sample rate conversion
-    for (long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
-        long f_abs = start_frame_abs + i_frame;
-        long f = f_abs % n_frames_dest;
+    for (long long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
+        long long f_abs = start_frame_abs + i_frame;
+        long long f = f_abs % n_frames_dest;
         if (f < 0) f += n_frames_dest;
 
+        tr->xf.elapsed = f_abs;
         double current_ms = (double)f_abs * 1000.0 / sr_dest;
         double track_ramp_ms = fmod(current_ms, tr->track_length);
         double max_abs[2] = {0.0, 0.0};
-        long f_src[2] = {-1, -1};
+        long long f_src[2] = {-1, -1};
 
         for (int i = 0; i < 2; i++) {
             if (samples_src[i]) {
                 double src_ms = tr->offset[i] + track_ramp_ms;
-                f_src[i] = (long)round(src_ms * sr_src[i] / 1000.0);
+                f_src[i] = (long long)round(src_ms * sr_src[i] / 1000.0);
                 if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
                     for (long c = 0; c < n_chans_src[i]; c++) {
                         double a = fabs((double)samples_src[i][f_src[i] * n_chans_src[i] + c]);
@@ -681,7 +683,6 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
         int finished = r1_done && r2_done;
         tr->xf.last_control = tr->control;
-        tr->xf.elapsed++;
         tr->busy = !finished;
 
         // Apply fades to all destination channels
