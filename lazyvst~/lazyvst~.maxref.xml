@@ -38,12 +38,6 @@
 				The <m>open</m> message opens the graphical user interface (GUI) of the VST plugin in a separate Win32 window. This requires that the VST plugin has an editor available. If the editor is already open, it brings the window to the front.
 			</description>
 		</method>
-		<method name="snapshot">
-			<digest>Load a VST state from a .maxsnap file</digest>
-			<description>
-				The <m>snapshot</m> message takes an absolute path to a <f>.maxsnap</f> file and restores the VST plugin's state from the Base64-encoded chunk contained within the file's JSON structure.
-			</description>
-		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist />

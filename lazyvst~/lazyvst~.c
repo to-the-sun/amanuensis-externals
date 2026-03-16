@@ -610,7 +610,7 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld. Messages: open, snapshot [path]", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
