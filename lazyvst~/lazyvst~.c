@@ -87,6 +87,9 @@ enum {
     effGetChunk = 23,
     effBeginSetProgram = 67,
     effEndSetProgram = 68,
+    effGetParamName = 8,
+    effGetParamLabel = 9,
+    effGetParamDisplay = 10,
     effGetEffectName = 45,
     effGetProductString = 48
 };
@@ -100,56 +103,26 @@ enum {
 
 enum {
     audioMasterVersion = 1,
+    audioMasterIdle = 3,
     audioMasterGetTime = 7,
+    audioMasterSizeWindow = 11,
+    audioMasterGetSampleRate = 13,
+    audioMasterGetBlockSize = 14,
+    audioMasterGetInputLatency = 15,
+    audioMasterGetOutputLatency = 16,
+    audioMasterGetCurrentProcessLevel = 23,
+    audioMasterGetAutomationState = 26,
     audioMasterGetVendorString = 32,
     audioMasterGetProductString = 33,
     audioMasterGetVendorVersion = 34,
     audioMasterCanDo = 37,
-    audioMasterGetLanguage = 38
+    audioMasterGetLanguage = 38,
+    audioMasterGetDirectory = 41,
+    audioMasterUpdateDisplay = 42
 };
 
-intptr_t hostCallback(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
-    static VstTimeInfo timeInfo = { 0 };
-    timeInfo.sampleRate = 44100.0;
-    timeInfo.tempo = 120.0;
-    timeInfo.timeSigNumerator = 4;
-    timeInfo.timeSigDenominator = 4;
-    timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
-
-    // Comprehensive host call tracing
-    if (opcode != audioMasterGetTime) {
-        post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
-    }
-
-    switch (opcode) {
-        case audioMasterVersion:
-            return 2400;
-        case audioMasterGetTime:
-            return (intptr_t)&timeInfo;
-        case audioMasterGetVendorString:
-            if (ptr) strcpy((char*)ptr, "Jules");
-            return 1;
-        case audioMasterGetProductString:
-            if (ptr) strcpy((char*)ptr, "lazyvst~");
-            return 1;
-        case audioMasterGetVendorVersion:
-            return 1000;
-        case audioMasterGetLanguage:
-            return 1; // English
-        case audioMasterCanDo:
-            if (ptr) {
-                const char* canDo = (const char*)ptr;
-                if (strcmp(canDo, "sendVstEvents") == 0 ||
-                    strcmp(canDo, "sendVstMidiEvent") == 0 ||
-                    strcmp(canDo, "supplyIdle") == 0) {
-                    return 1;
-                }
-            }
-            return 0;
-        default:
-            return 0;
-    }
-}
+struct _lazyvst;
+typedef struct _lazyvst t_lazyvst;
 
 typedef struct _lazyvst {
     t_pxobject x_obj;
@@ -173,6 +146,64 @@ typedef struct _lazyvst {
     long cur_ms;
 } t_lazyvst;
 
+intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
+    static VstTimeInfo timeInfo = { 0 };
+    t_lazyvst *x = (effect) ? (t_lazyvst*)effect->user : NULL;
+
+    timeInfo.sampleRate = (x && x->cur_sr > 0) ? x->cur_sr : 44100.0;
+    timeInfo.tempo = 120.0;
+    timeInfo.timeSigNumerator = 4;
+    timeInfo.timeSigDenominator = 4;
+    timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
+
+    // Comprehensive host call tracing
+    if (opcode != audioMasterGetTime && opcode != audioMasterIdle) {
+        post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
+    }
+
+    switch (opcode) {
+        case audioMasterVersion:
+            return 2400;
+        case audioMasterIdle:
+            return 0;
+        case audioMasterGetTime:
+            return (intptr_t)&timeInfo;
+        case audioMasterGetSampleRate:
+            return (intptr_t)((x && x->cur_sr > 0) ? x->cur_sr : 44100.0);
+        case audioMasterGetBlockSize:
+            return (intptr_t)((x && x->cur_ms > 0) ? x->cur_ms : 512);
+        case audioMasterGetCurrentProcessLevel:
+            return 0; // Unknown
+        case audioMasterGetAutomationState:
+            return 0; // Off
+        case audioMasterGetVendorString:
+            if (ptr) strcpy((char*)ptr, "Jules");
+            return 1;
+        case audioMasterGetProductString:
+            if (ptr) strcpy((char*)ptr, "lazyvst~");
+            return 1;
+        case audioMasterGetVendorVersion:
+            return 1000;
+        case audioMasterGetLanguage:
+            return 1; // English
+        case audioMasterCanDo:
+            if (ptr) {
+                const char* canDo = (const char*)ptr;
+                if (strcmp(canDo, "sendVstEvents") == 0 ||
+                    strcmp(canDo, "sendVstMidiEvent") == 0 ||
+                    strcmp(canDo, "supplyIdle") == 0 ||
+                    strcmp(canDo, "sizeWindow") == 0) {
+                    return 1;
+                }
+            }
+            return 0;
+        case audioMasterUpdateDisplay:
+            return 0;
+        default:
+            return 0;
+    }
+}
+
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
 void *lazyvst_worker(t_lazyvst *x);
@@ -189,6 +220,8 @@ void lazyvst_bang(t_lazyvst *x);
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_getchunk(t_lazyvst *x, long isbank);
+void lazyvst_vstinfo(t_lazyvst *x);
+void lazyvst_vstlist(t_lazyvst *x);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -259,6 +292,8 @@ void ext_main(void *r) {
     class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
+    class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", 0);
+    class_addmethod(c, (method)lazyvst_vstlist, "vstlist", 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", 0);
     class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
@@ -305,6 +340,31 @@ void lazyvst_getchunk(t_lazyvst *x, long isbank) {
             dptr += sprintf(dptr, "%02X ", bptr[k]);
         }
         post("lazyvst~: Chunk head: %s", dump);
+    }
+}
+
+void lazyvst_vstinfo(t_lazyvst *x) {
+    post("lazyvst~: INFO");
+    post("  SR: %.1f", x->cur_sr);
+    post("  MS: %ld", x->cur_ms);
+    if (x->effect) {
+        post("  UniqueID: 0x%08X", x->effect->uniqueID);
+        post("  Version: %d", x->effect->version);
+    }
+}
+
+void lazyvst_vstlist(t_lazyvst *x) {
+    if (!x->effect) return;
+    post("lazyvst~: Listing parameters (%d total):", x->effect->numParams);
+    for (int i = 0; i < x->effect->numParams; i++) {
+        char name[256] = {0};
+        char display[256] = {0};
+        char label[256] = {0};
+        x->effect->dispatcher(x->effect, effGetParamName, i, 0, name, 0.0f);
+        x->effect->dispatcher(x->effect, effGetParamDisplay, i, 0, display, 0.0f);
+        x->effect->dispatcher(x->effect, effGetParamLabel, i, 0, label, 0.0f);
+        float val = x->effect->getParameter ? ((float (*)(AEffect*, int32_t))x->effect->getParameter)(x->effect, i) : 0.0f;
+        post("  [%d] %s: %s %s (raw=%f)", i, name, display, label, val);
     }
 }
 
@@ -694,18 +754,18 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
 
         post("lazyvst~: VST state applied (ret=%ld).", (long)ret);
 
-        // Fallback for plugins that ignore program chunks
-        if (ret == 0 && chunk_index == 1) {
-            post("lazyvst~: Warning - dispatcher returned 0 for program chunk. Trying index 0 (bank)...");
-            ret = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
-            post("lazyvst~: Fallback bank restore ret=%ld", (long)ret);
+        // Fallback for plugins that ignore program chunks or return 0 on success (quirk)
+        if (chunk_index == 1) {
+            post("lazyvst~: Trying index 0 (bank) restoration for completeness...");
+            intptr_t ret2 = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+            post("lazyvst~: Fallback bank restore ret=%ld", (long)ret2);
             // Refresh again after fallback
             x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
         }
 
         // If editor is open, signal idle multiple times to ensure GUI update
         if (x->hwnd) {
-            for (int i=0; i<5; i++) x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
+            for (int i=0; i<10; i++) x->effect->dispatcher(x->effect, effEditIdle, 0, 0, NULL, 0.0f);
         }
     } else {
         post("lazyvst~: ERROR - Failed to decode snapshot blob.");
