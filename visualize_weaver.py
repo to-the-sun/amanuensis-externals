@@ -19,10 +19,10 @@ BACKGROUND = (30, 30, 35)
 FPS = 60
 
 # State
-# Each entry: {"track": T, "ms": M, "f1": F1, "f2": F2}
-data_points = []
-# Each entry: {"track": T, "ms": M, "text": "Label"}
-labels = []
+# Maps track_id -> list of points
+data_points_by_track = {}
+# Maps track_id -> list of labels
+labels_by_track = {}
 tracks_seen = set()
 global_max_ms = 0.0
 main_ramp_duration = 5000.0 # Default fallback
@@ -56,8 +56,8 @@ def process_text(text):
                         main_ramp_duration = global_max_ms
 
                     # Always perform global clear as requested
-                    data_points.clear()
-                    labels.clear()
+                    data_points_by_track.clear()
+                    labels_by_track.clear()
                     tracks_seen.clear()
                     global_max_ms = 0.0
                     print(f"!!! Visualizer state cleared via TCP. New scale: {main_ramp_duration:.0f}ms !!!")
@@ -65,29 +65,34 @@ def process_text(text):
                 continue
 
             if all(k in pkt for k in ["track", "ms", "label"]):
+                track_id = pkt["track"]
                 with state_lock:
-                    labels.append({
-                        "track": pkt["track"],
+                    if track_id not in labels_by_track:
+                        labels_by_track[track_id] = []
+                    labels_by_track[track_id].append({
                         "ms": pkt["ms"],
                         "text": pkt["label"],
                         "f2": pkt.get("f2", 0.0)
                     })
-                    tracks_seen.add(pkt["track"])
-                    if len(labels) > 1000:
-                        labels.pop(0)
+                    tracks_seen.add(track_id)
+                    if len(labels_by_track[track_id]) > 1000:
+                        labels_by_track[track_id].pop(0)
                 continue
 
             valid = all(k in pkt for k in ["track", "ms", "f1", "f2"])
             if valid:
+                track_id = pkt["track"]
                 with state_lock:
-                    data_points.append(pkt)
-                    tracks_seen.add(pkt["track"])
+                    if track_id not in data_points_by_track:
+                        data_points_by_track[track_id] = []
+                    data_points_by_track[track_id].append(pkt)
+                    tracks_seen.add(track_id)
                     if pkt["ms"] > global_max_ms:
                         global_max_ms = pkt["ms"]
 
-                    # Keep a reasonable history (e.g., last 10000 points)
-                    if len(data_points) > 10000:
-                        data_points.pop(0)
+                    # Keep a reasonable history per track
+                    if len(data_points_by_track[track_id]) > 10000:
+                        data_points_by_track[track_id].pop(0)
 
         except json.JSONDecodeError:
             continue
@@ -161,21 +166,24 @@ def run_gui():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_c:
                     with state_lock:
-                        data_points.clear()
+                        data_points_by_track.clear()
+                        labels_by_track.clear()
                         tracks_seen.clear()
                         global_max_ms = 0.0
 
         screen.fill(BACKGROUND)
 
         with state_lock:
-            points = list(data_points)
-            point_labels = list(labels)
+            # Shallow copy of the structures
+            points_dict = {tid: list(pts) for tid, pts in data_points_by_track.items()}
+            labels_dict = {tid: list(lbs) for tid, lbs in labels_by_track.items()}
             tracks = sorted(list(tracks_seen))
             current_max_ms = global_max_ms
             current_main_ramp_duration = main_ramp_duration
+            total_points = sum(len(pts) for pts in points_dict.values())
 
         # Status text
-        status_text = status_font.render(f"Tracks: {len(tracks)} Points: {len(points)} Duration: {current_main_ramp_duration:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
+        status_text = status_font.render(f"Tracks: {len(tracks)} Points: {total_points} Duration: {current_main_ramp_duration:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
         screen.blit(status_text, (WINDOW_SIZE[0] - status_text.get_width() - 20, 20))
 
         if not tracks:
@@ -196,24 +204,26 @@ def run_gui():
         graph_w = WINDOW_SIZE[0] - left_pad - right_pad
         graph_h = WINDOW_SIZE[1] - top_pad - bottom_pad
 
-        num_rows = len(tracks)
-        row_full_h = graph_h / max(1, num_rows)
+        num_rows = max(tracks) if tracks else 1
+        row_full_h = graph_h / num_rows
         row_graph_h = row_full_h - row_spacing
 
         # 1. Background rectangles for all rows
-        for i, t in enumerate(tracks):
+        for t in range(1, num_rows + 1):
+            i = t - 1
             y_full = top_pad + i * row_full_h
             y_graph = y_full + row_spacing / 2
             if i % 2 == 0:
                 pygame.draw.rect(screen, (35, 35, 42), (left_pad, y_graph, graph_w, row_graph_h))
 
         # 2. Colored crossfade lines (f1 and f2) - Layer 0 (Bottom)
-        for i, t in enumerate(tracks):
+        for t in tracks:
+            i = t - 1
             y_full = top_pad + i * row_full_h
             row_top = y_full + row_spacing / 2
             row_bottom = row_top + row_graph_h
 
-            track_points = [p for p in points if p["track"] == t]
+            track_points = points_dict.get(t, [])
             if len(track_points) < 2:
                 continue
 
@@ -233,12 +243,13 @@ def run_gui():
                 pygame.draw.lines(screen, (255, 100, 100), False, f2_points, 2) # Red for f2
 
         # 3. Crossfade labels (vertical lines and text) - Layer 1
-        for i, t in enumerate(tracks):
+        for t in tracks:
+            i = t - 1
             y_full = top_pad + i * row_full_h
             row_top = y_full + row_spacing / 2
             row_bottom = row_top + row_graph_h
 
-            track_labels = [l for l in point_labels if l["track"] == t]
+            track_labels = labels_dict.get(t, [])
             for l in track_labels:
                 lx = left_pad + (l["ms"] / view_width_ms) * graph_w
                 if left_pad <= lx <= left_pad + graph_w:
@@ -256,7 +267,8 @@ def run_gui():
                     screen.blit(txt, (int(lx) + 3, ty))
 
         # 4. Row boundary lines and Track ID labels - Layer 2
-        for i, t in enumerate(tracks):
+        for t in range(1, num_rows + 1):
+            i = t - 1
             y_full = top_pad + i * row_full_h
             y_graph = y_full + row_spacing / 2
 
