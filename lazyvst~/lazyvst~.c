@@ -144,21 +144,31 @@ typedef struct _lazyvst {
 
     double cur_sr;
     long cur_ms;
+    long debug_host;
 } t_lazyvst;
 
 intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
     static VstTimeInfo timeInfo = { 0 };
     t_lazyvst *x = (effect) ? (t_lazyvst*)effect->user : NULL;
 
+    timeInfo.samplePos = 0.0;
     timeInfo.sampleRate = (x && x->cur_sr > 0) ? x->cur_sr : 44100.0;
+    timeInfo.nanoSeconds = 0.0;
+    timeInfo.ppqPos = 0.0;
     timeInfo.tempo = 120.0;
+    timeInfo.barStartPos = 0.0;
+    timeInfo.cycleStartPos = 0.0;
+    timeInfo.cycleEndPos = 0.0;
     timeInfo.timeSigNumerator = 4;
     timeInfo.timeSigDenominator = 4;
-    timeInfo.flags = 1 | 2; // kVstTransportChanged | kVstTransportPlaying
+    timeInfo.samplesToNextClock = 0;
+    timeInfo.flags = 1 | 2 | 1024 | 2048; // TransportChanged | TransportPlaying | TimeSigValid | TempoValid
 
     // Comprehensive host call tracing
-    if (opcode != audioMasterGetTime && opcode != audioMasterIdle) {
-        post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
+    if (x && x->debug_host) {
+        if (opcode != audioMasterGetTime && opcode != audioMasterIdle) {
+            post("lazyvst~: Plugin calling host: op=%d, idx=%d, val=%ld, ptr=%p, opt=%f", opcode, index, (long)value, ptr, opt);
+        }
     }
 
     switch (opcode) {
@@ -177,10 +187,10 @@ intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, int
         case audioMasterGetAutomationState:
             return 0; // Off
         case audioMasterGetVendorString:
-            if (ptr) strcpy((char*)ptr, "Jules");
+            if (ptr) strcpy((char*)ptr, "Cycling '74");
             return 1;
         case audioMasterGetProductString:
-            if (ptr) strcpy((char*)ptr, "lazyvst~");
+            if (ptr) strcpy((char*)ptr, "Max");
             return 1;
         case audioMasterGetVendorVersion:
             return 1000;
@@ -192,12 +202,27 @@ intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, int
                 if (strcmp(canDo, "sendVstEvents") == 0 ||
                     strcmp(canDo, "sendVstMidiEvent") == 0 ||
                     strcmp(canDo, "supplyIdle") == 0 ||
-                    strcmp(canDo, "sizeWindow") == 0) {
+                    strcmp(canDo, "sizeWindow") == 0 ||
+                    strcmp(canDo, "sendVstTimeInfo") == 0 ||
+                    strcmp(canDo, "reportConnectionChanges") == 0 ||
+                    strcmp(canDo, "acceptIOChanges") == 0) {
                     return 1;
                 }
             }
             return 0;
         case audioMasterUpdateDisplay:
+            return 0;
+        case audioMasterGetDirectory:
+            if (x && ptr) {
+                // Return directory of the VST DLL
+                char dir[2048];
+                strncpy(dir, x->path, 2048);
+                char *last_slash = strrchr(dir, '/');
+                if (!last_slash) last_slash = strrchr(dir, '\\');
+                if (last_slash) *last_slash = '\0';
+                strcpy((char*)ptr, dir);
+                return (intptr_t)ptr;
+            }
             return 0;
         default:
             return 0;
@@ -222,6 +247,7 @@ void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_getchunk(t_lazyvst *x, long isbank);
 void lazyvst_vstinfo(t_lazyvst *x);
 void lazyvst_vstlist(t_lazyvst *x);
+void lazyvst_vstdebug(t_lazyvst *x, long state);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -294,6 +320,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", 0);
     class_addmethod(c, (method)lazyvst_vstlist, "vstlist", 0);
+    class_addmethod(c, (method)lazyvst_vstdebug, "vstdebug", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", 0);
     class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
@@ -363,9 +390,14 @@ void lazyvst_vstlist(t_lazyvst *x) {
         x->effect->dispatcher(x->effect, effGetParamName, i, 0, name, 0.0f);
         x->effect->dispatcher(x->effect, effGetParamDisplay, i, 0, display, 0.0f);
         x->effect->dispatcher(x->effect, effGetParamLabel, i, 0, label, 0.0f);
-        float val = x->effect->getParameter ? ((float (*)(AEffect*, int32_t))x->effect->getParameter)(x->effect, i) : 0.0f;
+        float val = x->effect->getParameter ? ((float (*)(struct AEffect*, int32_t))x->effect->getParameter)(x->effect, i) : 0.0f;
         post("  [%d] %s: %s %s (raw=%f)", i, name, display, label, val);
     }
+}
+
+void lazyvst_vstdebug(t_lazyvst *x, long state) {
+    x->debug_host = state;
+    post("lazyvst~: Host call debugging %s.", state ? "ENABLED" : "DISABLED");
 }
 
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
@@ -754,11 +786,12 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
 
         post("lazyvst~: VST state applied (ret=%ld).", (long)ret);
 
-        // Fallback for plugins that ignore program chunks or return 0 on success (quirk)
-        if (chunk_index == 1) {
-            post("lazyvst~: Trying index 0 (bank) restoration for completeness...");
-            intptr_t ret2 = x->effect->dispatcher(x->effect, effSetChunk, 0, (intptr_t)decoded_size, decoded_ptr, 0.0f);
-            post("lazyvst~: Fallback bank restore ret=%ld", (long)ret2);
+        // Fallback for plugins that ignore program chunks or require bank chunks
+        if (ret == 0) {
+            intptr_t other_index = (chunk_index == 1) ? 0 : 1;
+            post("lazyvst~: dispatcher returned 0. Trying index %ld restoration...", (long)other_index);
+            intptr_t ret2 = x->effect->dispatcher(x->effect, effSetChunk, (int32_t)other_index, (intptr_t)decoded_size, decoded_ptr, 0.0f);
+            post("lazyvst~: Fallback restore ret=%ld", (long)ret2);
             // Refresh again after fallback
             x->effect->dispatcher(x->effect, effSetProgram, 0, cur_prog, NULL, 0.0f);
         }
@@ -841,6 +874,7 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->f_buffer_size = 0;
         x->cur_sr = 0;
         x->cur_ms = 0;
+        x->debug_host = 0;
         x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
