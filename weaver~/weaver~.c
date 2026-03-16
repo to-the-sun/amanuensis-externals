@@ -192,9 +192,7 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
         memcpy(tr->schedule, temp_schedule, actual_count * sizeof(double));
     }
     tr->schedule_count = actual_count;
-
-    // Invalidate next index to force re-scan on next DSP loop
-    tr->last_track_scan = -1.0;
+    tr->next_schedule_idx = 0; // Force re-scan of new schedule
 
     critical_exit(x->lock);
 
@@ -932,16 +930,18 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
                         while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
                             double s = tr->schedule[tr->next_schedule_idx];
-                            int nt = (x->fifo_tail + 1) % 4096;
-                            if (nt != x->fifo_head) {
-                                char bstr[64];
-                                snprintf(bstr, 64, "%ld", (long)s);
-                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                x->hit_bars[x->fifo_tail].bar.value = cycle_base + s;
-                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                x->hit_bars[x->fifo_tail].no_crossfade = 0;
-                                x->fifo_tail = nt;
+                            if (s > tr->last_track_scan) {
+                                int nt = (x->fifo_tail + 1) % 4096;
+                                if (nt != x->fifo_head) {
+                                    char bstr[64];
+                                    snprintf(bstr, 64, "%ld", (long)s);
+                                    x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + s;
+                                    x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                                    x->hit_bars[x->fifo_tail].track_id = t + 1;
+                                    x->hit_bars[x->fifo_tail].no_crossfade = 0;
+                                    x->fifo_tail = nt;
+                                }
                             }
                             tr->next_schedule_idx++;
                         }
@@ -963,6 +963,8 @@ void weaver_audio_qtask(t_weaver *x) {
     x->cached_bar_len = weaver_get_bar_length(x);
     double bar_len = x->cached_bar_len;
     int clear_sent = 0;
+
+    t_hashtab *tracks_to_update = hashtab_new(0);
 
     while (x->fifo_head != x->fifo_tail) {
         t_fifo_entry hit_entry = x->hit_bars[x->fifo_head];
@@ -1040,12 +1042,14 @@ void weaver_audio_qtask(t_weaver *x) {
             // Check if it's a silence cap
             if (hashtab_lookup(tr->silence_caps, bar_key, NULL) == MAX_ERR_NONE) {
                 weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
-                hashtab_delete(tr->silence_caps, bar_key);
             } else if (is_bar_0) {
                 // Bar 0 missing: force silence
                 weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
             }
         }
+
+        // Always remove processed bar from silence caps to prevent growth
+        hashtab_delete(tr->silence_caps, bar_key);
 
         // 2. Silence Cap logic (using current information)
         if (tr && bar_len > 0) {
@@ -1061,16 +1065,33 @@ void weaver_audio_qtask(t_weaver *x) {
             }
 
             if (!next_exists) {
-                // weaver_schedule_silence will call update_schedule
-                weaver_schedule_silence(x, tr, target_track, next_rel);
-            } else {
-                // Still need to update schedule to handle processed bar/caps
-                weaver_track_update_schedule(x, tr, target_track);
+                // Add to silence_caps but don't update schedule yet
+                hashtab_store(tr->silence_caps, next_rel_sym, (t_object*)1);
             }
-        } else {
-            weaver_track_update_schedule(x, tr, target_track);
+        }
+
+        // Mark track for schedule update at the end of task
+        if (tr) {
+            char tstr_key[64];
+            snprintf(tstr_key, 64, "%ld", target_track);
+            hashtab_store(tracks_to_update, gensym(tstr_key), (t_object*)1);
         }
 
         if (dict) dictobj_release(dict);
     }
+
+    // Perform deferred schedule updates
+    long num_update = 0;
+    t_symbol **update_keys = NULL;
+    hashtab_getkeys(tracks_to_update, &num_update, &update_keys);
+    for (long i = 0; i < num_update; i++) {
+        long tid = atol(update_keys[i]->s_name);
+        t_weaver_track *tr = weaver_get_track_state(x, tid);
+        if (tr) {
+            weaver_track_update_schedule(x, tr, tid);
+        }
+    }
+    if (update_keys) sysmem_freeptr(update_keys);
+    hashtab_clear(tracks_to_update);
+    object_free(tracks_to_update);
 }
