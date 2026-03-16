@@ -773,7 +773,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
         int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
         int finished = r1_done && r2_done;
         tr->xf.last_control = tr->control;
-        tr->xf.elapsed++;
+        tr->xf.elapsed = f_abs;
         tr->busy = !finished;
 
         // Apply fades to all destination channels
@@ -869,10 +869,27 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 double tr_scan = fmod(current_scan, tr->track_length);
 
                 if (tr->last_track_scan == -1.0) {
-                    // Initial scan: find first scheduled bar >= current position
+                    // Initial scan: trigger only the most recent scheduled bar
                     tr->next_schedule_idx = 0;
-                    while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] < tr_scan) {
+                    long best_idx = -1;
+                    while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
+                        best_idx = tr->next_schedule_idx;
                         tr->next_schedule_idx++;
+                    }
+                    if (best_idx != -1) {
+                        double s = tr->schedule[best_idx];
+                        int nt = (x->fifo_tail + 1) % 4096;
+                        if (nt != x->fifo_head) {
+                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                            char bstr[64];
+                            snprintf(bstr, 64, "%ld", (long)s);
+                            x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                            x->hit_bars[x->fifo_tail].bar.value = cycle_base + s;
+                            x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                            x->hit_bars[x->fifo_tail].track_id = t + 1;
+                            x->hit_bars[x->fifo_tail].no_crossfade = 0;
+                            x->fifo_tail = nt;
+                        }
                     }
                 } else {
                     int main_looped = (current_scan < last_scan);
@@ -888,30 +905,16 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                             x->fifo_tail = nt_loop;
                         }
 
-                        double prev_cycle_base = floor(last_scan / tr->track_length) * tr->track_length;
+                        // Trigger only the most recent bar in the NEW cycle to avoid FIFO bursts
                         double curr_cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-
-                        // Check remaining bars in old cycle
-                        while (tr->next_schedule_idx < tr->schedule_count) {
-                            double s = tr->schedule[tr->next_schedule_idx];
-                            int nt = (x->fifo_tail + 1) % 4096;
-                            if (nt != x->fifo_head) {
-                                char bstr[64];
-                                snprintf(bstr, 64, "%ld", (long)s);
-                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                x->hit_bars[x->fifo_tail].bar.value = prev_cycle_base + s;
-                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                                x->fifo_tail = nt;
-                            }
+                        tr->next_schedule_idx = 0;
+                        long best_idx = -1;
+                        while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
+                            best_idx = tr->next_schedule_idx;
                             tr->next_schedule_idx++;
                         }
-
-                        // Reset to start of schedule for new cycle
-                        tr->next_schedule_idx = 0;
-                        while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
-                            double s = tr->schedule[tr->next_schedule_idx];
+                        if (best_idx != -1) {
+                            double s = tr->schedule[best_idx];
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
                                 char bstr[64];
@@ -923,7 +926,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                                 x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
                                 x->fifo_tail = nt;
                             }
-                            tr->next_schedule_idx++;
                         }
                     } else {
                         // Normal progression
