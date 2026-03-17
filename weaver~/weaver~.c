@@ -117,6 +117,7 @@ void weaver_clear_track_states(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
 void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id);
 void weaver_update_all_schedules(t_weaver *x);
+void weaver_clear_all_silence_caps(t_weaver *x);
 
 static t_class *weaver_class;
 
@@ -228,6 +229,21 @@ void weaver_update_all_schedules(t_weaver *x) {
         hashtab_lookup(x->track_states, keys[i], (t_object **)&tr);
         if (tr) {
             weaver_track_update_schedule(x, tr, atol(keys[i]->s_name));
+        }
+    }
+    if (keys) sysmem_freeptr(keys);
+}
+
+void weaver_clear_all_silence_caps(t_weaver *x) {
+    if (!x->track_states) return;
+    long num_items = 0;
+    t_symbol **keys = NULL;
+    hashtab_getkeys(x->track_states, &num_items, &keys);
+    for (long i = 0; i < num_items; i++) {
+        t_weaver_track *tr = NULL;
+        hashtab_lookup(x->track_states, keys[i], (t_object **)&tr);
+        if (tr && tr->silence_caps) {
+            hashtab_clear(tr->silence_caps);
         }
     }
     if (keys) sysmem_freeptr(keys);
@@ -839,6 +855,7 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                     tr->track_length = length;
                     critical_exit(x->lock);
                     weaver_log(x, "Track %ld length manually updated to %.2f ms", track_id, length);
+                    if (tr->silence_caps) hashtab_clear(tr->silence_caps);
                     weaver_track_update_schedule(x, tr, track_id);
                 }
             }
@@ -851,6 +868,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (s == gensym("tracks") && argc > 0) {
         x->max_tracks = atom_getlong(argv);
+        weaver_clear_all_silence_caps(x);
         weaver_update_track_cache(x);
         weaver_update_all_schedules(x);
     } else if (s != x->audio_dict_name) {
@@ -858,6 +876,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
         x->audio_dict_name = s;
         x->dict_found = 0;
         x->dict_error_sent = 0;
+        weaver_clear_all_silence_caps(x);
         weaver_update_all_schedules(x);
     }
 }
@@ -1071,7 +1090,7 @@ void weaver_audio_qtask(t_weaver *x) {
         hashtab_delete(tr->silence_caps, bar_key);
 
         // 2. Silence Cap logic (using current information)
-        if (tr && bar_len > 0) {
+        if (tr && bar_len > 0 && found_in_dict) {
             double curr_rel = atof(bar_key->s_name);
             double next_rel = fmod(curr_rel + bar_len, tr->track_length);
             char next_rel_str[64];
