@@ -105,7 +105,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int is_bar_0, int skip_trigger);
+void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int is_bar_0, int skip_trigger, const char *bar_label);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -193,6 +193,22 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
     }
     tr->schedule_count = actual_count;
     tr->next_schedule_idx = 0; // Force re-scan of new schedule
+
+    if (actual_count > 0) {
+        char *buf = (char *)sysmem_newptr(actual_count * 32);
+        if (buf) {
+            buf[0] = '\0';
+            for (long i = 0; i < actual_count; i++) {
+                char tmp[32];
+                snprintf(tmp, 32, "%.0f%s", tr->schedule[i], (i == actual_count - 1) ? "" : ", ");
+                strncat(buf, tmp, 32);
+            }
+            weaver_log(x, "Track %ld schedule updated: [%s]", track_id, buf);
+            sysmem_freeptr(buf);
+        }
+    } else {
+        weaver_log(x, "Track %ld schedule updated: [empty]", track_id);
+    }
 
     critical_exit(x->lock);
 
@@ -570,7 +586,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int is_bar_0, int skip_trigger) {
+void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int is_bar_0, int skip_trigger, const char *bar_label) {
     weaver_check_attachments(x);
 
     double bar_len = weaver_get_bar_length(x);
@@ -652,9 +668,9 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 tr->xf.direction = tr->control - tr->xf.last_control;
                 weaver_log(x, "Track %lld: Track loop crossfade to Bar 0 (%s@%.2f)", track, palette->s_name, offset_ms);
                 if (x->visualize) {
-                    char l_msg[256];
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"f2\": %.1f}",
-                             (long long)track, bar_ms, palette->s_name, offset_ms, (double)active);
+                    char l_msg[512];
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms, bar_label ? bar_label : "", (double)active);
                     visualize(l_msg);
                 }
             }
@@ -669,9 +685,9 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
                 tr->xf.direction = tr->control - tr->xf.last_control;
                 weaver_log(x, "Track %lld: starting crossfade at %.2f ms to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
                 if (x->visualize) {
-                    char l_msg[256];
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"f2\": %.1f}",
-                             (long long)track, bar_ms, palette->s_name, offset_ms, (double)active);
+                    char l_msg[512];
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
+                             (long long)track, bar_ms, palette->s_name, offset_ms, bar_label ? bar_label : "", (double)active);
                     visualize(l_msg);
                 }
             }
@@ -1001,7 +1017,7 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (tr && tr->busy && !no_crossfade) {
             int active = (int)round(tr->control);
-            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 0, 1);
+            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 0, 1, bar_key->s_name);
             continue;
         }
 
@@ -1017,6 +1033,7 @@ void weaver_audio_qtask(t_weaver *x) {
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
                 found_in_dict = 1;
+                weaver_log(x, "Track %ld: triggered bar %s from dictionary", target_track, bar_key->s_name);
                 t_symbol *palette = _sym_nothing;
                 double offset = 0.0;
 
@@ -1036,17 +1053,17 @@ void weaver_audio_qtask(t_weaver *x) {
                     offset = atom_getfloat(&o_atom);
                 }
 
-                weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, is_bar_0, 0);
+                weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, is_bar_0, 0, bar_key->s_name);
             }
         }
 
         if (!found_in_dict) {
             // Check if it's a silence cap
             if (hashtab_lookup(tr->silence_caps, bar_key, NULL) == MAX_ERR_NONE) {
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
+                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0, bar_key->s_name);
             } else if (is_bar_0) {
                 // Bar 0 missing: force silence
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
+                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0, bar_key->s_name);
             }
         }
 
