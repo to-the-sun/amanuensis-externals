@@ -38,6 +38,12 @@
 				The <m>open</m> message opens the graphical user interface (GUI) of the VST plugin in a separate Win32 window. This requires that the VST plugin has an editor available. If the editor is already open, it brings the window to the front.
 			</description>
 		</method>
+		<method name="list">
+			<digest>Set a VST parameter value</digest>
+			<description>
+				A list in the first inlet (index 0) emulates the behavior of the standard Max <o>vst~</o> object. The first element of the list is the parameter index (starting at 1) and the second element is the parameter value (a float between 0.0 and 1.0, where 0.0 is minimum and 1.0 is maximum).
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist />

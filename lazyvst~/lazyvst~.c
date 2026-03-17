@@ -14,6 +14,7 @@ struct AEffect;
 
 typedef intptr_t (VstHostCallback)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
 typedef intptr_t (VstDispatcherProc)(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+typedef void (VstSetParameterProc)(struct AEffect* effect, int32_t index, float parameter);
 typedef void (VstProcessProc)(struct AEffect* effect, float** inputs, float** outputs, int32_t sampleframes);
 typedef void (VstProcessDoubleProc)(struct AEffect* effect, double** inputs, double** outputs, int32_t sampleframes);
 
@@ -113,6 +114,7 @@ void lazyvst_get_counts(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
+void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 
 static t_class *lazyvst_class;
 
@@ -173,6 +175,7 @@ void ext_main(void *r) {
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
+    class_addmethod(c, (method)lazyvst_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
 
@@ -381,12 +384,27 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld, list [param value] sets parameter", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
         sprintf(s, "Outlet %ld (signal): VST Output %ld", a + 1, a + 1);
+    }
+}
+
+void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->effect && argc >= 2) {
+        long index = atom_getlong(argv) - 1;
+        float value = atom_getfloat(argv + 1);
+
+        if (index >= 0 && index < x->effect->numParams) {
+            if (value < 0.0f) value = 0.0f;
+            if (value > 1.0f) value = 1.0f;
+            ((VstSetParameterProc*)x->effect->setParameter)(x->effect, (int32_t)index, value);
+        } else {
+            object_error((t_object *)x, "parameter index %ld out of range (1-%d)", index + 1, x->effect->numParams);
+        }
     }
 }
 
