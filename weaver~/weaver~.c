@@ -157,14 +157,14 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
     long actual_count = 0;
 
     for (long i = 0; i < num_bars; i++) {
-        double val = atof(bar_keys[i]->s_name);
+        double val = round(atof(bar_keys[i]->s_name));
         if (val >= 0.0) {
             temp_schedule[actual_count++] = val;
         }
     }
 
     for (long i = 0; i < num_caps; i++) {
-        double val = atof(cap_keys[i]->s_name);
+        double val = round(atof(cap_keys[i]->s_name));
         if (val >= 0.0) {
             temp_schedule[actual_count++] = val;
         }
@@ -175,7 +175,7 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
 
         long unique_count = 1;
         for (long i = 1; i < actual_count; i++) {
-            if (fabs(temp_schedule[i] - temp_schedule[i-1]) > 0.0001) {
+            if (fabs(temp_schedule[i] - temp_schedule[i-1]) > 0.5) {
                 temp_schedule[unique_count++] = temp_schedule[i];
             }
         }
@@ -301,7 +301,7 @@ void weaver_clear_track_states(t_weaver *x) {
 void weaver_schedule_silence(t_weaver *x, t_weaver_track *tr, long track_id, double ms) {
     if (!tr || !tr->silence_caps) return;
     char ms_str[64];
-    snprintf(ms_str, 64, "%ld", (long)ms);
+    snprintf(ms_str, 64, "%ld", (long)round(ms));
     t_symbol *s_ms = gensym(ms_str);
     hashtab_store(tr->silence_caps, s_ms, (t_object*)1);
     weaver_track_update_schedule(x, tr, track_id);
@@ -815,7 +815,7 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (inlet == 1) {
         if (argc >= 2) {
             long track_id = atom_getlong(argv);
-            double length = atom_getfloat(argv + 1);
+            double length = round(atom_getfloat(argv + 1));
             if (track_id > 0) {
                 t_weaver_track *tr = weaver_get_track_state(x, track_id);
                 if (tr) {
@@ -868,35 +868,41 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
                 double tr_scan = fmod(current_scan, tr->track_length);
 
+                long r_scan = (long)round(tr_scan);
+                long r_last = (long)round(tr->last_track_scan);
+                int track_looped = (r_scan < r_last);
+                int main_looped = (current_scan < last_scan);
+
                 if (tr->last_track_scan == -1.0) {
-                    // Initial scan: trigger only the most recent scheduled bar
                     tr->next_schedule_idx = 0;
-                    long best_idx = -1;
-                    while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
-                        best_idx = tr->next_schedule_idx;
-                        tr->next_schedule_idx++;
-                    }
-                    if (best_idx != -1) {
-                        double s = tr->schedule[best_idx];
-                        int nt = (x->fifo_tail + 1) % 4096;
-                        if (nt != x->fifo_head) {
-                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                            char bstr[64];
-                            snprintf(bstr, 64, "%ld", (long)s);
-                            x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                            x->hit_bars[x->fifo_tail].bar.value = cycle_base + s;
-                            x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                            x->hit_bars[x->fifo_tail].track_id = t + 1;
-                            x->hit_bars[x->fifo_tail].no_crossfade = 0;
-                            x->fifo_tail = nt;
+                    if (tr->schedule_count > 0) {
+                        long best_idx = -1;
+                        for (long idx = 0; idx < tr->schedule_count; idx++) {
+                            if ((long)round(tr->schedule[idx]) <= r_scan) {
+                                best_idx = idx;
+                            } else {
+                                break;
+                            }
+                        }
+                        if (best_idx != -1) {
+                            int nt = (x->fifo_tail + 1) % 4096;
+                            if (nt != x->fifo_head) {
+                                double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                                long r_sched = (long)round(tr->schedule[best_idx]);
+                                char bstr[64];
+                                snprintf(bstr, 64, "%ld", r_sched);
+                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
+                                x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)r_sched;
+                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                                x->hit_bars[x->fifo_tail].track_id = t + 1;
+                                x->hit_bars[x->fifo_tail].no_crossfade = 0;
+                                x->fifo_tail = nt;
+                            }
+                            tr->next_schedule_idx = (best_idx + 1) % tr->schedule_count;
                         }
                     }
                 } else {
-                    int main_looped = (current_scan < last_scan);
-                    int track_looped = (tr_scan < tr->last_track_scan);
-
                     if (main_looped || track_looped) {
-                        // Notify loop
                         int nt_loop = (x->fifo_tail + 1) % 4096;
                         if (nt_loop != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
@@ -904,48 +910,40 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                             x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
                             x->fifo_tail = nt_loop;
                         }
+                    }
 
-                        // Trigger only the most recent bar in the NEW cycle to avoid FIFO bursts
-                        double curr_cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                        tr->next_schedule_idx = 0;
-                        long best_idx = -1;
-                        while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
-                            best_idx = tr->next_schedule_idx;
-                            tr->next_schedule_idx++;
-                        }
-                        if (best_idx != -1) {
-                            double s = tr->schedule[best_idx];
-                            int nt = (x->fifo_tail + 1) % 4096;
-                            if (nt != x->fifo_head) {
-                                char bstr[64];
-                                snprintf(bstr, 64, "%ld", (long)s);
-                                x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                x->hit_bars[x->fifo_tail].bar.value = curr_cycle_base + s;
-                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                                x->fifo_tail = nt;
+                    if (tr->schedule_count > 0) {
+                        int count_down = tr->schedule_count;
+                        while (count_down--) {
+                            long r_sched = (long)round(tr->schedule[tr->next_schedule_idx]);
+                            int passed = 0;
+                            if (track_looped) {
+                                passed = (r_sched > r_last || r_sched <= r_scan);
+                            } else {
+                                passed = (r_sched > r_last && r_sched <= r_scan);
                             }
-                        }
-                    } else {
-                        // Normal progression
-                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                        while (tr->next_schedule_idx < tr->schedule_count && tr->schedule[tr->next_schedule_idx] <= tr_scan) {
-                            double s = tr->schedule[tr->next_schedule_idx];
-                            if (s > tr->last_track_scan) {
+
+                            if (passed) {
                                 int nt = (x->fifo_tail + 1) % 4096;
                                 if (nt != x->fifo_head) {
+                                    double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
                                     char bstr[64];
-                                    snprintf(bstr, 64, "%ld", (long)s);
+                                    snprintf(bstr, 64, "%ld", r_sched);
                                     x->hit_bars[x->fifo_tail].bar.sym = gensym(bstr);
-                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + s;
+                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)r_sched;
                                     x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                     x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                    x->hit_bars[x->fifo_tail].no_crossfade = 0;
+                                    x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
                                     x->fifo_tail = nt;
                                 }
+                                if (track_looped && r_sched <= r_scan) {
+                                    track_looped = 0;
+                                    r_last = -1;
+                                }
+                                tr->next_schedule_idx = (tr->next_schedule_idx + 1) % tr->schedule_count;
+                            } else {
+                                break;
                             }
-                            tr->next_schedule_idx++;
                         }
                     }
                 }
@@ -1055,10 +1053,11 @@ void weaver_audio_qtask(t_weaver *x) {
 
         // 2. Silence Cap logic (using current information)
         if (tr && bar_len > 0) {
-            double curr_rel = atof(bar_key->s_name);
-            double next_rel = fmod(curr_rel + bar_len, tr->track_length);
+            double r_bar_len = round(bar_len);
+            double curr_rel = round(atof(bar_key->s_name));
+            double next_rel = fmod(curr_rel + r_bar_len, round(tr->track_length));
             char next_rel_str[64];
-            snprintf(next_rel_str, 64, "%ld", (long)next_rel);
+            snprintf(next_rel_str, 64, "%ld", (long)round(next_rel));
             t_symbol *next_rel_sym = gensym(next_rel_str);
 
             int next_exists = 0;
