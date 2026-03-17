@@ -148,7 +148,18 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
         memcpy(tr->schedule, temp_schedule, actual_count * sizeof(double));
     }
     tr->schedule_count = actual_count;
-    tr->next_schedule_idx = 0; // Force re-scan of new schedule
+
+    // Catch up index to current scan position
+    tr->next_schedule_idx = 0;
+    if (actual_count > 0 && tr->last_track_scan != -1.0) {
+        long r_last = (long)round(tr->last_track_scan);
+        while (tr->next_schedule_idx < tr->schedule_count && (long)round(tr->schedule[tr->next_schedule_idx]) <= r_last) {
+            tr->next_schedule_idx++;
+        }
+        if (tr->next_schedule_idx >= tr->schedule_count) {
+            tr->next_schedule_idx = 0;
+        }
+    }
 
     critical_exit(x->lock);
     sysmem_freeptr(temp_schedule);
@@ -361,7 +372,21 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->poly_warn_sent = 0;
         x->bar_found = 0;
         x->bar_error_sent = 0;
+        x->max_tracks = 4;
+        x->low_ms = 22.653;
+        x->high_ms = 4999.0;
+        x->track_cache_count = 0;
 
+        // 1. Initialize core structures and sync objects early
+        critical_new(&x->lock);
+        x->track_states = hashtab_new(0);
+        x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
+
+        // 2. Create outlets (before any logging happens)
+        x->log_outlet = outlet_new((t_object *)x, NULL);
+        x->loop_outlet = outlet_new((t_object *)x, NULL);
+
+        // 3. Process Arguments
         // Argument 1: dictionary name
         if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
             x->audio_dict_name = atom_getsym(argv);
@@ -380,18 +405,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
             object_error((t_object *)x, "missing mandatory polybuffer~ name argument");
         }
 
-        x->max_tracks = 4;
-        x->low_ms = 22.653;
-        x->high_ms = 4999.0;
-
-        attr_args_process(x, argc, argv);
-
-        weaver_update_track_cache(x);
-
-        // Create outlets from right to left
-        x->log_outlet = outlet_new((t_object *)x, NULL);
-        x->loop_outlet = outlet_new((t_object *)x, NULL);
-
+        // 4. Initialize polybuffer tracking
         if (x->poly_prefix != _sym_nothing) {
             char t1name[256];
             snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
@@ -400,15 +414,12 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
             x->track1_ref = buffer_ref_new((t_object *)x, _sym_nothing);
         }
 
-        // Initial search for mandatory objects
+        attr_args_process(x, argc, argv);
+
+        // 5. Setup initial state dependent on initialized refs and locks
         weaver_check_attachments(x);
-
-        x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
-
-        critical_new(&x->lock);
-
-        x->track_states = hashtab_new(0);
         x->cached_bar_len = weaver_get_bar_length(x);
+        weaver_update_track_cache(x);
 
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
 
@@ -421,7 +432,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 void weaver_free(t_weaver *x) {
     dsp_free((t_pxobject *)x);
     visualize_cleanup();
-    critical_free(x->lock);
     if (x->audio_qelem) qelem_free(x->audio_qelem);
     if (x->proxy) object_free(x->proxy);
 
@@ -433,6 +443,7 @@ void weaver_free(t_weaver *x) {
     }
     weaver_clear_track_states(x);
     if (x->track_states) object_free(x->track_states);
+    if (x->lock) critical_free(x->lock);
 }
 
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
