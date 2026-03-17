@@ -68,10 +68,10 @@
 				Posts metadata about the current VST instance, including sample rate, block size, unique ID, and version, to the Max console.
 			</description>
 		</method>
-		<method name="vstlist">
+		<method name="params">
 			<digest>List VST parameters</digest>
 			<description>
-				Iterates through all parameters of the VST and posts their index, name, current display value, label, and raw float value to the Max console.
+				Iterates through all parameters of the VST and posts their index (1-indexed), name, current display value, label, and raw float value to the Max console.
 			</description>
 		</method>
 		<method name="vstdebug">
