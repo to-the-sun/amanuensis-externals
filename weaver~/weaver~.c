@@ -51,7 +51,6 @@ typedef struct _weaver_track {
     double *schedule;
     long schedule_count;
     long schedule_size;
-    t_hashtab *silence_caps;
     long next_schedule_idx;
 } t_weaver_track;
 
@@ -111,7 +110,6 @@ double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void weaver_audio_qtask(t_weaver *x);
-void weaver_schedule_silence(t_weaver *x, t_weaver_track *tr, long track_id, double ms);
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
@@ -123,63 +121,21 @@ static t_class *weaver_class;
 void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id) {
     if (!tr) return;
 
-    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
-    t_dictionary *track_dict = NULL;
-    char tstr[64];
-    snprintf(tstr, 64, "%ld", track_id);
-    t_symbol *track_sym = gensym(tstr);
-
-    long num_bars = 0;
-    t_symbol **bar_keys = NULL;
-
-    if (dict && dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-    }
-
-    long num_caps = 0;
-    t_symbol **cap_keys = NULL;
-    if (tr->silence_caps) {
-        hashtab_getkeys(tr->silence_caps, &num_caps, &cap_keys);
-    }
-
-    long total_potential = num_bars + num_caps;
-    if (total_potential == 0) {
+    double bar_len = round(weaver_get_bar_length(x));
+    if (bar_len <= 0) {
         critical_enter(x->lock);
         tr->schedule_count = 0;
         critical_exit(x->lock);
-        if (bar_keys) dictionary_freekeys(track_dict, num_bars, bar_keys);
-        if (cap_keys) sysmem_freeptr(cap_keys);
-        if (dict) dictobj_release(dict);
         return;
     }
 
-    double *temp_schedule = (double *)sysmem_newptr(total_potential * sizeof(double));
+    double tr_len = round(tr->track_length);
+    long max_bars = (long)ceil(tr_len / bar_len) + 1;
+    double *temp_schedule = (double *)sysmem_newptr(max_bars * sizeof(double));
     long actual_count = 0;
 
-    for (long i = 0; i < num_bars; i++) {
-        double val = round(atof(bar_keys[i]->s_name));
-        if (val >= 0.0) {
-            temp_schedule[actual_count++] = val;
-        }
-    }
-
-    for (long i = 0; i < num_caps; i++) {
-        double val = round(atof(cap_keys[i]->s_name));
-        if (val >= 0.0) {
-            temp_schedule[actual_count++] = val;
-        }
-    }
-
-    if (actual_count > 0) {
-        qsort(temp_schedule, actual_count, sizeof(double), compare_doubles);
-
-        long unique_count = 1;
-        for (long i = 1; i < actual_count; i++) {
-            if (fabs(temp_schedule[i] - temp_schedule[i-1]) > 0.5) {
-                temp_schedule[unique_count++] = temp_schedule[i];
-            }
-        }
-        actual_count = unique_count;
+    for (double val = 0.0; val < tr_len; val += bar_len) {
+        temp_schedule[actual_count++] = val;
     }
 
     critical_enter(x->lock);
@@ -195,11 +151,7 @@ void weaver_track_update_schedule(t_weaver *x, t_weaver_track *tr, long track_id
     tr->next_schedule_idx = 0; // Force re-scan of new schedule
 
     critical_exit(x->lock);
-
     sysmem_freeptr(temp_schedule);
-    if (bar_keys) dictionary_freekeys(track_dict, num_bars, bar_keys);
-    if (cap_keys) sysmem_freeptr(cap_keys);
-    if (dict) dictobj_release(dict);
 }
 
 void weaver_update_all_schedules(t_weaver *x) {
@@ -252,7 +204,6 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->schedule = NULL;
             tr->schedule_count = 0;
             tr->schedule_size = 0;
-            tr->silence_caps = hashtab_new(0);
             tr->next_schedule_idx = 0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
@@ -287,10 +238,6 @@ void weaver_clear_track_states(t_weaver *x) {
             if (tr->src_refs[1]) object_free(tr->src_refs[1]);
             if (tr->dest_ref) object_free(tr->dest_ref);
             if (tr->schedule) sysmem_freeptr(tr->schedule);
-            if (tr->silence_caps) {
-                hashtab_clear(tr->silence_caps);
-                object_free(tr->silence_caps);
-            }
             sysmem_freeptr(tr);
         }
     }
@@ -298,14 +245,6 @@ void weaver_clear_track_states(t_weaver *x) {
     hashtab_clear(x->track_states);
 }
 
-void weaver_schedule_silence(t_weaver *x, t_weaver_track *tr, long track_id, double ms) {
-    if (!tr || !tr->silence_caps) return;
-    char ms_str[64];
-    snprintf(ms_str, 64, "%ld", (long)round(ms));
-    t_symbol *s_ms = gensym(ms_str);
-    hashtab_store(tr->silence_caps, s_ms, (t_object*)1);
-    weaver_track_update_schedule(x, tr, track_id);
-}
 
 // Helper function to send verbose log messages with prefix
 void weaver_log(t_weaver *x, const char *fmt, ...) {
@@ -1039,36 +978,8 @@ void weaver_audio_qtask(t_weaver *x) {
         }
 
         if (!found_in_dict) {
-            // Check if it's a silence cap
-            if (hashtab_lookup(tr->silence_caps, bar_key, NULL) == MAX_ERR_NONE) {
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
-            } else if (is_bar_0) {
-                // Bar 0 missing: force silence
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
-            }
-        }
-
-        // Always remove processed bar from silence caps to prevent growth
-        hashtab_delete(tr->silence_caps, bar_key);
-
-        // 2. Silence Cap logic (using current information)
-        if (tr && bar_len > 0) {
-            double r_bar_len = round(bar_len);
-            double curr_rel = round(atof(bar_key->s_name));
-            double next_rel = fmod(curr_rel + r_bar_len, round(tr->track_length));
-            char next_rel_str[64];
-            snprintf(next_rel_str, 64, "%ld", (long)round(next_rel));
-            t_symbol *next_rel_sym = gensym(next_rel_str);
-
-            int next_exists = 0;
-            if (track_dict && dictionary_hasentry(track_dict, next_rel_sym)) {
-                next_exists = 1;
-            }
-
-            if (!next_exists) {
-                // Add to silence_caps but don't update schedule yet
-                hashtab_store(tr->silence_caps, next_rel_sym, (t_object*)1);
-            }
+            // Trigger silence if bar missing from dictionary
+            weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, is_bar_0, 0);
         }
 
         // Mark track for schedule update at the end of task
