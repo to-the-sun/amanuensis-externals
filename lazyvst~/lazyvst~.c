@@ -246,7 +246,7 @@ void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_getchunk(t_lazyvst *x, long isbank);
 void lazyvst_vstinfo(t_lazyvst *x);
-void lazyvst_vstlist(t_lazyvst *x);
+void lazyvst_params(t_lazyvst *x);
 void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vstdebug(t_lazyvst *x, long state);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
@@ -320,7 +320,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", 0);
-    class_addmethod(c, (method)lazyvst_vstlist, "vstlist", 0);
+    class_addmethod(c, (method)lazyvst_params, "params", 0);
     class_addmethod(c, (method)lazyvst_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_vstdebug, "vstdebug", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", 0);
@@ -382,7 +382,7 @@ void lazyvst_vstinfo(t_lazyvst *x) {
     }
 }
 
-void lazyvst_vstlist(t_lazyvst *x) {
+void lazyvst_params(t_lazyvst *x) {
     if (!x->effect) return;
     post("lazyvst~: Listing parameters (%d total):", x->effect->numParams);
     for (int i = 0; i < x->effect->numParams; i++) {
@@ -393,7 +393,7 @@ void lazyvst_vstlist(t_lazyvst *x) {
         x->effect->dispatcher(x->effect, effGetParamDisplay, i, 0, display, 0.0f);
         x->effect->dispatcher(x->effect, effGetParamLabel, i, 0, label, 0.0f);
         float val = x->effect->getParameter ? ((float (*)(struct AEffect*, int32_t))x->effect->getParameter)(x->effect, i) : 0.0f;
-        post("  [%d] %s: %s %s (raw=%f)", i, name, display, label, val);
+        post("  [%d] %s: %s %s (raw=%f)", i + 1, name, display, label, val);
     }
 }
 
