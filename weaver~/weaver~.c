@@ -72,7 +72,6 @@ typedef struct _weaver {
     long track_cache_count;
     void *proxy;
     long proxy_id;
-    double cached_bar_len;
     long bar_found;
     long bar_error_sent;
     long dict_found;
@@ -242,6 +241,29 @@ void weaver_check_attachments(t_weaver *x) {
             }
         }
     }
+
+    // Bar buffer check
+    t_buffer_obj *b_bar = buffer_ref_getobject(x->bar_buffer_ref);
+    if (!b_bar) {
+        // Kick
+        buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
+        buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
+        b_bar = buffer_ref_getobject(x->bar_buffer_ref);
+    }
+
+    if (b_bar) {
+        if (!x->bar_found) {
+            weaver_log(x, "successfully found buffer~ 'bar'");
+            x->bar_found = 1;
+            x->bar_error_sent = 0;
+        }
+    } else {
+        x->bar_found = 0;
+        if (!x->bar_error_sent) {
+            object_error((t_object *)x, "bar buffer~ not found");
+            x->bar_error_sent = 1;
+        }
+    }
 }
 
 void ext_main(void *r) {
@@ -343,7 +365,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         // 5. Setup initial state dependent on initialized refs and locks
         weaver_check_attachments(x);
-        x->cached_bar_len = weaver_get_bar_length(x);
         weaver_update_track_cache(x);
 
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
@@ -413,32 +434,13 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
 double weaver_get_bar_length(t_weaver *x) {
     double bar_length = 0;
     t_buffer_obj *b = buffer_ref_getobject(x->bar_buffer_ref);
-    if (!b) {
-        // Kick the buffer reference to force re-binding
-        buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
-        buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
-        b = buffer_ref_getobject(x->bar_buffer_ref);
-    }
     if (b) {
-        if (!x->bar_found) {
-            weaver_log(x, "successfully found buffer~ 'bar'");
-            x->bar_found = 1;
-            x->bar_error_sent = 0;
-        }
-        critical_enter(0);
         float *samples = buffer_locksamples(b);
         if (samples) {
             if (buffer_getframecount(b) > 0) {
                 bar_length = (double)samples[0];
             }
             buffer_unlocksamples(b);
-        }
-        critical_exit(0);
-    } else {
-        x->bar_found = 0;
-        if (!x->bar_error_sent) {
-            object_error((t_object *)x, "bar buffer~ not found");
-            x->bar_error_sent = 1;
         }
     }
     return bar_length;
@@ -729,7 +731,7 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
     double last_scan = x->last_scan_val;
-    double bar_len = round(x->cached_bar_len);
+    double bar_len = round(weaver_get_bar_length(x));
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         for (int i = 0; i < sampleframes; i++) {
@@ -833,7 +835,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
 void weaver_audio_qtask(t_weaver *x) {
     weaver_check_attachments(x);
-    x->cached_bar_len = weaver_get_bar_length(x);
     int clear_sent = 0;
 
     while (x->fifo_head != x->fifo_tail) {
