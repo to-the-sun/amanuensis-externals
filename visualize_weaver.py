@@ -72,6 +72,7 @@ def process_text(text):
                     labels_by_track[track_id].append({
                         "ms": pkt["ms"],
                         "text": pkt["label"],
+                        "bar": pkt.get("bar", ""),
                         "f2": pkt.get("f2", 0.0)
                     })
                     tracks_seen.add(track_id)
@@ -254,17 +255,25 @@ def run_gui():
                 lx = left_pad + (l["ms"] / view_width_ms) * graph_w
                 if left_pad <= lx <= left_pad + graph_w:
                     pygame.draw.line(screen, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
-                    txt = font.render(l["text"], True, (180, 180, 200))
+
+                    # Two lines:
+                    # 1. Bar value
+                    # 2. Palette@offset (the 'text' field)
+                    txt_bar = font.render(f"Bar: {l.get('bar', '')}", True, (220, 220, 255))
+                    txt_label = font.render(l["text"], True, (180, 180, 200))
 
                     # Position based on f2 (Slot 1) state at initiation
                     # f2 at 0.0 (Slot 0 active) -> TOP
                     # f2 at 1.0 (Slot 1 active) -> BOTTOM
                     if l.get("f2", 0.0) < 0.5:
-                        ty = row_top + 2
+                        ty1 = row_top + 2
+                        ty2 = ty1 + 11
                     else:
-                        ty = row_bottom - 12 # Roughly font height
+                        ty2 = row_bottom - 12
+                        ty1 = ty2 - 11
 
-                    screen.blit(txt, (int(lx) + 3, ty))
+                    screen.blit(txt_bar, (int(lx) + 3, ty1))
+                    screen.blit(txt_label, (int(lx) + 3, ty2))
 
         # 4. Row boundary lines and Track ID labels - Layer 2
         for t in range(1, num_rows + 1):
