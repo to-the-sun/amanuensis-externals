@@ -38,6 +38,54 @@
 				The <m>open</m> message opens the graphical user interface (GUI) of the VST plugin in a separate Win32 window. This requires that the VST plugin has an editor available. If the editor is already open, it brings the window to the front.
 			</description>
 		</method>
+		<method name="snapshot">
+			<digest>Load a VST state snapshot</digest>
+			<description>
+				The <m>snapshot</m> message followed by an absolute path to a <m>.maxsnap</m> file will load the VST's state from that file. This operation is deferred to the main thread for safety.
+			</description>
+		</method>
+		<method name="list">
+			<digest>Change a parameter value</digest>
+			<description>
+				A list in the first inlet where the first element is the parameter number (1-indexed) and the second element is the value (float 0.0 to 1.0) will set the corresponding parameter in the VST plugin.
+			</description>
+		</method>
+		<method name="vst">
+			<digest>Manual VST dispatch</digest>
+			<description>
+				Directly send an opcode, index, and value to the VST plugin's dispatcher.
+			</description>
+		</method>
+		<method name="getchunk">
+			<digest>Get the current VST state chunk</digest>
+			<description>
+				Retrieves the current state chunk from the VST. An optional argument (0 or 1) specifies whether to get the bank chunk (0) or program chunk (1). The chunk data is posted to the Max console.
+			</description>
+		</method>
+		<method name="vstinfo">
+			<digest>Post VST metadata</digest>
+			<description>
+				Posts metadata about the current VST instance, including sample rate, block size, unique ID, and version, to the Max console.
+			</description>
+		</method>
+		<method name="vstlist">
+			<digest>List VST parameters</digest>
+			<description>
+				Iterates through all parameters of the VST and posts their index, name, current display value, label, and raw float value to the Max console.
+			</description>
+		</method>
+		<method name="vstdebug">
+			<digest>Toggle host call debugging</digest>
+			<description>
+				Enables (1) or disables (0) verbose logging of calls made by the plugin to the host.
+			</description>
+		</method>
+		<method name="bang">
+			<digest>Post a status message</digest>
+			<description>
+				Posts a "bang received" message to the Max console.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist />
