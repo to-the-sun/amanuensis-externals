@@ -101,7 +101,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger);
+void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger, t_symbol *bar_symbol);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -451,7 +451,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger) {
+void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger, t_symbol *bar_symbol) {
     double bar_len = weaver_get_bar_length(x);
     if (bar_len <= 0) return;
 
@@ -520,6 +520,12 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             tr->xf.direction = 0.0;
             tr->busy = 0;
             weaver_log(x, "Track %lld: Transport reset jump to %s@%.2f at %.2f ms", track, palette->s_name, offset_ms, bar_ms);
+            if (x->visualize) {
+                char l_msg[256];
+                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
+                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, (double)active);
+                visualize(l_msg);
+            }
         } else if (change) {
             // Normal change: initiate crossfade
             int other = 1 - active;
@@ -533,8 +539,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             weaver_log(x, "Track %lld: Triggering bar at %.2f ms, crossfading to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
             if (x->visualize) {
                 char l_msg[256];
-                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"f2\": %.1f}",
-                         (long long)track, bar_ms, palette->s_name, offset_ms, (double)active);
+                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
+                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, (double)active);
                 visualize(l_msg);
             }
         }
@@ -850,7 +856,7 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (tr && tr->busy && !no_crossfade) {
             int active = (int)round(tr->control);
-            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 1);
+            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 1, bar_key);
             continue;
         }
 
@@ -886,19 +892,19 @@ void weaver_audio_qtask(t_weaver *x) {
                         offset = atom_getfloat(&o_atom);
                     }
 
-                    weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, 0);
+                    weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, 0, bar_key);
                 }
             }
 
             if (!found_in_dict) {
                 // Trigger silence if bar missing from dictionary
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0);
+                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0, bar_key);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0);
+            weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0, bar_key);
         }
     }
 }
