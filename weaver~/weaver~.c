@@ -38,6 +38,7 @@ typedef struct _weaver_track {
     t_crossfade_state xf;
     t_symbol *palette[2];
     double offset[2];
+    double dict_offset[2];
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -123,8 +124,10 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
             tr->palette[0] = gensym("-");
             tr->offset[0] = -1.0;
+            tr->dict_offset[0] = -1.0;
             tr->palette[1] = gensym("-");
             tr->offset[1] = -1.0;
+            tr->dict_offset[1] = -1.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -487,22 +490,23 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     if (sr_dest <= 0) sr_dest = sys_getsr();
     if (sr_dest <= 0) sr_dest = 44100.0;
 
-    long n_frames_dest = buffer_getframecount(dest_buf);
+    long long n_frames_dest = buffer_getframecount(dest_buf);
     long n_chans_dest = buffer_getchannelcount(dest_buf);
-    long start_frame_abs = (long)round(bar_ms * sr_dest / 1000.0);
-    long n_frames_to_weave = (long)round(bar_len * sr_dest / 1000.0);
+    long long start_frame_abs = (long long)round(bar_ms * sr_dest / 1000.0);
+    long long n_frames_to_weave = (long long)round(bar_len * sr_dest / 1000.0);
 
     // 2. Crossfade Trigger
     crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
 
     if (!skip_trigger) {
         int active = (int)round(tr->control);
-        int change = (palette != tr->palette[active] || offset_ms != tr->offset[active]);
+        int change = (palette != tr->palette[active] || offset_ms != tr->dict_offset[active]);
 
         if (no_crossfade) {
             // Transport reset: jump immediately
             tr->palette[active] = palette;
-            tr->offset[active] = offset_ms;
+            tr->dict_offset[active] = offset_ms;
+            tr->offset[active] = offset_ms - bar_ms;
             tr->src_found[active] = 0;
             tr->src_error_sent[active] = 0;
             tr->control = (double)active;
@@ -520,7 +524,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             // Normal change: initiate crossfade
             int other = 1 - active;
             tr->palette[other] = palette;
-            tr->offset[other] = offset_ms;
+            tr->dict_offset[other] = offset_ms;
+            tr->offset[other] = offset_ms - bar_ms;
             tr->src_found[other] = 0;
             tr->src_error_sent[other] = 0;
             tr->control = (double)other;
@@ -552,7 +557,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     // Source buffers setup using cached refs
     t_buffer_obj *src_buf[2] = {NULL, NULL};
     float *samples_src[2] = {NULL, NULL};
-    long n_frames_src[2] = {0, 0};
+    long long n_frames_src[2] = {0, 0};
     long n_chans_src[2] = {0, 0};
     double sr_src[2] = {0, 0};
 
@@ -595,20 +600,19 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     }
 
     // Weave loop with crossfade and nearest-neighbor sample rate conversion
-    for (long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
-        long f_abs = start_frame_abs + i_frame;
-        long f = f_abs % n_frames_dest;
+    for (long long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
+        long long f_abs = start_frame_abs + i_frame;
+        long long f = f_abs % n_frames_dest;
         if (f < 0) f += n_frames_dest;
 
         double current_ms = (double)f_abs * 1000.0 / sr_dest;
-        double track_ramp_ms = fmod(current_ms, tr->track_length);
         double max_abs[2] = {0.0, 0.0};
-        long f_src[2] = {-1, -1};
+        long long f_src[2] = {-1, -1};
 
         for (int i = 0; i < 2; i++) {
             if (samples_src[i]) {
-                double src_ms = tr->offset[i] + track_ramp_ms;
-                f_src[i] = (long)round(src_ms * sr_src[i] / 1000.0);
+                double src_ms = tr->offset[i] + current_ms;
+                f_src[i] = (long long)round(src_ms * sr_src[i] / 1000.0);
                 if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
                     for (long c = 0; c < n_chans_src[i]; c++) {
                         double a = fabs((double)samples_src[i][f_src[i] * n_chans_src[i] + c]);
@@ -755,14 +759,14 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                     }
 
                     if (r_scan != r_last && bar_len > 0) {
-                        long tr_len = (long)round(tr->track_length);
-                        long start = r_last + 1;
-                        long end = r_scan;
+                        long long tr_len = (long long)round(tr->track_length);
+                        long long start = r_last + 1;
+                        long long end = r_scan;
 
                         if (track_looped) {
                             // First part: from r_last+1 to tr_len-1
-                            for (long j = start; j < tr_len; j++) {
-                                if (j % (long)bar_len == 0) {
+                            for (long long j = start; j < tr_len; j++) {
+                                if (j % (long long)bar_len == 0) {
                                     int nt = (x->fifo_tail + 1) % 4096;
                                     if (nt != x->fifo_head) {
                                         double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
@@ -782,8 +786,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         }
 
                         // Handle second part (or normal progression)
-                        for (long j = start; j <= end; j++) {
-                            if (j % (long)bar_len == 0) {
+                        for (long long j = start; j <= end; j++) {
+                            if (j % (long long)bar_len == 0) {
                                 int nt = (x->fifo_tail + 1) % 4096;
                                 if (nt != x->fifo_head) {
                                     double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
