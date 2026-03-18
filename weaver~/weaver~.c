@@ -733,8 +733,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
                 double tr_scan = fmod(current_scan, tr->track_length);
 
-                long r_scan = (long)round(tr_scan);
-                long r_last = (long)round(tr->last_track_scan);
+                long r_scan = (long)floor(tr_scan);
+                long r_last = (long)floor(tr->last_track_scan);
                 int track_looped = (r_scan < r_last);
                 int main_looped = (current_scan < last_scan);
 
@@ -765,33 +765,9 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                     }
 
                     if (r_scan != r_last && bar_len > 0) {
-                        long long tr_len = (long long)round(tr->track_length);
-                        long long start = r_last + 1;
+                        long long start = track_looped ? 0 : r_last + 1;
                         long long end = r_scan;
 
-                        if (track_looped) {
-                            // First part: from r_last+1 to tr_len-1
-                            for (long long j = start; j < tr_len; j++) {
-                                if (j % (long long)bar_len == 0) {
-                                    int nt = (x->fifo_tail + 1) % 4096;
-                                    if (nt != x->fifo_head) {
-                                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                                        // Since we are looking back in time to the previous cycle, we must subtract tr_len
-                                        cycle_base -= tr->track_length;
-                                        x->hit_bars[x->fifo_tail].bar.sym = NULL;
-                                        x->hit_bars[x->fifo_tail].rel_time = (double)j;
-                                        x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)j;
-                                        x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                        x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                        x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                                        x->fifo_tail = nt;
-                                    }
-                                }
-                            }
-                            start = 0;
-                        }
-
-                        // Handle second part (or normal progression)
                         for (long long j = start; j <= end; j++) {
                             if (j % (long long)bar_len == 0) {
                                 int nt = (x->fifo_tail + 1) % 4096;

@@ -1,7 +1,0 @@
-pygame 2.6.1 (SDL 2.28.4, Python 3.12.13)
-Hello from the pygame community. https://www.pygame.org/contribute.html
-Visualizer: Listening on TCP port 9999
-Accepted connection from ('127.0.0.1', 49874)
-!!! Visualizer state cleared via TCP. New scale: 5000ms !!!
-!!! Visualizer state cleared via TCP. New scale: 990ms !!!
-!!! Visualizer state cleared via TCP. New scale: 990ms !!!
