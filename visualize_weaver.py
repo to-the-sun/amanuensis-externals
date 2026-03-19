@@ -73,6 +73,7 @@ def process_text(text):
                         "ms": pkt["ms"],
                         "text": pkt["label"],
                         "bar": pkt.get("bar", ""),
+                        "len": pkt.get("len", 0),
                         "f2": pkt.get("f2", 0.0)
                     })
                     tracks_seen.add(track_id)
@@ -257,9 +258,9 @@ def run_gui():
                     pygame.draw.line(screen, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
 
                     # Two lines:
-                    # 1. Bar value
+                    # 1. Bar value / track length
                     # 2. Palette@offset (the 'text' field)
-                    txt_bar = font.render(f"Bar: {l.get('bar', '')}", True, (220, 220, 255))
+                    txt_bar = font.render(f"{l.get('bar', '')}/{l.get('len', 0)}", True, (220, 220, 255))
                     txt_label = font.render(l["text"], True, (180, 180, 200))
 
                     # Position based on f2 (Slot 1) state at initiation
