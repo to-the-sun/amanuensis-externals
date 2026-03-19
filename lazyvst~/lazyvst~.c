@@ -4,6 +4,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_systhread.h"
+#include "ext_critical.h"
 #include "z_dsp.h"
 
 #define kEffectMagic 0x56737450
@@ -133,18 +134,31 @@ typedef struct _lazyvst {
     HWND hwnd;
     t_qelem *q_instantiate;
     VstPluginMainProc* main_ptr;
-    long num_inputs;
-    long num_outputs;
+    long num_inputs;    // Max object inlet count
+    long num_outputs;   // Max object outlet count
+    long vst_inputs;    // Plugin's actual input count
+    long vst_outputs;   // Plugin's actual output count
 
     float** f_ins;
     float** f_outs;
+    double** d_ins;
+    double** d_outs;
     float* f_in_data;
     float* f_out_data;
     long f_buffer_size;
 
+    long f_ins_alloc;
+    long f_outs_alloc;
+    long d_ins_alloc;
+    long d_outs_alloc;
+
+    float* f_silence;
+    double* d_silence;
+
     double cur_sr;
     long cur_ms;
     long debug_host;
+    t_critical lock;
 } t_lazyvst;
 
 intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
@@ -241,6 +255,8 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_do_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_bang(t_lazyvst *x);
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
@@ -316,6 +332,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
     class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_plug, "plug", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
     class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", 0);
@@ -431,6 +448,79 @@ void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     }
 }
 
+void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    t_symbol *path = NULL;
+    if (argc > 0 && argv[0].a_type == A_SYM) {
+        path = atom_getsym(argv);
+    } else if (s != gensym("plug")) {
+        path = s;
+    }
+
+    if (path) {
+        post("lazyvst~: Received plug message for: %s", path->s_name);
+        defer_low(x, (method)lazyvst_do_plug, path, 0, NULL);
+    } else {
+        post("lazyvst~: plug message received but no path provided");
+    }
+}
+
+void lazyvst_do_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+        x->thread = NULL;
+    }
+
+    critical_enter(x->lock);
+    if (x->effect) {
+        x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
+        if (x->hwnd) {
+            x->effect->dispatcher(x->effect, effEditClose, 0, 0, NULL, 0.0f);
+            DestroyWindow(x->hwnd);
+            x->hwnd = NULL;
+        }
+        x->effect->dispatcher(x->effect, effClose, 0, 0, NULL, 0.0f);
+        x->effect = NULL;
+    }
+
+    if (x->h_module) {
+        FreeLibrary(x->h_module);
+        x->h_module = NULL;
+    }
+    x->main_ptr = NULL;
+    critical_exit(x->lock);
+
+    short path_id = 0;
+    char filename[MAX_FILENAME_CHARS];
+    char fullpath[2048];
+
+    if (path_frompathname(s->s_name, &path_id, filename)) {
+        // Fallback to raw string if path_frompathname fails
+        strncpy(x->path, s->s_name, 2048);
+    } else {
+        if (path_toabsolutesystempath(path_id, filename, fullpath)) {
+            strncpy(x->path, s->s_name, 2048);
+        } else {
+            strncpy(x->path, fullpath, 2048);
+        }
+    }
+    x->path[2047] = '\0';
+
+    const char *fname = strrchr(x->path, '/');
+    if (!fname) fname = strrchr(x->path, '\\');
+    if (fname) fname++;
+    else fname = x->path;
+
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExA(x->path, GetFileExInfoStandard, &fileInfo)) {
+        if (lazyvst_get_counts(x)) {
+            post("lazyvst~: began loading %s", fname);
+            systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
+        }
+    } else {
+        error("lazyvst~: plugin %s not found", fname);
+    }
+}
+
 void lazyvst_do_open(t_lazyvst *x) {
     if (!x->effect) {
         post("lazyvst~: VST not loaded yet.");
@@ -533,6 +623,8 @@ void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerat
     if (maxvectorsize > x->f_buffer_size) {
         if (x->f_in_data) sysmem_freeptr(x->f_in_data);
         if (x->f_out_data) sysmem_freeptr(x->f_out_data);
+        if (x->f_silence) sysmem_freeptr(x->f_silence);
+        if (x->d_silence) sysmem_freeptr(x->d_silence);
 
         if (x->num_inputs > 0) {
             x->f_in_data = (float*)sysmem_newptr(sizeof(float) * maxvectorsize * x->num_inputs);
@@ -545,24 +637,30 @@ void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerat
         } else {
             x->f_out_data = NULL;
         }
+        x->f_silence = (float*)sysmem_newptr(sizeof(float) * maxvectorsize);
+        memset(x->f_silence, 0, sizeof(float) * maxvectorsize);
+        x->d_silence = (double*)sysmem_newptr(sizeof(double) * maxvectorsize);
+        memset(x->d_silence, 0, sizeof(double) * maxvectorsize);
         x->f_buffer_size = maxvectorsize;
     }
 
+    critical_enter(x->lock);
     if (x->effect) {
         x->effect->dispatcher(x->effect, effSetSampleRate, 0, 0, NULL, (float)samplerate);
         x->effect->dispatcher(x->effect, effSetBlockSize, 0, maxvectorsize, NULL, 0.0f);
         x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
     }
+    critical_exit(x->lock);
 
     dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)lazyvst_perform64, 0, NULL);
 }
 
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
-    if (!x->effect) {
-        // Throughput for inlet 1 -> outlet 1 and inlet 2 -> outlet 2
+    if (critical_tryenter(x->lock) != MAX_ERR_NONE) {
+        // Throughput for 4x4
         for (int i = 0; i < numouts; i++) {
             if (outs[i]) {
-                if (i < 2 && i < numins && ins[i]) {
+                if (i < 4 && i < numins && ins[i]) {
                     memcpy(outs[i], ins[i], sizeof(double) * sampleframes);
                 } else {
                     memset(outs[i], 0, sizeof(double) * sampleframes);
@@ -572,32 +670,87 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
         return;
     }
 
+    if (!x->effect) {
+        // Throughput for 4x4
+        for (int i = 0; i < numouts; i++) {
+            if (outs[i]) {
+                if (i < 4 && i < numins && ins[i]) {
+                    memcpy(outs[i], ins[i], sizeof(double) * sampleframes);
+                } else {
+                    memset(outs[i], 0, sizeof(double) * sampleframes);
+                }
+            }
+        }
+        critical_exit(x->lock);
+        return;
+    }
+
     if (x->effect->flags & effFlagsCanDoubleReplacing) {
-        ((VstProcessDoubleProc*)x->effect->processDoubleReplacing)(x->effect, ins, outs, (int32_t)sampleframes);
+        if (x->d_ins && x->d_outs) {
+            for (int i = 0; i < x->vst_inputs; i++) {
+                if (i < numins && ins[i]) {
+                    x->d_ins[i] = ins[i];
+                } else {
+                    x->d_ins[i] = x->d_silence;
+                }
+            }
+            for (int i = 0; i < x->vst_outputs; i++) {
+                if (i < numouts && outs[i]) {
+                    x->d_outs[i] = outs[i];
+                } else {
+                    // Plugin wants to write to extra output, but we don't have enough outlets
+                    // Use silence buffer as a dummy sink to prevent crashes
+                    x->d_outs[i] = x->d_silence;
+                }
+            }
+            ((VstProcessDoubleProc*)x->effect->processDoubleReplacing)(x->effect, x->d_ins, x->d_outs, (int32_t)sampleframes);
+
+            // Zero any remaining Max outlets that the VST didn't cover
+            for (int i = x->vst_outputs; i < numouts; i++) {
+                if (outs[i]) {
+                    memset(outs[i], 0, sizeof(double) * sampleframes);
+                }
+            }
+        }
     } else if (x->effect->flags & effFlagsCanReplacing) {
         if (x->f_ins && x->f_outs && x->f_in_data && x->f_out_data) {
-            for (int i = 0; i < x->num_inputs; i++) {
-                x->f_ins[i] = x->f_in_data + (i * x->f_buffer_size);
-                if (i < numins && ins[i]) {
-                    for (int j = 0; j < sampleframes; j++) {
-                        x->f_ins[i][j] = (float)ins[i][j];
+            for (int i = 0; i < x->vst_inputs; i++) {
+                if (i < x->num_inputs) {
+                    x->f_ins[i] = x->f_in_data + (i * x->f_buffer_size);
+                    if (i < numins && ins[i]) {
+                        for (int j = 0; j < sampleframes; j++) {
+                            x->f_ins[i][j] = (float)ins[i][j];
+                        }
+                    } else {
+                        memset(x->f_ins[i], 0, sizeof(float) * sampleframes);
                     }
                 } else {
-                    memset(x->f_ins[i], 0, sizeof(float) * sampleframes);
+                    x->f_ins[i] = x->f_silence;
                 }
             }
 
-            for (int i = 0; i < x->num_outputs; i++) {
-                x->f_outs[i] = x->f_out_data + (i * x->f_buffer_size);
+            for (int i = 0; i < x->vst_outputs; i++) {
+                if (i < x->num_outputs) {
+                    x->f_outs[i] = x->f_out_data + (i * x->f_buffer_size);
+                } else {
+                    x->f_outs[i] = x->f_silence;
+                }
             }
 
             ((VstProcessProc*)x->effect->processReplacing)(x->effect, x->f_ins, x->f_outs, (int32_t)sampleframes);
 
-            for (int i = 0; i < x->num_outputs; i++) {
-                if (i < numouts && outs[i]) {
+            for (int i = 0; i < x->vst_outputs; i++) {
+                if (i < x->num_outputs && i < numouts && outs[i]) {
                     for (int j = 0; j < sampleframes; j++) {
                         outs[i][j] = (double)x->f_outs[i][j];
                     }
+                }
+            }
+
+            // Zero any remaining Max outlets
+            for (int i = x->vst_outputs; i < numouts; i++) {
+                if (outs[i]) {
+                    memset(outs[i], 0, sizeof(double) * sampleframes);
                 }
             }
         }
@@ -608,17 +761,18 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
             }
         }
     }
+    critical_exit(x->lock);
 }
 
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld (min. 4 inlets)", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld (signal): VST Output %ld", a + 1, a + 1);
+        sprintf(s, "Outlet %ld (signal): VST Output %ld (min. 4 outlets)", a + 1, a + 1);
     }
 }
 
@@ -816,7 +970,33 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
         AEffect* effect = x->main_ptr((VstHostCallback*)hostCallback);
         if (effect && effect->magic == kEffectMagic) {
             effect->user = x;
+
+            critical_enter(x->lock);
             x->effect = effect;
+            x->vst_inputs = (long)effect->numInputs;
+            x->vst_outputs = (long)effect->numOutputs;
+
+            if (x->vst_inputs > x->f_ins_alloc) {
+                if (x->f_ins) sysmem_freeptr(x->f_ins);
+                x->f_ins = (float**)sysmem_newptr(sizeof(float*) * x->vst_inputs);
+                x->f_ins_alloc = x->vst_inputs;
+            }
+            if (x->vst_inputs > x->d_ins_alloc) {
+                if (x->d_ins) sysmem_freeptr(x->d_ins);
+                x->d_ins = (double**)sysmem_newptr(sizeof(double*) * x->vst_inputs);
+                x->d_ins_alloc = x->vst_inputs;
+            }
+            if (x->vst_outputs > x->f_outs_alloc) {
+                if (x->f_outs) sysmem_freeptr(x->f_outs);
+                x->f_outs = (float**)sysmem_newptr(sizeof(float*) * x->vst_outputs);
+                x->f_outs_alloc = x->vst_outputs;
+            }
+            if (x->vst_outputs > x->d_outs_alloc) {
+                if (x->d_outs) sysmem_freeptr(x->d_outs);
+                x->d_outs = (double**)sysmem_newptr(sizeof(double*) * x->vst_outputs);
+                x->d_outs_alloc = x->vst_outputs;
+            }
+            critical_exit(x->lock);
 
             effect->dispatcher(effect, effOpen, 0, 0, NULL, 0.0f);
 
@@ -843,7 +1023,7 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
             const char *pluginName = (effectName[0] != '\0') ? effectName : filename;
 
             post("lazyvst~: %s finished loading with %d inlets, %d outlets, %d parameters and %d presets.",
-                pluginName, effect->numInputs, effect->numOutputs, effect->numParams, effect->numPrograms);
+                pluginName, (int)x->vst_inputs, (int)x->vst_outputs, effect->numParams, effect->numPrograms);
         }
     }
 }
@@ -852,18 +1032,29 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
 
     if (x) {
+        critical_new(&x->lock);
         x->h_module = NULL;
         x->thread = NULL;
         x->path[0] = '\0';
         x->effect = NULL;
         x->hwnd = NULL;
-        x->num_inputs = 2; // Default to 2
-        x->num_outputs = 2; // Default to 2
+        x->num_inputs = 4; // Default to 4
+        x->num_outputs = 4; // Default to 4
+        x->vst_inputs = 0;
+        x->vst_outputs = 0;
         x->f_ins = NULL;
         x->f_outs = NULL;
+        x->d_ins = NULL;
+        x->d_outs = NULL;
         x->f_in_data = NULL;
         x->f_out_data = NULL;
         x->f_buffer_size = 0;
+        x->f_ins_alloc = 0;
+        x->f_outs_alloc = 0;
+        x->d_ins_alloc = 0;
+        x->d_outs_alloc = 0;
+        x->f_silence = NULL;
+        x->d_silence = NULL;
         x->cur_sr = 0;
         x->cur_ms = 0;
         x->debug_host = 0;
@@ -883,26 +1074,34 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
             if (GetFileAttributesExA(x->path, GetFileExInfoStandard, &fileInfo)) {
                 if (lazyvst_get_counts(x)) {
                     post("lazyvst~: began loading %s", filename);
+                    if (x->num_inputs < 4) x->num_inputs = 4;
+                    if (x->num_outputs < 4) x->num_outputs = 4;
                     systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
                 } else {
-                    x->num_inputs = 2;
-                    x->num_outputs = 2;
+                    x->num_inputs = 4;
+                    x->num_outputs = 4;
                 }
             } else {
                 error("lazyvst~: plugin %s not found", filename);
-                x->num_inputs = 2;
-                x->num_outputs = 2;
+                x->num_inputs = 4;
+                x->num_outputs = 4;
             }
         } else {
-            x->num_inputs = 2;
-            x->num_outputs = 2;
+            x->num_inputs = 4;
+            x->num_outputs = 4;
         }
 
         if (x->num_inputs > 0) {
             x->f_ins = (float**)sysmem_newptr(sizeof(float*) * x->num_inputs);
+            x->f_ins_alloc = x->num_inputs;
+            x->d_ins = (double**)sysmem_newptr(sizeof(double*) * x->num_inputs);
+            x->d_ins_alloc = x->num_inputs;
         }
         if (x->num_outputs > 0) {
             x->f_outs = (float**)sysmem_newptr(sizeof(float*) * x->num_outputs);
+            x->f_outs_alloc = x->num_outputs;
+            x->d_outs = (double**)sysmem_newptr(sizeof(double*) * x->num_outputs);
+            x->d_outs_alloc = x->num_outputs;
         }
 
         dsp_setup((t_pxobject *)x, x->num_inputs);
@@ -940,8 +1139,14 @@ void lazyvst_free(t_lazyvst *x) {
 
     if (x->f_ins) sysmem_freeptr(x->f_ins);
     if (x->f_outs) sysmem_freeptr(x->f_outs);
+    if (x->d_ins) sysmem_freeptr(x->d_ins);
+    if (x->d_outs) sysmem_freeptr(x->d_outs);
     if (x->f_in_data) sysmem_freeptr(x->f_in_data);
     if (x->f_out_data) sysmem_freeptr(x->f_out_data);
+    if (x->f_silence) sysmem_freeptr(x->f_silence);
+    if (x->d_silence) sysmem_freeptr(x->d_silence);
+
+    if (x->lock) critical_free(x->lock);
 
     if (x->h_module) {
         FreeLibrary(x->h_module);
