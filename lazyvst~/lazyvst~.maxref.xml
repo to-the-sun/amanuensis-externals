@@ -3,7 +3,7 @@
 <c74object name="lazyvst~" module="msp" category="Utility">
 	<digest>A VST metadata utility</digest>
 	<description>
-		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its first argument. Upon creation, it identifies the file, posts metadata such as size and attributes, and instantiates the plugin to retrieve and post its internal Effect Name (as it would appear in a title bar) directly to the Max console.
+		The `lazyvst~` object takes an absolute file path to a VST plugin (64-bit Windows .dll) as its optional first argument. Upon creation or receipt of a plug message, it identifies the file, posts metadata such as size and attributes, and instantiates the plugin to retrieve and post its internal Effect Name (as it would appear in a title bar) directly to the Max console. If no plugin is loaded, it functions as a 4x4 throughput.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -26,7 +26,7 @@
 	</outletlist>
 	<!--ARGUMENTS-->
 	<argumentlist>
-		<argument name="path" type="symbol" optional="0">
+		<argument name="path" type="symbol" optional="1">
 			<digest>Absolute path to the VST plugin</digest>
 		</argument>
 	</argumentlist>
@@ -42,6 +42,12 @@
 			<digest>Load a VST state snapshot</digest>
 			<description>
 				The <m>snapshot</m> message followed by an absolute path to a <m>.maxsnap</m> file will load the VST's state from that file. This operation is deferred to the main thread for safety.
+			</description>
+		</method>
+		<method name="plug">
+			<digest>Load a VST plugin</digest>
+			<description>
+				The <m>plug</m> message followed by an absolute path to a VST plugin (64-bit Windows .dll) will load that plugin asynchronously.
 			</description>
 		</method>
 		<method name="list">
