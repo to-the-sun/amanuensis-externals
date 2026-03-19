@@ -235,7 +235,7 @@ void *lazyvst_worker(t_lazyvst *x);
 void lazyvst_open(t_lazyvst *x);
 void lazyvst_do_open(t_lazyvst *x);
 void lazyvst_do_instantiate(t_lazyvst *x);
-void lazyvst_get_counts(t_lazyvst *x);
+long lazyvst_get_counts(t_lazyvst *x);
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
@@ -312,7 +312,6 @@ void lazyvst_open(t_lazyvst *x) {
 
 void ext_main(void *r) {
     common_symbols_init();
-    post("lazyvst~: ext_main called (snapshot-debug-v5)");
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)lazyvst_open, "open", 0);
@@ -485,45 +484,26 @@ void lazyvst_do_open(t_lazyvst *x) {
 void *lazyvst_worker(t_lazyvst *x) {
     const char *path = x->path;
 
-    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-    if (GetFileAttributesExA(path, GetFileExInfoStandard, &fileInfo)) {
-        LARGE_INTEGER size;
-        size.LowPart = fileInfo.nFileSizeLow;
-        size.HighPart = fileInfo.nFileSizeHigh;
-
-        post("lazyvst~: Identified file: %s", path);
-        post("lazyvst~: File size: %lld bytes", size.QuadPart);
-        post("lazyvst~: Attributes: 0x%lx", fileInfo.dwFileAttributes);
-
-        x->h_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-        if (x->h_module) {
-            post("lazyvst~: Successfully loaded library at address %p", x->h_module);
-
-            x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
-            if (!x->main_ptr) {
-                x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
-            }
-
-            if (x->main_ptr) {
-                post("lazyvst~: VST entry point found.");
-                qelem_set(x->q_instantiate);
-            } else {
-                post("lazyvst~: VST entry point NOT FOUND.");
-            }
-        } else {
-            post("lazyvst~: Failed to load library: %s (Error %lu)", path, GetLastError());
+    x->h_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (x->h_module) {
+        x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "VSTPluginMain");
+        if (!x->main_ptr) {
+            x->main_ptr = (VstPluginMainProc*)GetProcAddress(x->h_module, "main");
         }
-    } else {
-        post("lazyvst~: Could not identify file: %s (Error %lu)", path, GetLastError());
+
+        if (x->main_ptr) {
+            qelem_set(x->q_instantiate);
+        }
     }
     return NULL;
 }
 
-void lazyvst_get_counts(t_lazyvst *x) {
+long lazyvst_get_counts(t_lazyvst *x) {
+    long success = 0;
     x->num_inputs = 0;
     x->num_outputs = 0;
 
-    if (x->path[0] == '\0') return;
+    if (x->path[0] == '\0') return 0;
 
     HMODULE h_mod = LoadLibraryExA(x->path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (h_mod) {
@@ -538,10 +518,12 @@ void lazyvst_get_counts(t_lazyvst *x) {
                 x->num_inputs = (long)effect->numInputs;
                 x->num_outputs = (long)effect->numOutputs;
                 effect->dispatcher(effect, effClose, 0, 0, NULL, 0.0f);
+                success = 1;
             }
         }
         FreeLibrary(h_mod);
     }
+    return success;
 }
 
 void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -577,9 +559,14 @@ void lazyvst_dsp64(t_lazyvst *x, t_object *dsp64, short *count, double samplerat
 
 void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     if (!x->effect) {
+        // Throughput for inlet 1 -> outlet 1 and inlet 2 -> outlet 2
         for (int i = 0; i < numouts; i++) {
             if (outs[i]) {
-                memset(outs[i], 0, sizeof(double) * sampleframes);
+                if (i < 2 && i < numins && ins[i]) {
+                    memcpy(outs[i], ins[i], sizeof(double) * sampleframes);
+                } else {
+                    memset(outs[i], 0, sizeof(double) * sampleframes);
+                }
             }
         }
         return;
@@ -828,7 +815,6 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
     if (x->main_ptr) {
         AEffect* effect = x->main_ptr((VstHostCallback*)hostCallback);
         if (effect && effect->magic == kEffectMagic) {
-            post("lazyvst~: VST instance created successfully on main thread.");
             effect->user = x;
             x->effect = effect;
 
@@ -849,31 +835,21 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
                 effect->dispatcher(effect, effGetProductString, 0, 0, effectName, 0.0f);
             }
 
-            if (effectName[0] != '\0') {
-                post("lazyvst~: VST Name: %s", effectName);
-            } else {
-                post("lazyvst~: VST Name: [Unknown]");
-            }
+            const char *filename = strrchr(x->path, '/');
+            if (!filename) filename = strrchr(x->path, '\\');
+            if (filename) filename++;
+            else filename = x->path;
 
-            post("lazyvst~: Programs: %d", effect->numPrograms);
-            post("lazyvst~: Parameters: %d", effect->numParams);
-            post("lazyvst~: Inputs: %d", effect->numInputs);
-            post("lazyvst~: Outputs: %d", effect->numOutputs);
-            post("lazyvst~: Initial Delay: %d", effect->initialDelay);
-            post("lazyvst~: Unique ID: 0x%08X", effect->uniqueID);
-            post("lazyvst~: VST Version: %d", effect->version);
-            post("lazyvst~: Flags: 0x%08X", effect->flags);
-        } else if (effect) {
-            post("lazyvst~: Failed magic number check. Expected 0x%lx, Observed 0x%lx.", kEffectMagic, effect->magic);
-        } else {
-            post("lazyvst~: Entry point returned NULL.");
+            const char *pluginName = (effectName[0] != '\0') ? effectName : filename;
+
+            post("lazyvst~: %s finished loading with %d inlets, %d outlets, %d parameters and %d presets.",
+                pluginName, effect->numInputs, effect->numOutputs, effect->numParams, effect->numPrograms);
         }
     }
 }
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
     t_lazyvst *x = (t_lazyvst *)object_alloc(lazyvst_class);
-    post("lazyvst~: new instance created");
 
     if (x) {
         x->h_module = NULL;
@@ -881,8 +857,8 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->path[0] = '\0';
         x->effect = NULL;
         x->hwnd = NULL;
-        x->num_inputs = 0;
-        x->num_outputs = 0;
+        x->num_inputs = 2; // Default to 2
+        x->num_outputs = 2; // Default to 2
         x->f_ins = NULL;
         x->f_outs = NULL;
         x->f_in_data = NULL;
@@ -898,25 +874,41 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
             strncpy(x->path, path_sym->s_name, 2048);
             x->path[2047] = '\0';
 
-            lazyvst_get_counts(x);
+            const char *filename = strrchr(x->path, '/');
+            if (!filename) filename = strrchr(x->path, '\\');
+            if (filename) filename++;
+            else filename = x->path;
 
-            if (x->num_inputs > 0) {
-                x->f_ins = (float**)sysmem_newptr(sizeof(float*) * x->num_inputs);
+            WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+            if (GetFileAttributesExA(x->path, GetFileExInfoStandard, &fileInfo)) {
+                if (lazyvst_get_counts(x)) {
+                    post("lazyvst~: began loading %s", filename);
+                    systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
+                } else {
+                    x->num_inputs = 2;
+                    x->num_outputs = 2;
+                }
+            } else {
+                error("lazyvst~: plugin %s not found", filename);
+                x->num_inputs = 2;
+                x->num_outputs = 2;
             }
-            if (x->num_outputs > 0) {
-                x->f_outs = (float**)sysmem_newptr(sizeof(float*) * x->num_outputs);
-            }
-
-            dsp_setup((t_pxobject *)x, x->num_inputs);
-
-            for (long i = 0; i < x->num_outputs; i++) {
-                outlet_new((t_object *)x, "signal");
-            }
-
-            systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
         } else {
-            dsp_setup((t_pxobject *)x, 0);
-            post("lazyvst~: No valid path argument provided.");
+            x->num_inputs = 2;
+            x->num_outputs = 2;
+        }
+
+        if (x->num_inputs > 0) {
+            x->f_ins = (float**)sysmem_newptr(sizeof(float*) * x->num_inputs);
+        }
+        if (x->num_outputs > 0) {
+            x->f_outs = (float**)sysmem_newptr(sizeof(float*) * x->num_outputs);
+        }
+
+        dsp_setup((t_pxobject *)x, x->num_inputs);
+
+        for (long i = 0; i < x->num_outputs; i++) {
+            outlet_new((t_object *)x, "signal");
         }
     }
     return x;
