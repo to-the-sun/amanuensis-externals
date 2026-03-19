@@ -458,6 +458,7 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     // 1. Track State and Destination Buffer Lookup
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
+    int initial_busy = tr->busy;
 
     char bufname[256];
     snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track);
@@ -522,8 +523,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             weaver_log(x, "Track %lld: Transport reset jump to %s@%.2f at %.2f ms", track, palette->s_name, offset_ms, bar_ms);
             if (x->visualize) {
                 char l_msg[256];
-                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
-                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, (double)active);
+                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
+                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, tr->track_length, (double)active);
                 visualize(l_msg);
             }
         } else if (change) {
@@ -539,8 +540,8 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
             weaver_log(x, "Track %lld: Triggering bar at %.2f ms, crossfading to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
             if (x->visualize) {
                 char l_msg[256];
-                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"f2\": %.1f}",
-                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, (double)active);
+                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
+                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, tr->track_length, (double)active);
                 visualize(l_msg);
             }
         }
@@ -582,7 +583,6 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
 
         if (src_buf[i]) {
             if (!tr->src_found[i]) {
-                weaver_log(x, "Track %lld: successfully found source buffer '%s'", track, tr->palette[i]->s_name);
                 tr->src_found[i] = 1;
                 tr->src_error_sent[i] = 0;
             }
@@ -673,6 +673,10 @@ void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, doub
     }
     buffer_unlocksamples(dest_buf);
     buffer_setdirty(dest_buf);
+
+    if (tr->busy != initial_busy) {
+        weaver_log(x, "Track %lld: busy state changed from %d to %d", track, initial_busy, tr->busy);
+    }
     critical_exit(0);
 }
 
@@ -868,6 +872,7 @@ void weaver_audio_qtask(t_weaver *x) {
                         offset = atom_getfloat(&o_atom);
                     }
 
+                    weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
                     weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, 0, bar_key);
                 }
             }
