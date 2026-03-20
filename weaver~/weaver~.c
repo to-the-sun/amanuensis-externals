@@ -50,6 +50,27 @@ typedef struct _weaver_track {
     double track_length;
     double last_track_scan;
     double last_visualize_ms;
+
+    // Thread-safe state handover
+    t_symbol *pending_palette;
+    double pending_offset;
+    t_symbol *pending_bar_symbol;
+    int pending_no_crossfade;
+    int has_pending_data;
+    int waiting_for_dict;
+
+    // Visualization state
+    double viz_f1;
+    double viz_f2;
+    t_symbol *viz_palette;
+    double viz_offset;
+    t_symbol *viz_bar_symbol;
+    double viz_ms;
+    int viz_dirty;
+    int viz_trigger_dirty;
+    int dirty_dest;
+    double viz_control;
+    double viz_track_length;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -86,6 +107,8 @@ typedef struct _weaver {
     t_hashtab *track_states;
     double low_ms;
     double high_ms;
+
+    double last_viz_check_ms;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -103,7 +126,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger, t_symbol *bar_symbol);
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, int no_crossfade, t_symbol *bar_symbol);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -148,6 +171,27 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
             tr->last_visualize_ms = -1000.0;
+
+            // Thread-safe state handover init
+            tr->pending_palette = _sym_nothing;
+            tr->pending_offset = 0.0;
+            tr->pending_bar_symbol = _sym_nothing;
+            tr->pending_no_crossfade = 0;
+            tr->has_pending_data = 0;
+            tr->waiting_for_dict = 0;
+
+            // Visualization state init
+            tr->viz_f1 = 0.0;
+            tr->viz_f2 = 0.0;
+            tr->viz_palette = _sym_nothing;
+            tr->viz_offset = 0.0;
+            tr->viz_bar_symbol = _sym_nothing;
+            tr->viz_ms = 0.0;
+            tr->viz_dirty = 0;
+            tr->viz_trigger_dirty = 0;
+            tr->dirty_dest = 0;
+            tr->viz_control = 0.0;
+            tr->viz_track_length = 1000.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -329,6 +373,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->low_ms = 22.653;
         x->high_ms = 4999.0;
         x->track_cache_count = 0;
+        x->last_viz_check_ms = 0;
 
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
@@ -453,233 +498,30 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_process_data(t_weaver *x, t_symbol *palette, t_atom_long track, double bar_ms, double offset_ms, int no_crossfade, int skip_trigger, t_symbol *bar_symbol) {
-    double bar_len = weaver_get_bar_length(x);
-    if (bar_len <= 0) return;
-
-    // 1. Track State and Destination Buffer Lookup
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, int no_crossfade, t_symbol *bar_symbol) {
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
-    int initial_busy = tr->busy;
 
-    char bufname[256];
-    snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)track);
-    t_symbol *s_bufname = gensym(bufname);
+    critical_enter(x->lock);
+    tr->pending_palette = palette;
+    tr->pending_offset = offset_ms;
+    tr->pending_bar_symbol = bar_symbol;
+    tr->pending_no_crossfade = no_crossfade;
+    tr->viz_ms = bar_ms; // Trigger timestamp for viz
+    tr->viz_control = tr->control;
+    tr->viz_track_length = tr->track_length;
 
-    t_buffer_obj *dest_buf = buffer_ref_getobject(tr->dest_ref);
-    if (!dest_buf) {
-        // Kick
-        buffer_ref_set(tr->dest_ref, _sym_nothing);
-        buffer_ref_set(tr->dest_ref, s_bufname);
-        dest_buf = buffer_ref_getobject(tr->dest_ref);
+    // Pre-bind palette to buffer_ref (slot logic will be applied in DSP thread)
+    // We update both refs because we don't know which slot is currently available,
+    // but the DSP thread will use the palette symbol from metadata to lock the correct buffer.
+    // Actually, it's safer to just set them both if it's a new palette.
+    if (palette != _sym_nothing && palette != gensym("-")) {
+        buffer_ref_set(tr->src_refs[0], palette);
+        buffer_ref_set(tr->src_refs[1], palette);
     }
 
-    if (dest_buf) {
-        if (!tr->dest_found) {
-            weaver_log(x, "Track %lld: successfully found destination buffer '%s'", track, s_bufname->s_name);
-            tr->dest_found = 1;
-            tr->dest_warn_sent = 0;
-        }
-    } else {
-        tr->dest_found = 0;
-        if (!tr->dest_warn_sent) {
-            object_warn((t_object *)x, "Track %lld: destination buffer '%s' not found", track, s_bufname->s_name);
-            tr->dest_warn_sent = 1;
-        }
-        return;
-    }
-
-    double sr_dest = buffer_getsamplerate(dest_buf);
-    if (sr_dest <= 0) sr_dest = sys_getsr();
-    if (sr_dest <= 0) sr_dest = 44100.0;
-
-    long long n_frames_dest = buffer_getframecount(dest_buf);
-    long n_chans_dest = buffer_getchannelcount(dest_buf);
-    long long start_frame_abs = (long long)round(bar_ms * sr_dest / 1000.0);
-    long long n_frames_to_weave = (long long)round(bar_len * sr_dest / 1000.0);
-
-    // 2. Crossfade Trigger
-    crossfade_update_params(&tr->xf, sr_dest, x->low_ms, x->high_ms);
-
-    if (!skip_trigger) {
-        int active = (int)round(tr->control);
-        int change = (palette != tr->palette[active] || offset_ms != tr->dict_offset[active]);
-
-        if (no_crossfade) {
-            // Transport reset: jump immediately
-            tr->palette[active] = palette;
-            tr->dict_offset[active] = offset_ms;
-            tr->offset[active] = offset_ms - bar_ms;
-            tr->src_found[active] = 0;
-            tr->src_error_sent[active] = 0;
-            tr->control = (double)active;
-
-            // Force ramps to solid states (Slot 0 ON if active==0, Slot 1 ON if active==1)
-            tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
-            tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
-            tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
-            tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
-            tr->xf.last_control = tr->control;
-            tr->xf.direction = 0.0;
-            tr->busy = 0;
-            weaver_log(x, "Track %lld: Transport reset jump to %s@%.2f at %.2f ms", track, palette->s_name, offset_ms, bar_ms);
-            if (x->visualize) {
-                char l_msg[256];
-                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
-                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, tr->track_length, (double)active);
-                visualize(l_msg);
-            }
-        } else if (change) {
-            // Normal change: initiate crossfade
-            int other = 1 - active;
-            tr->palette[other] = palette;
-            tr->dict_offset[other] = offset_ms;
-            tr->offset[other] = offset_ms - bar_ms;
-            tr->src_found[other] = 0;
-            tr->src_error_sent[other] = 0;
-            tr->control = (double)other;
-            tr->xf.direction = tr->control - tr->xf.last_control;
-            weaver_log(x, "Track %lld: Triggering bar at %.2f ms, crossfading to %s@%.2f", track, bar_ms, palette->s_name, offset_ms);
-            if (x->visualize) {
-                char l_msg[256];
-                snprintf(l_msg, sizeof(l_msg), "{\"track\": %lld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
-                         (long long)track, bar_ms, palette->s_name, offset_ms, bar_symbol->s_name, tr->track_length, (double)active);
-                visualize(l_msg);
-            }
-        }
-    }
-
-    critical_enter(0);
-    float *samples_dest = NULL;
-    int retries_dest = 0;
-    for (retries_dest = 0; retries_dest < 10; retries_dest++) {
-        samples_dest = buffer_locksamples(dest_buf);
-        if (samples_dest) break;
-        systhread_sleep(1);
-    }
-    if (!samples_dest) {
-        critical_exit(0);
-        weaver_log(x, "Error: could not lock destination buffer %s", s_bufname->s_name);
-        return;
-    }
-
-    // Source buffers setup using cached refs
-    t_buffer_obj *src_buf[2] = {NULL, NULL};
-    float *samples_src[2] = {NULL, NULL};
-    long long n_frames_src[2] = {0, 0};
-    long n_chans_src[2] = {0, 0};
-    double sr_src[2] = {0, 0};
-
-    for (int i = 0; i < 2; i++) {
-        if (tr->palette[i] == gensym("-") || tr->palette[i] == _sym_nothing) {
-            continue;
-        }
-        buffer_ref_set(tr->src_refs[i], tr->palette[i]);
-        src_buf[i] = buffer_ref_getobject(tr->src_refs[i]);
-        if (!src_buf[i]) {
-            // Kick
-            buffer_ref_set(tr->src_refs[i], _sym_nothing);
-            buffer_ref_set(tr->src_refs[i], tr->palette[i]);
-            src_buf[i] = buffer_ref_getobject(tr->src_refs[i]);
-        }
-
-        if (src_buf[i]) {
-            if (!tr->src_found[i]) {
-                tr->src_found[i] = 1;
-                tr->src_error_sent[i] = 0;
-            }
-            sr_src[i] = buffer_getsamplerate(src_buf[i]);
-            if (sr_src[i] <= 0) sr_src[i] = 44100.0;
-            n_frames_src[i] = buffer_getframecount(src_buf[i]);
-            n_chans_src[i] = buffer_getchannelcount(src_buf[i]);
-
-            for (int retry = 0; retry < 10; retry++) {
-                samples_src[i] = buffer_locksamples(src_buf[i]);
-                if (samples_src[i]) break;
-                systhread_sleep(1);
-            }
-        } else {
-            tr->src_found[i] = 0;
-            if (!tr->src_error_sent[i]) {
-                object_error((t_object *)x, "Track %lld: source buffer '%s' not found", track, tr->palette[i]->s_name);
-                tr->src_error_sent[i] = 1;
-            }
-        }
-    }
-
-    // Weave loop with crossfade and nearest-neighbor sample rate conversion
-    for (long long i_frame = 0; i_frame < n_frames_to_weave; i_frame++) {
-        long long f_abs = start_frame_abs + i_frame;
-        long long f = f_abs % n_frames_dest;
-        if (f < 0) f += n_frames_dest;
-
-        double current_ms = (double)f_abs * 1000.0 / sr_dest;
-        double max_abs[2] = {0.0, 0.0};
-        long long f_src[2] = {-1, -1};
-
-        for (int i = 0; i < 2; i++) {
-            if (samples_src[i]) {
-                double src_ms = tr->offset[i] + current_ms;
-                f_src[i] = (long long)round(src_ms * sr_src[i] / 1000.0);
-                if (f_src[i] >= 0 && f_src[i] < n_frames_src[i]) {
-                    for (long c = 0; c < n_chans_src[i]; c++) {
-                        double a = fabs((double)samples_src[i][f_src[i] * n_chans_src[i] + c]);
-                        if (a > max_abs[i]) max_abs[i] = a;
-                    }
-                }
-            }
-        }
-
-        double f1, f2;
-        // ramp_process returns signal * fade, and updates internal state
-        ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f1);
-        ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f2);
-
-        // Movement is only non-zero for the first sample to trigger the ramps
-        tr->xf.direction = 0.0;
-
-        int r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
-        int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
-        int finished = r1_done && r2_done;
-        tr->xf.last_control = tr->control;
-        tr->xf.elapsed = f_abs;
-        tr->busy = !finished;
-
-        // Apply fades to all destination channels
-        for (long c = 0; c < n_chans_dest; c++) {
-            double mix1 = 0.0;
-            double mix2 = 0.0;
-            if (samples_src[0] && f_src[0] >= 0 && f_src[0] < n_frames_src[0] && c < n_chans_src[0]) {
-                mix1 = (double)samples_src[0][f_src[0] * n_chans_src[0] + c] * f1;
-            }
-            if (samples_src[1] && f_src[1] >= 0 && f_src[1] < n_frames_src[1] && c < n_chans_src[1]) {
-                mix2 = (double)samples_src[1][f_src[1] * n_chans_src[1] + c] * f2;
-            }
-            samples_dest[f * n_chans_dest + c] = (float)(mix1 + mix2);
-        }
-
-        if (x->visualize && (current_ms >= tr->last_visualize_ms + 100.0 || current_ms < tr->last_visualize_ms)) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "{\"track\": %lld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f}",
-                     (long long)track, current_ms, f1, f2);
-            visualize(msg);
-            tr->last_visualize_ms = current_ms;
-        }
-    }
-
-    // Cleanup
-    for (int i = 0; i < 2; i++) {
-        if (src_buf[i] && samples_src[i]) {
-            buffer_unlocksamples(src_buf[i]);
-        }
-    }
-    buffer_unlocksamples(dest_buf);
-    buffer_setdirty(dest_buf);
-
-    if (tr->busy != initial_busy) {
-        weaver_log(x, "Track %lld: busy state changed from %d to %d", track, initial_busy, tr->busy);
-    }
-    critical_exit(0);
+    tr->has_pending_data = 1;
+    critical_exit(x->lock);
 }
 
 
@@ -725,13 +567,18 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 }
 
 typedef struct {
-    int has_data;
-    double data_rel_time;
-    double data_abs_time;
-    int data_no_crossfade;
-    int has_loop;
-    int loop_no_crossfade;
-} t_track_vector_event;
+    float *samples_dest;
+    long long n_frames_dest;
+    long n_chans_dest;
+    double sr_dest;
+
+    float *samples_src[2];
+    long long n_frames_src[2];
+    long n_chans_src[2];
+    double sr_src[2];
+    t_buffer_obj *buf_src[2];
+    t_buffer_obj *buf_dest;
+} t_track_buffers;
 
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
@@ -739,79 +586,185 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
     double bar_len = round(weaver_get_bar_length(x));
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
-        t_track_vector_event track_events[MAX_WEAVER_TRACKS];
-        memset(track_events, 0, sizeof(track_events));
+        t_track_buffers tb[MAX_WEAVER_TRACKS];
+        memset(tb, 0, sizeof(tb));
 
-        for (int i = 0; i < sampleframes; i++) {
-            double current_scan = in[i]; // Lookahead removed as per project memory
+        for (long t = 0; t < x->track_cache_count; t++) {
+            t_weaver_track *tr = x->track_cache[t];
+            if (!tr) continue;
 
-            for (long t = 0; t < x->track_cache_count; t++) {
-                t_weaver_track *tr = x->track_cache[t];
-                if (!tr) continue;
+            // 1. Apply metadata updates at the BEGINNING of the vector
+            if (tr->has_pending_data) {
+                int active = (int)round(tr->control);
+                int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active]);
 
-                double tr_scan = fmod(current_scan, tr->track_length);
+                if (tr->pending_no_crossfade) {
+                    tr->palette[active] = tr->pending_palette;
+                    tr->dict_offset[active] = tr->pending_offset;
+                    tr->offset[active] = tr->pending_offset - in[0]; // Estimate with first sample
+                    tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
+                    tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
+                    tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
+                    tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
+                    tr->xf.direction = 0.0;
+                    tr->busy = 0;
+                } else if (change) {
+                    int other = 1 - active;
+                    tr->palette[other] = tr->pending_palette;
+                    tr->dict_offset[other] = tr->pending_offset;
+                    tr->offset[other] = tr->pending_offset - in[0]; // Estimate
+                    tr->control = (double)other;
+                    tr->xf.direction = tr->control - tr->xf.last_control;
+                }
+                tr->viz_palette = tr->pending_palette;
+                tr->viz_offset = tr->pending_offset;
+                tr->viz_bar_symbol = tr->pending_bar_symbol;
+                tr->viz_trigger_dirty = 1;
+                tr->has_pending_data = 0;
+                tr->waiting_for_dict = 0;
+            }
 
-                long r_scan = (long)floor(tr_scan);
-                long r_last = (long)floor(tr->last_track_scan);
-                int track_looped = (r_scan < r_last);
-                int main_looped = (current_scan < last_scan);
+            // 2. Lock Buffers (Safe because it happens once per vector)
+            t_buffer_obj *dest_buf = buffer_ref_getobject(tr->dest_ref);
+            if (dest_buf) {
+                tb[t].samples_dest = buffer_locksamples(dest_buf);
+                if (tb[t].samples_dest) {
+                    tb[t].buf_dest = dest_buf;
+                    tb[t].n_frames_dest = buffer_getframecount(dest_buf);
+                    tb[t].n_chans_dest = buffer_getchannelcount(dest_buf);
+                    tb[t].sr_dest = buffer_getsamplerate(dest_buf);
+                    if (tb[t].sr_dest <= 0) tb[t].sr_dest = sys_getsr();
+                }
+            }
 
-                if (tr->last_track_scan == -1.0) {
-                    if (bar_len > 0) {
-                        double bar_start = floor(tr_scan / bar_len) * bar_len;
-                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                        track_events[t].has_data = 1;
-                        track_events[t].data_rel_time = bar_start;
-                        track_events[t].data_abs_time = cycle_base + bar_start;
-                        track_events[t].data_no_crossfade = 0;
-                    }
-                } else {
-                    if (main_looped || track_looped) {
-                        track_events[t].has_loop = 1;
-                        track_events[t].loop_no_crossfade |= main_looped;
-                    }
-
-                    if (r_scan != r_last && bar_len > 0) {
-                        long long start = track_looped ? 0 : r_last + 1;
-                        long long end = r_scan;
-
-                        // Calculate the latest multiple of bar_len that was passed
-                        long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
-                        if (latest_j >= start) {
-                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                            track_events[t].has_data = 1;
-                            track_events[t].data_rel_time = (double)latest_j;
-                            track_events[t].data_abs_time = cycle_base + (double)latest_j;
-                            track_events[t].data_no_crossfade = main_looped;
+            for (int j = 0; j < 2; j++) {
+                if (tr->palette[j] != _sym_nothing && tr->palette[j] != gensym("-")) {
+                    t_buffer_obj *src_buf = buffer_ref_getobject(tr->src_refs[j]);
+                    if (src_buf) {
+                        tb[t].samples_src[j] = buffer_locksamples(src_buf);
+                        if (tb[t].samples_src[j]) {
+                            tb[t].buf_src[j] = src_buf;
+                            tb[t].n_frames_src[j] = buffer_getframecount(src_buf);
+                            tb[t].n_chans_src[j] = buffer_getchannelcount(src_buf);
+                            tb[t].sr_src[j] = buffer_getsamplerate(src_buf);
+                            if (tb[t].sr_src[j] <= 0) tb[t].sr_src[j] = sys_getsr();
                         }
                     }
                 }
+            }
+            crossfade_update_params(&tr->xf, tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr(), x->low_ms, x->high_ms);
+        }
+
+        for (int i = 0; i < sampleframes; i++) {
+            double current_scan = in[i];
+            int main_looped = (current_scan < last_scan);
+
+            for (long t = 0; t < x->track_cache_count; t++) {
+                t_weaver_track *tr = x->track_cache[t];
+                if (!tr || !tb[t].samples_dest) continue;
+
+                // 2. Continuous Bar Hit Detection
+                double tr_scan = fmod(current_scan, tr->track_length);
+                long r_scan = (long)floor(tr_scan);
+                long r_last = (long)floor(tr->last_track_scan);
+                int track_looped = (r_scan < r_last);
+
+                if (tr->last_track_scan != -1.0) {
+                    if (main_looped || track_looped) {
+                        int nt_loop = (x->fifo_tail + 1) % 4096;
+                        if (nt_loop != x->fifo_head) {
+                            x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
+                            x->hit_bars[x->fifo_tail].track_id = t + 1;
+                            x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
+                            x->fifo_tail = nt_loop;
+                        }
+                    }
+
+                    if (!tr->busy && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
+                        long long start = track_looped ? 0 : r_last + 1;
+                        long long end = r_scan;
+                        long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
+
+                        if (latest_j >= start) {
+                            int nt = (x->fifo_tail + 1) % 4096;
+                            if (nt != x->fifo_head) {
+                                x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                x->hit_bars[x->fifo_tail].rel_time = (double)latest_j;
+                                x->hit_bars[x->fifo_tail].bar.value = current_scan; // Current ramp
+                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                                x->hit_bars[x->fifo_tail].track_id = t + 1;
+                                x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
+                                x->fifo_tail = nt;
+                                tr->waiting_for_dict = 1;
+                                tr->busy = 1;
+                            }
+                        }
+                    }
+                }
+
+                // 3. One-sample audio weaving
+                long long f_dest = (long long)round(current_scan * tb[t].sr_dest / 1000.0) % tb[t].n_frames_dest;
+                if (f_dest < 0) f_dest += tb[t].n_frames_dest;
+
+                double max_abs[2] = {0.0, 0.0};
+                long long f_src[2] = {-1, -1};
+
+                for (int j = 0; j < 2; j++) {
+                    if (tb[t].samples_src[j]) {
+                        double src_ms = tr->offset[j] + current_scan;
+                        f_src[j] = (long long)round(src_ms * tb[t].sr_src[j] / 1000.0);
+                        if (f_src[j] >= 0 && f_src[j] < tb[t].n_frames_src[j]) {
+                            for (long c = 0; c < tb[t].n_chans_src[j]; c++) {
+                                double a = fabs((double)tb[t].samples_src[j][f_src[j] * tb[t].n_chans_src[j] + c]);
+                                if (a > max_abs[j]) max_abs[j] = a;
+                            }
+                        }
+                    }
+                }
+
+                double f1, f2;
+                ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f1);
+                ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f2);
+                tr->xf.direction = 0.0;
+
+                int r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
+                int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
+                if (r1_done && r2_done && !tr->waiting_for_dict) tr->busy = 0;
+
+                tr->xf.last_control = tr->control;
+                tr->xf.elapsed = (long long)round(current_scan * tb[t].sr_dest / 1000.0);
+
+                for (long c = 0; c < tb[t].n_chans_dest; c++) {
+                    double mix1 = 0.0;
+                    double mix2 = 0.0;
+                    if (tb[t].samples_src[0] && f_src[0] >= 0 && f_src[0] < tb[t].n_frames_src[0] && c < tb[t].n_chans_src[0]) {
+                        mix1 = (double)tb[t].samples_src[0][f_src[0] * tb[t].n_chans_src[0] + c] * f1;
+                    }
+                    if (tb[t].samples_src[1] && f_src[1] >= 0 && f_src[1] < tb[t].n_frames_src[1] && c < tb[t].n_chans_src[1]) {
+                        mix2 = (double)tb[t].samples_src[1][f_src[1] * tb[t].n_chans_src[1] + c] * f2;
+                    }
+                    tb[t].samples_dest[f_dest * tb[t].n_chans_dest + c] = (float)(mix1 + mix2);
+                }
+                tr->dirty_dest = 1;
+
+                tr->viz_f1 = f1;
+                tr->viz_f2 = f2;
+                tr->viz_dirty = 1;
+
                 tr->last_track_scan = tr_scan;
             }
             last_scan = current_scan;
         }
 
-        // Push accumulated events to FIFO
+        // Unlock Phase
         for (long t = 0; t < x->track_cache_count; t++) {
-            if (track_events[t].has_loop) {
-                int nt_loop = (x->fifo_tail + 1) % 4096;
-                if (nt_loop != x->fifo_head) {
-                    x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
-                    x->hit_bars[x->fifo_tail].track_id = t + 1;
-                    x->hit_bars[x->fifo_tail].no_crossfade = track_events[t].loop_no_crossfade;
-                    x->fifo_tail = nt_loop;
-                }
+            if (tb[t].buf_dest && tb[t].samples_dest) {
+                buffer_unlocksamples(tb[t].buf_dest);
+                // buffer_setdirty is too slow for DSP thread! Handle in qtask.
             }
-            if (track_events[t].has_data) {
-                int nt = (x->fifo_tail + 1) % 4096;
-                if (nt != x->fifo_head) {
-                    x->hit_bars[x->fifo_tail].bar.sym = NULL;
-                    x->hit_bars[x->fifo_tail].rel_time = track_events[t].data_rel_time;
-                    x->hit_bars[x->fifo_tail].bar.value = track_events[t].data_abs_time;
-                    x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                    x->hit_bars[x->fifo_tail].track_id = t + 1;
-                    x->hit_bars[x->fifo_tail].no_crossfade = track_events[t].data_no_crossfade;
-                    x->fifo_tail = nt;
+            for (int j = 0; j < 2; j++) {
+                if (tb[t].buf_src[j] && tb[t].samples_src[j]) {
+                    buffer_unlocksamples(tb[t].buf_src[j]);
                 }
             }
         }
@@ -856,12 +809,6 @@ void weaver_audio_qtask(t_weaver *x) {
             bar_key = gensym(bstr);
         }
 
-        if (tr && tr->busy && !no_crossfade) {
-            int active = (int)round(tr->control);
-            weaver_process_data(x, tr->palette[active], target_track, hit.value, tr->offset[active], no_crossfade, 1, bar_key);
-            continue;
-        }
-
         t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
         if (dict) {
             char tstr[64];
@@ -895,19 +842,66 @@ void weaver_audio_qtask(t_weaver *x) {
                     }
 
                     weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
-                    weaver_process_data(x, palette, target_track, hit.value, offset, no_crossfade, 0, bar_key);
+                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, no_crossfade, bar_key);
                 }
             }
 
             if (!found_in_dict) {
                 // Trigger silence if bar missing from dictionary
-                weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0, bar_key);
+                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, no_crossfade, bar_key);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_process_data(x, gensym("-"), target_track, hit.value, 0.0, no_crossfade, 0, bar_key);
+            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, no_crossfade, bar_key);
+        }
+    }
+
+    // 1. Post-DSP Buffer Management (buffer_setdirty is main-thread only)
+    for (long t = 0; t < x->track_cache_count; t++) {
+        t_weaver_track *tr = x->track_cache[t];
+        if (tr && tr->dirty_dest) {
+            t_buffer_obj *b = buffer_ref_getobject(tr->dest_ref);
+            if (b) buffer_setdirty(b);
+            tr->dirty_dest = 0;
+        }
+    }
+
+    // 2. Visualization Polling
+    if (x->visualize) {
+        double current_ms = (double)systime_ms();
+        if (current_ms >= x->last_viz_check_ms + 100.0) {
+            for (long t = 0; t < x->track_cache_count; t++) {
+                t_weaver_track *tr = x->track_cache[t];
+                if (!tr) continue;
+
+                char l_msg[256] = "";
+                char msg[256] = "";
+                int has_l = 0, has_m = 0;
+
+                // Capture data quickly under lock
+                critical_enter(x->lock);
+                if (tr->viz_trigger_dirty) {
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
+                             t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control));
+                    tr->viz_trigger_dirty = 0;
+                    has_l = 1;
+                }
+
+                if (tr->viz_dirty) {
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2);
+                    tr->viz_dirty = 0;
+                    has_m = 1;
+                }
+                critical_exit(x->lock);
+
+                // Send data outside lock
+                if (has_l) visualize(l_msg);
+                if (has_m) visualize(msg);
+            }
+            x->last_viz_check_ms = current_ms;
         }
     }
 }
