@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet type="text/xsl" href="c74user.xsl"?>
+
+<maxref name="hold" title="hold" version="1.0">
+	<digest>Queue and release data based on a control signal</digest>
+	<description>
+		The hold object accepts any type of data across multiple throughput inlets. When the first inlet (Inlet 0) receives data, a snapshot of all throughput inlets is captured. If the rightmost control inlet is zero, the snapshot is immediately output to the corresponding outlets. If the control inlet is non-zero, snapshots are queued and held until the control inlet becomes zero, at which point all queued snapshots are released in First-In-First-Out (FIFO) order.
+	</description>
+
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Control</metadata>
+		<metadata name="tag">Data</metadata>
+	</metadatalist>
+
+	<argumentlist>
+		<argument name="num_throughputs" optional="0" type="int">
+			<digest>The number of throughput inlet/outlet pairs</digest>
+			<description>Specifies how many data channels to manage. Always at least one. The total number of inlets will be this number plus one additional control inlet.</description>
+		</argument>
+	</argumentlist>
+
+	<methodlist>
+		<method name="bang">
+			<arglist />
+			<digest>Capture/release data</digest>
+			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+		</method>
+		<method name="int">
+			<arglist>
+				<arg name="value" optional="0" type="int" />
+			</arglist>
+			<digest>Capture/release data</digest>
+			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+		</method>
+		<method name="float">
+			<arglist>
+				<arg name="value" optional="0" type="float" />
+			</arglist>
+			<digest>Capture/release data</digest>
+			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+		</method>
+		<method name="list">
+			<arglist>
+				<arg name="values" optional="0" type="list" />
+			</arglist>
+			<digest>Capture/release data</digest>
+			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+		</method>
+		<method name="anything">
+			<arglist>
+				<arg name="values" optional="0" type="list" />
+			</arglist>
+			<digest>Capture/release data</digest>
+			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+		</method>
+	</methodlist>
+
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="int" size="1">
+			<digest>Enable verbose logging</digest>
+			<description>When enabled, posts messages to the Max console regarding data reception, queueing, and flushing.</description>
+		</attribute>
+	</attributelist>
+
+	<seealsolist>
+		<seealso name="rebar" />
+		<seealso name="crucible" />
+		<seealso name="weaver~" />
+	</seealsolist>
+
+</maxref>
