@@ -728,14 +728,19 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
     double bar_len = round(weaver_get_bar_length(x));
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
+        // Processing sample-by-sample within each track loop ensures robust handling of multiple events
+        // (e.g., a bar crossing followed by a loop point) that might occur within a single signal vector.
+        // Nested loop Sample { Track } ensures that events are pushed to the FIFO in their exact global
+        // temporal order across all tracks.
         for (int i = 0; i < sampleframes; i++) {
-            double current_scan = in[i]; // Lookahead removed as per project memory
+            double current_scan = in[i];
 
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
                 if (!tr) continue;
 
-                double tr_scan = fmod(current_scan, tr->track_length);
+                double tr_len = tr->track_length;
+                double tr_scan = fmod(current_scan, tr_len);
 
                 long r_scan = (long)floor(tr_scan);
                 long r_last = (long)floor(tr->last_track_scan);
@@ -747,7 +752,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         int nt = (x->fifo_tail + 1) % 4096;
                         if (nt != x->fifo_head) {
                             double bar_start = floor(tr_scan / bar_len) * bar_len;
-                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                            double cycle_base = floor(current_scan / tr_len) * tr_len;
                             x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].rel_time = bar_start;
                             x->hit_bars[x->fifo_tail].bar.value = cycle_base + bar_start;
@@ -777,7 +782,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         if (latest_j >= start) {
                             int nt = (x->fifo_tail + 1) % 4096;
                             if (nt != x->fifo_head) {
-                                double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                                double cycle_base = floor(current_scan / tr_len) * tr_len;
                                 x->hit_bars[x->fifo_tail].bar.sym = NULL;
                                 x->hit_bars[x->fifo_tail].rel_time = (double)latest_j;
                                 x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)latest_j;
