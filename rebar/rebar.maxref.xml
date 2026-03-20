@@ -36,20 +36,12 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="1" type="list/anything">
-			<digest>Outlet 1: Data and Reach Lists</digest>
-			<description>Outputs the final data for winning bars and reach-update messages from the internal `crucible` module.</description>
+		<outlet id="1" type="int">
+			<digest>Outlet 1: Busy State (0 or 1)</digest>
+			<description>Outputs a 1 when the processing sequence begins and a 0 when it completes and data has been committed back to the user dictionary.</description>
 		</outlet>
-		<outlet id="2" type="bang">
-			<digest>Outlet 2: Fill Bang</digest>
-			<description>Sends a bang whenever a new span win causes the total song reach to grow.</description>
-		</outlet>
-		<outlet id="3" type="int">
-			<digest>Outlet 3: Reach Update</digest>
-			<description>Outputs the updated total duration (reach) of the incumbent dictionary in milliseconds.</description>
-		</outlet>
-		<outlet id="4" type="anything">
-			<digest>Outlet 4: Consolidated Logging</digest>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Consolidated Logging</digest>
 			<description>
 				When the `@log` attribute is enabled, this outlet provides detailed verbose information from all three internal modules (`notify`, `buildspans`, and `crucible`).
 			</description>

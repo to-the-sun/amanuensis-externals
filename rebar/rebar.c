@@ -22,9 +22,7 @@ typedef struct _rebar {
     struct _buildspans *buildspans_inst;
     struct _crucible *crucible_inst;
 
-    void *out_data;      // Crucible Outlet 0
-    void *out_fill;      // Crucible Outlet 1
-    void *out_reach;     // Crucible Outlet 2
+    void *out_busy;      // Busy state (0/1)
     void *out_log;       // Consolidated logging
 
     long log;
@@ -378,13 +376,8 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
     } else if (vo->type == MOD_BUILDSPANS) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
         else if (vo->index == 1) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
-        else if (vo->index == 2) sdk_outlet_anything(x->out_data, s, (long)ac, av);
-        else if (vo->index == 3) sdk_outlet_anything(x->out_data, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
-        else if (vo->index == 1) sdk_outlet_anything(x->out_reach, s, (long)ac, av);
-        else if (vo->index == 2) sdk_outlet_anything(x->out_fill, s, (long)ac, av);
-        else if (vo->index == 3) sdk_outlet_anything(x->out_data, s, (long)ac, av);
     }
 }
 
@@ -396,11 +389,6 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 4) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
-    } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == 3) sdk_outlet_list(x->out_data, s, (long)ac, av);
-    } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 1) sdk_outlet_list(x->out_reach, s, (long)ac, av);
-        else if (vo->index == 3) sdk_outlet_list(x->out_data, s, (long)ac, av);
     }
 }
 
@@ -412,10 +400,6 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
-    } else if (vo->type == MOD_BUILDSPANS) {
-        if (vo->index == 2) sdk_outlet_int(x->out_data, n);
-    } else if (vo->type == MOD_CRUCIBLE) {
-        if (vo->index == 1) sdk_outlet_int(x->out_reach, n);
     }
 }
 
@@ -568,9 +552,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         x->out_log = sdk_outlet_new((t_object *)x, NULL);
-        x->out_reach = sdk_outlet_new((t_object *)x, NULL);
-        x->out_fill = sdk_outlet_new((t_object *)x, NULL);
-        x->out_data = sdk_outlet_new((t_object *)x, NULL);
+        x->out_busy = sdk_outlet_new((t_object *)x, NULL);
 
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
@@ -628,9 +610,11 @@ void rebar_do_copy_back(t_rebar *x) {
         rebar_copy_dictionary(tmp_dict, user_dict);
     }
     if (user_dict) object_release((t_object *)user_dict);
+    sdk_outlet_int(x->out_busy, 0);
 }
 
 void rebar_int(t_rebar *x, long n) {
+    sdk_outlet_int(x->out_busy, 1);
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
@@ -659,10 +643,8 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
     else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Data and Reach Lists from Crucible"); break;
-            case 1: sprintf(s, "Outlet 2: Fill bang/message from Crucible"); break;
-            case 2: sprintf(s, "Outlet 3: Reach Lists (song/track) from Crucible"); break;
-            case 3: sprintf(s, "Outlet 4: Logging and Status messages"); break;
+            case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;
+            case 1: sprintf(s, "Outlet 2: Logging and Status messages"); break;
         }
     }
 }
