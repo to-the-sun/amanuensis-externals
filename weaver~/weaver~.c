@@ -772,19 +772,19 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         long long start = track_looped ? 0 : r_last + 1;
                         long long end = r_scan;
 
-                        for (long long j = start; j <= end; j++) {
-                            if (j % (long long)bar_len == 0) {
-                                int nt = (x->fifo_tail + 1) % 4096;
-                                if (nt != x->fifo_head) {
-                                    double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                                    x->hit_bars[x->fifo_tail].bar.sym = NULL;
-                                    x->hit_bars[x->fifo_tail].rel_time = (double)j;
-                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)j;
-                                    x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                    x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                    x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                                    x->fifo_tail = nt;
-                                }
+                        // Calculate the latest multiple of bar_len that was passed
+                        long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
+                        if (latest_j >= start) {
+                            int nt = (x->fifo_tail + 1) % 4096;
+                            if (nt != x->fifo_head) {
+                                double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                                x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                                x->hit_bars[x->fifo_tail].rel_time = (double)latest_j;
+                                x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)latest_j;
+                                x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                                x->hit_bars[x->fifo_tail].track_id = t + 1;
+                                x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
+                                x->fifo_tail = nt;
                             }
                         }
                     }
