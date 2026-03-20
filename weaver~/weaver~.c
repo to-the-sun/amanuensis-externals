@@ -52,6 +52,8 @@ typedef struct _weaver_track {
     double last_visualize_ms;
 } t_weaver_track;
 
+#define MAX_WEAVER_TRACKS 256
+
 typedef struct _weaver {
     t_pxobject t_obj;
     t_symbol *poly_prefix;
@@ -70,7 +72,7 @@ typedef struct _weaver {
     t_qelem *audio_qelem;
     t_critical lock;
     long max_tracks;
-    t_weaver_track *track_cache[256];
+    t_weaver_track *track_cache[MAX_WEAVER_TRACKS];
     long track_cache_count;
     void *proxy;
     long proxy_id;
@@ -156,7 +158,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
 void weaver_update_track_cache(t_weaver *x) {
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         x->track_cache_count = 0;
-        long limit = (x->max_tracks > 256) ? 256 : x->max_tracks;
+        long limit = (x->max_tracks > MAX_WEAVER_TRACKS) ? MAX_WEAVER_TRACKS : x->max_tracks;
         for (long i = 1; i <= limit; i++) {
             x->track_cache[x->track_cache_count++] = weaver_get_track_state(x, (t_atom_long)i);
         }
@@ -722,12 +724,24 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
     }
 }
 
+typedef struct {
+    int has_data;
+    double data_rel_time;
+    double data_abs_time;
+    int data_no_crossfade;
+    int has_loop;
+    int loop_no_crossfade;
+} t_track_vector_event;
+
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
     double last_scan = x->last_scan_val;
     double bar_len = round(weaver_get_bar_length(x));
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
+        t_track_vector_event track_events[MAX_WEAVER_TRACKS];
+        memset(track_events, 0, sizeof(track_events));
+
         for (int i = 0; i < sampleframes; i++) {
             double current_scan = in[i]; // Lookahead removed as per project memory
 
@@ -744,54 +758,62 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
                 if (tr->last_track_scan == -1.0) {
                     if (bar_len > 0) {
-                        int nt = (x->fifo_tail + 1) % 4096;
-                        if (nt != x->fifo_head) {
-                            double bar_start = floor(tr_scan / bar_len) * bar_len;
-                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                            x->hit_bars[x->fifo_tail].bar.sym = NULL;
-                            x->hit_bars[x->fifo_tail].rel_time = bar_start;
-                            x->hit_bars[x->fifo_tail].bar.value = cycle_base + bar_start;
-                            x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                            x->hit_bars[x->fifo_tail].track_id = t + 1;
-                            x->hit_bars[x->fifo_tail].no_crossfade = 0;
-                            x->fifo_tail = nt;
-                        }
+                        double bar_start = floor(tr_scan / bar_len) * bar_len;
+                        double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                        track_events[t].has_data = 1;
+                        track_events[t].data_rel_time = bar_start;
+                        track_events[t].data_abs_time = cycle_base + bar_start;
+                        track_events[t].data_no_crossfade = 0;
                     }
                 } else {
                     if (main_looped || track_looped) {
-                        int nt_loop = (x->fifo_tail + 1) % 4096;
-                        if (nt_loop != x->fifo_head) {
-                            x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
-                            x->hit_bars[x->fifo_tail].track_id = t + 1;
-                            x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                            x->fifo_tail = nt_loop;
-                        }
+                        track_events[t].has_loop = 1;
+                        track_events[t].loop_no_crossfade |= main_looped;
                     }
 
                     if (r_scan != r_last && bar_len > 0) {
                         long long start = track_looped ? 0 : r_last + 1;
                         long long end = r_scan;
 
-                        for (long long j = start; j <= end; j++) {
-                            if (j % (long long)bar_len == 0) {
-                                int nt = (x->fifo_tail + 1) % 4096;
-                                if (nt != x->fifo_head) {
-                                    double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
-                                    x->hit_bars[x->fifo_tail].bar.sym = NULL;
-                                    x->hit_bars[x->fifo_tail].rel_time = (double)j;
-                                    x->hit_bars[x->fifo_tail].bar.value = cycle_base + (double)j;
-                                    x->hit_bars[x->fifo_tail].type = TYPE_DATA;
-                                    x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                    x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
-                                    x->fifo_tail = nt;
-                                }
-                            }
+                        // Calculate the latest multiple of bar_len that was passed
+                        long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
+                        if (latest_j >= start) {
+                            double cycle_base = floor(current_scan / tr->track_length) * tr->track_length;
+                            track_events[t].has_data = 1;
+                            track_events[t].data_rel_time = (double)latest_j;
+                            track_events[t].data_abs_time = cycle_base + (double)latest_j;
+                            track_events[t].data_no_crossfade = main_looped;
                         }
                     }
                 }
                 tr->last_track_scan = tr_scan;
             }
             last_scan = current_scan;
+        }
+
+        // Push accumulated events to FIFO
+        for (long t = 0; t < x->track_cache_count; t++) {
+            if (track_events[t].has_loop) {
+                int nt_loop = (x->fifo_tail + 1) % 4096;
+                if (nt_loop != x->fifo_head) {
+                    x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
+                    x->hit_bars[x->fifo_tail].track_id = t + 1;
+                    x->hit_bars[x->fifo_tail].no_crossfade = track_events[t].loop_no_crossfade;
+                    x->fifo_tail = nt_loop;
+                }
+            }
+            if (track_events[t].has_data) {
+                int nt = (x->fifo_tail + 1) % 4096;
+                if (nt != x->fifo_head) {
+                    x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                    x->hit_bars[x->fifo_tail].rel_time = track_events[t].data_rel_time;
+                    x->hit_bars[x->fifo_tail].bar.value = track_events[t].data_abs_time;
+                    x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                    x->hit_bars[x->fifo_tail].track_id = t + 1;
+                    x->hit_bars[x->fifo_tail].no_crossfade = track_events[t].data_no_crossfade;
+                    x->fifo_tail = nt;
+                }
+            }
         }
 
         qelem_set(x->audio_qelem);
