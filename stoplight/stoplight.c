@@ -2,6 +2,8 @@
 #include "ext_obex.h"
 #include "ext_critical.h"
 
+#define MAX_PAIRS 9
+
 typedef enum _msg_type {
     MSG_BANG,
     MSG_INT,
@@ -17,22 +19,33 @@ typedef struct _queued_msg {
     t_atom *argv;
 } t_queued_msg;
 
+typedef struct _bundle {
+    t_queued_msg *msgs; // Array of size num_pairs
+} t_bundle;
+
 typedef struct _stoplight {
     t_object s_obj;
-    void *outlet;
-    void *proxy;
-    long proxy_id;
+    long num_pairs;
+    void **outlets;
+    void **proxies;
+    long *proxy_ids;
     t_atom_long state;
     t_linklist *queue;
     t_critical lock;
     long is_flushing;
+    t_queued_msg *last_items; // Size num_pairs - 1 (for cold data inlets 1..N-1)
 } t_stoplight;
+
+// Helper functions
+void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
+void stoplight_clear_msg(t_queued_msg *msg);
+void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
 
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv);
 void stoplight_free(t_stoplight *x);
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s);
 
-void stoplight_queue_message(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
+void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
 void stoplight_flush(t_stoplight *x);
 
 void stoplight_bang(t_stoplight *x);
@@ -61,39 +74,141 @@ void ext_main(void *r) {
     stoplight_class = c;
 }
 
+void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
+    dest->type = type;
+    dest->s = s;
+    dest->argc = argc;
+    if (argc > 0 && argv) {
+        dest->argv = (t_atom *)sysmem_newptrclear(argc * sizeof(t_atom));
+        if (dest->argv) {
+            for (long i = 0; i < argc; i++) {
+                dest->argv[i] = argv[i];
+                if (atom_gettype(&dest->argv[i]) == A_OBJ) {
+                    object_retain(atom_getobj(&dest->argv[i]));
+                }
+            }
+        }
+    } else {
+        dest->argv = NULL;
+    }
+}
+
+void stoplight_clear_msg(t_queued_msg *msg) {
+    if (msg->argv) {
+        for (long i = 0; i < msg->argc; i++) {
+            if (atom_gettype(&msg->argv[i]) == A_OBJ) {
+                object_release(atom_getobj(&msg->argv[i]));
+            }
+        }
+        sysmem_freeptr(msg->argv);
+        msg->argv = NULL;
+    }
+    msg->argc = 0;
+}
+
+void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg) {
+    switch (msg->type) {
+        case MSG_BANG:
+            outlet_bang(outlet);
+            break;
+        case MSG_INT:
+            outlet_int(outlet, atom_getlong(msg->argv));
+            break;
+        case MSG_FLOAT:
+            outlet_float(outlet, atom_getfloat(msg->argv));
+            break;
+        case MSG_LIST:
+            outlet_list(outlet, msg->s, (short)msg->argc, msg->argv);
+            break;
+        case MSG_ANYTHING:
+            outlet_anything(outlet, msg->s, (short)msg->argc, msg->argv);
+            break;
+    }
+}
+
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
     t_stoplight *x = (t_stoplight *)object_alloc(stoplight_class);
 
     if (x) {
+        x->num_pairs = 1;
+        if (argc > 0) {
+            long val = atom_getlong(argv);
+            if (val > 1) {
+                if (val > MAX_PAIRS) val = MAX_PAIRS;
+                x->num_pairs = val;
+            }
+        }
+
         critical_new(&x->lock);
         x->state = 0;
         x->is_flushing = 0;
         x->queue = linklist_new();
-        x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
-        x->outlet = outlet_new((t_object *)x, NULL);
+
+        // Outlets (create right-to-left for left-to-right appearance)
+        x->outlets = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
+        for (long i = x->num_pairs - 1; i >= 0; i--) {
+            x->outlets[i] = outlet_new((t_object *)x, NULL);
+        }
+
+        // Proxies (cold data inlets 1..N-1 and control inlet N)
+        // Created right-to-left to appear left-to-right (Main, Cold1, ..., Control)
+        x->proxies = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
+        x->proxy_ids = (long *)sysmem_newptrclear(x->num_pairs * sizeof(long));
+        for (long i = x->num_pairs; i >= 1; i--) {
+            x->proxy_ids[i - 1] = i;
+            x->proxies[i - 1] = proxy_new((t_object *)x, x->proxy_ids[i - 1], &x->proxy_ids[i - 1]);
+        }
+
+        // Last items for cold data inlets
+        if (x->num_pairs > 1) {
+            x->last_items = (t_queued_msg *)sysmem_newptrclear((x->num_pairs - 1) * sizeof(t_queued_msg));
+            for (long i = 0; i < x->num_pairs - 1; i++) {
+                // Initialize with integer 0
+                t_atom a;
+                atom_setlong(&a, 0);
+                stoplight_copy_msg(&x->last_items[i], MSG_INT, NULL, 1, &a);
+            }
+        } else {
+            x->last_items = NULL;
+        }
     }
     return (x);
 }
 
 void stoplight_free(t_stoplight *x) {
-    if (x->proxy) {
-        object_free(x->proxy);
+    if (x->proxies) {
+        for (long i = 0; i < x->num_pairs; i++) {
+            if (x->proxies[i]) {
+                object_free(x->proxies[i]);
+            }
+        }
+        sysmem_freeptr(x->proxies);
+    }
+    if (x->proxy_ids) {
+        sysmem_freeptr(x->proxy_ids);
+    }
+    if (x->outlets) {
+        sysmem_freeptr(x->outlets);
+    }
+    if (x->last_items) {
+        for (long i = 0; i < x->num_pairs - 1; i++) {
+            stoplight_clear_msg(&x->last_items[i]);
+        }
+        sysmem_freeptr(x->last_items);
     }
     if (x->queue) {
-        t_queued_msg *msg;
+        t_bundle *bundle;
         while (linklist_getsize(x->queue) > 0) {
-            msg = (t_queued_msg *)linklist_getindex(x->queue, 0);
+            bundle = (t_bundle *)linklist_getindex(x->queue, 0);
             linklist_chuckindex(x->queue, 0);
-            if (msg) {
-                if (msg->argv) {
-                    for (long i = 0; i < msg->argc; i++) {
-                        if (atom_gettype(&msg->argv[i]) == A_OBJ) {
-                            object_release(atom_getobj(&msg->argv[i]));
-                        }
+            if (bundle) {
+                if (bundle->msgs) {
+                    for (long i = 0; i < x->num_pairs; i++) {
+                        stoplight_clear_msg(&bundle->msgs[i]);
                     }
-                    sysmem_freeptr(msg->argv);
+                    sysmem_freeptr(bundle->msgs);
                 }
-                sysmem_freeptr(msg);
+                sysmem_freeptr(bundle);
             }
         }
         object_free(x->queue);
@@ -101,31 +216,25 @@ void stoplight_free(t_stoplight *x) {
     critical_free(x->lock);
 }
 
-void stoplight_queue_message(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
-    t_queued_msg *msg = (t_queued_msg *)sysmem_newptrclear(sizeof(t_queued_msg));
-    if (msg) {
-        msg->type = type;
-        msg->s = s;
-        msg->argc = argc;
-        if (argc > 0 && argv) {
-            msg->argv = (t_atom *)sysmem_newptrclear(argc * sizeof(t_atom));
-            if (msg->argv) {
-                for (long i = 0; i < argc; i++) {
-                    msg->argv[i] = argv[i];
-                    if (atom_gettype(&msg->argv[i]) == A_OBJ) {
-                        object_retain(atom_getobj(&msg->argv[i]));
-                    }
-                }
-            } else {
-                sysmem_freeptr(msg);
-                return;
+void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
+    t_bundle *bundle = (t_bundle *)sysmem_newptrclear(sizeof(t_bundle));
+    if (bundle) {
+        bundle->msgs = (t_queued_msg *)sysmem_newptrclear(x->num_pairs * sizeof(t_queued_msg));
+        if (bundle->msgs) {
+            // Inlet 0: current item
+            stoplight_copy_msg(&bundle->msgs[0], type, s, argc, argv);
+            // Inlets 1..N-1: last items
+            for (long i = 1; i < x->num_pairs; i++) {
+                t_queued_msg *src = &x->last_items[i-1];
+                stoplight_copy_msg(&bundle->msgs[i], src->type, src->s, src->argc, src->argv);
             }
+
+            critical_enter(x->lock);
+            linklist_append(x->queue, bundle);
+            critical_exit(x->lock);
         } else {
-            msg->argv = NULL;
+            sysmem_freeptr(bundle);
         }
-        critical_enter(x->lock);
-        linklist_append(x->queue, msg);
-        critical_exit(x->lock);
     }
 }
 
@@ -137,41 +246,26 @@ void stoplight_flush(t_stoplight *x) {
     x->is_flushing = 1;
 
     while (x->state == 0 && linklist_getsize(x->queue) > 0) {
-        t_queued_msg *msg;
+        t_bundle *bundle;
 
         critical_enter(x->lock);
-        msg = (t_queued_msg *)linklist_getindex(x->queue, 0);
+        bundle = (t_bundle *)linklist_getindex(x->queue, 0);
         linklist_chuckindex(x->queue, 0);
         critical_exit(x->lock);
 
-        if (msg) {
-            switch (msg->type) {
-                case MSG_BANG:
-                    outlet_bang(x->outlet);
-                    break;
-                case MSG_INT:
-                    outlet_int(x->outlet, atom_getlong(msg->argv));
-                    break;
-                case MSG_FLOAT:
-                    outlet_float(x->outlet, atom_getfloat(msg->argv));
-                    break;
-                case MSG_LIST:
-                    outlet_list(x->outlet, msg->s, (short)msg->argc, msg->argv);
-                    break;
-                case MSG_ANYTHING:
-                    outlet_anything(x->outlet, msg->s, (short)msg->argc, msg->argv);
-                    break;
+        if (bundle) {
+            // Output in right-to-left order (Outlet N-1 down to 0)
+            for (long i = x->num_pairs - 1; i >= 0; i--) {
+                stoplight_output_msg(x, x->outlets[i], &bundle->msgs[i]);
             }
 
-            if (msg->argv) {
-                for (long i = 0; i < msg->argc; i++) {
-                    if (atom_gettype(&msg->argv[i]) == A_OBJ) {
-                        object_release(atom_getobj(&msg->argv[i]));
-                    }
+            if (bundle->msgs) {
+                for (long i = 0; i < x->num_pairs; i++) {
+                    stoplight_clear_msg(&bundle->msgs[i]);
                 }
-                sysmem_freeptr(msg->argv);
+                sysmem_freeptr(bundle->msgs);
             }
-            sysmem_freeptr(msg);
+            sysmem_freeptr(bundle);
         }
     }
 
@@ -179,80 +273,130 @@ void stoplight_flush(t_stoplight *x) {
 }
 
 void stoplight_bang(t_stoplight *x) {
-    if (proxy_getinlet((t_object *)x) == 0) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 0) {
         if (x->state) {
-            stoplight_queue_message(x, MSG_BANG, NULL, 0, NULL);
+            stoplight_queue_bundle(x, MSG_BANG, NULL, 0, NULL);
         } else {
-            outlet_bang(x->outlet);
+            // Right-to-left output
+            for (long i = x->num_pairs - 1; i >= 1; i--) {
+                stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
+            }
+            outlet_bang(x->outlets[0]);
         }
+    } else if (inlet < x->num_pairs) {
+        // Cold data inlet
+        stoplight_clear_msg(&x->last_items[inlet - 1]);
+        stoplight_copy_msg(&x->last_items[inlet - 1], MSG_BANG, NULL, 0, NULL);
     }
 }
 
 void stoplight_int(t_stoplight *x, t_atom_long n) {
-    if (proxy_getinlet((t_object *)x) == 1) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == x->num_pairs) {
+        // Control inlet
         x->state = (n != 0);
         if (x->state == 0) {
             stoplight_flush(x);
         }
-    } else {
+    } else if (inlet == 0) {
+        t_atom a;
+        atom_setlong(&a, n);
         if (x->state) {
-            t_atom a;
-            atom_setlong(&a, n);
-            stoplight_queue_message(x, MSG_INT, NULL, 1, &a);
+            stoplight_queue_bundle(x, MSG_INT, NULL, 1, &a);
         } else {
-            outlet_int(x->outlet, n);
+            // Right-to-left output
+            for (long i = x->num_pairs - 1; i >= 1; i--) {
+                stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
+            }
+            outlet_int(x->outlets[0], n);
         }
+    } else {
+        // Cold data inlet
+        stoplight_clear_msg(&x->last_items[inlet - 1]);
+        t_atom a;
+        atom_setlong(&a, n);
+        stoplight_copy_msg(&x->last_items[inlet - 1], MSG_INT, NULL, 1, &a);
     }
 }
 
 void stoplight_float(t_stoplight *x, double f) {
-    if (proxy_getinlet((t_object *)x) == 1) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == x->num_pairs) {
+        // Control inlet
         x->state = (f != 0.0);
         if (x->state == 0) {
             stoplight_flush(x);
         }
-    } else {
+    } else if (inlet == 0) {
+        t_atom a;
+        atom_setfloat(&a, f);
         if (x->state) {
-            t_atom a;
-            atom_setfloat(&a, f);
-            stoplight_queue_message(x, MSG_FLOAT, NULL, 1, &a);
+            stoplight_queue_bundle(x, MSG_FLOAT, NULL, 1, &a);
         } else {
-            outlet_float(x->outlet, f);
+            // Right-to-left output
+            for (long i = x->num_pairs - 1; i >= 1; i--) {
+                stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
+            }
+            outlet_float(x->outlets[0], f);
         }
+    } else {
+        // Cold data inlet
+        stoplight_clear_msg(&x->last_items[inlet - 1]);
+        t_atom a;
+        atom_setfloat(&a, f);
+        stoplight_copy_msg(&x->last_items[inlet - 1], MSG_FLOAT, NULL, 1, &a);
     }
 }
 
 void stoplight_list(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
-    if (proxy_getinlet((t_object *)x) == 0) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 0) {
         if (x->state) {
-            stoplight_queue_message(x, MSG_LIST, s, argc, argv);
+            stoplight_queue_bundle(x, MSG_LIST, s, argc, argv);
         } else {
-            outlet_list(x->outlet, s, (short)argc, argv);
+            // Right-to-left output
+            for (long i = x->num_pairs - 1; i >= 1; i--) {
+                stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
+            }
+            outlet_list(x->outlets[0], s, (short)argc, argv);
         }
+    } else if (inlet < x->num_pairs) {
+        // Cold data inlet
+        stoplight_clear_msg(&x->last_items[inlet - 1]);
+        stoplight_copy_msg(&x->last_items[inlet - 1], MSG_LIST, s, argc, argv);
     }
 }
 
 void stoplight_anything(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
-    if (proxy_getinlet((t_object *)x) == 0) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 0) {
         if (x->state) {
-            stoplight_queue_message(x, MSG_ANYTHING, s, argc, argv);
+            stoplight_queue_bundle(x, MSG_ANYTHING, s, argc, argv);
         } else {
-            outlet_anything(x->outlet, s, (short)argc, argv);
+            // Right-to-left output
+            for (long i = x->num_pairs - 1; i >= 1; i--) {
+                stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
+            }
+            outlet_anything(x->outlets[0], s, (short)argc, argv);
         }
+    } else if (inlet < x->num_pairs) {
+        // Cold data inlet
+        stoplight_clear_msg(&x->last_items[inlet - 1]);
+        stoplight_copy_msg(&x->last_items[inlet - 1], MSG_ANYTHING, s, argc, argv);
     }
 }
 
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        switch (a) {
-            case 0:
-                sprintf(s, "Inlet 0: Data to be passed or queued.");
-                break;
-            case 1:
-                sprintf(s, "Inlet 1: Control Signal (0=pass, non-zero=queue).");
-                break;
+        if (a == 0) {
+            sprintf(s, "Inlet 1 (Hot): Data to be passed or queued.");
+        } else if (a == x->num_pairs) {
+            sprintf(s, "Inlet %ld (Control): Control Signal (0=pass, non-zero=queue).", a + 1);
+        } else {
+            sprintf(s, "Inlet %ld (Cold): Data to be bundled with Inlet 1.", a + 1);
         }
     } else {
-        sprintf(s, "Outlet 1: Data Output.");
+        sprintf(s, "Outlet %ld: Data Output.", a + 1);
     }
 }
