@@ -1,6 +1,6 @@
-# Discord Audio Object Design Outline (`discord_voice~`)
+# Discord Audio Object Design Outline (`discordvoice~`)
 
-This document outlines the architecture and implementation strategy for a Max/MSP external object (`discord_voice~`) capable of sending real-time audio from Max to a Discord voice channel.
+This document outlines the architecture and implementation strategy for a Max/MSP external object (`discordvoice~`) capable of sending real-time audio from Max to a Discord voice channel.
 
 ## 1. Architecture Overview
 
