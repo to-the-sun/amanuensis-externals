@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet type="text/xsl" href="c74user.xsl"?>
 
-<maxref name="hold" title="hold" version="1.0">
+<maxref name="stoplight" title="stoplight" version="1.0">
 	<digest>Queue and release data based on a control signal</digest>
 	<description>
-		The hold object accepts any type of data across multiple throughput inlets. When the first inlet (Inlet 0) receives data, a snapshot of all throughput inlets is captured. If the rightmost control inlet is zero, the snapshot is immediately output to the corresponding outlets. If the control inlet is non-zero, snapshots are queued and held until the control inlet becomes zero, at which point all queued snapshots are released in First-In-First-Out (FIFO) order.
+		The stoplight object accepts any type of data across multiple throughput inlets. When the first inlet (Inlet 0) receives data, a snapshot of all throughput inlets is captured. If the rightmost control inlet is zero, the snapshot is immediately output to the corresponding outlets. If the control inlet is non-zero, snapshots are queued and held until the control inlet becomes zero, at which point all queued snapshots are released in First-In-First-Out (FIFO) order.
 	</description>
 
 	<metadatalist>
