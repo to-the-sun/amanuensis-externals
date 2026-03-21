@@ -16,7 +16,7 @@
 	<argumentlist>
 		<argument name="num_throughputs" optional="0" type="int">
 			<digest>The number of throughput inlet/outlet pairs</digest>
-			<description>Specifies how many data channels to manage. Always at least one. The total number of inlets will be this number plus one additional control inlet.</description>
+			<description>Specifies how many data channels to manage. Always at least one. The total number of inlets will be this number plus one additional control inlet. The total number of outlets will be this number plus one additional rightmost logging outlet.</description>
 		</argument>
 	</argumentlist>
 
@@ -59,7 +59,7 @@
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="int" size="1">
 			<digest>Enable verbose logging</digest>
-			<description>When enabled, posts messages to the Max console regarding data reception, queueing, and flushing.</description>
+			<description>When enabled, posts messages to the rightmost logging outlet regarding data reception, queueing, and flushing.</description>
 		</attribute>
 	</attributelist>
 

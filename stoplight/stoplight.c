@@ -17,6 +17,7 @@ typedef struct _stoplight_snapshot {
 
 typedef struct _stoplight {
     t_object x_obj;
+    t_critical lock;
     long N;                         // Number of throughput inlets/outlets
     long inlet_num;                 // Inlet index updated by proxies
     t_stoplight_msg *current_inlets;     // Array of N messages for current state
@@ -24,10 +25,10 @@ typedef struct _stoplight {
     t_stoplight_snapshot *queue_tail;
     long hold_state;                // Control inlet value (0 or non-zero)
     long log;                       // @log attribute
+    void *log_outlet;               // Dedicated log outlet
     void **through_outlets;         // Array of N outlets
     void **proxies;                 // Array of N proxies (Inlets 1 to N)
     long is_flushing;               // Recursion guard
-    t_critical lock;
 } t_stoplight;
 
 static t_class *stoplight_class = NULL;
@@ -129,7 +130,7 @@ void stoplight_flush(t_stoplight *x) {
     x->is_flushing = 1;
 
     if (x->log) {
-        common_log(NULL, x->log, "stoplight", "Flushing queue...");
+        common_log(x->log_outlet, x->log, "stoplight", "Flushing queue...");
     }
     while (x->queue_head) {
         // Peek at state to see if we should still be flushing
@@ -145,7 +146,7 @@ void stoplight_flush(t_stoplight *x) {
         critical_enter(x->lock);
     }
     if (x->log) {
-        common_log(NULL, x->log, "stoplight", "Flush complete.");
+        common_log(x->log_outlet, x->log, "stoplight", "Flush complete.");
     }
     x->is_flushing = 0;
     critical_exit(x->lock);
@@ -161,7 +162,7 @@ void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, 
             // Hot inlet
             if (x->hold_state == 0) {
                 if (x->log) {
-                    common_log(NULL, x->log, "stoplight", "Inlet 0 hot: Outputting current snapshot.");
+                    common_log(x->log_outlet, x->log, "stoplight", "Inlet 0 hot: Outputting current snapshot.");
                 }
                 // Output current state (safe copy)
                 t_stoplight_snapshot *temp_snap = (t_stoplight_snapshot *)sysmem_newptr(sizeof(t_stoplight_snapshot));
@@ -185,7 +186,7 @@ void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, 
                 }
             } else {
                 if (x->log) {
-                    common_log(NULL, x->log, "stoplight", "Inlet 0 hot: Queueing current snapshot (hold active).");
+                    common_log(x->log_outlet, x->log, "stoplight", "Inlet 0 hot: Queueing current snapshot (hold active).");
                 }
                 // Queue current state
                 t_stoplight_snapshot *snap = (t_stoplight_snapshot *)sysmem_newptr(sizeof(t_stoplight_snapshot));
@@ -225,7 +226,7 @@ void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, 
         }
 
         if (x->log) {
-            common_log(NULL, x->log, "stoplight", "Control inlet: %ld", x->hold_state);
+            common_log(x->log_outlet, x->log, "stoplight", "Control inlet: %ld", x->hold_state);
         }
 
         int trigger_flush = (prev_state != 0 && x->hold_state == 0);
@@ -271,6 +272,8 @@ void stoplight_anything(t_stoplight *x, t_symbol *s, long ac, t_atom *av) {
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
     t_stoplight *x = (t_stoplight *)object_alloc(stoplight_class);
     if (x) {
+        critical_new(&x->lock);
+
         long n = 1;
         if (argc > 0 && atom_gettype(argv) == A_LONG) {
             n = (long)atom_getlong(argv);
@@ -285,10 +288,24 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         x->queue_head = NULL;
         x->queue_tail = NULL;
         x->is_flushing = 0;
-        critical_new(&x->lock);
+        x->log_outlet = NULL;
+        x->through_outlets = NULL;
+        x->proxies = NULL;
+        x->current_inlets = NULL;
+
+        // Dedicated log outlet (Rightmost)
+        x->log_outlet = outlet_new((t_object *)x, NULL);
+
+        // Throughput Outlets (Right-to-Left creation means Outlet N-1 to 0)
+        x->through_outlets = (void **)sysmem_newptrclear(sizeof(void *) * x->N);
+        if (x->through_outlets) {
+            for (long i = x->N - 1; i >= 0; i--) {
+                x->through_outlets[i] = outlet_new((t_object *)x, NULL);
+            }
+        }
 
         // Current inlets storage
-        x->current_inlets = (t_stoplight_msg *)sysmem_newptr(sizeof(t_stoplight_msg) * x->N);
+        x->current_inlets = (t_stoplight_msg *)sysmem_newptrclear(sizeof(t_stoplight_msg) * x->N);
         if (x->current_inlets) {
             for (long i = 0; i < x->N; i++) {
                 x->current_inlets[i].s = gensym("bang");
@@ -298,18 +315,10 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         // Proxies for Inlets 1 to N
-        x->proxies = (void **)sysmem_newptr(sizeof(void *) * x->N);
+        x->proxies = (void **)sysmem_newptrclear(sizeof(void *) * x->N);
         if (x->proxies) {
             for (long i = 0; i < x->N; i++) {
                 x->proxies[i] = proxy_new(x, (long)(i + 1), &x->inlet_num);
-            }
-        }
-
-        // Outlets: Throughputs N-1 down to 0
-        x->through_outlets = (void **)sysmem_newptr(sizeof(void *) * x->N);
-        if (x->through_outlets) {
-            for (long i = x->N - 1; i >= 0; i--) {
-                x->through_outlets[i] = outlet_new(x, NULL);
             }
         }
 
@@ -359,6 +368,8 @@ void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
     } else {
         if (a < x->N) {
             sprintf(s, "Throughput Outlet %ld", a);
+        } else if (a == x->N) {
+            sprintf(s, "Logging Outlet");
         }
     }
 }
@@ -366,7 +377,7 @@ void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
 void ext_main(void *r) {
     common_symbols_init();
 
-    t_class *c = class_new("stoplight", (method)stoplight_new, (method)stoplight_free, (long)sizeof(t_stoplight), 0L, A_GIMME, 0);
+    t_class *c = class_new("stoplight", (method)stoplight_new, (method)stoplight_free, sizeof(t_stoplight), 0L, A_GIMME, 0);
     stoplight_class = c;
 
     class_addmethod(c, (method)stoplight_bang, "bang", 0);
