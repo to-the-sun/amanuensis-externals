@@ -2,7 +2,7 @@
 #include "ext_obex.h"
 #include "ext_critical.h"
 
-#define MAX_PAIRS 9
+#define MAX_ARG 9
 
 typedef enum _msg_type {
     MSG_BANG,
@@ -134,8 +134,8 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         if (argc > 0) {
             long val = atom_getlong(argv);
             if (val > 1) {
-                if (val > MAX_PAIRS) val = MAX_PAIRS;
-                x->num_pairs = val;
+                if (val > MAX_ARG) val = MAX_ARG;
+                x->num_pairs = 1 + val;
             }
         }
 
@@ -144,16 +144,17 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         x->is_flushing = 0;
         x->queue = linklist_new();
 
-        // Outlets (create right-to-left)
+        // Outlets (create right-to-left for left-to-right appearance)
         x->outlets = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         for (long i = x->num_pairs - 1; i >= 0; i--) {
             x->outlets[i] = outlet_new((t_object *)x, NULL);
         }
 
         // Proxies (cold data inlets 1..N-1 and control inlet N)
+        // Created right-to-left to appear left-to-right (Main, Cold1, ..., Control)
         x->proxies = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         x->proxy_ids = (long *)sysmem_newptrclear(x->num_pairs * sizeof(long));
-        for (long i = 0; i < x->num_pairs; i++) {
+        for (long i = x->num_pairs - 1; i >= 0; i--) {
             x->proxy_ids[i] = i + 1;
             x->proxies[i] = proxy_new((t_object *)x, x->proxy_ids[i], &x->proxy_ids[i]);
         }
@@ -275,6 +276,7 @@ void stoplight_bang(t_stoplight *x) {
         if (x->state) {
             stoplight_queue_bundle(x, MSG_BANG, NULL, 0, NULL);
         } else {
+            // Right-to-left output
             for (long i = x->num_pairs - 1; i >= 1; i--) {
                 stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
             }
@@ -301,6 +303,7 @@ void stoplight_int(t_stoplight *x, t_atom_long n) {
         if (x->state) {
             stoplight_queue_bundle(x, MSG_INT, NULL, 1, &a);
         } else {
+            // Right-to-left output
             for (long i = x->num_pairs - 1; i >= 1; i--) {
                 stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
             }
@@ -329,6 +332,7 @@ void stoplight_float(t_stoplight *x, double f) {
         if (x->state) {
             stoplight_queue_bundle(x, MSG_FLOAT, NULL, 1, &a);
         } else {
+            // Right-to-left output
             for (long i = x->num_pairs - 1; i >= 1; i--) {
                 stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
             }
@@ -349,6 +353,7 @@ void stoplight_list(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->state) {
             stoplight_queue_bundle(x, MSG_LIST, s, argc, argv);
         } else {
+            // Right-to-left output
             for (long i = x->num_pairs - 1; i >= 1; i--) {
                 stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
             }
@@ -367,6 +372,7 @@ void stoplight_anything(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->state) {
             stoplight_queue_bundle(x, MSG_ANYTHING, s, argc, argv);
         } else {
+            // Right-to-left output
             for (long i = x->num_pairs - 1; i >= 1; i--) {
                 stoplight_output_msg(x, x->outlets[i], &x->last_items[i-1]);
             }
@@ -382,13 +388,13 @@ void stoplight_anything(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet 0 (Hot): Data to be passed or queued.");
+            sprintf(s, "Inlet 1 (Hot): Data to be passed or queued.");
         } else if (a == x->num_pairs) {
-            sprintf(s, "Inlet %ld (Control): Control Signal (0=pass, non-zero=queue).", a);
+            sprintf(s, "Inlet %ld (Control): Control Signal (0=pass, non-zero=queue).", a + 1);
         } else {
-            sprintf(s, "Inlet %ld (Cold): Data to be bundled with Inlet 0.", a);
+            sprintf(s, "Inlet %ld (Cold): Data to be bundled with Inlet 1.", a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld: Data Output.", a);
+        sprintf(s, "Outlet %ld: Data Output.", a + 1);
     }
 }
