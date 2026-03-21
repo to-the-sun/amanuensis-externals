@@ -2,7 +2,7 @@
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="stoplight" module="max" category="Data">
 	<digest>A data gate for Max messages</digest>
-	<description>The `stoplight` object passes messages from the left inlet to its outlet. It has a second control inlet to eventually gate messages based on its value.</description>
+	<description>The `stoplight` object is a data gate that either passes through incoming messages or queues them based on a control signal. When the control inlet (Inlet 1) is 0, messages from Inlet 0 are passed immediately to the outlet. When the control signal is non-zero, incoming messages are stored in a FIFO (First-In-First-Out) queue. As soon as the control signal returns to 0, all queued messages are released in the order they were received.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -11,19 +11,19 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="anything">
-			<digest>Inlet 0: Accepts anything to be passed through.</digest>
-			<description>Any message received on this inlet is immediately passed to the outlet.</description>
+			<digest>Inlet 0: Data to be passed or queued.</digest>
+			<description>Accepts any Max message. These messages are either passed immediately to the outlet or stored in a FIFO queue depending on the state of the control inlet.</description>
 		</inlet>
 		<inlet id="2" type="int">
-			<digest>Inlet 1: Control (0 or non-zero).</digest>
-			<description>Values here will eventually control whether messages from Inlet 0 are passed through.</description>
+			<digest>Inlet 1: Control Signal (0=pass, non-zero=queue).</digest>
+			<description>A control value. When 0 (or if no value has been received), Inlet 0 acts as a passthrough. When non-zero, incoming data from Inlet 0 is queued. If a non-zero value changes back to 0, the queue is immediately flushed.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="anything">
-			<digest>Outlet 1: Passed-through Data.</digest>
-			<description>The data passed from Inlet 0.</description>
+			<digest>Outlet 1: Data Output.</digest>
+			<description>The data output from the gate. This will either be a real-time passthrough of messages from Inlet 0, or a sequential flush of queued messages.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
