@@ -1,7 +1,6 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_critical.h"
-#include "../shared/logging.h"
 #include <string.h>
 
 typedef struct _stoplight_msg {
@@ -19,12 +18,9 @@ typedef struct _stoplight {
     t_object x_obj;
     t_critical lock;
     long inlet_num;                 // Inlet index updated by proxy
-    t_stoplight_msg current_msg;    // Storage for the single cold inlet (none in this case, but here for consistency)
     t_stoplight_snapshot *queue_head;
     t_stoplight_snapshot *queue_tail;
     long hold_state;                // Control inlet value (0 or non-zero)
-    long log;                       // @log attribute
-    void *log_outlet;               // Dedicated log outlet (Index 1)
     void *data_outlet;              // Data outlet (Index 0)
     void *proxy;                    // Control proxy (Inlet 1)
     long is_flushing;               // Recursion guard
@@ -117,11 +113,7 @@ void stoplight_flush(t_stoplight *x) {
     }
     x->is_flushing = 1;
 
-    if (x->log) {
-        common_log(x->log_outlet, x->log, "stoplight", "Flushing queue...");
-    }
     while (x->queue_head) {
-        // Peek at state to see if we should still be flushing
         if (x->hold_state != 0) break;
 
         t_stoplight_snapshot *snap = x->queue_head;
@@ -133,22 +125,14 @@ void stoplight_flush(t_stoplight *x) {
         stoplight_free_snapshot(snap);
         critical_enter(x->lock);
     }
-    if (x->log) {
-        common_log(x->log_outlet, x->log, "stoplight", "Flush complete.");
-    }
     x->is_flushing = 0;
     critical_exit(x->lock);
 }
 
 void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, t_atom *av) {
     if (inlet_idx == 0) {
-        // Hot inlet
         critical_enter(x->lock);
         if (x->hold_state == 0) {
-            if (x->log) {
-                common_log(x->log_outlet, x->log, "stoplight", "Hot input: Passing through.");
-            }
-            // Passing through doesn't need a copy, but outputting might be complex so let's do a quick snapshot just for RT safety if lock is released
             t_stoplight_msg temp_m;
             temp_m.argv = NULL;
             stoplight_copy_msg(&temp_m, s, ac, av);
@@ -156,10 +140,6 @@ void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, 
             stoplight_output_msg(x, &temp_m);
             stoplight_clear_msg(&temp_m);
         } else {
-            if (x->log) {
-                common_log(x->log_outlet, x->log, "stoplight", "Hot input: Queueing (hold active).");
-            }
-            // Queue current msg
             t_stoplight_snapshot *snap = (t_stoplight_snapshot *)sysmem_newptrclear(sizeof(t_stoplight_snapshot));
             if (snap) {
                 stoplight_copy_msg(&snap->msg, s, ac, av);
@@ -174,19 +154,13 @@ void stoplight_store_data(t_stoplight *x, long inlet_idx, t_symbol *s, long ac, 
             critical_exit(x->lock);
         }
     } else if (inlet_idx == 1) {
-        // Control inlet
         critical_enter(x->lock);
         long prev_state = x->hold_state;
         if (s == gensym("int") || s == gensym("float")) {
             if (ac > 0 && av) x->hold_state = (long)atom_getfloat(av);
             else x->hold_state = 0;
         } else {
-            // Fallback for other messages on control inlet
             x->hold_state = (ac > 0) ? 1 : 0;
-        }
-
-        if (x->log) {
-            common_log(x->log_outlet, x->log, "stoplight", "Control state changed: %ld", x->hold_state);
         }
 
         int trigger_flush = (prev_state != 0 && x->hold_state == 0);
@@ -235,19 +209,11 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->inlet_num = 0;
         x->hold_state = 0;
-        x->log = 0;
         x->queue_head = NULL;
         x->queue_tail = NULL;
         x->is_flushing = 0;
-        x->current_msg.s = NULL;
-        x->current_msg.argc = 0;
-        x->current_msg.argv = NULL;
 
-        // Outlets (Right-to-Left: Log then Data)
-        x->log_outlet = outlet_new((t_object *)x, NULL);
         x->data_outlet = outlet_new((t_object *)x, NULL);
-
-        // Proxies for Inlet 1
         x->proxy = proxy_new(x, 1, &x->inlet_num);
 
         attr_args_process(x, argc, argv);
@@ -256,7 +222,6 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void stoplight_free(t_stoplight *x) {
-    stoplight_clear_msg(&x->current_msg);
     if (x->proxy) object_free(x->proxy);
 
     while (x->queue_head) {
@@ -272,8 +237,7 @@ void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
         if (a == 0) sprintf(s, "Data Inlet (Hot)");
         else sprintf(s, "Control Inlet (Hold if non-zero)");
     } else {
-        if (a == 0) sprintf(s, "Data Outlet");
-        else sprintf(s, "Logging Outlet");
+        sprintf(s, "Data Outlet");
     }
 }
 
@@ -289,10 +253,6 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stoplight_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_assist, "assist", A_CANT, 0);
-
-    CLASS_ATTR_LONG(c, "log", 0, t_stoplight, log);
-    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
-    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
 }

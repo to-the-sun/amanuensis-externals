@@ -49,13 +49,6 @@
 		</method>
 	</methodlist>
 
-	<attributelist>
-		<attribute name="log" get="1" set="1" type="int" size="1">
-			<digest>Enable verbose logging</digest>
-			<description>When enabled, posts messages to the rightmost logging outlet regarding data reception, queueing, and flushing.</description>
-		</attribute>
-	</attributelist>
-
 	<seealsolist>
 		<seealso name="rebar" />
 		<seealso name="crucible" />
