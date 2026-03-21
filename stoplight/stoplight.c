@@ -2,7 +2,7 @@
 #include "ext_obex.h"
 #include "ext_critical.h"
 
-#define MAX_ARG 9
+#define MAX_PAIRS 9
 
 typedef enum _msg_type {
     MSG_BANG,
@@ -134,8 +134,8 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         if (argc > 0) {
             long val = atom_getlong(argv);
             if (val > 1) {
-                if (val > MAX_ARG) val = MAX_ARG;
-                x->num_pairs = 1 + val;
+                if (val > MAX_PAIRS) val = MAX_PAIRS;
+                x->num_pairs = val;
             }
         }
 
@@ -154,17 +154,19 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         // Created right-to-left to appear left-to-right (Main, Cold1, ..., Control)
         x->proxies = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         x->proxy_ids = (long *)sysmem_newptrclear(x->num_pairs * sizeof(long));
-        for (long i = x->num_pairs - 1; i >= 0; i--) {
-            x->proxy_ids[i] = i + 1;
-            x->proxies[i] = proxy_new((t_object *)x, x->proxy_ids[i], &x->proxy_ids[i]);
+        for (long i = x->num_pairs; i >= 1; i--) {
+            x->proxy_ids[i - 1] = i;
+            x->proxies[i - 1] = proxy_new((t_object *)x, x->proxy_ids[i - 1], &x->proxy_ids[i - 1]);
         }
 
         // Last items for cold data inlets
         if (x->num_pairs > 1) {
             x->last_items = (t_queued_msg *)sysmem_newptrclear((x->num_pairs - 1) * sizeof(t_queued_msg));
             for (long i = 0; i < x->num_pairs - 1; i++) {
-                // Initialize with bang
-                stoplight_copy_msg(&x->last_items[i], MSG_BANG, NULL, 0, NULL);
+                // Initialize with integer 0
+                t_atom a;
+                atom_setlong(&a, 0);
+                stoplight_copy_msg(&x->last_items[i], MSG_INT, NULL, 1, &a);
             }
         } else {
             x->last_items = NULL;
