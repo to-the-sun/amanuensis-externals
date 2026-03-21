@@ -23,6 +23,8 @@ FPS = 60
 data_points_by_track = {}
 # Maps track_id -> list of labels
 labels_by_track = {}
+# Maps track_id -> bool
+busy_states = {}
 tracks_seen = set()
 global_max_ms = 0.0
 main_ramp_duration = 5000.0 # Default fallback
@@ -58,6 +60,7 @@ def process_text(text):
                     # Always perform global clear as requested
                     data_points_by_track.clear()
                     labels_by_track.clear()
+                    busy_states.clear()
                     tracks_seen.clear()
                     global_max_ms = 0.0
                     print(f"!!! Visualizer state cleared via TCP. New scale: {main_ramp_duration:.0f}ms !!!")
@@ -76,6 +79,8 @@ def process_text(text):
                         "len": pkt.get("len", 0),
                         "f2": pkt.get("f2", 0.0)
                     })
+                    if "busy" in pkt:
+                        busy_states[track_id] = bool(pkt["busy"])
                     tracks_seen.add(track_id)
                     if len(labels_by_track[track_id]) > 1000:
                         labels_by_track[track_id].pop(0)
@@ -88,6 +93,8 @@ def process_text(text):
                     if track_id not in data_points_by_track:
                         data_points_by_track[track_id] = []
                     data_points_by_track[track_id].append(pkt)
+                    if "busy" in pkt:
+                        busy_states[track_id] = bool(pkt["busy"])
                     tracks_seen.add(track_id)
                     if pkt["ms"] > global_max_ms:
                         global_max_ms = pkt["ms"]
@@ -179,6 +186,7 @@ def run_gui():
             # Shallow copy of the structures
             points_dict = {tid: list(pts) for tid, pts in data_points_by_track.items()}
             labels_dict = {tid: list(lbs) for tid, lbs in labels_by_track.items()}
+            busy_dict = dict(busy_states)
             tracks = sorted(list(tracks_seen))
             current_max_ms = global_max_ms
             current_main_ramp_duration = main_ramp_duration
@@ -286,7 +294,13 @@ def run_gui():
             pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph), (left_pad + graph_w, y_graph), 1)
             pygame.draw.line(screen, (60, 60, 70), (left_pad, y_graph + row_graph_h), (left_pad + graph_w, y_graph + row_graph_h), 1)
 
-            label = label_font.render(f"Track {t}", True, (200, 200, 200))
+            is_busy = busy_dict.get(t, False)
+            if is_busy:
+                # White background for busy tracks
+                pygame.draw.rect(screen, (255, 255, 255), (5, y_graph + row_graph_h/2 - 10, 70, 20))
+                label = label_font.render(f"Track {t}", True, (0, 0, 0))
+            else:
+                label = label_font.render(f"Track {t}", True, (200, 200, 200))
             screen.blit(label, (10, y_graph + row_graph_h/2 - 7))
 
         # 5. Main time axis and status text - Layer 3 (Top)

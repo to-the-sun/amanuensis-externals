@@ -71,6 +71,10 @@ typedef struct _weaver_track {
     int dirty_dest;
     double viz_control;
     double viz_track_length;
+
+    int last_busy_logged;
+    int viz_busy;
+    double last_viz_sent_ms;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -136,6 +140,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
+static t_symbol *_sym_dash;
 
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
     t_weaver_track *tr = NULL;
@@ -192,6 +197,9 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->dirty_dest = 0;
             tr->viz_control = 0.0;
             tr->viz_track_length = 1000.0;
+            tr->last_busy_logged = -1;
+            tr->viz_busy = 0;
+            tr->last_viz_sent_ms = -1000.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -318,6 +326,7 @@ void weaver_check_attachments(t_weaver *x) {
 
 void ext_main(void *r) {
     common_symbols_init();
+    _sym_dash = gensym("-");
     t_class *c = class_new("weaver~", (method)weaver_new, (method)weaver_free, sizeof(t_weaver), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)weaver_anything, "anything", A_GIMME, 0);
@@ -585,85 +594,89 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
     double last_scan = x->last_scan_val;
     double bar_len = round(weaver_get_bar_length(x));
 
-    if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
-        t_track_buffers tb[MAX_WEAVER_TRACKS];
-        memset(tb, 0, sizeof(tb));
+    t_track_buffers tb[MAX_WEAVER_TRACKS];
+    memset(tb, 0, sizeof(tb));
 
-        for (long t = 0; t < x->track_cache_count; t++) {
-            t_weaver_track *tr = x->track_cache[t];
-            if (!tr) continue;
+    // 1. Handover and Buffer Acquisition
+    int has_lock = (critical_tryenter(x->lock) == MAX_ERR_NONE);
 
-            // 1. Apply metadata updates at the BEGINNING of the vector
-            if (tr->has_pending_data) {
-                int active = (int)round(tr->control);
-                int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active]);
+    for (long t = 0; t < x->track_cache_count; t++) {
+        t_weaver_track *tr = x->track_cache[t];
+        if (!tr) continue;
 
-                if (tr->pending_no_crossfade) {
-                    tr->palette[active] = tr->pending_palette;
-                    tr->dict_offset[active] = tr->pending_offset;
-                    tr->offset[active] = tr->pending_offset - in[0]; // Estimate with first sample
-                    tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
-                    tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
-                    tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
-                    tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
-                    tr->xf.direction = 0.0;
-                    tr->busy = 0;
-                } else if (change) {
-                    int other = 1 - active;
-                    tr->palette[other] = tr->pending_palette;
-                    tr->dict_offset[other] = tr->pending_offset;
-                    tr->offset[other] = tr->pending_offset - in[0]; // Estimate
-                    tr->control = (double)other;
-                    tr->xf.direction = tr->control - tr->xf.last_control;
-                }
-                tr->viz_palette = tr->pending_palette;
-                tr->viz_offset = tr->pending_offset;
-                tr->viz_bar_symbol = tr->pending_bar_symbol;
-                tr->viz_trigger_dirty = 1;
-                tr->has_pending_data = 0;
-                tr->waiting_for_dict = 0;
+        if (has_lock && tr->has_pending_data) {
+            int active = (int)round(tr->control);
+            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active]);
+
+            if (tr->pending_no_crossfade) {
+                tr->palette[active] = tr->pending_palette;
+                tr->dict_offset[active] = tr->pending_offset;
+                tr->offset[active] = tr->pending_offset - tr->viz_ms;
+                tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
+                tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
+                tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
+                tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
+                tr->xf.direction = 0.0;
+                tr->busy = 0;
+            } else if (change) {
+                int other = 1 - active;
+                tr->palette[other] = tr->pending_palette;
+                tr->dict_offset[other] = tr->pending_offset;
+                tr->offset[other] = tr->pending_offset - tr->viz_ms;
+                tr->control = (double)other;
+                tr->xf.direction = tr->control - tr->xf.last_control;
             }
+            tr->viz_palette = tr->pending_palette;
+            tr->viz_offset = tr->pending_offset;
+            tr->viz_bar_symbol = tr->pending_bar_symbol;
+            tr->viz_trigger_dirty = 1;
+            tr->has_pending_data = 0;
+            tr->waiting_for_dict = 0;
+        }
 
-            // 2. Lock Buffers (Safe because it happens once per vector)
-            t_buffer_obj *dest_buf = buffer_ref_getobject(tr->dest_ref);
-            if (dest_buf) {
-                tb[t].samples_dest = buffer_locksamples(dest_buf);
-                if (tb[t].samples_dest) {
-                    tb[t].buf_dest = dest_buf;
-                    tb[t].n_frames_dest = buffer_getframecount(dest_buf);
-                    tb[t].n_chans_dest = buffer_getchannelcount(dest_buf);
-                    tb[t].sr_dest = buffer_getsamplerate(dest_buf);
-                    if (tb[t].sr_dest <= 0) tb[t].sr_dest = sys_getsr();
-                }
+        // 2. Lock Buffers
+        t_buffer_obj *dest_buf = buffer_ref_getobject(tr->dest_ref);
+        if (dest_buf) {
+            tb[t].samples_dest = buffer_locksamples(dest_buf);
+            if (tb[t].samples_dest) {
+                tb[t].buf_dest = dest_buf;
+                tb[t].n_frames_dest = buffer_getframecount(dest_buf);
+                tb[t].n_chans_dest = buffer_getchannelcount(dest_buf);
+                tb[t].sr_dest = buffer_getsamplerate(dest_buf);
+                if (tb[t].sr_dest <= 0) tb[t].sr_dest = sys_getsr();
             }
+        }
 
-            for (int j = 0; j < 2; j++) {
-                if (tr->palette[j] != _sym_nothing && tr->palette[j] != gensym("-")) {
-                    t_buffer_obj *src_buf = buffer_ref_getobject(tr->src_refs[j]);
-                    if (src_buf) {
-                        tb[t].samples_src[j] = buffer_locksamples(src_buf);
-                        if (tb[t].samples_src[j]) {
-                            tb[t].buf_src[j] = src_buf;
-                            tb[t].n_frames_src[j] = buffer_getframecount(src_buf);
-                            tb[t].n_chans_src[j] = buffer_getchannelcount(src_buf);
-                            tb[t].sr_src[j] = buffer_getsamplerate(src_buf);
-                            if (tb[t].sr_src[j] <= 0) tb[t].sr_src[j] = sys_getsr();
-                        }
+        for (int j = 0; j < 2; j++) {
+            if (tr->palette[j] != _sym_nothing && tr->palette[j] != _sym_dash) {
+                t_buffer_obj *src_buf = buffer_ref_getobject(tr->src_refs[j]);
+                if (src_buf) {
+                    tb[t].samples_src[j] = buffer_locksamples(src_buf);
+                    if (tb[t].samples_src[j]) {
+                        tb[t].buf_src[j] = src_buf;
+                        tb[t].n_frames_src[j] = buffer_getframecount(src_buf);
+                        tb[t].n_chans_src[j] = buffer_getchannelcount(src_buf);
+                        tb[t].sr_src[j] = buffer_getsamplerate(src_buf);
+                        if (tb[t].sr_src[j] <= 0) tb[t].sr_src[j] = sys_getsr();
                     }
                 }
             }
-            crossfade_update_params(&tr->xf, tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr(), x->low_ms, x->high_ms);
         }
+        crossfade_update_params(&tr->xf, tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr(), x->low_ms, x->high_ms);
+    }
 
-        for (int i = 0; i < sampleframes; i++) {
+    if (has_lock) critical_exit(x->lock);
+
+    // 3. Sample Loop (Unlocked)
+    for (int i = 0; i < sampleframes; i++) {
             double current_scan = in[i];
             int main_looped = (current_scan < last_scan);
 
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
-                if (!tr || !tb[t].samples_dest) continue;
+                if (!tr) continue;
 
-                // 2. Continuous Bar Hit Detection
+                // 2. Continuous Bar Hit Detection (Outside samples_dest check)
                 double tr_scan = fmod(current_scan, tr->track_length);
                 long r_scan = (long)floor(tr_scan);
                 long r_last = (long)floor(tr->last_track_scan);
@@ -680,8 +693,8 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         }
                     }
 
-                    if (!tr->busy && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
-                        long long start = track_looped ? 0 : r_last + 1;
+                    if ((!tr->busy || main_looped) && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
+                        long long start = (track_looped || main_looped) ? 0 : r_last + 1;
                         long long end = r_scan;
                         long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
 
@@ -700,9 +713,29 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                             }
                         }
                     }
+                } else if (bar_len > 0) {
+                    // Initial Bar Trigger
+                    double initial_bar = floor(tr_scan / bar_len) * bar_len;
+                    int nt_init = (x->fifo_tail + 1) % 4096;
+                    if (nt_init != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].bar.sym = NULL;
+                        x->hit_bars[x->fifo_tail].rel_time = initial_bar;
+                        x->hit_bars[x->fifo_tail].bar.value = current_scan;
+                        x->hit_bars[x->fifo_tail].type = TYPE_DATA;
+                        x->hit_bars[x->fifo_tail].track_id = t + 1;
+                        x->hit_bars[x->fifo_tail].no_crossfade = 0;
+                        x->fifo_tail = nt_init;
+                        tr->waiting_for_dict = 1;
+                        tr->busy = 1;
+                    }
                 }
 
-                // 3. One-sample audio weaving
+                // 3. One-sample audio weaving (Inside samples_dest check)
+                if (!tb[t].samples_dest) {
+                    tr->last_track_scan = tr_scan;
+                    continue;
+                }
+
                 long long f_dest = (long long)round(current_scan * tb[t].sr_dest / 1000.0) % tb[t].n_frames_dest;
                 if (f_dest < 0) f_dest += tb[t].n_frames_dest;
 
@@ -749,30 +782,32 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
                 tr->viz_f1 = f1;
                 tr->viz_f2 = f2;
-                tr->viz_dirty = 1;
+                tr->viz_busy = tr->busy;
+
+                if (current_scan >= tr->last_viz_sent_ms + 100.0 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy) {
+                    tr->viz_dirty = 1;
+                    tr->last_viz_sent_ms = current_scan;
+                }
 
                 tr->last_track_scan = tr_scan;
             }
             last_scan = current_scan;
         }
 
-        // Unlock Phase
-        for (long t = 0; t < x->track_cache_count; t++) {
-            if (tb[t].buf_dest && tb[t].samples_dest) {
-                buffer_unlocksamples(tb[t].buf_dest);
-                // buffer_setdirty is too slow for DSP thread! Handle in qtask.
-            }
-            for (int j = 0; j < 2; j++) {
-                if (tb[t].buf_src[j] && tb[t].samples_src[j]) {
-                    buffer_unlocksamples(tb[t].buf_src[j]);
-                }
+    // 4. Unlock Phase
+    for (long t = 0; t < x->track_cache_count; t++) {
+        if (tb[t].buf_dest && tb[t].samples_dest) {
+            buffer_unlocksamples(tb[t].buf_dest);
+        }
+        for (int j = 0; j < 2; j++) {
+            if (tb[t].buf_src[j] && tb[t].samples_src[j]) {
+                buffer_unlocksamples(tb[t].buf_src[j]);
             }
         }
-
-        qelem_set(x->audio_qelem);
-        x->last_scan_val = last_scan;
-        critical_exit(x->lock);
     }
+
+    x->last_scan_val = (sampleframes > 0) ? in[sampleframes - 1] : last_scan;
+    qelem_set(x->audio_qelem);
 }
 
 void weaver_audio_qtask(t_weaver *x) {
@@ -858,13 +893,21 @@ void weaver_audio_qtask(t_weaver *x) {
         }
     }
 
-    // 1. Post-DSP Buffer Management (buffer_setdirty is main-thread only)
+    // 1. Post-DSP Buffer and Busy Management
     for (long t = 0; t < x->track_cache_count; t++) {
         t_weaver_track *tr = x->track_cache[t];
-        if (tr && tr->dirty_dest) {
-            t_buffer_obj *b = buffer_ref_getobject(tr->dest_ref);
-            if (b) buffer_setdirty(b);
-            tr->dirty_dest = 0;
+        if (tr) {
+            if (tr->dirty_dest) {
+                t_buffer_obj *b = buffer_ref_getobject(tr->dest_ref);
+                if (b) buffer_setdirty(b);
+                tr->dirty_dest = 0;
+            }
+
+            // Busy State Logging
+            if (tr->busy != tr->last_busy_logged) {
+                weaver_log(x, "track %ld busy: %d", t + 1, tr->busy);
+                tr->last_busy_logged = tr->busy;
+            }
         }
     }
 
@@ -883,15 +926,15 @@ void weaver_audio_qtask(t_weaver *x) {
                 // Capture data quickly under lock
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f}",
-                             t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control));
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
+                             t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }
