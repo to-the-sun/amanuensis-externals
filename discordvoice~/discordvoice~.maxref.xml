@@ -53,13 +53,17 @@
 			</arglist>
 			<digest>Connect to Discord and join a voice channel</digest>
 			<description>
-				Starts the connection process.
+				Starts the connection process. The message should be the word <m>connect</m> followed by three symbols as a list.
+				<br /><br />
+				<b>Format:</b> <m>connect [token] [guild_id] [channel_id]</m>
+				<br /><br />
+				<b>Example:</b> <m>connect MTAyND... 123456789012345678 987654321098765432</m>
+				<br /><br />
+				<b>token:</b> Your Discord Bot Token (as a single symbol).
 				<br />
-				<b>token:</b> Your Discord Bot Token.
+				<b>guild_id:</b> The 18-digit Snowflake ID of the Discord server.
 				<br />
-				<b>guild_id:</b> The ID of the Discord server (Guild) containing the voice channel.
-				<br />
-				<b>channel_id:</b> The ID of the target voice channel.
+				<b>channel_id:</b> The 18-digit Snowflake ID of the target voice channel.
 			</description>
 		</method>
 		<method name="bang">
