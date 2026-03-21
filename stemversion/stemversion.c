@@ -8,6 +8,7 @@ typedef struct _stemversion {
     void *outlet;
     long log;
     void *log_outlet;
+    t_symbol *format;
 } t_stemversion;
 
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
@@ -30,6 +31,11 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_SYM(c, "format", 0, t_stemversion, format);
+    CLASS_ATTR_ENUM(c, "format", 0, "default live");
+    CLASS_ATTR_LABEL(c, "format", 0, "Timestamp Format");
+    CLASS_ATTR_DEFAULT(c, "format", 0, "default");
+
     class_register(CLASS_BOX, c);
     stemversion_class = c;
 }
@@ -39,6 +45,7 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->log = 0;
         x->log_outlet = NULL;
+        x->format = gensym("default");
 
         attr_args_process(x, argc, argv);
 
@@ -63,13 +70,23 @@ void stemversion_bang(t_stemversion *x) {
     time(&rawtime);
     timeinfo = localtime(&rawtime);
 
-    snprintf(final_symbol_str, sizeof(final_symbol_str), "[%d-%d-%d-%d-%d-%d]",
-             timeinfo->tm_year + 1900,
-             timeinfo->tm_mon + 1,
-             timeinfo->tm_mday,
-             timeinfo->tm_hour,
-             timeinfo->tm_min,
-             timeinfo->tm_sec);
+    if (x->format == gensym("live")) {
+        snprintf(final_symbol_str, sizeof(final_symbol_str), "[%04d-%02d-%02d %02d%02d%02d]",
+                 timeinfo->tm_year + 1900,
+                 timeinfo->tm_mon + 1,
+                 timeinfo->tm_mday,
+                 timeinfo->tm_hour,
+                 timeinfo->tm_min,
+                 timeinfo->tm_sec);
+    } else {
+        snprintf(final_symbol_str, sizeof(final_symbol_str), "[%d-%d-%d-%d-%d-%d]",
+                 timeinfo->tm_year + 1900,
+                 timeinfo->tm_mon + 1,
+                 timeinfo->tm_mday,
+                 timeinfo->tm_hour,
+                 timeinfo->tm_min,
+                 timeinfo->tm_sec);
+    }
 
     outlet_anything(x->outlet, gensym(final_symbol_str), 0, NULL);
 }
@@ -79,7 +96,13 @@ void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s) {
         sprintf(s, "Inlet 1: (bang) Output Current Timestamp");
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])"); break;
+            case 0:
+                if (x->format == gensym("live")) {
+                    sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-08 151616])");
+                } else {
+                    sprintf(s, "Outlet 1: Timestamp Symbol (e.g., [2025-12-8-15-16-16])");
+                }
+                break;
             case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
         }
     }

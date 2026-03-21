@@ -19,7 +19,7 @@
 	<outletlist>
 		<outlet id="1" type="symbol">
 			<digest>Outlet 1: Version string</digest>
-			<description>Outputs the timestamp string, e.g., [2025-12-8-15-16-16].</description>
+			<description>Outputs the timestamp string. The format depends on the @format attribute.</description>
 		</outlet>
 		<outlet id="2" type="anything">
 			<digest>Outlet 2: Logging (Optional)</digest>
@@ -41,6 +41,13 @@
 			<description>When enabled (1), creates an additional outlet for status information.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="format" get="1" set="1" type="symbol" size="1">
+			<digest>Timestamp Format</digest>
+			<description>Sets the formatting style for the output timestamp. Options are 'default' (e.g., [2025-12-8-15-16-16]) and 'live' (e.g., [2025-12-08 151616]).</description>
+			<attributelist>
+				<attribute name="enum" get="1" set="1" type="symbol" size="1" value="default live" />
 			</attributelist>
 		</attribute>
 	</attributelist>
