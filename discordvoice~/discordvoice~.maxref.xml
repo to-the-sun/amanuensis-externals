@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="discordvoice~" module="msp" category="Streaming">
+
+	<digest>
+		Stream audio to Discord voice channels
+	</digest>
+
+	<description>
+		The <inlinehelp>discordvoice~</inlinehelp> object enables real-time audio streaming from Max directly to a Discord voice channel. It handles the Discord Gateway signaling, Voice Gateway handshake, and audio encoding necessary for integration with the Discord API.
+	</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Streaming</metadata>
+		<metadata name="tag">Discord</metadata>
+		<metadata name="tag">Network</metadata>
+	</metadatalist>
+
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="signal/list">
+			<digest>Left Audio Input / Control Messages</digest>
+			<description>Audio signal for the left channel. Also accepts control messages like 'connect'.</description>
+		</inlet>
+		<inlet id="1" type="signal">
+			<digest>Right Audio Input</digest>
+			<description>Audio signal for the right channel.</description>
+		</inlet>
+	</inletlist>
+
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="int">
+			<digest>Connection Status</digest>
+			<description>Outputs an integer indicating the current connection state (0: Disconnected, 1: Connecting, 2: Connected, 3: Identified, 4: Ready).</description>
+		</outlet>
+		<outlet id="1" type="anything">
+			<digest>Logging and Debugging</digest>
+			<description>Detailed status and error messages from the internal networking thread.</description>
+		</outlet>
+	</outletlist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="connect">
+			<arglist>
+				<arg name="token" type="symbol" optional="0" />
+				<arg name="guild_id" type="symbol" optional="0" />
+				<arg name="channel_id" type="symbol" optional="0" />
+			</arglist>
+			<digest>Connect to Discord and join a voice channel</digest>
+			<description>
+				Starts the connection process.
+				<br />
+				<b>token:</b> Your Discord Bot Token.
+				<br />
+				<b>guild_id:</b> The ID of the Discord server (Guild) containing the voice channel.
+				<br />
+				<b>channel_id:</b> The ID of the target voice channel.
+			</description>
+		</method>
+		<method name="bang">
+			<digest>Query current connection status</digest>
+			<description>Triggers an immediate output of the connection status integer from the first outlet.</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attrlist>
+		<attr name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>When enabled (1), the object will post detailed connection progress and protocol messages to the second outlet.</description>
+		</attr>
+	</attrlist>
+
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="threads~" />
+		<seealso name="lazyvst~" />
+		<seealso name="weaver~" />
+	</seealsolist>
+
+</c74object>

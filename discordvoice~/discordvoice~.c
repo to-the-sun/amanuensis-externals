@@ -24,6 +24,7 @@ typedef struct _discordvoice {
     t_systhread thread;
     t_critical lock;
     int terminate;
+    void *status_outlet;
     void *log_outlet;
     long log;
 
@@ -73,6 +74,7 @@ typedef struct _discordvoice {
 void *discordvoice_new(t_symbol *s, long argc, t_atom *argv);
 void discordvoice_free(t_discordvoice *x);
 void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s);
+void discordvoice_bang(t_discordvoice *x);
 void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *argv);
 void *discordvoice_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -94,6 +96,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)discordvoice_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)discordvoice_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)discordvoice_bang, "bang", 0);
     class_addmethod(c, (method)discordvoice_connect, "connect", A_GIMME, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_discordvoice, log);
@@ -146,6 +149,7 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
 
         dsp_setup((t_pxobject *)x, 2); // 2 signal inlets (L/R)
         x->log_outlet = outlet_new((t_object *)x, NULL);
+        x->status_outlet = outlet_new((t_object *)x, NULL);
 
         critical_new(&x->lock);
 
@@ -545,8 +549,23 @@ void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s) {
             case 1: sprintf(s, "Inlet 2 (signal): Right audio input"); break;
         }
     } else {
-        sprintf(s, "Outlet 1 (anything): Logging and status");
+        switch (a) {
+            case 0: sprintf(s, "Outlet 1 (int): Connection status (0-4)"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Logging and protocol status"); break;
+        }
     }
+}
+
+void discordvoice_bang(t_discordvoice *x) {
+    int status = 0;
+    critical_enter(x->lock);
+    if (x->ready) status = 4;
+    else if (x->identified) status = 3;
+    else if (x->connected) status = 2;
+    else if (x->thread) status = 1;
+    critical_exit(x->lock);
+
+    outlet_int(x->status_outlet, status);
 }
 
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
