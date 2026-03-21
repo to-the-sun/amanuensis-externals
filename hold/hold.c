@@ -16,7 +16,7 @@ typedef struct _hold_snapshot {
 } t_hold_snapshot;
 
 typedef struct _hold {
-    t_object obj;
+    t_object x_obj;
     long N;                         // Number of throughput inlets/outlets
     long inlet_num;                 // Inlet index updated by proxies
     t_hold_msg *current_inlets;     // Array of N messages for current state
@@ -30,7 +30,7 @@ typedef struct _hold {
     t_critical lock;
 } t_hold;
 
-static t_class *hold_class;
+static t_class *hold_class = NULL;
 
 // Forward declarations
 void hold_clear_msg(t_hold_msg *msg);
@@ -41,7 +41,7 @@ void hold_flush(t_hold *x);
 void hold_store_data(t_hold *x, long inlet_idx, t_symbol *s, long ac, t_atom *av);
 
 void hold_bang(t_hold *x);
-void hold_int(t_hold *x, long n);
+void hold_int(t_hold *x, t_atom_long n);
 void hold_float(t_hold *x, double f);
 void hold_list(t_hold *x, t_symbol *s, long ac, t_atom *av);
 void hold_anything(t_hold *x, t_symbol *s, long ac, t_atom *av);
@@ -98,6 +98,7 @@ void hold_free_snapshot(t_hold_snapshot *snap, long N) {
 }
 
 void hold_output_snapshot(t_hold *x, t_hold_snapshot *snap) {
+    if (!snap || !snap->msgs) return;
     // Right-to-left output order: Outlet N-1 down to 0
     for (long i = x->N - 1; i >= 0; i--) {
         t_hold_msg *m = &snap->msgs[i];
@@ -105,10 +106,10 @@ void hold_output_snapshot(t_hold *x, t_hold_snapshot *snap) {
             if (m->s == gensym("bang")) {
                 outlet_bang(x->through_outlets[i]);
             } else if (m->s == gensym("int")) {
-                if (m->argc > 0) outlet_int(x->through_outlets[i], atom_getlong(m->argv));
+                if (m->argc > 0 && m->argv) outlet_int(x->through_outlets[i], atom_getlong(m->argv));
                 else outlet_bang(x->through_outlets[i]);
             } else if (m->s == gensym("float")) {
-                if (m->argc > 0) outlet_float(x->through_outlets[i], atom_getfloat(m->argv));
+                if (m->argc > 0 && m->argv) outlet_float(x->through_outlets[i], atom_getfloat(m->argv));
                 else outlet_bang(x->through_outlets[i]);
             } else if (m->s == gensym("list")) {
                 outlet_list(x->through_outlets[i], NULL, (short)m->argc, m->argv);
@@ -216,7 +217,7 @@ void hold_store_data(t_hold *x, long inlet_idx, t_symbol *s, long ac, t_atom *av
         critical_enter(x->lock);
         long prev_state = x->hold_state;
         if (s == gensym("int") || s == gensym("float")) {
-            if (ac > 0) x->hold_state = (long)atom_getfloat(av);
+            if (ac > 0 && av) x->hold_state = (long)atom_getfloat(av);
             else x->hold_state = 0;
         } else {
             // Fallback for other messages on control inlet
@@ -242,7 +243,7 @@ void hold_bang(t_hold *x) {
     hold_store_data(x, inlet, gensym("bang"), 0, NULL);
 }
 
-void hold_int(t_hold *x, long n) {
+void hold_int(t_hold *x, t_atom_long n) {
     long inlet = proxy_getinlet((t_object *)x);
     t_atom a;
     atom_setlong(&a, n);
@@ -272,7 +273,7 @@ void *hold_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         long n = 1;
         if (argc > 0 && atom_gettype(argv) == A_LONG) {
-            n = atom_getlong(argv);
+            n = (long)atom_getlong(argv);
             argc--;
             argv++;
         }
@@ -288,22 +289,34 @@ void *hold_new(t_symbol *s, long argc, t_atom *argv) {
 
         // Current inlets storage
         x->current_inlets = (t_hold_msg *)sysmem_newptr(sizeof(t_hold_msg) * x->N);
-        for (long i = 0; i < x->N; i++) {
-            x->current_inlets[i].s = gensym("bang");
-            x->current_inlets[i].argc = 0;
-            x->current_inlets[i].argv = NULL;
+        if (x->current_inlets) {
+            for (long i = 0; i < x->N; i++) {
+                x->current_inlets[i].s = gensym("bang");
+                x->current_inlets[i].argc = 0;
+                x->current_inlets[i].argv = NULL;
+            }
         }
 
         // Proxies for Inlets 1 to N
         x->proxies = (void **)sysmem_newptr(sizeof(void *) * x->N);
-        for (long i = 0; i < x->N; i++) {
-            x->proxies[i] = proxy_new(x, (long)(i + 1), &x->inlet_num);
+        if (x->proxies) {
+            for (long i = 0; i < x->N; i++) {
+                x->proxies[i] = proxy_new(x, (long)(i + 1), &x->inlet_num);
+            }
         }
 
         // Outlets: Throughputs N-1 down to 0
         x->through_outlets = (void **)sysmem_newptr(sizeof(void *) * x->N);
-        for (long i = x->N - 1; i >= 0; i--) {
-            x->through_outlets[i] = outlet_new(x, NULL);
+        if (x->through_outlets) {
+            for (long i = x->N - 1; i >= 0; i--) {
+                x->through_outlets[i] = outlet_new(x, NULL);
+            }
+        }
+
+        if (!x->current_inlets || !x->proxies || !x->through_outlets) {
+            // hold_free will handle cleanup
+            object_free(x);
+            return NULL;
         }
 
         attr_args_process(x, argc, argv);
@@ -312,7 +325,6 @@ void *hold_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void hold_free(t_hold *x) {
-    critical_free(x->lock);
     if (x->current_inlets) {
         for (long i = 0; i < x->N; i++) {
             hold_clear_msg(&x->current_inlets[i]);
@@ -321,7 +333,7 @@ void hold_free(t_hold *x) {
     }
     if (x->proxies) {
         for (long i = 0; i < x->N; i++) {
-            object_free(x->proxies[i]);
+            if (x->proxies[i]) object_free(x->proxies[i]);
         }
         sysmem_freeptr(x->proxies);
     }
@@ -334,6 +346,7 @@ void hold_free(t_hold *x) {
         x->queue_head = snap->next;
         hold_free_snapshot(snap, x->N);
     }
+    critical_free(x->lock);
 }
 
 void hold_assist(t_hold *x, void *b, long m, long a, char *s) {
@@ -344,12 +357,17 @@ void hold_assist(t_hold *x, void *b, long m, long a, char *s) {
             sprintf(s, "Control Inlet (Hold if non-zero)");
         }
     } else {
-        sprintf(s, "Throughput Outlet %ld", a);
+        if (a < x->N) {
+            sprintf(s, "Throughput Outlet %ld", a);
+        }
     }
 }
 
 void ext_main(void *r) {
-    t_class *c = class_new("hold", (method)hold_new, (method)hold_free, sizeof(t_hold), 0L, A_GIMME, 0);
+    common_symbols_init();
+
+    t_class *c = class_new("hold", (method)hold_new, (method)hold_free, (long)sizeof(t_hold), 0L, A_GIMME, 0);
+    hold_class = c;
 
     class_addmethod(c, (method)hold_bang, "bang", 0);
     class_addmethod(c, (method)hold_int, "int", A_LONG, 0);
@@ -363,6 +381,4 @@ void ext_main(void *r) {
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_register(CLASS_BOX, c);
-    hold_class = c;
-    common_symbols_init();
 }
