@@ -4,7 +4,7 @@
 <maxref name="stoplight" title="stoplight" version="1.0">
 	<digest>Queue and release data based on a control signal</digest>
 	<description>
-		The stoplight object accepts any type of data across multiple throughput inlets. When the first inlet (Inlet 0) receives data, a snapshot of all throughput inlets is captured. If the rightmost control inlet is zero, the snapshot is immediately output to the corresponding outlets. If the control inlet is non-zero, snapshots are queued and held until the control inlet becomes zero, at which point all queued snapshots are released in First-In-First-Out (FIFO) order.
+		The stoplight object manages a single data channel. When the left inlet (Inlet 0) receives data, it is either output immediately or queued if the right control inlet (Inlet 1) is non-zero. When the control inlet returns to zero, all queued data is released in First-In-First-Out (FIFO) order.
 	</description>
 
 	<metadatalist>
@@ -13,46 +13,39 @@
 		<metadata name="tag">Data</metadata>
 	</metadatalist>
 
-	<argumentlist>
-		<argument name="num_throughputs" optional="0" type="int">
-			<digest>The number of throughput inlet/outlet pairs</digest>
-			<description>Specifies how many data channels to manage. Always at least one. The total number of inlets will be this number plus one additional control inlet. The total number of outlets will be this number plus one additional rightmost logging outlet.</description>
-		</argument>
-	</argumentlist>
-
 	<methodlist>
 		<method name="bang">
 			<arglist />
 			<digest>Capture/release data</digest>
-			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+			<description>In the left inlet: triggers output or queueing. In the right control inlet: 0 releases the queue, non-zero starts holding.</description>
 		</method>
 		<method name="int">
 			<arglist>
 				<arg name="value" optional="0" type="int" />
 			</arglist>
 			<digest>Capture/release data</digest>
-			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+			<description>In the left inlet: triggers output or queueing. In the right control inlet: 0 releases the queue, non-zero starts holding.</description>
 		</method>
 		<method name="float">
 			<arglist>
 				<arg name="value" optional="0" type="float" />
 			</arglist>
 			<digest>Capture/release data</digest>
-			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+			<description>In the left inlet: triggers output or queueing. In the right control inlet: 0 releases the queue, non-zero starts holding.</description>
 		</method>
 		<method name="list">
 			<arglist>
 				<arg name="values" optional="0" type="list" />
 			</arglist>
 			<digest>Capture/release data</digest>
-			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+			<description>In the left inlet: triggers output or queueing. In the right control inlet: 0 releases the queue, non-zero starts holding.</description>
 		</method>
 		<method name="anything">
 			<arglist>
 				<arg name="values" optional="0" type="list" />
 			</arglist>
 			<digest>Capture/release data</digest>
-			<description>In throughput inlets: stores or triggers a snapshot. In control inlet: 0 releases the queue, non-zero starts holding.</description>
+			<description>In the left inlet: triggers output or queueing. In the right control inlet: 0 releases the queue, non-zero starts holding.</description>
 		</method>
 	</methodlist>
 
