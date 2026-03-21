@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="stoplight" module="max" category="Data">
-	<digest>A data gate for Max messages</digest>
-	<description>The `stoplight` object is a data gate that either passes through incoming messages or queues them based on a control signal. When the control inlet (Inlet 1) is 0, messages from Inlet 0 are passed immediately to the outlet. When the control signal is non-zero, incoming messages are stored in a FIFO (First-In-First-Out) queue. As soon as the control signal returns to 0, all queued messages are released in the order they were received.</description>
+	<digest>A data gate and bundler for Max messages</digest>
+	<description>The `stoplight` object is a data gate that either passes through incoming messages or queues them based on a control signal. It supports multiple data inlet/outlet pairs. When the control inlet (the rightmost inlet) is 0, messages from Inlet 0 (the leftmost inlet) are passed immediately to Outlet 0, bundled with the most recent messages received on the other data inlets (1 to N-1). When the control signal is non-zero, incoming messages from Inlet 0 and the current values of the other data inlets are stored together in a FIFO (First-In-First-Out) queue. As soon as the control signal returns to 0, all queued bundles are released in the order they were received, with each bundle's contents sent out their respective outlets in right-to-left order.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -11,23 +11,31 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="anything">
-			<digest>Inlet 0: Data to be passed or queued.</digest>
-			<description>Accepts any Max message. These messages are either passed immediately to the outlet or stored in a FIFO queue depending on the state of the control inlet.</description>
+			<digest>Inlet 0 (Hot): Data to be passed or queued.</digest>
+			<description>Accepts any Max message. These messages are either passed immediately to the outlet (along with values from other data inlets) or stored in a FIFO queue depending on the state of the control inlet.</description>
 		</inlet>
-		<inlet id="2" type="int">
-			<digest>Inlet 1: Control Signal (0=pass, non-zero=queue).</digest>
-			<description>A control value. When 0 (or if no value has been received), Inlet 0 acts as a passthrough. When non-zero, incoming data from Inlet 0 is queued. If a non-zero value changes back to 0, the queue is immediately flushed.</description>
+		<inlet id="2" type="anything">
+			<digest>Inlet 1..N-1 (Cold): Data to be bundled with Inlet 0.</digest>
+			<description>The most recent value received on each of these inlets is bundled with any message entering Inlet 0. These inlets do not trigger output themselves.</description>
+		</inlet>
+		<inlet id="3" type="int">
+			<digest>Inlet N (Control): Control Signal (0=pass, non-zero=queue).</digest>
+			<description>A control value. When 0, data entering Inlet 0 is passed immediately. When non-zero, incoming data is queued. If a non-zero value changes back to 0, the queue is immediately flushed.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="anything">
-			<digest>Outlet 1: Data Output.</digest>
-			<description>The data output from the gate. This will either be a real-time passthrough of messages from Inlet 0, or a sequential flush of queued messages.</description>
+			<digest>Outlet 0..N-1: Data Outputs.</digest>
+			<description>The data outputs from the gate. Each outlet corresponds to a data inlet pair. When a bundle is released, messages are sent out their respective outlets in right-to-left order.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
-	<objarglist />
+	<objarglist>
+		<objarg name="num-pairs" optional="1" type="int">
+			<digest>The number of data inlet/outlet pairs (1-9, default 1).</digest>
+		</objarg>
+	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="bang">

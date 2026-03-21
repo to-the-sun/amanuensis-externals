@@ -19,14 +19,17 @@ def verify_stoplight_c():
 
     # Check for proxy_getinlet check in handlers
     for handler in handlers:
-        # Simple regex to check if the handler has a proxy_getinlet check
-        pattern = rf'void\s+{handler}\s*\(.*?\)\s*\{{.*?proxy_getinlet\(.*?\)\s*==\s*0.*?\}}'
+        # Permissive check for proxy_getinlet call
+        if 'proxy_getinlet' not in content:
+             print(f"Error: proxy_getinlet not used at all in {filepath}")
+             return False
+
+        # Check if the handler actually uses the result of proxy_getinlet
+        # In the new code, we assign it to 'inlet'
+        pattern = rf'void\s+{handler}\s*\(.*?\)\s*\{{.*?proxy_getinlet\(.*?\)'
         if not re.search(pattern, content, re.DOTALL):
-            print(f"Error: {handler} might be missing proxy_getinlet check.")
-            # Let's do a more permissive check
-            if 'proxy_getinlet' not in content:
-                 print(f"Error: proxy_getinlet not used at all in {filepath}")
-                 return False
+            print(f"Error: {handler} might be missing proxy_getinlet call.")
+            return False
 
     # Check assist message for backticks
     if 'Accepts `anything` to be passed through.' in content:
