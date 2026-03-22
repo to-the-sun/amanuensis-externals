@@ -51,6 +51,7 @@ typedef struct _discordvoice {
     int connected;
     int identified;
     int ready;
+    int heartbeat_acked;
 
     t_symbol *voice_token;
     t_symbol *voice_endpoint;
@@ -73,7 +74,9 @@ typedef struct _discordvoice {
 
     // WebSocket receive buffers
     BYTE *recv_buffer;
+    DWORD recv_buffer_pos;
     BYTE *v_recv_buffer;
+    DWORD v_recv_buffer_pos;
 
     DWORD last_audio_tick;
 } t_discordvoice;
@@ -164,7 +167,9 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_audio_tick = 0;
 
         x->recv_buffer = (BYTE *)sysmem_newptr(65536);
+        x->recv_buffer_pos = 0;
         x->v_recv_buffer = (BYTE *)sysmem_newptr(65536);
+        x->v_recv_buffer_pos = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -390,13 +395,15 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
     discordvoice_log(x, "connected to gateway");
 
     x->heartbeat_interval = 0;
+    x->v_heartbeat_interval = 0;
     x->last_sequence = -1;
     x->identified = 0;
     x->ready = 0;
+    x->heartbeat_acked = 1;
     x->last_heartbeat_tick = GetTickCount();
 
     // Message loop
-    DWORD recv_buffer_pos = 0;
+    x->recv_buffer_pos = 0;
 
     while (!x->terminate) {
         WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType;
@@ -405,13 +412,13 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
         DWORD err = WinHttpWebSocketReceive(hWebSocket, chunk, sizeof(chunk), &bytesRead, &bufferType);
 
         if (err == ERROR_SUCCESS) {
-            if (recv_buffer_pos + bytesRead < 65536) {
-                memcpy(x->recv_buffer + recv_buffer_pos, chunk, bytesRead);
-                recv_buffer_pos += bytesRead;
+            if (x->recv_buffer_pos + bytesRead < 65536) {
+                memcpy(x->recv_buffer + x->recv_buffer_pos, chunk, bytesRead);
+                x->recv_buffer_pos += bytesRead;
             }
 
             if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
-                x->recv_buffer[recv_buffer_pos] = 0;
+                x->recv_buffer[x->recv_buffer_pos] = 0;
                 // discordvoice_log(x, "Received: %s", (char *)x->recv_buffer);
 
                 t_dictionary *d = NULL;
@@ -428,12 +435,15 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                             x->heartbeat_interval = (long)interval;
                             discordvoice_log(x, "Gateway Hello, Heartbeat Interval: %ld", x->heartbeat_interval);
 
+                            x->last_heartbeat_tick = GetTickCount();
+                            // First heartbeat should be sent immediately per Discord docs
                             discordvoice_send_heartbeat(x, hWebSocket);
-                            discordvoice_send_identify(x, hWebSocket);
-                            x->identified = 1;
                         }
                     } else if (op == 11) { // Heartbeat ACK
-                        // discordvoice_log(x, "Heartbeat ACK");
+                        x->heartbeat_acked = 1;
+                        discordvoice_log(x, "Heartbeat ACK received");
+                    } else if (op == 1) { // Heartbeat Request
+                        discordvoice_send_heartbeat(x, hWebSocket);
                     } else if (op == 0) { // Dispatch
                         t_symbol *t = NULL;
                         dictionary_getsym(d, gensym("t"), &t);
@@ -512,7 +522,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                     }
                     object_free(d);
                 }
-                recv_buffer_pos = 0;
+                x->recv_buffer_pos = 0;
             } else if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
                 USHORT closeStatus = 0;
                 BYTE closeReason[128];
@@ -534,17 +544,16 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
             WINHTTP_WEB_SOCKET_BUFFER_TYPE vBufferType;
             BYTE vChunk[4096];
             DWORD vBytesRead = 0;
-            static DWORD v_recv_buffer_pos = 0;
 
             DWORD vErr = WinHttpWebSocketReceive(hVWebSocket, vChunk, sizeof(vChunk), &vBytesRead, &vBufferType);
             if (vErr == ERROR_SUCCESS) {
-                if (v_recv_buffer_pos + vBytesRead < 65536) {
-                    memcpy(x->v_recv_buffer + v_recv_buffer_pos, vChunk, vBytesRead);
-                    v_recv_buffer_pos += vBytesRead;
+                if (x->v_recv_buffer_pos + vBytesRead < 65536) {
+                    memcpy(x->v_recv_buffer + x->v_recv_buffer_pos, vChunk, vBytesRead);
+                    x->v_recv_buffer_pos += vBytesRead;
                 }
 
                 if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
-                    x->v_recv_buffer[v_recv_buffer_pos] = 0;
+                    x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
                     t_dictionary *vd = NULL;
                     char verrstr[256];
                     if (dictobj_dictionaryfromstring(&vd, (char *)x->v_recv_buffer, 1, verrstr) == MAX_ERR_NONE) {
@@ -609,7 +618,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                         }
                         object_free(vd);
                     }
-                    v_recv_buffer_pos = 0;
+                    x->v_recv_buffer_pos = 0;
                 } else if (vBufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
                     USHORT vCloseStatus = 0;
                     BYTE vCloseReason[128];
@@ -625,7 +634,16 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
         // Check for heartbeats
         DWORD now = GetTickCount();
         if (x->heartbeat_interval > 0 && now - x->last_heartbeat_tick >= (DWORD)x->heartbeat_interval) {
+            if (!x->heartbeat_acked) {
+                discordvoice_log(x, "Heartbeat ACK not received, closing connection");
+                break;
+            }
+            x->heartbeat_acked = 0;
             discordvoice_send_heartbeat(x, hWebSocket);
+            if (!x->identified) {
+                discordvoice_send_identify(x, hWebSocket);
+                x->identified = 1;
+            }
         }
         if (hVWebSocket && x->v_heartbeat_interval > 0 && now - x->v_last_heartbeat_tick >= (DWORD)x->v_heartbeat_interval) {
             discordvoice_send_v_heartbeat(x, hVWebSocket);
@@ -633,9 +651,31 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
 
         // Audio Transmission Loop (20ms)
         if (x->udp_sock != INVALID_SOCKET && x->ready && now - x->last_audio_tick >= 20) {
-            // For now, send a silent Opus frame to keep the connection alive
-            unsigned char dummy_opus[3] = {0xF8, 0xFF, 0xFE};
-            discordvoice_send_audio_packet(x, dummy_opus, 3);
+            int samples_needed = 960 * 2; // 20ms of stereo at 48kHz
+            float frame[1920];
+            int available = 0;
+
+            critical_enter(x->lock);
+            available = (x->buffer_head - x->buffer_tail + x->buffer_size) % x->buffer_size;
+            if (available >= samples_needed) {
+                for (int i = 0; i < samples_needed; i++) {
+                    frame[i] = x->audio_buffer[x->buffer_tail];
+                    x->buffer_tail = (x->buffer_tail + 1) % x->buffer_size;
+                }
+            }
+            critical_exit(x->lock);
+
+            if (available >= samples_needed) {
+                // In a real implementation, we would encode frame[] with libopus here.
+                // Since we cannot link libopus, we'll send a valid-looking Opus "silence"
+                // packet but the user will need to link the library to get real audio.
+                unsigned char opus_packet[3] = {0xF8, 0xFF, 0xFE};
+                discordvoice_send_audio_packet(x, opus_packet, 3);
+            } else {
+                // Not enough audio buffered yet, send silence to maintain timing
+                unsigned char opus_silence[3] = {0xF8, 0xFF, 0xFE};
+                discordvoice_send_audio_packet(x, opus_silence, 3);
+            }
             x->last_audio_tick = now;
         }
 
