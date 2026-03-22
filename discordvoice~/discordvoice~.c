@@ -191,9 +191,24 @@ void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *arg
         return;
     }
 
+    // Robust symbol/ID conversion
     x->token = atom_getsym(argv);
-    x->guild_id = atom_getsym(argv + 1);
-    x->channel_id = atom_getsym(argv + 2);
+
+    if (atom_gettype(argv + 1) == A_SYM) {
+        x->guild_id = atom_getsym(argv + 1);
+    } else {
+        char buf[64];
+        snprintf(buf, 64, "%lld", (long long)atom_getlong(argv + 1));
+        x->guild_id = gensym(buf);
+    }
+
+    if (atom_gettype(argv + 2) == A_SYM) {
+        x->channel_id = atom_getsym(argv + 2);
+    } else {
+        char buf[64];
+        snprintf(buf, 64, "%lld", (long long)atom_getlong(argv + 2));
+        x->channel_id = gensym(buf);
+    }
 
     if (x->thread) {
         object_warn((t_object *)x, "already connecting/connected, restart not implemented yet");
@@ -213,17 +228,18 @@ void discordvoice_send_heartbeat(t_discordvoice *x, HINTERNET hWebSocket) {
     }
     WinHttpWebSocketSend(hWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
     x->last_heartbeat_tick = GetTickCount();
-    discordvoice_log(x, "Sent Heartbeat");
+    discordvoice_log(x, "Sent Heartbeat: %s", json);
 }
 
 void discordvoice_send_identify(t_discordvoice *x, HINTERNET hWebSocket) {
     char json[1024];
     // Identify with intents 129 (GUILDS | GUILD_VOICE_STATES)
+    // Use standard property names and remove trailing ~ which might cause issues
     snprintf(json, sizeof(json),
-        "{\"op\":2,\"d\":{\"token\":\"%s\",\"properties\":{\"$os\":\"windows\",\"$browser\":\"discordvoice~\",\"$device\":\"discordvoice~\"},\"intents\":129}}",
+        "{\"op\":2,\"d\":{\"token\":\"%s\",\"properties\":{\"os\":\"windows\",\"browser\":\"discordvoice\",\"device\":\"discordvoice\"},\"intents\":129}}",
         x->token->s_name);
     WinHttpWebSocketSend(hWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
-    discordvoice_log(x, "Sent Identify (Intents: 129)");
+    discordvoice_log(x, "Sent Identify: %s", json);
 }
 
 void discordvoice_send_voice_state_update(t_discordvoice *x, HINTERNET hWebSocket) {
@@ -232,7 +248,7 @@ void discordvoice_send_voice_state_update(t_discordvoice *x, HINTERNET hWebSocke
         "{\"op\":4,\"d\":{\"guild_id\":\"%s\",\"channel_id\":\"%s\",\"self_mute\":false,\"self_deaf\":false}}",
         x->guild_id->s_name, x->channel_id->s_name);
     WinHttpWebSocketSend(hWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
-    discordvoice_log(x, "Sent Voice State Update (Join Channel)");
+    discordvoice_log(x, "Sent Voice State Update: %s", json);
 }
 
 void discordvoice_send_v_heartbeat(t_discordvoice *x, HINTERNET hVWebSocket) {
@@ -359,20 +375,28 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
     x->last_heartbeat_tick = GetTickCount();
 
     // Message loop
+    BYTE *recv_buffer = (BYTE *)sysmem_newptr(65536);
+    DWORD recv_buffer_pos = 0;
+
     while (!x->terminate) {
         WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType;
-        BYTE buffer[8192];
+        BYTE chunk[8192];
         DWORD bytesRead = 0;
-        DWORD err = WinHttpWebSocketReceive(hWebSocket, buffer, sizeof(buffer), &bytesRead, &bufferType);
+        DWORD err = WinHttpWebSocketReceive(hWebSocket, chunk, sizeof(chunk), &bytesRead, &bufferType);
 
         if (err == ERROR_SUCCESS) {
+            if (recv_buffer_pos + bytesRead < 65536) {
+                memcpy(recv_buffer + recv_buffer_pos, chunk, bytesRead);
+                recv_buffer_pos += bytesRead;
+            }
+
             if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
-                buffer[bytesRead] = 0;
-                // discordvoice_log(x, "Received: %s", (char *)buffer);
+                recv_buffer[recv_buffer_pos] = 0;
+                // discordvoice_log(x, "Received: %s", (char *)recv_buffer);
 
                 t_dictionary *d = NULL;
                 char errstr[256];
-                if (dictobj_dictionaryfromstring(&d, (char *)buffer, 1, errstr) == MAX_ERR_NONE) {
+                if (dictobj_dictionaryfromstring(&d, (char *)recv_buffer, 1, errstr) == MAX_ERR_NONE) {
                     t_atom_long op = -1;
                     dictionary_getlong(d, gensym("op"), &op);
 
@@ -460,6 +484,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                     }
                     object_free(d);
                 }
+                recv_buffer_pos = 0;
             } else if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
                 USHORT closeStatus = 0;
                 BYTE closeReason[128];
@@ -585,6 +610,7 @@ cleanup:
     x->h_session = NULL;
     critical_exit(x->lock);
 
+    if (recv_buffer) sysmem_freeptr(recv_buffer);
     object_post((t_object *)x, "discordvoice~: gateway connection thread terminated");
     return NULL;
 }
