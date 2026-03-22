@@ -23,6 +23,7 @@
 typedef struct _discordvoice {
     t_pxobject d_obj;
     t_systhread thread;
+    t_systhread audio_thread;
     t_critical lock;
     int terminate;
     void *status_outlet;
@@ -100,6 +101,7 @@ void discordvoice_test_tone(t_discordvoice *x, t_atom_long state);
 void discordvoice_stats(t_discordvoice *x);
 void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *argv);
 void *discordvoice_thread_proc(t_discordvoice *x);
+void *discordvoice_audio_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void discordvoice_perform64(t_discordvoice *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void discordvoice_log(t_discordvoice *x, const char *fmt, ...);
@@ -149,6 +151,7 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->terminate = 0;
         x->thread = NULL;
+        x->audio_thread = NULL;
         x->connected = 0;
         x->identified = 0;
         x->token = _sym_nothing;
@@ -226,6 +229,11 @@ void discordvoice_free(t_discordvoice *x) {
         systhread_join(x->thread, &ret);
         x->thread = NULL;
     }
+    if (x->audio_thread) {
+        unsigned int ret;
+        systhread_join(x->audio_thread, &ret);
+        x->audio_thread = NULL;
+    }
 
     critical_free(x->lock);
 }
@@ -262,6 +270,7 @@ void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *arg
 
     x->terminate = 0;
     systhread_create((method)discordvoice_thread_proc, x, 0, 0, 0, &x->thread);
+    systhread_create((method)discordvoice_audio_thread_proc, x, 0, 0, 0, &x->audio_thread);
 }
 
 void discordvoice_send_heartbeat(t_discordvoice *x, HINTERNET hWebSocket) {
@@ -735,7 +744,34 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
             discordvoice_send_v_heartbeat(x, hVWebSocket);
         }
 
-        // Audio Transmission Loop (20ms)
+        systhread_sleep(10);
+    }
+
+cleanup:
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hWebSocket) WinHttpCloseHandle(hWebSocket);
+    if (hVRequest) WinHttpCloseHandle(hVRequest);
+    if (hVWebSocket) WinHttpCloseHandle(hVWebSocket);
+    if (hVConnect) WinHttpCloseHandle(hVConnect);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+
+    critical_enter(x->lock);
+    x->connected = 0;
+    x->h_websocket = NULL;
+    x->h_connect = NULL;
+    x->h_session = NULL;
+    critical_exit(x->lock);
+
+    object_post((t_object *)x, "discordvoice~: gateway connection thread terminated");
+    return NULL;
+}
+
+void *discordvoice_audio_thread_proc(t_discordvoice *x) {
+    discordvoice_log(x, "starting audio transmission thread");
+
+    while (!x->terminate) {
+        DWORD now = GetTickCount();
         if (x->udp_sock != INVALID_SOCKET && x->v_ready && now - x->last_audio_tick >= 20) {
             int samples_needed = 960 * 2; // 20ms of stereo at 48kHz
             float frame[1920];
@@ -757,9 +793,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                 for (int i = 0; i < 128; i++) test_packet[i] = (unsigned char)(rand() % 256);
                 discordvoice_send_audio_packet(x, test_packet, 128);
             } else if (available >= samples_needed) {
-                // In a real implementation, we would encode frame[] with libopus here.
-                // Since we cannot link libopus, we'll send a valid-looking Opus "silence"
-                // packet but the user will need to link the library to get real audio.
+                // For now, send a silent Opus frame but advance buffer
                 unsigned char opus_packet[3] = {0xF8, 0xFF, 0xFE};
                 discordvoice_send_audio_packet(x, opus_packet, 3);
             } else {
@@ -769,27 +803,10 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
             }
             x->last_audio_tick = now;
         }
-
         systhread_sleep(1);
     }
 
-cleanup:
-    if (hRequest) WinHttpCloseHandle(hRequest);
-    if (hWebSocket) WinHttpCloseHandle(hWebSocket);
-    if (hVRequest) WinHttpCloseHandle(hVRequest);
-    if (hVWebSocket) WinHttpCloseHandle(hVWebSocket);
-    if (hVConnect) WinHttpCloseHandle(hVConnect);
-    if (hConnect) WinHttpCloseHandle(hConnect);
-    if (hSession) WinHttpCloseHandle(hSession);
-
-    critical_enter(x->lock);
-    x->connected = 0;
-    x->h_websocket = NULL;
-    x->h_connect = NULL;
-    x->h_session = NULL;
-    critical_exit(x->lock);
-
-    object_post((t_object *)x, "discordvoice~: gateway connection thread terminated");
+    discordvoice_log(x, "audio transmission thread terminated");
     return NULL;
 }
 
@@ -826,8 +843,9 @@ void discordvoice_test_tone(t_discordvoice *x, t_atom_long state) {
 }
 
 void discordvoice_stats(t_discordvoice *x) {
-    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s, V_READY: %d, AES: %d",
-                     x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed", x->v_ready, x->aes_initialized);
+    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s, V_READY: %d, AES: %d, AudioThread: %s",
+                     x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed", x->v_ready, x->aes_initialized,
+                     (x->audio_thread != NULL) ? "Running" : "Stopped");
 }
 
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
