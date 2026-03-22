@@ -218,12 +218,12 @@ void discordvoice_send_heartbeat(t_discordvoice *x, HINTERNET hWebSocket) {
 
 void discordvoice_send_identify(t_discordvoice *x, HINTERNET hWebSocket) {
     char json[1024];
-    // Simple identify without complex nested dicts for now
+    // Identify with intents 129 (GUILDS | GUILD_VOICE_STATES)
     snprintf(json, sizeof(json),
-        "{\"op\":2,\"d\":{\"token\":\"%s\",\"properties\":{\"$os\":\"windows\",\"$browser\":\"discordvoice~\",\"$device\":\"discordvoice~\"},\"intents\":0}}",
+        "{\"op\":2,\"d\":{\"token\":\"%s\",\"properties\":{\"$os\":\"windows\",\"$browser\":\"discordvoice~\",\"$device\":\"discordvoice~\"},\"intents\":129}}",
         x->token->s_name);
     WinHttpWebSocketSend(hWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
-    discordvoice_log(x, "Sent Identify");
+    discordvoice_log(x, "Sent Identify (Intents: 129)");
 }
 
 void discordvoice_send_voice_state_update(t_discordvoice *x, HINTERNET hWebSocket) {
@@ -461,7 +461,12 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                     object_free(d);
                 }
             } else if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
-                discordvoice_log(x, "WebSocket closed by server");
+                USHORT closeStatus = 0;
+                BYTE closeReason[128];
+                DWORD closeReasonLength = 0;
+                WinHttpWebSocketQueryCloseStatus(hWebSocket, &closeStatus, closeReason, sizeof(closeReason), &closeReasonLength);
+                closeReason[closeReasonLength] = 0;
+                discordvoice_log(x, "WebSocket closed by server (Status: %u, Reason: %s)", closeStatus, (char *)closeReason);
                 break;
             }
         } else if (err == ERROR_WINHTTP_TIMEOUT || err == 12002) {
@@ -540,6 +545,14 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                         }
                         object_free(vd);
                     }
+                } else if (vBufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+                    USHORT vCloseStatus = 0;
+                    BYTE vCloseReason[128];
+                    DWORD vCloseReasonLength = 0;
+                    WinHttpWebSocketQueryCloseStatus(hVWebSocket, &vCloseStatus, vCloseReason, sizeof(vCloseReason), &vCloseReasonLength);
+                    vCloseReason[vCloseReasonLength] = 0;
+                    discordvoice_log(x, "Voice WebSocket closed by server (Status: %u, Reason: %s)", (unsigned int)vCloseStatus, (char *)vCloseReason);
+                    break;
                 }
             }
         }

@@ -76,7 +76,10 @@
 	<attrlist>
 		<attr name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Verbose Logging</digest>
-			<description>When enabled (1), the object will post detailed connection progress and protocol messages to the second outlet.</description>
+			<description>
+				When enabled (1), the object will post detailed connection progress and protocol messages to the second outlet.
+				This is useful for debugging connection issues and monitoring the Discord Gateway/Voice Gateway handshake process.
+			</description>
 		</attr>
 	</attrlist>
 
