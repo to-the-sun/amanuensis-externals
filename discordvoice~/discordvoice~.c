@@ -620,7 +620,6 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                             discordvoice_log(x, "Voice READY Payload received");
                             discordvoice_send_v_speaking(x, hVWebSocket, 1);
                             x->last_audio_tick = GetTickCount();
-                            x->v_ready = 1;
 
                             t_dictionary *vdata_dict = NULL;
                             if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
@@ -637,6 +636,9 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                 // Perform IP Discovery
                                 x->udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
                                 if (x->udp_sock != INVALID_SOCKET) {
+                                    DWORD udp_timeout = 2000;
+                                    setsockopt(x->udp_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&udp_timeout, sizeof(udp_timeout));
+
                                     memset(&x->v_server_addr, 0, sizeof(x->v_server_addr));
                                     x->v_server_addr.sin_family = AF_INET;
                                     x->v_server_addr.sin_port = htons((u_short)port);
@@ -684,6 +686,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                     discordvoice_log(x, "Voice Secret Key received");
 
                                     // Initialize BCrypt AES-GCM
+                                    critical_enter(x->lock);
                                     if (x->hAesKey) { BCryptDestroyKey(x->hAesKey); x->hAesKey = NULL; }
                                     if (!x->hAesAlg) {
                                         BCryptOpenAlgorithmProvider(&x->hAesAlg, BCRYPT_AES_ALGORITHM, NULL, 0);
@@ -693,7 +696,9 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                     // Generate key from secret_key
                                     BCryptGenerateSymmetricKey(x->hAesAlg, &x->hAesKey, NULL, 0, x->secret_key, 32, 0);
                                     x->aes_initialized = 1;
+                                    critical_exit(x->lock);
                                     discordvoice_log(x, "Voice Encryption initialized (AES-256-GCM)");
+                                    x->v_ready = 1;
                                 }
                             }
                         }
@@ -821,8 +826,8 @@ void discordvoice_test_tone(t_discordvoice *x, t_atom_long state) {
 }
 
 void discordvoice_stats(t_discordvoice *x) {
-    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s",
-                     x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed");
+    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s, V_READY: %d, AES: %d",
+                     x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed", x->v_ready, x->aes_initialized);
 }
 
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
