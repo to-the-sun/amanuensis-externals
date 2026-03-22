@@ -51,6 +51,7 @@ typedef struct _discordvoice {
     int connected;
     int identified;
     int ready;
+    int v_ready;
     int heartbeat_acked;
 
     t_symbol *voice_token;
@@ -399,6 +400,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
     x->last_sequence = -1;
     x->identified = 0;
     x->ready = 0;
+        x->v_ready = 0;
     x->heartbeat_acked = 1;
     x->last_heartbeat_tick = GetTickCount();
 
@@ -436,8 +438,10 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                             discordvoice_log(x, "Gateway Hello, Heartbeat Interval: %ld", x->heartbeat_interval);
 
                             x->last_heartbeat_tick = GetTickCount();
-                            // First heartbeat should be sent immediately per Discord docs
+                            // First heartbeat and identify should be sent immediately
                             discordvoice_send_heartbeat(x, hWebSocket);
+                            discordvoice_send_identify(x, hWebSocket);
+                            x->identified = 1;
                         }
                     } else if (op == 11) { // Heartbeat ACK
                         x->heartbeat_acked = 1;
@@ -572,6 +576,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                             discordvoice_log(x, "Voice READY Payload received");
                             discordvoice_send_v_speaking(x, hVWebSocket, 1);
                             x->last_audio_tick = GetTickCount();
+                            x->v_ready = 1;
 
                             t_dictionary *vdata_dict = NULL;
                             if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
@@ -650,7 +655,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
         }
 
         // Audio Transmission Loop (20ms)
-        if (x->udp_sock != INVALID_SOCKET && x->ready && now - x->last_audio_tick >= 20) {
+        if (x->udp_sock != INVALID_SOCKET && x->v_ready && now - x->last_audio_tick >= 20) {
             int samples_needed = 960 * 2; // 20ms of stereo at 48kHz
             float frame[1920];
             int available = 0;
@@ -719,7 +724,8 @@ void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s) {
 void discordvoice_bang(t_discordvoice *x) {
     int status = 0;
     critical_enter(x->lock);
-    if (x->ready) status = 4;
+    if (x->v_ready) status = 5;
+    else if (x->ready) status = 4;
     else if (x->identified) status = 3;
     else if (x->connected) status = 2;
     else if (x->thread) status = 1;

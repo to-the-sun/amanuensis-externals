@@ -35,7 +35,7 @@
 	<outletlist>
 		<outlet id="0" type="int">
 			<digest>Connection Status</digest>
-			<description>Outputs an integer indicating the current connection state (0: Disconnected, 1: Connecting, 2: Connected, 3: Identified, 4: Ready).</description>
+			<description>Outputs an integer indicating the current connection state (0: Disconnected, 1: Connecting, 2: Connected, 3: Identified, 4: Ready, 5: Voice Ready).</description>
 		</outlet>
 		<outlet id="1" type="anything">
 			<digest>Logging and Debugging</digest>
