@@ -70,6 +70,17 @@
 			<digest>Query current connection status</digest>
 			<description>Triggers an immediate output of the connection status integer from the first outlet.</description>
 		</method>
+		<method name="test_tone">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Toggle internal test noise</digest>
+			<description>When enabled (1), the object sends random noise packets to Discord to verify the audio and encryption path. This should trigger the speaking indicator in the Discord client.</description>
+		</method>
+		<method name="stats">
+			<digest>Post transmission statistics</digest>
+			<description>Posts the current packet count and socket status to the log outlet.</description>
+		</method>
 	</methodlist>
 
 	<!--ATTRIBUTES-->

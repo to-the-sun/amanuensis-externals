@@ -75,6 +75,8 @@ typedef struct _discordvoice {
     int buffer_head;
     int buffer_tail;
     int buffer_size;
+    int test_tone;
+    long long packets_sent;
 
     // WebSocket receive buffers
     BYTE *recv_buffer;
@@ -94,6 +96,8 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv);
 void discordvoice_free(t_discordvoice *x);
 void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s);
 void discordvoice_bang(t_discordvoice *x);
+void discordvoice_test_tone(t_discordvoice *x, t_atom_long state);
+void discordvoice_stats(t_discordvoice *x);
 void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *argv);
 void *discordvoice_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -125,6 +129,8 @@ void ext_main(void *r) {
     class_addmethod(c, (method)discordvoice_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)discordvoice_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)discordvoice_bang, "bang", 0);
+    class_addmethod(c, (method)discordvoice_test_tone, "test_tone", A_LONG, 0);
+    class_addmethod(c, (method)discordvoice_stats, "stats", 0);
     class_addmethod(c, (method)discordvoice_connect, "connect", A_GIMME, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_discordvoice, log);
@@ -176,6 +182,8 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->buffer_head = 0;
         x->buffer_tail = 0;
         x->last_audio_tick = 0;
+        x->test_tone = 0;
+        x->packets_sent = 0;
 
         x->recv_buffer = (BYTE *)sysmem_newptr(65536);
         x->recv_buffer_pos = 0;
@@ -354,6 +362,7 @@ void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *opus_data,
         // Append auth tag
         memcpy(packet + 12 + opus_len, tag, 16);
         sendto(x->udp_sock, (const char *)packet, 12 + opus_len + 16, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
+        x->packets_sent++;
     } else {
         discordvoice_log(x, "BCryptEncrypt failed with status 0x%x", status);
     }
@@ -656,6 +665,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                 }
                             }
                         } else if (vop == 4) { // SESSION_DESCRIPTION
+                            discordvoice_log(x, "SESSION_DESCRIPTION: %s", (char *)x->v_recv_buffer);
                             t_dictionary *vdata_dict = NULL;
                             if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
                                 t_symbol *mode = NULL;
@@ -736,7 +746,12 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
             }
             critical_exit(x->lock);
 
-            if (available >= samples_needed) {
+            if (x->test_tone) {
+                // Send a small random packet to see if Discord speaker lights up
+                unsigned char test_packet[128];
+                for (int i = 0; i < 128; i++) test_packet[i] = (unsigned char)(rand() % 256);
+                discordvoice_send_audio_packet(x, test_packet, 128);
+            } else if (available >= samples_needed) {
                 // In a real implementation, we would encode frame[] with libopus here.
                 // Since we cannot link libopus, we'll send a valid-looking Opus "silence"
                 // packet but the user will need to link the library to get real audio.
@@ -798,6 +813,16 @@ void discordvoice_bang(t_discordvoice *x) {
     critical_exit(x->lock);
 
     outlet_int(x->status_outlet, status);
+}
+
+void discordvoice_test_tone(t_discordvoice *x, t_atom_long state) {
+    x->test_tone = (int)state;
+    discordvoice_log(x, "Test tone: %s", x->test_tone ? "ON" : "OFF");
+}
+
+void discordvoice_stats(t_discordvoice *x) {
+    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s",
+                     x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed");
 }
 
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
