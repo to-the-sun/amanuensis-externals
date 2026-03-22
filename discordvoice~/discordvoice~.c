@@ -88,6 +88,15 @@ void discordvoice_log(t_discordvoice *x, const char *fmt, ...) {
     va_start(args, fmt);
     vcommon_log(x->log_outlet, x->log, "discordvoice~", fmt, args);
     va_end(args);
+
+    // Always post errors/critical info to the Max console regardless of @log attribute
+    if (strstr(fmt, "failed") || strstr(fmt, "Error") || strstr(fmt, "terminated")) {
+        char buf[1024];
+        va_start(args, fmt);
+        vsnprintf(buf, 1024, fmt, args);
+        va_end(args);
+        object_error((t_object *)x, "discordvoice~: %s", buf);
+    }
 }
 
 void ext_main(void *r) {
@@ -281,28 +290,53 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
 
     hSession = WinHttpOpen(L"discordvoice~/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
-        discordvoice_log(x, "WinHttpOpen failed");
+        discordvoice_log(x, "WinHttpOpen failed (Error %u)", GetLastError());
         goto cleanup;
     }
 
     // Discord Gateway URL: wss://gateway.discord.gg/?v=10&encoding=json
     hConnect = WinHttpConnect(hSession, L"gateway.discord.gg", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) goto cleanup;
+    if (!hConnect) {
+        discordvoice_log(x, "WinHttpConnect failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
 
     hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/?v=10&encoding=json", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) goto cleanup;
+    if (!hRequest) {
+        discordvoice_log(x, "WinHttpOpenRequest failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
 
     WinHttpSetTimeouts(hSession, 0, 0, 0, (int)timeout);
 
-    if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0)) goto cleanup;
+    if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0)) {
+        discordvoice_log(x, "WinHttpSetOption (Upgrade) failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
 
-    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) goto cleanup;
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        discordvoice_log(x, "WinHttpSendRequest failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
 
-    if (!WinHttpReceiveResponse(hRequest, NULL)) goto cleanup;
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        discordvoice_log(x, "WinHttpReceiveResponse failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
+
+    // Check HTTP status code
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX)) {
+        if (statusCode != 101) {
+            discordvoice_log(x, "WebSocket upgrade failed with HTTP Status %u", statusCode);
+            goto cleanup;
+        }
+    }
 
     hWebSocket = WinHttpWebSocketCompleteUpgrade(hRequest, 0);
     if (!hWebSocket) {
-        discordvoice_log(x, "WinHttpWebSocketCompleteUpgrade failed");
+        discordvoice_log(x, "WinHttpWebSocketCompleteUpgrade failed (Error %u)", GetLastError());
         goto cleanup;
     }
 
