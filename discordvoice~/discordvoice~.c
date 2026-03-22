@@ -6,6 +6,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <winhttp.h>
+#include <bcrypt.h>
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
 #include "../shared/logging.h"
@@ -66,6 +67,8 @@ typedef struct _discordvoice {
     unsigned int ssrc;
     unsigned short sequence;
     unsigned int timestamp;
+    unsigned char secret_key[32];
+    t_symbol *v_mode;
 
     // Audio Buffer
     float *audio_buffer;
@@ -78,6 +81,11 @@ typedef struct _discordvoice {
     DWORD recv_buffer_pos;
     BYTE *v_recv_buffer;
     DWORD v_recv_buffer_pos;
+
+    // Encryption (BCrypt)
+    BCRYPT_ALG_HANDLE hAesAlg;
+    BCRYPT_KEY_HANDLE hAesKey;
+    int aes_initialized;
 
     DWORD last_audio_tick;
 } t_discordvoice;
@@ -160,6 +168,8 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->ssrc = 0;
         x->sequence = 0;
         x->timestamp = 0;
+        memset(x->secret_key, 0, 32);
+        x->v_mode = _sym_nothing;
 
         x->buffer_size = 48000 * 2; // 1 second of stereo
         x->audio_buffer = (float *)sysmem_newptr(x->buffer_size * sizeof(float));
@@ -171,6 +181,10 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->recv_buffer_pos = 0;
         x->v_recv_buffer = (BYTE *)sysmem_newptr(65536);
         x->v_recv_buffer_pos = 0;
+
+        x->hAesAlg = NULL;
+        x->hAesKey = NULL;
+        x->aes_initialized = 0;
 
         attr_args_process(x, argc, argv);
 
@@ -191,6 +205,9 @@ void discordvoice_free(t_discordvoice *x) {
     if (x->audio_buffer) sysmem_freeptr(x->audio_buffer);
     if (x->recv_buffer) sysmem_freeptr(x->recv_buffer);
     if (x->v_recv_buffer) sysmem_freeptr(x->v_recv_buffer);
+
+    if (x->hAesKey) BCryptDestroyKey(x->hAesKey);
+    if (x->hAesAlg) BCryptCloseAlgorithmProvider(x->hAesAlg, 0);
 
     critical_enter(x->lock);
     x->terminate = 1;
@@ -282,7 +299,7 @@ void discordvoice_send_v_heartbeat(t_discordvoice *x, HINTERNET hVWebSocket) {
 void discordvoice_send_v_identify(t_discordvoice *x, HINTERNET hVWebSocket) {
     char json[1024];
     snprintf(json, sizeof(json),
-        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\"}}",
+        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\",\"dave_protocol_version\":1}}",
         x->guild_id->s_name, x->user_id->s_name, x->session_id->s_name, x->voice_token->s_name);
     WinHttpWebSocketSend(hVWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
     discordvoice_log(x, "Sent Voice Identify: %s", json);
@@ -299,16 +316,17 @@ void discordvoice_send_v_select_protocol(t_discordvoice *x, HINTERNET hVWebSocke
 
 void discordvoice_send_v_speaking(t_discordvoice *x, HINTERNET hVWebSocket, int speaking) {
     char json[256];
-    snprintf(json, sizeof(json), "{\"op\":5,\"d\":{\"speaking\":%d,\"delay\":0,\"ssrc\":%u}}", speaking ? 1 : 0, x->ssrc);
+    snprintf(json, sizeof(json), "{\"op\":5,\"d\":{\"speaking\":%d,\"delay\":0,\"ssrc\":%u}}", speaking ? 5 : 0, x->ssrc);
     WinHttpWebSocketSend(hVWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
     discordvoice_log(x, "Sent Voice Speaking: %d", speaking);
 }
 
 void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *opus_data, int opus_len) {
     if (x->udp_sock == INVALID_SOCKET) return;
+    if (!x->aes_initialized) return;
 
     unsigned char packet[1500];
-    // RTP Header
+    // RTP Header (12 bytes)
     packet[0] = 0x80;
     packet[1] = 0x78; // Opus
     *(unsigned short *)(packet + 2) = htons(x->sequence++);
@@ -316,12 +334,29 @@ void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *opus_data,
     x->timestamp += 960; // 20ms at 48kHz
     *(unsigned int *)(packet + 8) = htonl(x->ssrc);
 
-    // Encryption would happen here.
-    // For now, we just append the data to show the structure.
-    // Discord will likely ignore unencrypted packets.
-    memcpy(packet + 12, opus_data, opus_len);
+    // AEAD_AES256_GCM_RTPSIZE
+    // Nonce is the 12-byte RTP header
+    unsigned char nonce[12];
+    memcpy(nonce, packet, 12);
 
-    sendto(x->udp_sock, (const char *)packet, opus_len + 12, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO paddingInfo;
+    BCRYPT_INIT_AUTH_MODE_INFO(paddingInfo);
+    unsigned char tag[16];
+    paddingInfo.pbNonce = nonce;
+    paddingInfo.cbNonce = 12;
+    paddingInfo.pbTag = tag;
+    paddingInfo.cbTag = 16;
+
+    DWORD cbResult = 0;
+    NTSTATUS status = BCryptEncrypt(x->hAesKey, opus_data, opus_len, &paddingInfo, NULL, 0, packet + 12, opus_len, &cbResult, 0);
+
+    if (status == 0) {
+        // Append auth tag
+        memcpy(packet + 12 + opus_len, tag, 16);
+        sendto(x->udp_sock, (const char *)packet, 12 + opus_len + 16, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
+    } else {
+        discordvoice_log(x, "BCryptEncrypt failed with status 0x%x", status);
+    }
 }
 
 void *discordvoice_thread_proc(t_discordvoice *x) {
@@ -618,6 +653,37 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                     } else {
                                         discordvoice_log(x, "IP Discovery Failed");
                                     }
+                                }
+                            }
+                        } else if (vop == 4) { // SESSION_DESCRIPTION
+                            t_dictionary *vdata_dict = NULL;
+                            if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
+                                t_symbol *mode = NULL;
+                                dictionary_getsym(vdata_dict, gensym("mode"), &mode);
+                                x->v_mode = mode;
+                                discordvoice_log(x, "Voice Session Description, Mode: %s", x->v_mode->s_name);
+
+                                t_atomarray *key_aa = NULL;
+                                if (dictionary_getatomarray(vdata_dict, gensym("secret_key"), (t_object **)&key_aa) == MAX_ERR_NONE) {
+                                    long key_len = 0;
+                                    t_atom *key_atoms = NULL;
+                                    atomarray_getatoms(key_aa, &key_len, &key_atoms);
+                                    for (int i = 0; i < 32 && i < key_len; i++) {
+                                        x->secret_key[i] = (unsigned char)atom_getlong(key_atoms + i);
+                                    }
+                                    discordvoice_log(x, "Voice Secret Key received");
+
+                                    // Initialize BCrypt AES-GCM
+                                    if (x->hAesKey) { BCryptDestroyKey(x->hAesKey); x->hAesKey = NULL; }
+                                    if (!x->hAesAlg) {
+                                        BCryptOpenAlgorithmProvider(&x->hAesAlg, BCRYPT_AES_ALGORITHM, NULL, 0);
+                                        BCryptSetProperty(x->hAesAlg, BCRYPT_CHAINING_MODE, (PBYTE)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+                                    }
+
+                                    // Generate key from secret_key
+                                    BCryptGenerateSymmetricKey(x->hAesAlg, &x->hAesKey, NULL, 0, x->secret_key, 32, 0);
+                                    x->aes_initialized = 1;
+                                    discordvoice_log(x, "Voice Encryption initialized (AES-256-GCM)");
                                 }
                             }
                         }

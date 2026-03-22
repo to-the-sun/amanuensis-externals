@@ -4,7 +4,7 @@ LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
 discordvoice~.mxe64: discordvoice~.c ../shared/logging.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o discordvoice~.mxe64 discordvoice~.c ../shared/logging.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32 -lwinhttp
+	$(CC) $(CFLAGS) -o discordvoice~.mxe64 discordvoice~.c ../shared/logging.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32 -lwinhttp -lbcrypt
 
 clean:
 	rm -f discordvoice~.mxe64

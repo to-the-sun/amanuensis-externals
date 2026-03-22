@@ -8,7 +8,7 @@
 	</digest>
 
 	<description>
-		The <inlinehelp>discordvoice~</inlinehelp> object enables real-time audio streaming from Max directly to a Discord voice channel. It handles the Discord Gateway signaling, Voice Gateway handshake, and audio encoding necessary for integration with the Discord API.
+		The <inlinehelp>discordvoice~</inlinehelp> object enables real-time audio streaming from Max directly to a Discord voice channel. It handles the Discord Gateway signaling, Voice Gateway handshake (including DAVE/E2EE protocol negotiation), and audio encoding necessary for integration with the Discord API.
 	</description>
 
 	<!--METADATA-->
