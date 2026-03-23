@@ -303,7 +303,14 @@ void discordvoice_send_identify(t_discordvoice *x, HINTERNET hWebSocket) {
         "{\"op\":2,\"d\":{\"token\":\"%s\",\"properties\":{\"os\":\"windows\",\"browser\":\"discordvoice\",\"device\":\"discordvoice\"},\"intents\":129}}",
         x->token->s_name);
     WinHttpWebSocketSend(hWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
-    discordvoice_log(x, "Sent Identify: %s", json);
+    // Redact token in log
+    char redacted[1024];
+    strncpy(redacted, json, 1024);
+    char *p = strstr(redacted, x->token->s_name);
+    if (p) {
+        memset(p, '*', strlen(x->token->s_name));
+    }
+    discordvoice_log(x, "Sent Identify: %s", redacted);
 }
 
 void discordvoice_send_voice_state_update(t_discordvoice *x, HINTERNET hWebSocket) {
@@ -329,7 +336,14 @@ void discordvoice_send_v_identify(t_discordvoice *x, HINTERNET hVWebSocket) {
         "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\",\"dave_protocol_version\":1}}",
         x->guild_id->s_name, x->user_id->s_name, x->session_id->s_name, x->voice_token->s_name);
     WinHttpWebSocketSend(hVWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
-    discordvoice_log(x, "Sent Voice Identify: %s", json);
+    // Redact token in log
+    char redacted[1024];
+    strncpy(redacted, json, 1024);
+    char *p = strstr(redacted, x->voice_token->s_name);
+    if (p) {
+        memset(p, '*', strlen(x->voice_token->s_name));
+    }
+    discordvoice_log(x, "Sent Voice Identify: %s", redacted);
 }
 
 void discordvoice_send_v_select_protocol(t_discordvoice *x, HINTERNET hVWebSocket) {
@@ -685,7 +699,6 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
     critical_exit(x->lock);
 
     discordvoice_log(x, "Connected to Voice Gateway");
-    discordvoice_send_v_identify(x, hVWebSocket);
 
     while (!x->terminate) {
         WINHTTP_WEB_SOCKET_BUFFER_TYPE vBufferType;
@@ -716,6 +729,9 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
                             x->v_heartbeat_interval = (long)vinterval;
                             x->v_last_heartbeat_tick = GetTickCount();
                             discordvoice_log(x, "Voice Hello, Heartbeat: %ld", x->v_heartbeat_interval);
+
+                            // Send Identify AFTER Hello
+                            discordvoice_send_v_identify(x, hVWebSocket);
 
                             // Check for DAVE/E2EE announcement
                             t_atomarray *modes = NULL;
