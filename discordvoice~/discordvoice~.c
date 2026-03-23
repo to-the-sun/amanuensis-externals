@@ -23,6 +23,7 @@
 typedef struct _discordvoice {
     t_pxobject d_obj;
     t_systhread thread;
+    t_systhread v_thread;
     t_systhread audio_thread;
     t_critical lock;
     int terminate;
@@ -70,6 +71,7 @@ typedef struct _discordvoice {
     unsigned int timestamp;
     unsigned char secret_key[32];
     t_symbol *v_mode;
+    int dave_version;
 
     // Audio Buffer
     float *audio_buffer;
@@ -101,6 +103,7 @@ void discordvoice_test_tone(t_discordvoice *x, t_atom_long state);
 void discordvoice_stats(t_discordvoice *x);
 void discordvoice_connect(t_discordvoice *x, t_symbol *s, long argc, t_atom *argv);
 void *discordvoice_thread_proc(t_discordvoice *x);
+void *discordvoice_v_thread_proc(t_discordvoice *x);
 void *discordvoice_audio_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void discordvoice_perform64(t_discordvoice *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -151,6 +154,7 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->terminate = 0;
         x->thread = NULL;
+        x->v_thread = NULL;
         x->audio_thread = NULL;
         x->connected = 0;
         x->identified = 0;
@@ -179,6 +183,7 @@ void *discordvoice_new(t_symbol *s, long argc, t_atom *argv) {
         x->timestamp = 0;
         memset(x->secret_key, 0, 32);
         x->v_mode = _sym_nothing;
+        x->dave_version = 0;
 
         x->buffer_size = 48000 * 2; // 1 second of stereo
         x->audio_buffer = (float *)sysmem_newptr(x->buffer_size * sizeof(float));
@@ -228,6 +233,11 @@ void discordvoice_free(t_discordvoice *x) {
         unsigned int ret;
         systhread_join(x->thread, &ret);
         x->thread = NULL;
+    }
+    if (x->v_thread) {
+        unsigned int ret;
+        systhread_join(x->v_thread, &ret);
+        x->v_thread = NULL;
     }
     if (x->audio_thread) {
         unsigned int ret;
@@ -338,21 +348,29 @@ void discordvoice_send_v_speaking(t_discordvoice *x, HINTERNET hVWebSocket, int 
     discordvoice_log(x, "Sent Voice Speaking: %d", speaking);
 }
 
-void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *opus_data, int opus_len) {
+/**
+ * @brief Sends an encrypted RTP audio packet to Discord.
+ *
+ * Note: Discord currently expects the payload to be Opus-encoded.
+ * If the channel requires DAVE (E2EE), additional framing may be necessary.
+ */
+void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *payload, int payload_len) {
     if (x->udp_sock == INVALID_SOCKET) return;
     if (!x->aes_initialized) return;
 
     unsigned char packet[1500];
+    int rtp_header_len = 12;
+
     // RTP Header (12 bytes)
     packet[0] = 0x80;
-    packet[1] = 0x78; // Opus
+    packet[1] = 0x78; // Payload type 120 (Opus)
     *(unsigned short *)(packet + 2) = htons(x->sequence++);
     *(unsigned int *)(packet + 4) = htonl(x->timestamp);
-    x->timestamp += 960; // 20ms at 48kHz
+    x->timestamp += 960; // 20ms of samples at 48kHz
     *(unsigned int *)(packet + 8) = htonl(x->ssrc);
 
-    // AEAD_AES256_GCM_RTPSIZE
-    // Nonce is the 12-byte RTP header
+    // Encryption: AEAD_AES256_GCM_RTPSIZE
+    // The 12-byte RTP header is used as the Nonce.
     unsigned char nonce[12];
     memcpy(nonce, packet, 12);
 
@@ -365,15 +383,26 @@ void discordvoice_send_audio_packet(t_discordvoice *x, unsigned char *opus_data,
     paddingInfo.cbTag = 16;
 
     DWORD cbResult = 0;
-    NTSTATUS status = BCryptEncrypt(x->hAesKey, opus_data, opus_len, &paddingInfo, NULL, 0, packet + 12, opus_len, &cbResult, 0);
+    // Encrypt the payload into the packet buffer starting after the RTP header
+    NTSTATUS status = BCryptEncrypt(x->hAesKey, payload, payload_len, &paddingInfo, NULL, 0, packet + rtp_header_len, payload_len, &cbResult, 0);
 
-    if (status == 0) {
-        // Append auth tag
-        memcpy(packet + 12 + opus_len, tag, 16);
-        sendto(x->udp_sock, (const char *)packet, 12 + opus_len + 16, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
-        x->packets_sent++;
+    if (BCRYPT_SUCCESS(status)) {
+        // Append the 16-byte authentication tag after the encrypted payload
+        memcpy(packet + rtp_header_len + payload_len, tag, 16);
+
+        int total_len = rtp_header_len + payload_len + 16;
+        int sent = sendto(x->udp_sock, (const char *)packet, total_len, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
+
+        if (sent != SOCKET_ERROR) {
+            x->packets_sent++;
+        } else {
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                discordvoice_log(x, "UDP sendto failed (Error %d)", err);
+            }
+        }
     } else {
-        discordvoice_log(x, "BCryptEncrypt failed with status 0x%x", status);
+        discordvoice_log(x, "BCryptEncrypt failed (Status 0x%x)", (unsigned int)status);
     }
 }
 
@@ -481,6 +510,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                 if (dictobj_dictionaryfromstring(&d, (char *)x->recv_buffer, 1, errstr) == MAX_ERR_NONE) {
                     t_atom_long op = -1;
                     dictionary_getlong(d, gensym("op"), &op);
+                    discordvoice_log(x, "Gateway Recv Opcode: %ld", (long)op);
 
                     if (op == 10) { // Hello
                         t_dictionary *data_dict = NULL;
@@ -543,37 +573,7 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
                                  discordvoice_log(x, "Voice Token: %s", x->voice_token->s_name);
                                  discordvoice_log(x, "Voice Endpoint: %s", x->voice_endpoint->s_name);
 
-                                 // Voice Gateway Connection
-                                 WCHAR szVHost[256];
-                                 char vhost[256];
-                                 const char *pend = strstr(x->voice_endpoint->s_name, ":");
-                                 if (pend) {
-                                     size_t len = pend - x->voice_endpoint->s_name;
-                                     strncpy(vhost, x->voice_endpoint->s_name, len);
-                                     vhost[len] = 0;
-                                 } else {
-                                     strcpy(vhost, x->voice_endpoint->s_name);
-                                 }
-                                 MultiByteToWideChar(CP_UTF8, 0, vhost, -1, szVHost, 256);
-
-                                 hVConnect = WinHttpConnect(hSession, szVHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
-                                 if (hVConnect) {
-                                     hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=4", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-                                     if (hVRequest) {
-                                         WinHttpSetOption(hVRequest, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
-                                         if (WinHttpSendRequest(hVRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-                                             if (WinHttpReceiveResponse(hVRequest, NULL)) {
-                                                 hVWebSocket = WinHttpWebSocketCompleteUpgrade(hVRequest, 0);
-                                                 if (hVWebSocket) {
-                                                     discordvoice_log(x, "Connected to Voice Gateway");
-                                                     WinHttpCloseHandle(hVRequest);
-                                                     hVRequest = NULL;
-                                                     discordvoice_send_v_identify(x, hVWebSocket);
-                                                 }
-                                             }
-                                         }
-                                     }
-                                 }
+                                 systhread_create((method)discordvoice_v_thread_proc, x, 0, 0, 0, &x->v_thread);
                              }
                         }
                     }
@@ -594,136 +594,6 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
         } else {
             discordvoice_log(x, "WinHttpWebSocketReceive failed with error %d", err);
             break;
-        }
-
-        // Check for Voice Gateway messages
-        if (hVWebSocket) {
-            WINHTTP_WEB_SOCKET_BUFFER_TYPE vBufferType;
-            BYTE vChunk[4096];
-            DWORD vBytesRead = 0;
-
-            DWORD vErr = WinHttpWebSocketReceive(hVWebSocket, vChunk, sizeof(vChunk), &vBytesRead, &vBufferType);
-            if (vErr == ERROR_SUCCESS) {
-                if (x->v_recv_buffer_pos + vBytesRead < 65536) {
-                    memcpy(x->v_recv_buffer + x->v_recv_buffer_pos, vChunk, vBytesRead);
-                    x->v_recv_buffer_pos += vBytesRead;
-                }
-
-                if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
-                    x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
-                    t_dictionary *vd = NULL;
-                    char verrstr[256];
-                    if (dictobj_dictionaryfromstring(&vd, (char *)x->v_recv_buffer, 1, verrstr) == MAX_ERR_NONE) {
-                        t_atom_long vop = -1;
-                        dictionary_getlong(vd, gensym("op"), &vop);
-                        if (vop == 8) { // Hello
-                            t_dictionary *vdata_dict = NULL;
-                            if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
-                                t_atom_long vinterval = 0;
-                                dictionary_getlong(vdata_dict, gensym("heartbeat_interval"), &vinterval);
-                                x->v_heartbeat_interval = (long)vinterval;
-                                x->v_last_heartbeat_tick = GetTickCount();
-                                discordvoice_log(x, "Voice Hello, Heartbeat: %ld", x->v_heartbeat_interval);
-                            }
-                        } else if (vop == 2) { // READY
-                            discordvoice_log(x, "Voice READY Payload received");
-                            discordvoice_send_v_speaking(x, hVWebSocket, 1);
-                            x->last_audio_tick = GetTickCount();
-
-                            t_dictionary *vdata_dict = NULL;
-                            if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
-                                t_symbol *ip = NULL;
-                                t_atom_long port = 0;
-                                t_atom_long ssrc = 0;
-                                dictionary_getsym(vdata_dict, gensym("ip"), &ip);
-                                dictionary_getlong(vdata_dict, gensym("port"), &port);
-                                dictionary_getlong(vdata_dict, gensym("ssrc"), &ssrc);
-                                x->ssrc = (unsigned int)ssrc;
-
-                                discordvoice_log(x, "Voice READY, SSRC: %u, Server UDP: %s:%ld", x->ssrc, ip->s_name, (long)port);
-
-                                // Perform IP Discovery
-                                x->udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-                                if (x->udp_sock != INVALID_SOCKET) {
-                                    DWORD udp_timeout = 2000;
-                                    setsockopt(x->udp_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&udp_timeout, sizeof(udp_timeout));
-
-                                    memset(&x->v_server_addr, 0, sizeof(x->v_server_addr));
-                                    x->v_server_addr.sin_family = AF_INET;
-                                    x->v_server_addr.sin_port = htons((u_short)port);
-                                    x->v_server_addr.sin_addr.S_un.S_addr = inet_addr(ip->s_name);
-
-                                    unsigned char packet[74];
-                                    memset(packet, 0, 74);
-                                    packet[0] = 0x01; // Request
-                                    packet[1] = 0x4a; // Message length
-                                    *(unsigned int *)(packet + 4) = htonl(x->ssrc);
-
-                                    sendto(x->udp_sock, (const char *)packet, 74, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
-
-                                    struct sockaddr_in from;
-                                    int fromlen = sizeof(from);
-                                    int n = recvfrom(x->udp_sock, (char *)packet, 74, 0, (struct sockaddr *)&from, &fromlen);
-                                    if (n >= 70) {
-                                        strcpy(x->my_ip, (const char *)(packet + 8));
-                                        x->my_port = ntohs(*(unsigned short *)(packet + 72));
-                                        discordvoice_log(x, "IP Discovery Success: My IP is %s, Port %d", x->my_ip, x->my_port);
-
-                                        discordvoice_send_v_select_protocol(x, hVWebSocket);
-                                    } else {
-                                        discordvoice_log(x, "IP Discovery Failed");
-                                    }
-                                }
-                            }
-                        } else if (vop == 4) { // SESSION_DESCRIPTION
-                            discordvoice_log(x, "SESSION_DESCRIPTION: %s", (char *)x->v_recv_buffer);
-                            t_dictionary *vdata_dict = NULL;
-                            if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
-                                t_symbol *mode = NULL;
-                                dictionary_getsym(vdata_dict, gensym("mode"), &mode);
-                                x->v_mode = mode;
-                                discordvoice_log(x, "Voice Session Description, Mode: %s", x->v_mode->s_name);
-
-                                t_atomarray *key_aa = NULL;
-                                if (dictionary_getatomarray(vdata_dict, gensym("secret_key"), (t_object **)&key_aa) == MAX_ERR_NONE) {
-                                    long key_len = 0;
-                                    t_atom *key_atoms = NULL;
-                                    atomarray_getatoms(key_aa, &key_len, &key_atoms);
-                                    for (int i = 0; i < 32 && i < key_len; i++) {
-                                        x->secret_key[i] = (unsigned char)atom_getlong(key_atoms + i);
-                                    }
-                                    discordvoice_log(x, "Voice Secret Key received");
-
-                                    // Initialize BCrypt AES-GCM
-                                    critical_enter(x->lock);
-                                    if (x->hAesKey) { BCryptDestroyKey(x->hAesKey); x->hAesKey = NULL; }
-                                    if (!x->hAesAlg) {
-                                        BCryptOpenAlgorithmProvider(&x->hAesAlg, BCRYPT_AES_ALGORITHM, NULL, 0);
-                                        BCryptSetProperty(x->hAesAlg, BCRYPT_CHAINING_MODE, (PBYTE)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
-                                    }
-
-                                    // Generate key from secret_key
-                                    BCryptGenerateSymmetricKey(x->hAesAlg, &x->hAesKey, NULL, 0, x->secret_key, 32, 0);
-                                    x->aes_initialized = 1;
-                                    critical_exit(x->lock);
-                                    discordvoice_log(x, "Voice Encryption initialized (AES-256-GCM)");
-                                    x->v_ready = 1;
-                                }
-                            }
-                        }
-                        object_free(vd);
-                    }
-                    x->v_recv_buffer_pos = 0;
-                } else if (vBufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
-                    USHORT vCloseStatus = 0;
-                    BYTE vCloseReason[128];
-                    DWORD vCloseReasonLength = 0;
-                    WinHttpWebSocketQueryCloseStatus(hVWebSocket, &vCloseStatus, vCloseReason, sizeof(vCloseReason), &vCloseReasonLength);
-                    vCloseReason[vCloseReasonLength] = 0;
-                    discordvoice_log(x, "Voice WebSocket closed by server (Status: %u, Reason: %s)", (unsigned int)vCloseStatus, (char *)vCloseReason);
-                    break;
-                }
-            }
         }
 
         // Check for heartbeats
@@ -767,42 +637,285 @@ cleanup:
     return NULL;
 }
 
+void *discordvoice_v_thread_proc(t_discordvoice *x) {
+    HINTERNET hSession = (HINTERNET)x->h_session;
+    HINTERNET hVConnect = NULL, hVRequest = NULL, hVWebSocket = NULL;
+    DWORD timeout = 50; // 50ms timeout for polling
+
+    discordvoice_log(x, "starting voice signaling thread");
+
+    // Voice Gateway Connection
+    WCHAR szVHost[256];
+    char vhost[256];
+    const char *pend = strstr(x->voice_endpoint->s_name, ":");
+    if (pend) {
+        size_t len = pend - x->voice_endpoint->s_name;
+        strncpy(vhost, x->voice_endpoint->s_name, len);
+        vhost[len] = 0;
+    } else {
+        strcpy(vhost, x->voice_endpoint->s_name);
+    }
+    MultiByteToWideChar(CP_UTF8, 0, vhost, -1, szVHost, 256);
+
+    hVConnect = WinHttpConnect(hSession, szVHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hVConnect) goto cleanup;
+
+    hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=4", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hVRequest) goto cleanup;
+
+    WinHttpSetTimeouts(hSession, 0, 0, 0, (int)timeout);
+    WinHttpSetOption(hVRequest, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
+
+    if (WinHttpSendRequest(hVRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        if (WinHttpReceiveResponse(hVRequest, NULL)) {
+            hVWebSocket = WinHttpWebSocketCompleteUpgrade(hVRequest, 0);
+        }
+    }
+
+    if (!hVWebSocket) {
+        discordvoice_log(x, "Voice WebSocket upgrade failed (Error %u)", GetLastError());
+        goto cleanup;
+    }
+
+    WinHttpCloseHandle(hVRequest);
+    hVRequest = NULL;
+
+    critical_enter(x->lock);
+    x->h_v_websocket = (void *)hVWebSocket;
+    critical_exit(x->lock);
+
+    discordvoice_log(x, "Connected to Voice Gateway");
+    discordvoice_send_v_identify(x, hVWebSocket);
+
+    while (!x->terminate) {
+        WINHTTP_WEB_SOCKET_BUFFER_TYPE vBufferType;
+        BYTE vChunk[4096];
+        DWORD vBytesRead = 0;
+
+        DWORD vErr = WinHttpWebSocketReceive(hVWebSocket, vChunk, sizeof(vChunk), &vBytesRead, &vBufferType);
+        if (vErr == ERROR_SUCCESS) {
+            if (x->v_recv_buffer_pos + vBytesRead < 65536) {
+                memcpy(x->v_recv_buffer + x->v_recv_buffer_pos, vChunk, vBytesRead);
+                x->v_recv_buffer_pos += vBytesRead;
+            }
+
+            if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+                x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
+                t_dictionary *vd = NULL;
+                char verrstr[256];
+                if (dictobj_dictionaryfromstring(&vd, (char *)x->v_recv_buffer, 1, verrstr) == MAX_ERR_NONE) {
+                    t_atom_long vop = -1;
+                    dictionary_getlong(vd, gensym("op"), &vop);
+                    discordvoice_log(x, "Voice Recv Opcode: %ld", (long)vop);
+
+                    if (vop == 8) { // Hello
+                        t_dictionary *vdata_dict = NULL;
+                        if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
+                            t_atom_long vinterval = 0;
+                            dictionary_getlong(vdata_dict, gensym("heartbeat_interval"), &vinterval);
+                            x->v_heartbeat_interval = (long)vinterval;
+                            x->v_last_heartbeat_tick = GetTickCount();
+                            discordvoice_log(x, "Voice Hello, Heartbeat: %ld", x->v_heartbeat_interval);
+
+                            // Check for DAVE/E2EE announcement
+                            t_atomarray *modes = NULL;
+                            if (dictionary_getatomarray(vdata_dict, gensym("modes"), (t_object **)&modes) == MAX_ERR_NONE) {
+                                long count = 0;
+                                t_atom *atoms = NULL;
+                                atomarray_getatoms(modes, &count, &atoms);
+                                for (int i = 0; i < count; i++) {
+                                    discordvoice_log(x, "Available Mode: %s", atom_getsym(atoms + i)->s_name);
+                                }
+                            }
+                        }
+                    } else if (vop == 2) { // READY
+                        discordvoice_log(x, "Voice READY Payload received");
+                        discordvoice_send_v_speaking(x, hVWebSocket, 1);
+                        x->last_audio_tick = GetTickCount();
+
+                        t_dictionary *vdata_dict = NULL;
+                        if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
+                            t_symbol *ip = NULL;
+                            t_atom_long port = 0;
+                            t_atom_long ssrc = 0;
+                            dictionary_getsym(vdata_dict, gensym("ip"), &ip);
+                            dictionary_getlong(vdata_dict, gensym("port"), &port);
+                            dictionary_getlong(vdata_dict, gensym("ssrc"), &ssrc);
+                            x->ssrc = (unsigned int)ssrc;
+
+                            discordvoice_log(x, "Voice READY, SSRC: %u, Server UDP: %s:%ld", x->ssrc, ip->s_name, (long)port);
+
+                            // Perform IP Discovery
+                            x->udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+                            if (x->udp_sock != INVALID_SOCKET) {
+                                DWORD udp_timeout = 2000;
+                                setsockopt(x->udp_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&udp_timeout, sizeof(udp_timeout));
+
+                                memset(&x->v_server_addr, 0, sizeof(x->v_server_addr));
+                                x->v_server_addr.sin_family = AF_INET;
+                                x->v_server_addr.sin_port = htons((u_short)port);
+                                x->v_server_addr.sin_addr.S_un.S_addr = inet_addr(ip->s_name);
+
+                                unsigned char packet[74];
+                                memset(packet, 0, 74);
+                                packet[0] = 0x01; // Request
+                                packet[1] = 0x4a; // Message length
+                                *(unsigned int *)(packet + 4) = htonl(x->ssrc);
+
+                                sendto(x->udp_sock, (const char *)packet, 74, 0, (struct sockaddr *)&x->v_server_addr, sizeof(x->v_server_addr));
+
+                                struct sockaddr_in from;
+                                int fromlen = sizeof(from);
+                                int n = recvfrom(x->udp_sock, (char *)packet, 74, 0, (struct sockaddr *)&from, &fromlen);
+                                if (n >= 70) {
+                                    strcpy(x->my_ip, (const char *)(packet + 8));
+                                    x->my_port = ntohs(*(unsigned short *)(packet + 72));
+                                    discordvoice_log(x, "IP Discovery Success: My IP is %s, Port %d", x->my_ip, x->my_port);
+
+                                    discordvoice_send_v_select_protocol(x, hVWebSocket);
+                                } else {
+                                    discordvoice_log(x, "IP Discovery Failed");
+                                }
+                            }
+                        }
+                    } else if (vop == 4) { // SESSION_DESCRIPTION
+                        t_dictionary *vdata_dict = NULL;
+                        if (dictionary_getdictionary(vd, gensym("d"), (t_object **)&vdata_dict) == MAX_ERR_NONE) {
+                            t_symbol *mode = NULL;
+                            dictionary_getsym(vdata_dict, gensym("mode"), &mode);
+                            x->v_mode = mode;
+                            discordvoice_log(x, "Session Description received (Mode: %s)", x->v_mode->s_name);
+
+                            // Check for DAVE parameters
+                            t_atom_long d_ver = 0;
+                            if (dictionary_getlong(vdata_dict, gensym("dave_version"), &d_ver) == MAX_ERR_NONE) {
+                                x->dave_version = (int)d_ver;
+                                discordvoice_log(x, "Active DAVE Protocol Version: %d", x->dave_version);
+                            }
+
+                            t_atomarray *key_aa = NULL;
+                            if (dictionary_getatomarray(vdata_dict, gensym("secret_key"), (t_object **)&key_aa) == MAX_ERR_NONE) {
+                                long key_len = 0;
+                                t_atom *key_atoms = NULL;
+                                atomarray_getatoms(key_aa, &key_len, &key_atoms);
+                                for (int i = 0; i < 32 && i < key_len; i++) {
+                                    x->secret_key[i] = (unsigned char)atom_getlong(key_atoms + i);
+                                }
+
+                                // Initialize BCrypt AES-GCM for standard RTP encryption
+                                critical_enter(x->lock);
+                                if (x->hAesKey) { BCryptDestroyKey(x->hAesKey); x->hAesKey = NULL; }
+                                if (!x->hAesAlg) {
+                                    BCryptOpenAlgorithmProvider(&x->hAesAlg, BCRYPT_AES_ALGORITHM, NULL, 0);
+                                    BCryptSetProperty(x->hAesAlg, BCRYPT_CHAINING_MODE, (PBYTE)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+                                }
+                                NTSTATUS s_key = BCryptGenerateSymmetricKey(x->hAesAlg, &x->hAesKey, NULL, 0, x->secret_key, 32, 0);
+                                if (BCRYPT_SUCCESS(s_key)) {
+                                    x->aes_initialized = 1;
+                                    discordvoice_log(x, "Encryption initialized (AES-256-GCM)");
+                                } else {
+                                    discordvoice_log(x, "Failed to initialize BCrypt symmetric key (Status 0x%x)", (unsigned int)s_key);
+                                }
+                                critical_exit(x->lock);
+                                x->v_ready = 1;
+                            }
+                        }
+                    }
+                    object_free(vd);
+                }
+                x->v_recv_buffer_pos = 0;
+            } else if (vBufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+                USHORT vCloseStatus = 0;
+                BYTE vCloseReason[128];
+                DWORD vCloseReasonLength = 0;
+                WinHttpWebSocketQueryCloseStatus(hVWebSocket, &vCloseStatus, vCloseReason, sizeof(vCloseReason), &vCloseReasonLength);
+                vCloseReason[vCloseReasonLength] = 0;
+                discordvoice_log(x, "Voice WebSocket closed by server (Status: %u, Reason: %s)", (unsigned int)vCloseStatus, (char *)vCloseReason);
+                break;
+            }
+        }
+
+        // Voice Heartbeat
+        DWORD v_now = GetTickCount();
+        if (x->v_heartbeat_interval > 0 && v_now - x->v_last_heartbeat_tick >= (DWORD)x->v_heartbeat_interval) {
+            discordvoice_send_v_heartbeat(x, hVWebSocket);
+        }
+
+        systhread_sleep(1);
+    }
+
+cleanup:
+    if (hVRequest) WinHttpCloseHandle(hVRequest);
+    if (hVWebSocket) WinHttpCloseHandle(hVWebSocket);
+    if (hVConnect) WinHttpCloseHandle(hVConnect);
+
+    critical_enter(x->lock);
+    x->h_v_websocket = NULL;
+    x->v_ready = 0;
+    critical_exit(x->lock);
+
+    discordvoice_log(x, "voice signaling thread terminated");
+    return NULL;
+}
+
+/**
+ * @brief Main audio processing and transmission loop.
+ *
+ * Runs in a high-priority system thread. Every 20ms, it consumes audio from the
+ * ring buffer, (ideally) encodes it via Opus, and transmits it over UDP.
+ */
 void *discordvoice_audio_thread_proc(t_discordvoice *x) {
     discordvoice_log(x, "starting audio transmission thread");
 
+    // Buffer for Opus encoding
+    unsigned char opus_encoded[1275];
+    int samples_per_frame = 960; // 20ms at 48kHz
+    int channels = 2;
+    int samples_needed = samples_per_frame * channels;
+    float pcm_frame[1920];
+
     while (!x->terminate) {
         DWORD now = GetTickCount();
+
+        // Wait for next 20ms window
         if (x->udp_sock != INVALID_SOCKET && x->v_ready && now - x->last_audio_tick >= 20) {
-            int samples_needed = 960 * 2; // 20ms of stereo at 48kHz
-            float frame[1920];
             int available = 0;
 
             critical_enter(x->lock);
             available = (x->buffer_head - x->buffer_tail + x->buffer_size) % x->buffer_size;
             if (available >= samples_needed) {
                 for (int i = 0; i < samples_needed; i++) {
-                    frame[i] = x->audio_buffer[x->buffer_tail];
+                    pcm_frame[i] = x->audio_buffer[x->buffer_tail];
                     x->buffer_tail = (x->buffer_tail + 1) % x->buffer_size;
                 }
             }
             critical_exit(x->lock);
 
             if (x->test_tone) {
-                // Send a small random packet to see if Discord speaker lights up
+                // INTEGRATION POINT: Replace with noise generation + Opus encoding
+                // Current: sending random 128-byte packet as a path test
                 unsigned char test_packet[128];
                 for (int i = 0; i < 128; i++) test_packet[i] = (unsigned char)(rand() % 256);
                 discordvoice_send_audio_packet(x, test_packet, 128);
-            } else if (available >= samples_needed) {
-                // For now, send a silent Opus frame but advance buffer
-                unsigned char opus_packet[3] = {0xF8, 0xFF, 0xFE};
-                discordvoice_send_audio_packet(x, opus_packet, 3);
-            } else {
-                // Not enough audio buffered yet, send silence to maintain timing
+            }
+            else if (available >= samples_needed) {
+                // INTEGRATION POINT: Insert libopus encoding here.
+                // opus_len = opus_encode(encoder, pcm_frame, samples_per_frame, opus_encoded, sizeof(opus_encoded));
+
+                // FALLBACK: Send silent Opus frame to maintain jitter buffer
                 unsigned char opus_silence[3] = {0xF8, 0xFF, 0xFE};
                 discordvoice_send_audio_packet(x, opus_silence, 3);
             }
+            else {
+                // Not enough audio buffered from Max yet.
+                // Send a silent Opus frame to prevent audio gaps / socket timeout.
+                unsigned char opus_idle[3] = {0xF8, 0xFF, 0xFE};
+                discordvoice_send_audio_packet(x, opus_idle, 3);
+            }
             x->last_audio_tick = now;
         }
+
+        // Yield to other threads but keep timing tight
         systhread_sleep(1);
     }
 
@@ -843,9 +956,11 @@ void discordvoice_test_tone(t_discordvoice *x, t_atom_long state) {
 }
 
 void discordvoice_stats(t_discordvoice *x) {
-    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s, V_READY: %d, AES: %d, AudioThread: %s",
+    discordvoice_log(x, "Stats: Packets Sent: %lld, UDP Socket: %s, V_READY: %d, AES: %d, Audio: %s, Voice: %s, Gateway: %s",
                      x->packets_sent, (x->udp_sock != INVALID_SOCKET) ? "Open" : "Closed", x->v_ready, x->aes_initialized,
-                     (x->audio_thread != NULL) ? "Running" : "Stopped");
+                     (x->audio_thread != NULL) ? "Running" : "Stopped",
+                     (x->v_thread != NULL) ? "Running" : "Stopped",
+                     (x->thread != NULL) ? "Running" : "Stopped");
 }
 
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
