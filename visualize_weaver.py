@@ -67,17 +67,23 @@ def process_text(text):
                 sys.stdout.flush()
                 continue
 
-            if all(k in pkt for k in ["track", "ms", "label"]):
+            if all(k in pkt for k in ["track", "ms", "palette", "offset"]):
                 track_id = pkt["track"]
+                label_text = f"{pkt['palette']}@{pkt['offset']:.0f}"
                 with state_lock:
                     if track_id not in labels_by_track:
                         labels_by_track[track_id] = []
+
+                    # Alternate top/bottom position per bar
+                    # We use the number of existing labels to decide position
+                    pos_idx = len(labels_by_track[track_id]) % 2
+
                     labels_by_track[track_id].append({
                         "ms": pkt["ms"],
-                        "text": pkt["label"],
+                        "text": label_text,
                         "bar": pkt.get("bar", ""),
                         "len": pkt.get("len", 0),
-                        "f2": pkt.get("f2", 0.0)
+                        "pos_idx": pos_idx
                     })
                     if "busy" in pkt:
                         busy_states[track_id] = bool(pkt["busy"])
@@ -271,10 +277,8 @@ def run_gui():
                     txt_bar = font.render(f"{l.get('bar', '')}/{l.get('len', 0)}", True, (220, 220, 255))
                     txt_label = font.render(l["text"], True, (180, 180, 200))
 
-                    # Position based on f2 (Slot 1) state at initiation
-                    # f2 at 0.0 (Slot 0 active) -> TOP
-                    # f2 at 1.0 (Slot 1 active) -> BOTTOM
-                    if l.get("f2", 0.0) < 0.5:
+                    # Alternating Position (top/bottom) per bar
+                    if l.get("pos_idx", 0) == 0:
                         ty1 = row_top + 2
                         ty2 = ty1 + 11
                     else:

@@ -516,9 +516,11 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->pending_no_crossfade = no_crossfade;
-    tr->viz_ms = bar_ms; // Trigger timestamp for viz
-    tr->viz_control = tr->control;
-    tr->viz_track_length = tr->track_length;
+    if (x->visualize) {
+        tr->viz_ms = bar_ms; // Trigger timestamp for viz
+        tr->viz_control = tr->control;
+        tr->viz_track_length = tr->track_length;
+    }
 
     // Pre-bind palette to buffer_ref (slot logic will be applied in DSP thread)
     // We update both refs because we don't know which slot is currently available,
@@ -626,10 +628,12 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
             }
-            tr->viz_palette = tr->pending_palette;
-            tr->viz_offset = tr->pending_offset;
-            tr->viz_bar_symbol = tr->pending_bar_symbol;
-            tr->viz_trigger_dirty = 1;
+            if (x->visualize) {
+                tr->viz_palette = tr->pending_palette;
+                tr->viz_offset = tr->pending_offset;
+                tr->viz_bar_symbol = tr->pending_bar_symbol;
+                tr->viz_trigger_dirty = 1;
+            }
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
         }
@@ -780,13 +784,15 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                 }
                 tr->dirty_dest = 1;
 
-                tr->viz_f1 = f1;
-                tr->viz_f2 = f2;
-                tr->viz_busy = tr->busy;
+                if (x->visualize) {
+                    tr->viz_f1 = f1;
+                    tr->viz_f2 = f2;
+                    tr->viz_busy = tr->busy;
 
-                if (current_scan >= tr->last_viz_sent_ms + 100.0 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy) {
-                    tr->viz_dirty = 1;
-                    tr->last_viz_sent_ms = current_scan;
+                    if (current_scan >= tr->last_viz_sent_ms + 333.33 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy) {
+                        tr->viz_dirty = 1;
+                        tr->last_viz_sent_ms = current_scan;
+                    }
                 }
 
                 tr->last_track_scan = tr_scan;
@@ -914,7 +920,7 @@ void weaver_audio_qtask(t_weaver *x) {
     // 2. Visualization Polling
     if (x->visualize) {
         double current_ms = (double)systime_ms();
-        if (current_ms >= x->last_viz_check_ms + 100.0) {
+        if (current_ms >= x->last_viz_check_ms + 333.33) {
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
                 if (!tr) continue;
@@ -926,7 +932,7 @@ void weaver_audio_qtask(t_weaver *x) {
                 // Capture data quickly under lock
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"label\": \"%s@%.0f\", \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
                              t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
