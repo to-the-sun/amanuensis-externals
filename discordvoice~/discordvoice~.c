@@ -674,7 +674,7 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
     hVConnect = WinHttpConnect(hSession, szVHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hVConnect) goto cleanup;
 
-    hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=4", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=8", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hVRequest) goto cleanup;
 
     WinHttpSetTimeouts(hSession, 0, 0, 0, (int)timeout);
@@ -714,6 +714,8 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
 
             if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
                 x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
+                discordvoice_log(x, "Voice Recv Raw: %s", (char *)x->v_recv_buffer);
+
                 t_dictionary *vd = NULL;
                 char verrstr[256];
                 if (dictobj_dictionaryfromstring(&vd, (char *)x->v_recv_buffer, 1, verrstr) == MAX_ERR_NONE) {
