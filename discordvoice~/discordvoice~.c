@@ -699,6 +699,7 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
     critical_exit(x->lock);
 
     discordvoice_log(x, "Connected to Voice Gateway");
+    discordvoice_send_v_identify(x, hVWebSocket);
 
     while (!x->terminate) {
         WINHTTP_WEB_SOCKET_BUFFER_TYPE vBufferType;
@@ -730,9 +731,6 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
                             x->v_heartbeat_interval = (long)vinterval;
                             x->v_last_heartbeat_tick = GetTickCount();
                             discordvoice_log(x, "Voice Hello, Heartbeat: %ld", x->v_heartbeat_interval);
-
-                            // Send Identify AFTER Hello
-                            discordvoice_send_v_identify(x, hVWebSocket);
 
                             // Check for DAVE/E2EE announcement
                             t_atomarray *modes = NULL;
