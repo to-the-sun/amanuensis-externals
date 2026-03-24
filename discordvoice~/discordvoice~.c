@@ -333,7 +333,7 @@ void discordvoice_send_v_heartbeat(t_discordvoice *x, HINTERNET hVWebSocket) {
 void discordvoice_send_v_identify(t_discordvoice *x, HINTERNET hVWebSocket) {
     char json[1024];
     snprintf(json, sizeof(json),
-        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\",\"dave_protocol_version\":1}}",
+        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\"}}",
         x->guild_id->s_name, x->user_id->s_name, x->session_id->s_name, x->voice_token->s_name);
     WinHttpWebSocketSend(hVWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
     // Redact token in log
@@ -674,7 +674,7 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
     hVConnect = WinHttpConnect(hSession, szVHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hVConnect) goto cleanup;
 
-    hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=8", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=4", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hVRequest) goto cleanup;
 
     WinHttpSetTimeouts(hSession, 0, 0, 0, (int)timeout);
@@ -714,7 +714,6 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
 
             if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
                 x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
-                discordvoice_log(x, "Voice Recv Raw: %s", (char *)x->v_recv_buffer);
 
                 t_dictionary *vd = NULL;
                 char verrstr[256];
