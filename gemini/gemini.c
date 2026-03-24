@@ -17,6 +17,7 @@ typedef struct _gemini {
     void *x_outlet;
     t_symbol *apikey;
     t_symbol *model;
+    t_symbol *version;
 
     // Threading and async management
     t_systhread x_thread;
@@ -88,6 +89,10 @@ void ext_main(void *r) {
     CLASS_ATTR_LABEL(c, "model", 0, "Model Name");
     CLASS_ATTR_DEFAULT_SAVE(c, "model", 0, "gemini-1.5-flash");
 
+    CLASS_ATTR_SYM(c, "version", 0, t_gemini, version);
+    CLASS_ATTR_LABEL(c, "version", 0, "API Version");
+    CLASS_ATTR_DEFAULT_SAVE(c, "version", 0, "v1");
+
     class_register(CLASS_BOX, c);
     gemini_class = c;
 }
@@ -99,6 +104,7 @@ void *gemini_new(t_symbol *s, long argc, t_atom *argv) {
         x->x_outlet = outlet_new(x, NULL);
         x->apikey = _sym_nothing;
         x->model = gensym("gemini-1.5-flash");
+        x->version = gensym("v1");
         x->pending_query = NULL;
         x->response_text = NULL;
         x->status_message = NULL;
@@ -231,6 +237,7 @@ void *gemini_threadproc(t_gemini *x) {
 
     if (!escaped_query) {
         systhread_mutex_lock(x->x_mutex);
+        if (x->status_message) sysmem_freeptr(x->status_message);
         x->status_message = sysmem_newptr(32);
         strcpy(x->status_message, "Memory Error (escaping)");
         systhread_mutex_unlock(x->x_mutex);
@@ -246,13 +253,14 @@ void *gemini_threadproc(t_gemini *x) {
     char urlPath[1024];
     char debugUrl[1024];
     wchar_t wUrl[1024];
-    snprintf(urlPath, 1024, "/v1beta/models/%s:generateContent?key=%s",
-             x->model->s_name, x->apikey->s_name);
+    snprintf(urlPath, 1024, "/%s/models/%s:generateContent?key=%s",
+             x->version->s_name, x->model->s_name, x->apikey->s_name);
 
-    snprintf(debugUrl, 1024, "URL: https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=***",
-             x->model->s_name);
+    snprintf(debugUrl, 1024, "URL: https://generativelanguage.googleapis.com/%s/models/%s:generateContent?key=***",
+             x->version->s_name, x->model->s_name);
 
     systhread_mutex_lock(x->x_mutex);
+    if (x->status_message) sysmem_freeptr(x->status_message);
     x->status_message = sysmem_newptr(strlen(debugUrl) + 1);
     strcpy(x->status_message, debugUrl);
     systhread_mutex_unlock(x->x_mutex);
@@ -302,6 +310,7 @@ void *gemini_threadproc(t_gemini *x) {
         if (dwStatusCode != 200) {
             char status_msg[128];
             snprintf(status_msg, 128, "Gemini API returned HTTP status %ld", dwStatusCode);
+            if (x->status_message) sysmem_freeptr(x->status_message);
             x->status_message = sysmem_newptr(strlen(status_msg) + 1);
             strcpy(x->status_message, status_msg);
         }
@@ -312,6 +321,7 @@ void *gemini_threadproc(t_gemini *x) {
         systhread_mutex_lock(x->x_mutex);
         char err_msg[128];
         snprintf(err_msg, 128, "WinHTTP Request failed with error %ld", err);
+        if (x->status_message) sysmem_freeptr(x->status_message);
         x->status_message = sysmem_newptr(strlen(err_msg) + 1);
         strcpy(x->status_message, err_msg);
         systhread_mutex_unlock(x->x_mutex);
@@ -378,6 +388,7 @@ void *gemini_threadproc(t_gemini *x) {
                                     strcpy(final_text, text_sym->s_name);
 
                                     systhread_mutex_lock(x->x_mutex);
+                                    if (x->status_message) sysmem_freeptr(x->status_message);
                                     x->status_message = sysmem_newptr(32);
                                     strcpy(x->status_message, "Successfully received response.");
                                     systhread_mutex_unlock(x->x_mutex);
@@ -393,6 +404,7 @@ void *gemini_threadproc(t_gemini *x) {
             strcpy(final_text, "Error parsing response");
 
             systhread_mutex_lock(x->x_mutex);
+            if (x->status_message) sysmem_freeptr(x->status_message);
             char *parse_err = sysmem_newptr(strlen(full_response) + 64);
             sprintf(parse_err, "Failed to parse JSON response: %s", full_response);
             x->status_message = parse_err;
@@ -400,8 +412,13 @@ void *gemini_threadproc(t_gemini *x) {
         }
         sysmem_freeptr(full_response);
     } else if (dwStatusCode != 200 && dwStatusCode != 0) {
-        final_text = sysmem_newptr(32);
-        sprintf(final_text, "HTTP Error %ld", dwStatusCode);
+        if (full_response) {
+             final_text = full_response;
+             full_response = NULL;
+        } else {
+            final_text = sysmem_newptr(32);
+            sprintf(final_text, "HTTP Error %ld", dwStatusCode);
+        }
     } else {
         final_text = sysmem_newptr(strlen("No response from server") + 1);
         strcpy(final_text, "No response from server");

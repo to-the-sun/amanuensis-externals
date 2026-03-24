@@ -59,6 +59,12 @@
 				The name of the Gemini model to use (e.g., <m>gemini-1.5-flash</m>, <m>gemini-1.5-pro</m>). Defaults to <m>gemini-1.5-flash</m>.
 			</description>
 		</attribute>
+		<attribute name="version" get="1" set="1" type="symbol" size="1">
+			<digest>API Version</digest>
+			<description>
+				The Gemini API version to use (e.g., <m>v1</m>, <m>v1beta</m>). Defaults to <m>v1</m>.
+			</description>
+		</attribute>
 	</attributelist>
 
 	<!-- SEEALSO -->
