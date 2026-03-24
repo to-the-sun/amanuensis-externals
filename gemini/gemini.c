@@ -186,6 +186,7 @@ void gemini_anything(t_gemini *x, t_symbol *s, long argc, t_atom *argv) {
     x->thread_active = 1;
     systhread_mutex_unlock(x->x_mutex);
 
+    object_post((t_object *)x, "Initiating query: %s", x->pending_query);
     systhread_create((method)gemini_threadproc, x, 0, 0, 0, &x->x_thread);
 }
 
@@ -203,6 +204,7 @@ void gemini_qtask(t_gemini *x) {
 void *gemini_threadproc(t_gemini *x) {
     BOOL bResults = FALSE;
     DWORD dwSize = 0;
+    DWORD dwStatusCode = 0;
     DWORD dwDownloaded = 0;
     LPSTR pszOutBuffer;
     char *full_response = NULL;
@@ -260,6 +262,23 @@ void *gemini_threadproc(t_gemini *x) {
         bResults = WinHttpReceiveResponse(x->hRequest, NULL);
 
     if (bResults) {
+        dwSize = sizeof(dwStatusCode);
+        WinHttpQueryHeaders(x->hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
+
+        if (dwStatusCode != 200) {
+            char status_msg[64];
+            snprintf(status_msg, 64, "HTTP Error %ld", dwStatusCode);
+            full_response = sysmem_newptr(strlen(status_msg) + 1);
+            strcpy(full_response, status_msg);
+            object_error((t_object *)x, "Gemini API returned HTTP status %ld", dwStatusCode);
+        }
+    } else {
+        DWORD err = GetLastError();
+        object_error((t_object *)x, "WinHTTP Request failed with error %ld", err);
+    }
+
+    if (bResults && dwStatusCode == 200) {
         do {
             dwSize = 0;
             if (!WinHttpQueryDataAvailable(x->hRequest, &dwSize)) break;
@@ -297,9 +316,13 @@ void *gemini_threadproc(t_gemini *x) {
     // Parse JSON response using Max's dictionary
     char *final_text = NULL;
     if (full_response) {
-        t_dictionary *d = NULL;
-        t_max_err err = dictobj_dictionaryfromstring(&d, full_response, 1, NULL);
-        if (err == MAX_ERR_NONE && d) {
+        if (dwStatusCode != 200) {
+            final_text = full_response; // Already contains error string
+            full_response = NULL;
+        } else {
+            t_dictionary *d = NULL;
+            t_max_err err = dictobj_dictionaryfromstring(&d, full_response, 1, NULL);
+            if (err == MAX_ERR_NONE && d) {
             // Gemini response structure: candidates[0].content.parts[0].text
             t_atomarray *candidates = NULL;
             if (dictionary_getatomarray(d, gensym("candidates"), (t_object **)&candidates) == MAX_ERR_NONE && candidates) {
@@ -317,18 +340,21 @@ void *gemini_threadproc(t_gemini *x) {
                                 if (dictionary_getsym(part_dict, gensym("text"), &text_sym) == MAX_ERR_NONE) {
                                     final_text = sysmem_newptr(strlen(text_sym->s_name) + 1);
                                     strcpy(final_text, text_sym->s_name);
+                                    object_post((t_object *)x, "Successfully received response.");
                                 }
                             }
                         }
                     }
                 }
             }
-            object_free(d);
-        } else {
-            final_text = sysmem_newptr(strlen("Error parsing response") + 1);
-            strcpy(final_text, "Error parsing response");
+                object_free(d);
+            } else {
+                final_text = sysmem_newptr(strlen("Error parsing response") + 1);
+                strcpy(final_text, "Error parsing response");
+                object_error((t_object *)x, "Failed to parse JSON response: %s", full_response);
+            }
+            sysmem_freeptr(full_response);
         }
-        sysmem_freeptr(full_response);
     } else {
         final_text = sysmem_newptr(strlen("No response from server") + 1);
         strcpy(final_text, "No response from server");
