@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="gemini">
+	<digest>Query Google Gemini LLM</digest>
+	<description>
+		The <o>gemini</o> object allows you to send queries to the Google Gemini Large Language Model (LLM) using their REST API. It performs the request asynchronously in a background thread to avoid blocking the Max main thread.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">LLM</metadata>
+		<metadata name="tag">AI</metadata>
+		<metadata name="tag">Networking</metadata>
+	</metadatalist>
+
+	<!-- INLETS -->
+	<inletlist>
+		<inlet id="0" type="anything">
+			<digest>Query (symbol or list)</digest>
+			<description>Any symbol or list sent to the first inlet will be used as the prompt for the Gemini LLM.</description>
+		</inlet>
+	</inletlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="anything">
+			<digest>LLM Response (symbol)</digest>
+			<description>The text response from the Gemini LLM will be output as a symbol.</description>
+		</outlet>
+	</outletlist>
+
+	<!-- ARGUMENTS -->
+	<!-- No positional arguments for this object -->
+
+	<!-- METHDO LIST -->
+	<methodlist>
+		<method name="anything">
+			<arglist />
+			<digest>Prompt the LLM</digest>
+			<description>
+				A symbol or list is taken as the query to be sent to the Gemini API.
+			</description>
+		</method>
+	</methodlist>
+
+	<!-- ATTRIBUTES -->
+	<attributelist>
+		<attribute name="apikey" get="1" set="1" type="symbol" size="1">
+			<digest>Google Gemini API Key</digest>
+			<description>
+				Your Google Gemini API key. You can obtain one for free at <link href="https://aistudio.google.com/">https://aistudio.google.com/</link>. This attribute is required for the object to function.
+			</description>
+		</attribute>
+		<attribute name="model" get="1" set="1" type="symbol" size="1">
+			<digest>Gemini Model Name</digest>
+			<description>
+				The name of the Gemini model to use (e.g., <m>gemini-1.5-flash</m>, <m>gemini-1.5-pro</m>). Defaults to <m>gemini-1.5-flash</m>.
+			</description>
+		</attribute>
+		<attribute name="version" get="1" set="1" type="symbol" size="1">
+			<digest>API Version</digest>
+			<description>
+				The Gemini API version to use (e.g., <m>v1</m>, <m>v1beta</m>). Defaults to <m>v1</m>.
+			</description>
+		</attribute>
+	</attributelist>
+
+	<!-- SEEALSO -->
+	<seealsolist>
+		<seealso name="threads~" />
+		<seealso name="rebar" />
+		<seealso name="crucible" />
+	</seealsolist>
+</c74object>
