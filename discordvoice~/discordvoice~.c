@@ -12,7 +12,7 @@
 #include "../shared/logging.h"
 #include <string.h>
 #include <stdio.h>
-
+#include <stdlib.h>
 /**
  * @file discordvoice~.c
  * @brief Max external for sending audio to Discord voice channels.
@@ -245,6 +245,11 @@ void discordvoice_free(t_discordvoice *x) {
         x->audio_thread = NULL;
     }
 
+    if (x->udp_sock != INVALID_SOCKET) {
+        closesocket(x->udp_sock);
+        x->udp_sock = INVALID_SOCKET;
+    }
+
     critical_free(x->lock);
 }
 
@@ -333,7 +338,7 @@ void discordvoice_send_v_heartbeat(t_discordvoice *x, HINTERNET hVWebSocket) {
 void discordvoice_send_v_identify(t_discordvoice *x, HINTERNET hVWebSocket) {
     char json[1024];
     snprintf(json, sizeof(json),
-        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\"}}",
+        "{\"op\":0,\"d\":{\"server_id\":\"%s\",\"user_id\":\"%s\",\"session_id\":\"%s\",\"token\":\"%s\",\"dave_protocol_version\":1}}",
         x->guild_id->s_name, x->user_id->s_name, x->session_id->s_name, x->voice_token->s_name);
     WinHttpWebSocketSend(hVWebSocket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)json, (DWORD)strlen(json));
     // Redact token in log
@@ -661,17 +666,20 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
     // Voice Gateway Connection
     WCHAR szVHost[256];
     char vhost[256];
+    INTERNET_PORT vPort = INTERNET_DEFAULT_HTTPS_PORT;
     const char *pend = strstr(x->voice_endpoint->s_name, ":");
     if (pend) {
         size_t len = pend - x->voice_endpoint->s_name;
         strncpy(vhost, x->voice_endpoint->s_name, len);
         vhost[len] = 0;
+        vPort = (INTERNET_PORT)atoi(pend + 1);
     } else {
         strcpy(vhost, x->voice_endpoint->s_name);
     }
     MultiByteToWideChar(CP_UTF8, 0, vhost, -1, szVHost, 256);
 
-    hVConnect = WinHttpConnect(hSession, szVHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    discordvoice_log(x, "Connecting to Voice Gateway at %s:%d", vhost, (int)vPort);
+    hVConnect = WinHttpConnect(hSession, szVHost, vPort, 0);
     if (!hVConnect) goto cleanup;
 
     hVRequest = WinHttpOpenRequest(hVConnect, L"GET", L"/?v=4", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
@@ -731,17 +739,6 @@ void *discordvoice_v_thread_proc(t_discordvoice *x) {
                             x->v_heartbeat_interval = (long)vinterval;
                             x->v_last_heartbeat_tick = GetTickCount();
                             discordvoice_log(x, "Voice Hello, Heartbeat: %ld", x->v_heartbeat_interval);
-
-                            // Check for DAVE/E2EE announcement
-                            t_atomarray *modes = NULL;
-                            if (dictionary_getatomarray(vdata_dict, gensym("modes"), (t_object **)&modes) == MAX_ERR_NONE) {
-                                long count = 0;
-                                t_atom *atoms = NULL;
-                                atomarray_getatoms(modes, &count, &atoms);
-                                for (int i = 0; i < count; i++) {
-                                    discordvoice_log(x, "Available Mode: %s", atom_getsym(atoms + i)->s_name);
-                                }
-                            }
                         }
                     } else if (vop == 2) { // READY
                         discordvoice_log(x, "Voice READY Payload received");
