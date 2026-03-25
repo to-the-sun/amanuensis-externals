@@ -1,6 +1,8 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_critical.h"
+#include "../shared/logging.h"
+#include <stdarg.h>
 
 #define MAX_PAIRS 9
 
@@ -34,9 +36,12 @@ typedef struct _stoplight {
     t_critical lock;
     long is_flushing;
     t_queued_msg *last_items; // Size num_pairs - 1 (for cold data inlets 1..N-1)
+    long log;
+    void *out_log;
 } t_stoplight;
 
 // Helper functions
+void stoplight_log(t_stoplight *x, const char *fmt, ...);
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
 void stoplight_clear_msg(t_queued_msg *msg);
 void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
@@ -70,8 +75,19 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stoplight_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_assist, "assist", A_CANT, 0);
 
+    CLASS_ATTR_LONG(c, "log", 0, t_stoplight, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+
     class_register(CLASS_BOX, c);
     stoplight_class = c;
+}
+
+void stoplight_log(t_stoplight *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->out_log, x->log, "stoplight", fmt, args);
+    va_end(args);
 }
 
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
@@ -142,9 +158,11 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->state = 0;
         x->is_flushing = 0;
+        x->log = 0;
         x->queue = linklist_new();
 
         // Outlets (create right-to-left for left-to-right appearance)
+        x->out_log = outlet_new((t_object *)x, NULL);
         x->outlets = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         for (long i = x->num_pairs - 1; i >= 0; i--) {
             x->outlets[i] = outlet_new((t_object *)x, NULL);
@@ -231,7 +249,9 @@ void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long a
 
             critical_enter(x->lock);
             linklist_append(x->queue, bundle);
+            long size = linklist_getsize(x->queue);
             critical_exit(x->lock);
+            stoplight_log(x, "Message added to queue. Queue size: %ld", size);
         } else {
             sysmem_freeptr(bundle);
         }
@@ -251,9 +271,11 @@ void stoplight_flush(t_stoplight *x) {
         critical_enter(x->lock);
         bundle = (t_bundle *)linklist_getindex(x->queue, 0);
         linklist_chuckindex(x->queue, 0);
+        long size = linklist_getsize(x->queue);
         critical_exit(x->lock);
 
         if (bundle) {
+            stoplight_log(x, "Message released from queue. Remaining size: %ld", size);
             // Output in right-to-left order (Outlet N-1 down to 0)
             for (long i = x->num_pairs - 1; i >= 0; i--) {
                 stoplight_output_msg(x, x->outlets[i], &bundle->msgs[i]);
@@ -397,6 +419,10 @@ void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
             sprintf(s, "Inlet %ld (Cold): Data to be bundled with Inlet 1.", a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld: Data Output.", a + 1);
+        if (a < x->num_pairs) {
+            sprintf(s, "Outlet %ld: Data Output.", a + 1);
+        } else {
+            sprintf(s, "Outlet %ld: Logging and Status messages", a + 1);
+        }
     }
 }

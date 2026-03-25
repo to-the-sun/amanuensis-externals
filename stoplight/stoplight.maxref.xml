@@ -29,6 +29,10 @@
 			<digest>Outlet 1..N: Data Outputs.</digest>
 			<description>The data outputs from the gate. Each outlet corresponds to a data inlet pair. When a bundle is released, messages are sent out their respective outlets in right-to-left order.</description>
 		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Outlet N+1: Logging and Status messages</digest>
+			<description>Outputs verbose logging and status messages when the @log attribute is enabled.</description>
+		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
@@ -55,7 +59,12 @@
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
-	<attributelist />
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="int" size="1">
+			<digest>Enable Logging</digest>
+			<description>When enabled (1), the object will output verbose logging messages to the rightmost outlet when messages are queued or released from the queue. Default is 0 (disabled).</description>
+		</attribute>
+	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="weaver~" />
