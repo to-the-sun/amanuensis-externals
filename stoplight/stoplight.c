@@ -48,6 +48,7 @@ void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
 
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv);
 void stoplight_free(t_stoplight *x);
+t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av);
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s);
 
 void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
@@ -78,6 +79,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_stoplight, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)stoplight_attr_set_log);
 
     class_register(CLASS_BOX, c);
     stoplight_class = c;
@@ -88,6 +90,14 @@ void stoplight_log(t_stoplight *x, const char *fmt, ...) {
     va_start(args, fmt);
     vcommon_log(x->out_log, x->log, "stoplight", fmt, args);
     va_end(args);
+}
+
+t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        post("stoplight: log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
@@ -147,7 +157,7 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         x->num_pairs = 1;
-        if (argc > 0) {
+        if (argc > 0 && atom_gettype(argv) == A_LONG) {
             long val = atom_getlong(argv);
             if (val > 1) {
                 if (val > MAX_PAIRS) val = MAX_PAIRS;
@@ -189,6 +199,8 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         } else {
             x->last_items = NULL;
         }
+
+        attr_args_process(x, argc, argv);
     }
     return (x);
 }
