@@ -42,6 +42,7 @@ typedef struct _stoplight {
 
 // Helper functions
 void stoplight_log(t_stoplight *x, const char *fmt, ...);
+void stoplight_format_msg(t_queued_msg *msg, char *buf, size_t size);
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
 void stoplight_clear_msg(t_queued_msg *msg);
 void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
@@ -98,6 +99,32 @@ t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av
         post("stoplight: log attribute set to %ld", x->log);
     }
     return MAX_ERR_NONE;
+}
+
+void stoplight_format_msg(t_queued_msg *msg, char *buf, size_t size) {
+    if (!msg || !buf || size == 0) return;
+
+    switch (msg->type) {
+        case MSG_BANG:
+            snprintf(buf, size, "bang");
+            break;
+        case MSG_INT:
+            if (msg->argc > 0) snprintf(buf, size, "int %ld", (long)atom_getlong(msg->argv));
+            else snprintf(buf, size, "int");
+            break;
+        case MSG_FLOAT:
+            if (msg->argc > 0) snprintf(buf, size, "float %.2f", atom_getfloat(msg->argv));
+            else snprintf(buf, size, "float");
+            break;
+        case MSG_LIST:
+            if (msg->s && msg->s != _sym_nothing) snprintf(buf, size, "list %s ...", msg->s->s_name);
+            else snprintf(buf, size, "list (%ld items)", msg->argc);
+            break;
+        case MSG_ANYTHING:
+            if (msg->s) snprintf(buf, size, "%s ...", msg->s->s_name);
+            else snprintf(buf, size, "anything (%ld items)", msg->argc);
+            break;
+    }
 }
 
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
@@ -263,7 +290,10 @@ void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long a
             linklist_append(x->queue, bundle);
             long size = linklist_getsize(x->queue);
             critical_exit(x->lock);
-            stoplight_log(x, "Message added to queue. Queue size: %ld", size);
+
+            char msg_buf[128];
+            stoplight_format_msg(&bundle->msgs[0], msg_buf, sizeof(msg_buf));
+            stoplight_log(x, "Message [%s] added to queue. Queue size: %ld", msg_buf, size);
         } else {
             sysmem_freeptr(bundle);
         }
@@ -287,7 +317,9 @@ void stoplight_flush(t_stoplight *x) {
         critical_exit(x->lock);
 
         if (bundle) {
-            stoplight_log(x, "Message released from queue. Remaining size: %ld", size);
+            char msg_buf[128];
+            stoplight_format_msg(&bundle->msgs[0], msg_buf, sizeof(msg_buf));
+            stoplight_log(x, "Message [%s] released from queue. Remaining size: %ld", msg_buf, size);
             // Output in right-to-left order (Outlet N-1 down to 0)
             for (long i = x->num_pairs - 1; i >= 0; i--) {
                 stoplight_output_msg(x, x->outlets[i], &bundle->msgs[i]);
