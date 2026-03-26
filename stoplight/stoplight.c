@@ -1,6 +1,8 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_critical.h"
+#include "../shared/logging.h"
+#include <stdarg.h>
 
 #define MAX_PAIRS 9
 
@@ -34,15 +36,20 @@ typedef struct _stoplight {
     t_critical lock;
     long is_flushing;
     t_queued_msg *last_items; // Size num_pairs - 1 (for cold data inlets 1..N-1)
+    long log;
+    void *out_log;
 } t_stoplight;
 
 // Helper functions
+void stoplight_log(t_stoplight *x, const char *fmt, ...);
+void stoplight_format_bundle(t_stoplight *x, t_bundle *bundle, char *buf, size_t size);
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
 void stoplight_clear_msg(t_queued_msg *msg);
 void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
 
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv);
 void stoplight_free(t_stoplight *x);
+t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av);
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s);
 
 void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
@@ -70,8 +77,78 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stoplight_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_assist, "assist", A_CANT, 0);
 
+    CLASS_ATTR_LONG(c, "log", 0, t_stoplight, log);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
+    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)stoplight_attr_set_log);
+
     class_register(CLASS_BOX, c);
     stoplight_class = c;
+}
+
+void stoplight_log(t_stoplight *x, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vcommon_log(x->out_log, x->log, "stoplight", fmt, args);
+    va_end(args);
+}
+
+t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        post("stoplight: log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
+void stoplight_format_bundle(t_stoplight *x, t_bundle *bundle, char *buf, size_t size) {
+    if (!x || !bundle || !buf || size == 0) return;
+
+    t_string *s = string_new("");
+    if (!s) return;
+
+    for (long i = 0; i < x->num_pairs; i++) {
+        t_queued_msg *msg = &bundle->msgs[i];
+        char *msg_str = NULL;
+        long msg_size = 0;
+
+        switch (msg->type) {
+            case MSG_BANG:
+                string_append(s, "bang");
+                break;
+            case MSG_INT:
+            case MSG_FLOAT:
+            case MSG_LIST:
+                if (msg->argc > 0 && msg->argv) {
+                    atom_gettext(msg->argc, msg->argv, &msg_size, &msg_str, OBEX_UTIL_ATOM_GETTEXT_DEFAULT);
+                    if (msg_str) {
+                        string_append(s, msg_str);
+                        sysmem_freeptr(msg_str);
+                    }
+                }
+                break;
+            case MSG_ANYTHING:
+                if (msg->s) {
+                    string_append(s, msg->s->s_name);
+                    if (msg->argc > 0 && msg->argv) {
+                        string_append(s, " ");
+                        atom_gettext(msg->argc, msg->argv, &msg_size, &msg_str, OBEX_UTIL_ATOM_GETTEXT_DEFAULT);
+                        if (msg_str) {
+                            string_append(s, msg_str);
+                            sysmem_freeptr(msg_str);
+                        }
+                    }
+                }
+                break;
+        }
+
+        if (i < x->num_pairs - 1) {
+            string_append(s, ", ");
+        }
+    }
+
+    snprintf(buf, size, "%s", string_getptr(s));
+    object_free(s);
 }
 
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
@@ -131,7 +208,7 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         x->num_pairs = 1;
-        if (argc > 0) {
+        if (argc > 0 && atom_gettype(argv) == A_LONG) {
             long val = atom_getlong(argv);
             if (val > 1) {
                 if (val > MAX_PAIRS) val = MAX_PAIRS;
@@ -142,9 +219,11 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->state = 0;
         x->is_flushing = 0;
+        x->log = 0;
         x->queue = linklist_new();
 
         // Outlets (create right-to-left for left-to-right appearance)
+        x->out_log = outlet_new((t_object *)x, NULL);
         x->outlets = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         for (long i = x->num_pairs - 1; i >= 0; i--) {
             x->outlets[i] = outlet_new((t_object *)x, NULL);
@@ -171,6 +250,8 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         } else {
             x->last_items = NULL;
         }
+
+        attr_args_process(x, argc, argv);
     }
     return (x);
 }
@@ -231,7 +312,12 @@ void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long a
 
             critical_enter(x->lock);
             linklist_append(x->queue, bundle);
+            long size = linklist_getsize(x->queue);
             critical_exit(x->lock);
+
+            char bundle_buf[1024];
+            stoplight_format_bundle(x, bundle, bundle_buf, sizeof(bundle_buf));
+            stoplight_log(x, "Bundle [%s] added to queue. Queue size: %ld", bundle_buf, size);
         } else {
             sysmem_freeptr(bundle);
         }
@@ -251,9 +337,13 @@ void stoplight_flush(t_stoplight *x) {
         critical_enter(x->lock);
         bundle = (t_bundle *)linklist_getindex(x->queue, 0);
         linklist_chuckindex(x->queue, 0);
+        long size = linklist_getsize(x->queue);
         critical_exit(x->lock);
 
         if (bundle) {
+            char bundle_buf[1024];
+            stoplight_format_bundle(x, bundle, bundle_buf, sizeof(bundle_buf));
+            stoplight_log(x, "Bundle [%s] released from queue. Remaining size: %ld", bundle_buf, size);
             // Output in right-to-left order (Outlet N-1 down to 0)
             for (long i = x->num_pairs - 1; i >= 0; i--) {
                 stoplight_output_msg(x, x->outlets[i], &bundle->msgs[i]);
@@ -397,6 +487,10 @@ void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
             sprintf(s, "Inlet %ld (Cold): Data to be bundled with Inlet 1.", a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld: Data Output.", a + 1);
+        if (a < x->num_pairs) {
+            sprintf(s, "Outlet %ld: Data Output.", a + 1);
+        } else {
+            sprintf(s, "Outlet %ld: Logging and Status messages", a + 1);
+        }
     }
 }
