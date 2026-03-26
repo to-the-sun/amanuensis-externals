@@ -42,7 +42,7 @@ typedef struct _stoplight {
 
 // Helper functions
 void stoplight_log(t_stoplight *x, const char *fmt, ...);
-void stoplight_format_msg(t_queued_msg *msg, char *buf, size_t size);
+void stoplight_format_bundle(t_stoplight *x, t_bundle *bundle, char *buf, size_t size);
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
 void stoplight_clear_msg(t_queued_msg *msg);
 void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
@@ -101,30 +101,54 @@ t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av
     return MAX_ERR_NONE;
 }
 
-void stoplight_format_msg(t_queued_msg *msg, char *buf, size_t size) {
-    if (!msg || !buf || size == 0) return;
+void stoplight_format_bundle(t_stoplight *x, t_bundle *bundle, char *buf, size_t size) {
+    if (!x || !bundle || !buf || size == 0) return;
 
-    switch (msg->type) {
-        case MSG_BANG:
-            snprintf(buf, size, "bang");
-            break;
-        case MSG_INT:
-            if (msg->argc > 0) snprintf(buf, size, "int %ld", (long)atom_getlong(msg->argv));
-            else snprintf(buf, size, "int");
-            break;
-        case MSG_FLOAT:
-            if (msg->argc > 0) snprintf(buf, size, "float %.2f", atom_getfloat(msg->argv));
-            else snprintf(buf, size, "float");
-            break;
-        case MSG_LIST:
-            if (msg->s && msg->s != _sym_nothing) snprintf(buf, size, "list %s ...", msg->s->s_name);
-            else snprintf(buf, size, "list (%ld items)", msg->argc);
-            break;
-        case MSG_ANYTHING:
-            if (msg->s) snprintf(buf, size, "%s ...", msg->s->s_name);
-            else snprintf(buf, size, "anything (%ld items)", msg->argc);
-            break;
+    t_string *s = string_new("");
+    if (!s) return;
+
+    for (long i = 0; i < x->num_pairs; i++) {
+        t_queued_msg *msg = &bundle->msgs[i];
+        char *msg_str = NULL;
+        long msg_size = 0;
+
+        switch (msg->type) {
+            case MSG_BANG:
+                string_append(s, "bang");
+                break;
+            case MSG_INT:
+            case MSG_FLOAT:
+            case MSG_LIST:
+                if (msg->argc > 0 && msg->argv) {
+                    atom_gettext(msg->argc, msg->argv, &msg_size, &msg_str, OBEX_UTIL_ATOM_GETTEXT_DEFAULT);
+                    if (msg_str) {
+                        string_append(s, msg_str);
+                        sysmem_freeptr(msg_str);
+                    }
+                }
+                break;
+            case MSG_ANYTHING:
+                if (msg->s) {
+                    string_append(s, msg->s->s_name);
+                    if (msg->argc > 0 && msg->argv) {
+                        string_append(s, " ");
+                        atom_gettext(msg->argc, msg->argv, &msg_size, &msg_str, OBEX_UTIL_ATOM_GETTEXT_DEFAULT);
+                        if (msg_str) {
+                            string_append(s, msg_str);
+                            sysmem_freeptr(msg_str);
+                        }
+                    }
+                }
+                break;
+        }
+
+        if (i < x->num_pairs - 1) {
+            string_append(s, ", ");
+        }
     }
+
+    snprintf(buf, size, "%s", string_getptr(s));
+    object_free(s);
 }
 
 void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long argc, t_atom *argv) {
@@ -291,9 +315,9 @@ void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long a
             long size = linklist_getsize(x->queue);
             critical_exit(x->lock);
 
-            char msg_buf[128];
-            stoplight_format_msg(&bundle->msgs[0], msg_buf, sizeof(msg_buf));
-            stoplight_log(x, "Message [%s] added to queue. Queue size: %ld", msg_buf, size);
+            char bundle_buf[1024];
+            stoplight_format_bundle(x, bundle, bundle_buf, sizeof(bundle_buf));
+            stoplight_log(x, "Bundle [%s] added to queue. Queue size: %ld", bundle_buf, size);
         } else {
             sysmem_freeptr(bundle);
         }
@@ -317,9 +341,9 @@ void stoplight_flush(t_stoplight *x) {
         critical_exit(x->lock);
 
         if (bundle) {
-            char msg_buf[128];
-            stoplight_format_msg(&bundle->msgs[0], msg_buf, sizeof(msg_buf));
-            stoplight_log(x, "Message [%s] released from queue. Remaining size: %ld", msg_buf, size);
+            char bundle_buf[1024];
+            stoplight_format_bundle(x, bundle, bundle_buf, sizeof(bundle_buf));
+            stoplight_log(x, "Bundle [%s] released from queue. Remaining size: %ld", bundle_buf, size);
             // Output in right-to-left order (Outlet N-1 down to 0)
             for (long i = x->num_pairs - 1; i >= 0; i--) {
                 stoplight_output_msg(x, x->outlets[i], &bundle->msgs[i]);

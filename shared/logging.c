@@ -10,10 +10,10 @@ void common_log(void *log_outlet, long log_enabled, const char *object_name, con
 
 void vcommon_log(void *log_outlet, long log_enabled, const char *object_name, const char *fmt, va_list args) {
     if (log_enabled && log_outlet) {
-        char buf[1024];
-        char final_buf[1100];
-        vsnprintf(buf, 1024, fmt, args);
-        snprintf(final_buf, 1100, "%s: %s", object_name, buf);
+        char buf[4096];
+        char final_buf[4200];
+        vsnprintf(buf, 4096, fmt, args);
+        snprintf(final_buf, 4200, "%s: %s", object_name, buf);
         outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
     }
 }
