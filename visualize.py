@@ -14,7 +14,7 @@ if os.environ.get('HEADLESS'):
 
 # Configuration
 TCP_PORT = 9999
-WINDOW_SIZE = (1200, 1400)
+WINDOW_SIZE = (1200, 1000)
 FPS = 60
 
 # State (shared between threads; guarded by lock)
@@ -402,10 +402,10 @@ def run_gui():
             p_max_ms = state["global_max_ms"]
             p_ramp_dur = state["main_ramp_duration"]
 
-        building_surf = screen.subsurface((0, 0, 1200, 600))
+        building_surf = screen.subsurface((0, 0, 1200, 400))
         draw_building(building_surf, p_palettes, p_bar_len, p_offset, fonts)
 
-        weaver_surf = screen.subsurface((0, 600, 1200, 800))
+        weaver_surf = screen.subsurface((0, 400, 1200, 600))
         view_width_ms = max(p_ramp_dur, p_max_ms)
         draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_width_ms, fonts)
 
