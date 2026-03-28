@@ -561,6 +561,14 @@ void weaver_clear(t_weaver *x) {
     x->last_scan_val = -1.0;
     x->fifo_head = 0;
     x->fifo_tail = 0;
+
+    x->dict_found = 0;
+    x->dict_error_sent = 0;
+    x->poly_found = 0;
+    x->poly_warn_sent = 0;
+    x->bar_found = 0;
+    x->bar_error_sent = 0;
+
     for (long t = 0; t < x->track_cache_count; t++) {
         t_weaver_track *tr = x->track_cache[t];
         if (tr) {
@@ -570,12 +578,57 @@ void weaver_clear(t_weaver *x) {
             tr->busy = 0;
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
+
+            tr->palette[0] = _sym_dash;
+            tr->palette[1] = _sym_dash;
+            tr->offset[0] = -1.0;
+            tr->offset[1] = -1.0;
+            tr->dict_offset[0] = -1.0;
+            tr->dict_offset[1] = -1.0;
+            tr->control = 0.0;
+
+            tr->dest_found = 0;
+            tr->dest_warn_sent = 0;
+            tr->src_found[0] = 0;
+            tr->src_found[1] = 0;
+            tr->src_error_sent[0] = 0;
+            tr->src_error_sent[1] = 0;
+
             crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
+
+            // Kick dest_ref
+            if (x->poly_prefix != _sym_nothing) {
+                char bufname[256];
+                snprintf(bufname, 256, "%s.%lld", x->poly_prefix->s_name, (long long)t + 1);
+                buffer_ref_set(tr->dest_ref, _sym_nothing);
+                buffer_ref_set(tr->dest_ref, gensym(bufname));
+            } else {
+                buffer_ref_set(tr->dest_ref, _sym_nothing);
+            }
+
+            // Reset src_refs
+            buffer_ref_set(tr->src_refs[0], _sym_nothing);
+            buffer_ref_set(tr->src_refs[1], _sym_nothing);
         }
     }
+
+    // Global kicks
+    if (x->poly_prefix != _sym_nothing) {
+        char t1name[256];
+        snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
+        buffer_ref_set(x->track1_ref, _sym_nothing);
+        buffer_ref_set(x->track1_ref, gensym(t1name));
+    } else {
+        buffer_ref_set(x->track1_ref, _sym_nothing);
+    }
+    buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
+    buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
+
+    weaver_check_attachments(x);
     critical_exit(x->lock);
+
     if (x->visualize) visualize("{\"clear\": 1}");
-    weaver_log(x, "cleared all track states and lengths");
+    weaver_log(x, "cleared all track states and lengths, and reset buffer bindings");
 }
 
 void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
