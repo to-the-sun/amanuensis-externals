@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="cropsilence~" module="msp" category="Buffer">
+	<digest>Crop silent segments from buffers in a polybuffer~</digest>
+	<description>The `cropsilence~` object scans each buffer within a `polybuffer~` in segments equal to a specified bar length. If a segment's peak amplitude is below a noise floor of 0.00009, it is cropped. The remaining segments are concatenated, and the buffer is resized to a multiple of the bar length.</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Buffer</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="float/int">
+			<digest>Inlet 1: Bar length in ms</digest>
+			<description>A number in this inlet triggers the cropping process for all buffers in the polybuffer~ using the specified bar length in milliseconds.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="bang">
+			<digest>Outlet 1: Bang when done</digest>
+			<description>Outputs a bang when the cropping process for all buffers is complete.</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Logging (Optional)</digest>
+			<description>If the log attribute is enabled, this outlet provides detailed diagnostic logs.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="polybuffer-name" type="symbol" optional="0">
+			<digest>Name of the polybuffer~ to bind to</digest>
+			<description>The mandatory argument specifies the name of the external `polybuffer~`. The object verifies its existence by looking for the first buffer member (`name.1`).</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="float">
+			<arglist>
+				<arg name="ms" type="float" optional="0" />
+			</arglist>
+			<digest>Trigger cropping</digest>
+			<description>Starts the cropping process using the provided bar length in milliseconds.</description>
+		</method>
+		<method name="int">
+			<arglist>
+				<arg name="ms" type="int" optional="0" />
+			</arglist>
+			<digest>Trigger cropping</digest>
+			<description>Starts the cropping process using the provided bar length in milliseconds.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Logging</digest>
+			<description>When enabled (1), detailed status information is sent to the second outlet.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="buffer~" />
+		<seealso name="polybuffer~" />
+		<seealso name="growbuffer~" />
+		<seealso name="weaver~" />
+	</seealsolist>
+</c74object>
