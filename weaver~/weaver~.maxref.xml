@@ -47,6 +47,10 @@
 			<digest>Change transcript dictionary or set maximum tracks</digest>
 			<description>Accepts a symbol to change the name of the transcript dictionary being referenced. Also accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
 		</method>
+		<method name="clear">
+			<digest>Reset the object to its initial state</digest>
+			<description>Resets all track lengths to 0 and clears the internal state, effectively stopping all audio weaving until new track lengths and data are received.</description>
+		</method>
 		<method name="list">
 			<digest>Update individual track lengths</digest>
 			<description>Accepts a two-item list [track_id, length] on the second inlet to set the loop length for a specific track in milliseconds.</description>

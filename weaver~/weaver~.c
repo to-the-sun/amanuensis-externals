@@ -138,6 +138,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 void weaver_audio_qtask(t_weaver *x);
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
+void weaver_clear(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
 static t_symbol *_sym_dash;
@@ -480,7 +481,7 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), (symbol) Dictionary Name, tracks (int)"); break;
+            case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), (symbol) Dictionary Name, tracks (int), clear"); break;
             case 1: sprintf(s, "Inlet 2 (list): [track_id, length] updates track length"); break;
         }
     } else { // ASSIST_OUTLET
@@ -555,12 +556,36 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     }
 }
 
+void weaver_clear(t_weaver *x) {
+    critical_enter(x->lock);
+    x->last_scan_val = -1.0;
+    x->fifo_head = 0;
+    x->fifo_tail = 0;
+    for (long t = 0; t < x->track_cache_count; t++) {
+        t_weaver_track *tr = x->track_cache[t];
+        if (tr) {
+            tr->track_length = 0.0;
+            tr->viz_track_length = 0.0;
+            tr->last_track_scan = -1.0;
+            tr->busy = 0;
+            tr->has_pending_data = 0;
+            tr->waiting_for_dict = 0;
+            crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
+        }
+    }
+    critical_exit(x->lock);
+    if (x->visualize) visualize("{\"clear\": 1}");
+    weaver_log(x, "cleared all track states and lengths");
+}
+
 void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
 
     if (s == gensym("tracks") && argc > 0) {
         x->max_tracks = atom_getlong(argv);
         weaver_update_track_cache(x);
+    } else if (s == gensym("clear")) {
+        weaver_clear(x);
     } else if (s != x->audio_dict_name) {
         // Inlet 0: Transcript Dictionary Reference
         x->audio_dict_name = s;
@@ -679,6 +704,10 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
                 if (!tr) continue;
+                if (tr->track_length <= 0.0) {
+                    tr->last_track_scan = -1.0;
+                    continue;
+                }
 
                 // 2. Continuous Bar Hit Detection (Outside samples_dest check)
                 double tr_scan = fmod(current_scan, tr->track_length);
