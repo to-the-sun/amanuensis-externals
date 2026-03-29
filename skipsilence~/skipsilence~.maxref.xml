@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="skipsilence~" module="msp" category="Analysis">
+
+	<digest>
+		Skip silent bars during playback
+	</digest>
+
+	<description>
+		The <inlinehelp>skipsilence~</inlinehelp> object plays audio from a specified buffer while automatically skipping over silent segments. Silence detection is performed on one-bar segments, using a noise floor of 0.00009. The object is responsive to changes in bar length, which is retrieved from an external buffer named 'bar'.
+	</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Analysis</metadata>
+		<metadata name="tag">Buffer</metadata>
+		<metadata name="tag">Playback</metadata>
+	</metadatalist>
+
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="message">
+			<digest>Control Messages</digest>
+			<description>Accepts the <m>play</m> message followed by a buffer name to start playback.</description>
+		</inlet>
+	</inletlist>
+
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Left Audio Output</digest>
+			<description>The left channel of the audio buffer. If the buffer is mono, this is duplicated to the second outlet.</description>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>Right Audio Output</digest>
+			<description>The right channel of the audio buffer (if stereo).</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Logging Outlet</digest>
+			<description>Diagnostic and status messages (enabled by the <at>log</at> attribute).</description>
+		</outlet>
+	</outletlist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="play">
+			<arglist>
+				<arg name="buffer_name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Start playback from the specified buffer</digest>
+			<description>
+				Begins playing the named buffer from the beginning, skipping any silent bars.
+			</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attrlist>
+		<attr name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Verbose Logging</digest>
+			<description>
+				When enabled (1), the object will post detailed scanning and playback progress to the third outlet.
+			</description>
+		</attr>
+	</attrlist>
+
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="cropsilence~" />
+		<seealso name="weaver~" />
+		<seealso name="stoplight" />
+	</seealsolist>
+
+</c74object>
