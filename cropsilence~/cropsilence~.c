@@ -370,7 +370,6 @@ void cropsilence_qfn(t_cropsilence *x) {
     }
 
     char bufname[256];
-    t_buffer_ref *b_ref = NULL;
 
     for (long i = 0; i < wd->num_buffers; i++) {
         t_buffer_result *res = &wd->results[i];
@@ -382,15 +381,11 @@ void cropsilence_qfn(t_cropsilence *x) {
             snprintf(bufname, 256, "%s.%ld", x->poly_name->s_name, i + 1);
             t_symbol *s_member = gensym(bufname);
 
-            if (b_ref == NULL) {
-                b_ref = buffer_ref_new((t_object *)x, s_member);
-            } else {
-                buffer_ref_set(b_ref, s_member);
-            }
-
+            t_buffer_ref *b_ref = buffer_ref_new((t_object *)x, s_member);
             t_buffer_obj *b = buffer_ref_getobject(b_ref);
             if (!b) {
                 cropsilence_log(x, "SKIPPED APPLY: %s (external buffer not found)", bufname);
+                object_free(b_ref);
                 continue;
             }
 
@@ -406,57 +401,59 @@ void cropsilence_qfn(t_cropsilence *x) {
 
             long long new_total_frames = kept_count * res->bar_frames;
 
-            // Resize external buffer
-            t_atom av;
-            atom_setlong(&av, (t_atom_long)(new_total_frames * chans));
-            object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
+            // Wrap both resizing and copying in buffer_edit_begin/end
+            if (buffer_edit_begin(b) == MAX_ERR_NONE) {
+                t_atom av;
+                atom_setlong(&av, (t_atom_long)(new_total_frames * chans));
+                object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
 
-            if (new_total_frames > 0) {
-                float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
-                if (new_samples) {
-                    long long current_kept_bar = 0;
-                    for (long long b_idx = 0; b_idx < res->num_bars; b_idx++) {
-                        if (res->bars[b_idx].has_audio) {
-                            long long src_start = b_idx * res->bar_frames;
-                            long long dst_start = current_kept_bar * res->bar_frames;
-                            long long frames_to_copy = res->bar_frames;
-                            if (src_start + frames_to_copy > total_frames) {
-                                frames_to_copy = total_frames - src_start;
+                if (new_total_frames > 0) {
+                    float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
+                    if (new_samples) {
+                        long long current_kept_bar = 0;
+                        for (long long b_idx = 0; b_idx < res->num_bars; b_idx++) {
+                            if (res->bars[b_idx].has_audio) {
+                                long long src_start = b_idx * res->bar_frames;
+                                long long dst_start = current_kept_bar * res->bar_frames;
+                                long long frames_to_copy = res->bar_frames;
+                                if (src_start + frames_to_copy > total_frames) {
+                                    frames_to_copy = total_frames - src_start;
+                                }
+                                memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
+                                current_kept_bar++;
                             }
-                            memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
-                            current_kept_bar++;
                         }
-                    }
 
-                    buffer_edit_begin(b);
-                    float *res_samples = buffer_locksamples(b);
-                    if (res_samples) {
-                        long new_chans = buffer_getchannelcount(b);
-                        if (new_chans == chans) {
-                            memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
-                        } else {
-                            cropsilence_error(x, "Channel count mismatch for %s after resize (expected %ld, got %ld)", bufname, chans, new_chans);
+                        // Retry loop for locking samples (no sleep on main thread)
+                        float *res_samples = NULL;
+                        for (int retry = 0; retry < 100; retry++) {
+                            res_samples = buffer_locksamples(b);
+                            if (res_samples) break;
                         }
-                        buffer_unlocksamples(b);
+
+                        if (res_samples) {
+                            long new_chans = buffer_getchannelcount(b);
+                            if (new_chans == chans) {
+                                memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
+                            } else {
+                                cropsilence_error(x, "Channel count mismatch for %s after resize (expected %ld, got %ld)", bufname, chans, new_chans);
+                            }
+                            buffer_unlocksamples(b);
+                        } else {
+                            cropsilence_error(x, "Could not lock external samples for %s (failed after 100 retries)", bufname);
+                        }
+                        sysmem_freeptr(new_samples);
                     } else {
-                        cropsilence_error(x, "Could not lock external samples for %s", bufname);
+                        cropsilence_error(x, "Memory allocation failed for cropping %s", bufname);
                     }
-                    buffer_edit_end(b, 1);
-                    buffer_setdirty(b);
-                    sysmem_freeptr(new_samples);
-                } else {
-                    cropsilence_error(x, "Memory allocation failed for cropping %s", bufname);
                 }
-            } else {
-                buffer_edit_begin(b);
                 buffer_edit_end(b, 1);
                 buffer_setdirty(b);
+            } else {
+                cropsilence_error(x, "Could not begin editing for %s (buffer busy or invalid)", bufname);
             }
+            object_free(b_ref);
         }
-    }
-
-    if (b_ref) {
-        object_free(b_ref);
     }
 
     // Clean up worker data
