@@ -2,7 +2,7 @@
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="cropsilence~" module="msp" category="Buffer">
 	<digest>Crop silent segments from buffers in a polybuffer~</digest>
-	<description>The `cropsilence~` object scans each buffer within a `polybuffer~` in segments equal to a specified bar length. If a segment's peak amplitude is below a noise floor of 0.00009, it is cropped. The remaining segments are concatenated, and the buffer is resized to a multiple of the bar length.</description>
+	<description>The `cropsilence~` object scans each buffer within a `polybuffer~` in segments equal to a specified bar length. If a segment's peak amplitude is below a noise floor of 0.00009, it is cropped. The remaining segments are concatenated, and the buffer is resized to a multiple of the bar length. The cropping process is asynchronous and performed in a background thread to avoid blocking the main thread during heavy processing.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -19,7 +19,7 @@
 	<outletlist>
 		<outlet id="1" type="bang">
 			<digest>Outlet 1 (bang): Bang when done</digest>
-			<description>Outputs a bang when the cropping process for all buffers is complete.</description>
+			<description>Outputs a bang when the asynchronous cropping process for all buffers is complete.</description>
 		</outlet>
 		<outlet id="2" type="anything">
 			<digest>Outlet 2 (anything): Detailed Diagnostic Logging</digest>
