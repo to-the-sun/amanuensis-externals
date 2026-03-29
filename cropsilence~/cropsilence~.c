@@ -6,12 +6,22 @@
 #include <string.h>
 #include <math.h>
 
+typedef struct _buffer_storage {
+    float *samples;
+    long long frame_count;
+    long chans;
+    double samplerate;
+} t_buffer_storage;
+
 typedef struct _cropsilence {
     t_object b_obj;
     t_symbol *poly_name;
     long log;
     void *log_outlet;
     void *status_outlet;
+    t_buffer_storage *ground_truth;
+    long num_ground_truth;
+    t_critical lock;
 } t_cropsilence;
 
 void *cropsilence_new(t_symbol *s, long argc, t_atom *argv);
@@ -21,6 +31,8 @@ void cropsilence_float(t_cropsilence *x, double f);
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s);
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...);
+void cropsilence_clear_ground_truth(t_cropsilence *x);
+void cropsilence_bind(t_cropsilence *x, t_symbol *s);
 void cropsilence_execute(t_cropsilence *x, double bar_ms);
 
 static t_class *cropsilence_class;
@@ -32,6 +44,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)cropsilence_int, "int", A_LONG, 0);
     class_addmethod(c, (method)cropsilence_float, "float", A_FLOAT, 0);
+    class_addmethod(c, (method)cropsilence_bind, "bind", A_SYM, 0);
     class_addmethod(c, (method)cropsilence_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_cropsilence, log);
@@ -55,38 +68,111 @@ void *cropsilence_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->poly_name = _sym_nothing;
         x->log = 0;
-
-        // Process Arguments
-        if (argc > 0 && atom_gettype(argv) == A_SYM && atom_getsym(argv)->s_name[0] != '@') {
-            x->poly_name = atom_getsym(argv);
-            argc--;
-            argv++;
-        } else {
-            object_error((t_object *)x, "missing mandatory polybuffer~ name argument");
-        }
+        x->ground_truth = NULL;
+        x->num_ground_truth = 0;
+        critical_new(&x->lock);
 
         attr_args_process(x, argc, argv);
 
         // Create outlets from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
         x->status_outlet = outlet_new((t_object *)x, NULL);
-
-        // Verify existence of name.1
-        if (x->poly_name != _sym_nothing) {
-            char bufname[256];
-            snprintf(bufname, 256, "%s.1", x->poly_name->s_name);
-            t_buffer_ref *temp = buffer_ref_new((t_object *)x, gensym(bufname));
-            if (!buffer_ref_getobject(temp)) {
-                object_warn((t_object *)x, "could not find initial buffer '%s'", bufname);
-            }
-            object_free(temp);
-        }
     }
     return x;
 }
 
 void cropsilence_free(t_cropsilence *x) {
-    // Nothing special to free
+    cropsilence_clear_ground_truth(x);
+    critical_free(x->lock);
+}
+
+void cropsilence_clear_ground_truth(t_cropsilence *x) {
+    if (x->ground_truth) {
+        for (long i = 0; i < x->num_ground_truth; i++) {
+            if (x->ground_truth[i].samples) {
+                sysmem_freeptr(x->ground_truth[i].samples);
+            }
+        }
+        sysmem_freeptr(x->ground_truth);
+        x->ground_truth = NULL;
+    }
+    x->num_ground_truth = 0;
+}
+
+void cropsilence_bind(t_cropsilence *x, t_symbol *s) {
+    critical_enter(x->lock);
+    if (s == x->poly_name && x->ground_truth != NULL) {
+        cropsilence_log(x, "BIND: Already bound to '%s'. Skipping ground truth copy.", s->s_name);
+        critical_exit(x->lock);
+        return;
+    }
+
+    cropsilence_log(x, "BIND: Binding to polybuffer~ '%s' and creating ground truth copy...", s->s_name);
+    cropsilence_clear_ground_truth(x);
+    x->poly_name = s;
+
+    // Count buffers
+    long count = 0;
+    char bufname[256];
+    t_buffer_ref *b_ref = NULL;
+
+    while (true) {
+        snprintf(bufname, 256, "%s.%ld", x->poly_name->s_name, count + 1);
+        if (b_ref == NULL) {
+            b_ref = buffer_ref_new((t_object *)x, gensym(bufname));
+        } else {
+            buffer_ref_set(b_ref, gensym(bufname));
+        }
+
+        if (buffer_ref_getobject(b_ref)) {
+            count++;
+        } else {
+            break;
+        }
+    }
+
+    if (count > 0) {
+        x->ground_truth = (t_buffer_storage *)sysmem_newptrclear(count * sizeof(t_buffer_storage));
+        if (x->ground_truth) {
+            x->num_ground_truth = count;
+            for (long i = 0; i < count; i++) {
+                snprintf(bufname, 256, "%s.%ld", x->poly_name->s_name, i + 1);
+                buffer_ref_set(b_ref, gensym(bufname));
+                t_buffer_obj *b = buffer_ref_getobject(b_ref);
+
+                x->ground_truth[i].frame_count = buffer_getframecount(b);
+                x->ground_truth[i].chans = buffer_getchannelcount(b);
+                x->ground_truth[i].samplerate = buffer_getsamplerate(b);
+
+                long long total_samples = x->ground_truth[i].frame_count * x->ground_truth[i].chans;
+                if (total_samples > 0) {
+                    x->ground_truth[i].samples = (float *)sysmem_newptr(total_samples * sizeof(float));
+                    if (x->ground_truth[i].samples) {
+                        float *ext_samples = buffer_locksamples(b);
+                        if (ext_samples) {
+                            memcpy(x->ground_truth[i].samples, ext_samples, total_samples * sizeof(float));
+                            buffer_unlocksamples(b);
+                        } else {
+                            cropsilence_log(x, "ERROR: Could not lock samples for %s", bufname);
+                        }
+                    } else {
+                        cropsilence_log(x, "ERROR: Memory allocation failed for ground truth of %s", bufname);
+                    }
+                }
+            }
+            cropsilence_log(x, "BIND SUCCESS: Stored ground truth for %ld buffers.", count);
+        } else {
+            cropsilence_log(x, "ERROR: Memory allocation failed for ground truth array.");
+            x->num_ground_truth = 0;
+        }
+    } else {
+        cropsilence_log(x, "BIND ERROR: No buffers found for polybuffer~ '%s'", s->s_name);
+    }
+
+    if (b_ref) {
+        object_free(b_ref);
+    }
+    critical_exit(x->lock);
 }
 
 void cropsilence_int(t_cropsilence *x, t_atom_long n) {
@@ -98,49 +184,59 @@ void cropsilence_float(t_cropsilence *x, double f) {
 }
 
 void cropsilence_execute(t_cropsilence *x, double bar_ms) {
+    critical_enter(x->lock);
     if (bar_ms <= 0) {
         object_error((t_object *)x, "invalid bar length: %f", bar_ms);
+        critical_exit(x->lock);
         return;
     }
 
-    if (x->poly_name == _sym_nothing) {
-        object_error((t_object *)x, "no polybuffer~ name specified");
+    if (x->poly_name == _sym_nothing || x->ground_truth == NULL) {
+        object_error((t_object *)x, "no polybuffer~ bound or ground truth missing");
+        critical_exit(x->lock);
         return;
     }
 
-    cropsilence_log(x, "START: Cropping polybuffer~ '%s' with bar length %.2f ms", x->poly_name->s_name, bar_ms);
+    cropsilence_log(x, "START: Cropping polybuffer~ '%s' using ground truth as source with bar length %.2f ms", x->poly_name->s_name, bar_ms);
 
     char bufname[256];
-    int buffer_index = 1;
-    snprintf(bufname, 256, "%s.%d", x->poly_name->s_name, buffer_index);
-    t_symbol *s_member = gensym(bufname);
-    t_buffer_ref *b_ref = buffer_ref_new((t_object *)x, s_member);
+    t_buffer_ref *b_ref = NULL;
 
-    while (buffer_ref_getobject(b_ref)) {
+    for (long i = 0; i < x->num_ground_truth; i++) {
+        t_buffer_storage *gt = &x->ground_truth[i];
+        snprintf(bufname, 256, "%s.%ld", x->poly_name->s_name, i + 1);
+        t_symbol *s_member = gensym(bufname);
+
+        if (b_ref == NULL) {
+            b_ref = buffer_ref_new((t_object *)x, s_member);
+        } else {
+            buffer_ref_set(b_ref, s_member);
+        }
+
         t_buffer_obj *b = buffer_ref_getobject(b_ref);
-        double sr = buffer_getsamplerate(b);
-        long long total_frames = buffer_getframecount(b);
-        long chans = buffer_getchannelcount(b);
+        if (!b) {
+            cropsilence_log(x, "SKIPPED: %s (external buffer not found)", bufname);
+            continue;
+        }
 
-        if (sr > 0 && total_frames > 0 && chans > 0) {
+        double sr = gt->samplerate;
+        long long total_frames = gt->frame_count;
+        long chans = gt->chans;
+        float *samples = gt->samples;
+
+        if (sr > 0 && total_frames > 0 && chans > 0 && samples) {
             long long bar_frames = (long long)ceil((bar_ms * sr) / 1000.0);
             if (bar_frames <= 0) {
-                cropsilence_log(x, "SKIPPED: %s (bar length too short for sample rate)", s_member->s_name);
-                goto next_buffer;
-            }
-
-            float *samples = buffer_locksamples(b);
-            if (!samples) {
-                cropsilence_log(x, "ERROR: Could not lock samples for %s", s_member->s_name);
-                goto next_buffer;
+                cropsilence_log(x, "SKIPPED: %s (bar length too short for sample rate)", bufname);
+                continue;
             }
 
             long long num_bars = (total_frames + bar_frames - 1) / bar_frames;
             int *keep_bar = (int *)sysmem_newptr(num_bars * sizeof(int));
             long long kept_count = 0;
 
-            for (long long i = 0; i < num_bars; i++) {
-                long long start_frame = i * bar_frames;
+            for (long long b_idx = 0; b_idx < num_bars; b_idx++) {
+                long long start_frame = b_idx * bar_frames;
                 long long end_frame = start_frame + bar_frames;
                 if (end_frame > total_frames) end_frame = total_frames;
 
@@ -156,90 +252,78 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
                 }
 
                 if (has_audio) {
-                    keep_bar[i] = 1;
+                    keep_bar[b_idx] = 1;
                     kept_count++;
                 } else {
-                    keep_bar[i] = 0;
+                    keep_bar[b_idx] = 0;
                 }
             }
 
-            if (kept_count < num_bars) {
-                cropsilence_log(x, "%s: Found %lld silent bars out of %lld. Cropping...", s_member->s_name, num_bars - kept_count, num_bars);
+            // Always apply result from ground truth, even if kept_count == num_bars (this resets any previous cropping)
+            cropsilence_log(x, "%s: Kept %lld bars out of %lld. Applying to external buffer.", bufname, kept_count, num_bars);
 
-                float *new_samples = (float *)sysmem_newptr(kept_count * bar_frames * chans * sizeof(float));
-                if (new_samples) {
-                    memset(new_samples, 0, kept_count * bar_frames * chans * sizeof(float));
-                    long long current_kept_bar = 0;
-                    for (long long i = 0; i < num_bars; i++) {
-                        if (keep_bar[i]) {
-                            long long src_start = i * bar_frames;
-                            long long dst_start = current_kept_bar * bar_frames;
-                            long long frames_to_copy = bar_frames;
-                            if (src_start + frames_to_copy > total_frames) {
-                                frames_to_copy = total_frames - src_start;
-                            }
-                            memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
-                            current_kept_bar++;
+            long long new_total_frames = kept_count * bar_frames;
+            float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
+            if (new_samples) {
+                long long current_kept_bar = 0;
+                for (long long b_idx = 0; b_idx < num_bars; b_idx++) {
+                    if (keep_bar[b_idx]) {
+                        long long src_start = b_idx * bar_frames;
+                        long long dst_start = current_kept_bar * bar_frames;
+                        long long frames_to_copy = bar_frames;
+                        if (src_start + frames_to_copy > total_frames) {
+                            frames_to_copy = total_frames - src_start;
                         }
+                        memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
+                        current_kept_bar++;
                     }
-                    buffer_unlocksamples(b);
+                }
 
-                    // Resize and copy back
-                    long long new_total_frames = kept_count * bar_frames;
-                    buffer_edit_begin(b);
-                    t_atom av;
-                    atom_setlong(&av, (t_atom_long)new_total_frames);
-                    object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
+                // Resize external buffer
+                buffer_edit_begin(b);
+                t_atom av;
+                atom_setlong(&av, (t_atom_long)new_total_frames);
+                object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
 
-                    float *res_samples = buffer_locksamples(b);
-                    if (res_samples) {
-                        // Re-verify channel count after resize just in case
-                        long new_chans = buffer_getchannelcount(b);
-                        if (new_chans == chans) {
-                            memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
-                        } else {
-                            cropsilence_log(x, "ERROR: Channel count changed after resize for %s", s_member->s_name);
-                        }
-                        buffer_unlocksamples(b);
+                float *res_samples = buffer_locksamples(b);
+                if (res_samples) {
+                    long new_chans = buffer_getchannelcount(b);
+                    if (new_chans == chans) {
+                        memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
                     } else {
-                        cropsilence_log(x, "ERROR: Could not lock samples after resize for %s", s_member->s_name);
+                        cropsilence_log(x, "ERROR: Channel count mismatch for %s after resize", bufname);
                     }
-                    buffer_edit_end(b, 1);
-                    buffer_setdirty(b);
-                    sysmem_freeptr(new_samples);
-                } else {
-                    cropsilence_log(x, "ERROR: Memory allocation failed for cropping %s", s_member->s_name);
                     buffer_unlocksamples(b);
+                } else {
+                    cropsilence_log(x, "ERROR: Could not lock external samples for %s", bufname);
                 }
+                buffer_edit_end(b, 1);
+                buffer_setdirty(b);
+                sysmem_freeptr(new_samples);
             } else {
-                cropsilence_log(x, "%s: No silent bars found.", s_member->s_name);
-                buffer_unlocksamples(b);
+                cropsilence_log(x, "ERROR: Memory allocation failed for cropping %s", bufname);
             }
-
             sysmem_freeptr(keep_bar);
         } else {
-            cropsilence_log(x, "SKIPPED: %s (invalid buffer parameters)", s_member->s_name);
+            cropsilence_log(x, "SKIPPED: %s (invalid buffer parameters or samples missing in ground truth)", bufname);
         }
-
-    next_buffer:
-        buffer_index++;
-        snprintf(bufname, 256, "%s.%d", x->poly_name->s_name, buffer_index);
-        s_member = gensym(bufname);
-        buffer_ref_set(b_ref, s_member);
     }
 
-    object_free(b_ref);
+    if (b_ref) {
+        object_free(b_ref);
+    }
     cropsilence_log(x, "END: Finished cropping polybuffer~ '%s'", x->poly_name->s_name);
     outlet_bang(x->status_outlet);
+    critical_exit(x->lock);
 }
 
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (number) Trigger cropping with specified bar length (ms)");
+        sprintf(s, "Inlet 1: (number) Trigger cropping with specified bar length (ms); (bind symbol) Bind to polybuffer~");
     } else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Bang when done"); break;
-            case 1: sprintf(s, "Outlet 2: Logging Outlet"); break;
+            case 0: sprintf(s, "Outlet 1 (bang): Bang when done"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
         }
     }
 }

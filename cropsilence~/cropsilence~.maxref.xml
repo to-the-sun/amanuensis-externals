@@ -10,9 +10,9 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="1" type="float/int">
-			<digest>Inlet 1: Bar length in ms</digest>
-			<description>A number in this inlet triggers the cropping process for all buffers in the polybuffer~ using the specified bar length in milliseconds.</description>
+		<inlet id="1" type="float/int/symbol">
+			<digest>Inlet 1: Bar length (ms) or Bind message</digest>
+			<description>A number in this inlet triggers the cropping process for all buffers in the polybuffer~ using the specified bar length in milliseconds. A 'bind' message followed by a symbol binds the object to a polybuffer~ and stores its initial state as a ground truth.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
@@ -28,10 +28,6 @@
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
-		<objarg name="polybuffer-name" type="symbol" optional="0">
-			<digest>Name of the polybuffer~ to bind to</digest>
-			<description>The mandatory argument specifies the name of the external `polybuffer~`. The object verifies its existence by looking for the first buffer member (`name.1`).</description>
-		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
@@ -40,14 +36,21 @@
 				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Trigger cropping</digest>
-			<description>Starts the cropping process using the provided bar length in milliseconds.</description>
+			<description>Starts the cropping process using the provided bar length in milliseconds. The cropping is always performed relative to the original ground truth state of the buffers stored during the last 'bind' message.</description>
 		</method>
 		<method name="int">
 			<arglist>
 				<arg name="ms" type="int" optional="0" />
 			</arglist>
 			<digest>Trigger cropping</digest>
-			<description>Starts the cropping process using the provided bar length in milliseconds.</description>
+			<description>Starts the cropping process using the provided bar length in milliseconds. The cropping is always performed relative to the original ground truth state of the buffers stored during the last 'bind' message.</description>
+		</method>
+		<method name="bind">
+			<arglist>
+				<arg name="polybuffer-name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Bind to polybuffer~</digest>
+			<description>Binds the object to the specified `polybuffer~`. Upon the first successful bind to a specific name, the object creates an internal copy of all buffers in that `polybuffer~` to serve as the ground truth for all future cropping operations. Subsequent 'bind' messages with the same name will not overwrite the ground truth.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
