@@ -31,6 +31,7 @@ void cropsilence_float(t_cropsilence *x, double f);
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s);
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...);
+void cropsilence_error(t_cropsilence *x, const char *fmt, ...);
 void cropsilence_clear_ground_truth(t_cropsilence *x);
 void cropsilence_bind(t_cropsilence *x, t_symbol *s);
 void cropsilence_execute(t_cropsilence *x, double bar_ms);
@@ -59,6 +60,15 @@ void cropsilence_log(t_cropsilence *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     vcommon_log(x->log_outlet, x->log, "cropsilence~", fmt, args);
+    va_end(args);
+}
+
+void cropsilence_error(t_cropsilence *x, const char *fmt, ...) {
+    va_list args;
+    char buf[4096];
+    va_start(args, fmt);
+    vsnprintf(buf, 4096, fmt, args);
+    object_error((t_object *)x, "%s", buf);
     va_end(args);
 }
 
@@ -156,20 +166,20 @@ void cropsilence_bind(t_cropsilence *x, t_symbol *s) {
                             memcpy(x->ground_truth[i].samples, ext_samples, total_samples * sizeof(float));
                             buffer_unlocksamples(b);
                         } else {
-                            cropsilence_log(x, "ERROR: Could not lock samples for %s", bufname);
+                            cropsilence_error(x, "Could not lock samples for %s", bufname);
                         }
                     } else {
-                        cropsilence_log(x, "ERROR: Memory allocation failed for ground truth of %s", bufname);
+                        cropsilence_error(x, "Memory allocation failed for ground truth of %s", bufname);
                     }
                 }
             }
             cropsilence_log(x, "BIND SUCCESS: Stored ground truth for %ld buffers.", count);
         } else {
-            cropsilence_log(x, "ERROR: Memory allocation failed for ground truth array.");
+            cropsilence_error(x, "Memory allocation failed for ground truth array.");
             x->num_ground_truth = 0;
         }
     } else {
-        cropsilence_log(x, "BIND ERROR: No buffers found for polybuffer~ '%s'", s->s_name);
+        cropsilence_error(x, "No buffers found for polybuffer~ '%s'", s->s_name);
     }
 
     if (b_ref) {
@@ -268,46 +278,48 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
             cropsilence_log(x, "%s: Kept %lld bars out of %lld. New total frames: %lld. Applying to external buffer.",
                 bufname, kept_count, num_bars, new_total_frames);
 
-            float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
-            if (new_samples) {
-                long long current_kept_bar = 0;
-                for (long long b_idx = 0; b_idx < num_bars; b_idx++) {
-                    if (keep_bar[b_idx]) {
-                        long long src_start = b_idx * bar_frames;
-                        long long dst_start = current_kept_bar * bar_frames;
-                        long long frames_to_copy = bar_frames;
-                        if (src_start + frames_to_copy > total_frames) {
-                            frames_to_copy = total_frames - src_start;
+            // Resize external buffer first
+            t_atom av;
+            atom_setlong(&av, (t_atom_long)(new_total_frames * chans));
+            object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
+
+            buffer_edit_begin(b);
+            if (new_total_frames > 0) {
+                float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
+                if (new_samples) {
+                    long long current_kept_bar = 0;
+                    for (long long b_idx = 0; b_idx < num_bars; b_idx++) {
+                        if (keep_bar[b_idx]) {
+                            long long src_start = b_idx * bar_frames;
+                            long long dst_start = current_kept_bar * bar_frames;
+                            long long frames_to_copy = bar_frames;
+                            if (src_start + frames_to_copy > total_frames) {
+                                frames_to_copy = total_frames - src_start;
+                            }
+                            memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
+                            current_kept_bar++;
                         }
-                        memcpy(new_samples + (dst_start * chans), samples + (src_start * chans), frames_to_copy * chans * sizeof(float));
-                        current_kept_bar++;
                     }
-                }
 
-                // Resize external buffer
-                buffer_edit_begin(b);
-                t_atom av;
-                atom_setlong(&av, (t_atom_long)(new_total_frames * chans));
-                object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
-
-                float *res_samples = buffer_locksamples(b);
-                if (res_samples) {
-                    long new_chans = buffer_getchannelcount(b);
-                    if (new_chans == chans) {
-                        memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
+                    float *res_samples = buffer_locksamples(b);
+                    if (res_samples) {
+                        long new_chans = buffer_getchannelcount(b);
+                        if (new_chans == chans) {
+                            memcpy(res_samples, new_samples, new_total_frames * chans * sizeof(float));
+                        } else {
+                            cropsilence_error(x, "Channel count mismatch for %s after resize (expected %ld, got %ld)", bufname, chans, new_chans);
+                        }
+                        buffer_unlocksamples(b);
                     } else {
-                        cropsilence_log(x, "ERROR: Channel count mismatch for %s after resize", bufname);
+                        cropsilence_error(x, "Could not lock external samples for %s", bufname);
                     }
-                    buffer_unlocksamples(b);
+                    sysmem_freeptr(new_samples);
                 } else {
-                    cropsilence_log(x, "ERROR: Could not lock external samples for %s", bufname);
+                    cropsilence_error(x, "Memory allocation failed for cropping %s", bufname);
                 }
-                buffer_edit_end(b, 1);
-                buffer_setdirty(b);
-                sysmem_freeptr(new_samples);
-            } else {
-                cropsilence_log(x, "ERROR: Memory allocation failed for cropping %s", bufname);
             }
+            buffer_edit_end(b, 1);
+            buffer_setdirty(b);
             sysmem_freeptr(keep_bar);
         } else {
             cropsilence_log(x, "SKIPPED: %s (invalid buffer parameters or samples missing in ground truth)", bufname);
