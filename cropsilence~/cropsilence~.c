@@ -144,6 +144,9 @@ void cropsilence_bind(t_cropsilence *x, t_symbol *s) {
                 x->ground_truth[i].chans = buffer_getchannelcount(b);
                 x->ground_truth[i].samplerate = buffer_getsamplerate(b);
 
+                cropsilence_log(x, "STORING: %s (%lld frames, %ld chans, %.2f Hz)",
+                    bufname, x->ground_truth[i].frame_count, x->ground_truth[i].chans, x->ground_truth[i].samplerate);
+
                 long long total_samples = x->ground_truth[i].frame_count * x->ground_truth[i].chans;
                 if (total_samples > 0) {
                     x->ground_truth[i].samples = (float *)sysmem_newptr(total_samples * sizeof(float));
@@ -232,6 +235,7 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
             }
 
             long long num_bars = (total_frames + bar_frames - 1) / bar_frames;
+            cropsilence_log(x, "PROCESSING: %s (bar_frames: %lld, total_bars: %lld)", bufname, bar_frames, num_bars);
             int *keep_bar = (int *)sysmem_newptr(num_bars * sizeof(int));
             long long kept_count = 0;
 
@@ -260,9 +264,10 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
             }
 
             // Always apply result from ground truth, even if kept_count == num_bars (this resets any previous cropping)
-            cropsilence_log(x, "%s: Kept %lld bars out of %lld. Applying to external buffer.", bufname, kept_count, num_bars);
-
             long long new_total_frames = kept_count * bar_frames;
+            cropsilence_log(x, "%s: Kept %lld bars out of %lld. New total frames: %lld. Applying to external buffer.",
+                bufname, kept_count, num_bars, new_total_frames);
+
             float *new_samples = (float *)sysmem_newptrclear(new_total_frames * chans * sizeof(float));
             if (new_samples) {
                 long long current_kept_bar = 0;
@@ -282,7 +287,7 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
                 // Resize external buffer
                 buffer_edit_begin(b);
                 t_atom av;
-                atom_setlong(&av, (t_atom_long)new_total_frames);
+                atom_setlong(&av, (t_atom_long)(new_total_frames * chans));
                 object_method_typed(b, gensym("sizeinsamps"), 1, &av, NULL);
 
                 float *res_samples = buffer_locksamples(b);
@@ -319,11 +324,11 @@ void cropsilence_execute(t_cropsilence *x, double bar_ms) {
 
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (number) Trigger cropping with specified bar length (ms); (bind symbol) Bind to polybuffer~");
+        sprintf(s, "Inlet 1 (float/int/symbol): Trigger cropping with bar length (ms) or Bind to polybuffer~");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (bang): Bang when done"); break;
-            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
+            case 1: sprintf(s, "Outlet 2 (anything): Detailed Diagnostic Logging Outlet"); break;
         }
     }
 }
