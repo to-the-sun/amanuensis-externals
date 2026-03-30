@@ -195,19 +195,26 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 } else if (n_chans == 1) {
                     out_l = out_r = (double)samples[f];
                 }
+            } else {
+                // Out of bounds safety
+                x->playing = 0;
             }
 
-            x->playhead += 1.0;
-            if (x->playhead >= (double)x->current_bar_end) {
-                if (x->next_bar_ready) {
-                    x->current_bar_start = x->next_bar_start;
-                    x->current_bar_end = x->next_bar_end;
-                    x->playhead = (double)x->current_bar_start;
-                    x->next_bar_ready = 0;
-                    x->scan_from = x->current_bar_end;
-                    x->scanner_trigger = 1;
-                } else {
-                    x->playing = 0;
+            if (x->playing) {
+                x->playhead += 1.0;
+                if (x->playhead >= (double)x->current_bar_end) {
+                    if (x->next_bar_ready) {
+                        skipsilence_log(x, "PERFORM: switching to next bar %lld to %lld", x->next_bar_start, x->next_bar_end);
+                        x->current_bar_start = x->next_bar_start;
+                        x->current_bar_end = x->next_bar_end;
+                        x->playhead = (double)x->current_bar_start;
+                        x->next_bar_ready = 0;
+                        x->scan_from = x->current_bar_end;
+                        x->scanner_trigger = 1;
+                    } else {
+                        skipsilence_log(x, "PERFORM: end of current bar reached, next bar not ready. stopping.");
+                        x->playing = 0;
+                    }
                 }
             }
         }
@@ -274,12 +281,14 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 critical_enter(x->lock);
                 x->scanner_trigger = 0;
                 critical_exit(x->lock);
-                skipsilence_log(x, "SCAN: reached end of buffer");
+                skipsilence_log(x, "SCAN: reached end of buffer at frame %lld", total_frames);
                 continue;
             }
 
             long long b_end = b_start + bar_frames;
             if (b_end > total_frames) b_end = total_frames;
+
+            skipsilence_log(x, "SCAN: checking segment %lld to %lld (bar_ms: %.2f, bar_frames: %lld)", b_start, b_end, bar_ms, bar_frames);
 
             int has_audio = 0;
             for (long long f = b_start; f < b_end; f++) {
@@ -309,11 +318,12 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                     x->next_bar_ready = 0;
                     x->scan_from = x->current_bar_end;
                     x->scanner_trigger = 1;
-                    skipsilence_log(x, "SCAN: found audio, starting playback at frame %lld", x->current_bar_start);
+                    skipsilence_log(x, "SCAN: found audio, starting playback at frame %lld to %lld", x->current_bar_start, x->current_bar_end);
                 } else {
-                    skipsilence_log(x, "SCAN: found next audio bar at frame %lld", x->next_bar_start);
+                    skipsilence_log(x, "SCAN: found next audio bar at frame %lld to %lld", x->next_bar_start, x->next_bar_end);
                 }
             } else {
+                skipsilence_log(x, "SCAN: segment %lld to %lld was silent. skipping...", b_start, b_end);
                 x->scan_from = b_end;
                 if (x->scan_from >= total_frames) {
                     x->scanner_trigger = 0;
