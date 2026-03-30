@@ -204,7 +204,9 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 x->playhead += 1.0;
                 if (x->playhead >= (double)x->current_bar_end) {
                     if (x->next_bar_ready) {
-                        skipsilence_log(x, "PERFORM: switching to next bar %lld to %lld", x->next_bar_start, x->next_bar_end);
+                        double ms_s = (double)x->next_bar_start * 1000.0 / (n_frames > 0 ? (buffer_getsamplerate(b) > 0 ? buffer_getsamplerate(b) : sys_getsr()) : sys_getsr());
+                        double ms_e = (double)x->next_bar_end * 1000.0 / (n_frames > 0 ? (buffer_getsamplerate(b) > 0 ? buffer_getsamplerate(b) : sys_getsr()) : sys_getsr());
+                        skipsilence_log(x, "PERFORM: switching to next bar %.2f to %.2f ms", ms_s, ms_e);
                         x->current_bar_start = x->next_bar_start;
                         x->current_bar_end = x->next_bar_end;
                         x->playhead = (double)x->current_bar_start;
@@ -281,14 +283,14 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 critical_enter(x->lock);
                 x->scanner_trigger = 0;
                 critical_exit(x->lock);
-                skipsilence_log(x, "SCAN: reached end of buffer at frame %lld", total_frames);
+                skipsilence_log(x, "SCAN: reached end of buffer at %.2f ms", (double)total_frames * 1000.0 / sr);
                 continue;
             }
 
             long long b_end = b_start + bar_frames;
             if (b_end > total_frames) b_end = total_frames;
 
-            skipsilence_log(x, "SCAN: checking segment %lld to %lld (bar_ms: %.2f, bar_frames: %lld)", b_start, b_end, bar_ms, bar_frames);
+            skipsilence_log(x, "SCAN: checking segment %.2f to %.2f ms (bar_ms: %.2f)", (double)b_start * 1000.0 / sr, (double)b_end * 1000.0 / sr, bar_ms);
 
             int has_audio = 0;
             for (long long f = b_start; f < b_end; f++) {
@@ -318,12 +320,12 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                     x->next_bar_ready = 0;
                     x->scan_from = x->current_bar_end;
                     x->scanner_trigger = 1;
-                    skipsilence_log(x, "SCAN: found audio, starting playback at frame %lld to %lld", x->current_bar_start, x->current_bar_end);
+                    skipsilence_log(x, "SCAN: found audio, starting playback at %.2f to %.2f ms", (double)x->current_bar_start * 1000.0 / sr, (double)x->current_bar_end * 1000.0 / sr);
                 } else {
-                    skipsilence_log(x, "SCAN: found next audio bar at frame %lld to %lld", x->next_bar_start, x->next_bar_end);
+                    skipsilence_log(x, "SCAN: found next audio bar at %.2f to %.2f ms", (double)x->next_bar_start * 1000.0 / sr, (double)x->next_bar_end * 1000.0 / sr);
                 }
             } else {
-                skipsilence_log(x, "SCAN: segment %lld to %lld was silent. skipping...", b_start, b_end);
+                skipsilence_log(x, "SCAN: segment %.2f to %.2f ms was silent. skipping...", (double)b_start * 1000.0 / sr, (double)b_end * 1000.0 / sr);
                 x->scan_from = b_end;
                 if (x->scan_from >= total_frames) {
                     x->scanner_trigger = 0;
