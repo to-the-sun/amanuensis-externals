@@ -15,10 +15,12 @@ typedef struct _skipsilence {
 
     long log;
     void *log_outlet;
+    void *playhead_outlet;
 
     // Playback state
     double playhead; // In frames
     int playing;
+    int play_mode;
     long long current_bar_start;
     long long current_bar_end;
 
@@ -33,11 +35,15 @@ typedef struct _skipsilence {
     t_systhread scanner_thread;
     t_critical lock;
 
+    void *proxy;
+    long proxy_id;
+
 } t_skipsilence;
 
 void *skipsilence_new(t_symbol *s, long argc, t_atom *argv);
 void skipsilence_free(t_skipsilence *x);
 void skipsilence_play(t_skipsilence *x, t_symbol *s);
+void skipsilence_int(t_skipsilence *x, long n);
 void skipsilence_dsp64(t_skipsilence *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
@@ -54,6 +60,7 @@ void ext_main(void *r) {
     t_class *c = class_new("skipsilence~", (method)skipsilence_new, (method)skipsilence_free, sizeof(t_skipsilence), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)skipsilence_play, "play", A_SYM, 0);
+    class_addmethod(c, (method)skipsilence_int, "int", A_LONG, 0);
     class_addmethod(c, (method)skipsilence_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)skipsilence_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)skipsilence_assist, "assist", A_CANT, 0);
@@ -79,10 +86,13 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         dsp_setup((t_pxobject *)x, 0);
+        x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
+
         // Create outlets from right to left
-        x->log_outlet = outlet_new((t_object *)x, NULL);
-        outlet_new((t_object *)x, "signal"); // Right
-        outlet_new((t_object *)x, "signal"); // Left
+        x->log_outlet = outlet_new((t_object *)x, NULL);           // Index 3
+        x->playhead_outlet = outlet_new((t_object *)x, "signal");  // Index 2
+        outlet_new((t_object *)x, "signal");                       // Index 1 (Right)
+        outlet_new((t_object *)x, "signal");                       // Index 0 (Left)
 
         x->play_ref = buffer_ref_new((t_object *)x, _sym_nothing);
         x->bar_ref = buffer_ref_new((t_object *)x, gensym("bar"));
@@ -90,6 +100,7 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->playhead = 0;
         x->playing = 0;
+        x->play_mode = 0;
         x->current_bar_start = -1;
         x->current_bar_end = -1;
         x->next_bar_start = -1;
@@ -120,6 +131,7 @@ void skipsilence_free(t_skipsilence *x) {
 
     if (x->play_ref) object_free(x->play_ref);
     if (x->bar_ref) object_free(x->bar_ref);
+    if (x->proxy) object_free(x->proxy);
 }
 
 t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
@@ -130,13 +142,34 @@ t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void 
 
 void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (messages): play [buffer_name]");
+        switch (a) {
+            case 0: sprintf(s, "Inlet 1 (messages): play [buffer_name]"); break;
+            case 1: sprintf(s, "Inlet 2 (int): Play Mode (0: once, 1: repeat, 2: stop)"); break;
+        }
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (signal): Left Channel"); break;
             case 1: sprintf(s, "Outlet 2 (signal): Right Channel"); break;
-            case 2: sprintf(s, "Outlet 3 (anything): Logging Outlet"); break;
+            case 2: sprintf(s, "Outlet 3 (signal): Playhead (current sample)"); break;
+            case 3: sprintf(s, "Outlet 4 (anything): Logging Outlet"); break;
         }
+    }
+}
+
+void skipsilence_int(t_skipsilence *x, long n) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 1) {
+        critical_enter(x->lock);
+        x->play_mode = (int)n;
+        if (x->play_mode == 2) {
+            x->playing = 0;
+            x->scanner_trigger = 0;
+            x->next_bar_ready = 0;
+            skipsilence_log(x, "INT: stop mode (2) received, stopping playback immediately");
+        } else {
+            skipsilence_log(x, "INT: play mode set to %d", x->play_mode);
+        }
+        critical_exit(x->lock);
     }
 }
 
@@ -222,6 +255,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
         }
         outs[0][i] = out_l;
         outs[1][i] = out_r;
+        outs[2][i] = x->playing ? x->playhead : 0.0;
     }
     critical_exit(x->lock);
 
@@ -281,9 +315,15 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
             if (b_start >= total_frames) {
                 buffer_unlocksamples(play_b);
                 critical_enter(x->lock);
-                x->scanner_trigger = 0;
+                if (x->play_mode == 1) {
+                    x->scan_from = 0;
+                    x->scanner_trigger = 1;
+                    skipsilence_log(x, "SCAN: repeat mode (1) active, restarting scan from beginning");
+                } else {
+                    x->scanner_trigger = 0;
+                    skipsilence_log(x, "SCAN: reached end of buffer at %.2f ms", (double)total_frames * 1000.0 / sr);
+                }
                 critical_exit(x->lock);
-                skipsilence_log(x, "SCAN: reached end of buffer at %.2f ms", (double)total_frames * 1000.0 / sr);
                 continue;
             }
 
