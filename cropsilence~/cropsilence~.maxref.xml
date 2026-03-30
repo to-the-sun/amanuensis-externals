@@ -2,7 +2,7 @@
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="cropsilence~" module="msp" category="Buffer">
 	<digest>Crop silent segments from buffers in a polybuffer~</digest>
-	<description>The `cropsilence~` object scans each buffer within a `polybuffer~` in segments equal to a specified bar length. If a segment's peak amplitude is below a noise floor of 0.00009, it is cropped. The remaining segments are concatenated, and the buffer is resized to a multiple of the bar length.</description>
+	<description>The `cropsilence~` object scans each buffer within a `polybuffer~` in segments equal to a specified bar length. If a segment's peak amplitude is below a noise floor of 0.00009, it is cropped. The remaining segments are concatenated, and the buffer is resized to a multiple of the bar length. The cropping process is asynchronous and performed in a background thread to avoid blocking the main thread during heavy processing.</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -11,19 +11,19 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="float/int/symbol">
-			<digest>Inlet 1: Bar length (ms) or Bind message</digest>
-			<description>A number in this inlet triggers the cropping process for all buffers in the polybuffer~ using the specified bar length in milliseconds. A 'bind' message followed by a symbol binds the object to a polybuffer~ and stores its initial state as a ground truth.</description>
+			<digest>Inlet 1 (float/int/symbol): Bar length (ms) or Bind message</digest>
+			<description>A number (either integer or floating-point) in this inlet triggers the cropping process for all buffers in the polybuffer~ using the specified bar length in milliseconds. A 'bind' message followed by a symbol binds the object to a polybuffer~ and stores its initial state as a ground truth.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="bang">
-			<digest>Outlet 1: Bang when done</digest>
-			<description>Outputs a bang when the cropping process for all buffers is complete.</description>
+			<digest>Outlet 1 (bang): Bang when done</digest>
+			<description>Outputs a bang when the asynchronous cropping process for all buffers is complete.</description>
 		</outlet>
 		<outlet id="2" type="anything">
-			<digest>Outlet 2: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides detailed diagnostic logs.</description>
+			<digest>Outlet 2 (anything): Detailed Diagnostic Logging</digest>
+			<description>When the @log attribute is enabled, this outlet provides detailed diagnostic information about buffer binding and the cropping process.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
