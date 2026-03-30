@@ -79,9 +79,10 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         dsp_setup((t_pxobject *)x, 0);
-        outlet_new((t_object *)x, "signal"); // Left
-        outlet_new((t_object *)x, "signal"); // Right
+        // Create outlets from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
+        outlet_new((t_object *)x, "signal"); // Right
+        outlet_new((t_object *)x, "signal"); // Left
 
         x->play_ref = buffer_ref_new((t_object *)x, _sym_nothing);
         x->bar_ref = buffer_ref_new((t_object *)x, gensym("bar"));
@@ -272,7 +273,6 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 buffer_unlocksamples(play_b);
                 critical_enter(x->lock);
                 x->scanner_trigger = 0;
-                x->playing = 0;
                 critical_exit(x->lock);
                 skipsilence_log(x, "SCAN: reached end of buffer");
                 continue;
