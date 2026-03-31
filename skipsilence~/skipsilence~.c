@@ -40,6 +40,7 @@ typedef struct _skipsilence {
     long proxy_id;
 
     int zero_bar_mode;
+    double last_bar_ms;
 
 } t_skipsilence;
 
@@ -113,6 +114,7 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->scanner_trigger = 0;
         x->scan_from = 0;
         x->zero_bar_mode = 0;
+        x->last_bar_ms = -1;
 
         critical_new(&x->lock);
         x->scanner_should_exit = 0;
@@ -278,8 +280,18 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                         x->scan_from = x->current_bar_end;
                         x->scanner_trigger = 1;
                     } else if (x->play_mode == 1) {
-                        // Repeat mode: wait for scanner at bar boundary
-                        x->playhead = (double)x->current_bar_end;
+                        if (x->zero_bar_mode) {
+                            x->playhead = 0;
+                            x->current_bar_start = -1;
+                            x->current_bar_end = -1;
+                            x->scan_from = 0;
+                            x->scanner_trigger = 1;
+                            x->playing = 0;
+                            skipsilence_log(x, "PERFORM: zero-bar mode repeat, restarting scan from beginning");
+                        } else {
+                            // Repeat mode: wait for scanner at bar boundary
+                            x->playhead = (double)x->current_bar_end;
+                        }
                     } else {
                         skipsilence_log(x, "PERFORM: end of current bar reached, next bar not ready. stopping.");
                         x->playing = 0;
@@ -311,6 +323,11 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
         }
 
         t_buffer_obj *play_b = buffer_ref_getobject(x->play_ref);
+
+        critical_enter(x->lock);
+        int bar_length_changed = (bar_ms != x->last_bar_ms);
+        x->last_bar_ms = bar_ms;
+        critical_exit(x->lock);
 
         if (bar_ms <= 0) {
             critical_enter(x->lock);
@@ -373,21 +390,24 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
         // bar_ms > 0
         int trigger = 0;
         critical_enter(x->lock);
-        if (x->zero_bar_mode) {
-            skipsilence_log(x, "SCAN: exiting zero-bar mode (bar_length > 0)");
-            x->zero_bar_mode = 0;
+        if (x->zero_bar_mode || bar_length_changed) {
+            if (x->zero_bar_mode) {
+                skipsilence_log(x, "SCAN: exiting zero-bar mode (bar_length > 0)");
+                x->zero_bar_mode = 0;
+            } else {
+                skipsilence_log(x, "SCAN: bar length changed, re-aligning");
+            }
             if (x->playing && play_b) {
                 double sr = buffer_getsamplerate(play_b);
                 if (sr <= 0) sr = sys_getsr();
                 long long bar_frames = (long long)ceil(bar_ms * sr / 1000.0);
                 if (bar_frames <= 0) bar_frames = 1;
 
-                long long frames_played = (long long)x->playhead - x->current_bar_start;
-                long long bars_played = frames_played / bar_frames;
-                x->current_bar_end = x->current_bar_start + (bars_played + 1) * bar_frames;
+                long long bars_passed = (long long)x->playhead / bar_frames;
+                x->current_bar_end = (bars_passed + 1) * bar_frames;
                 x->scan_from = x->current_bar_end;
                 x->scanner_trigger = 1;
-                skipsilence_log(x, "SCAN: re-aligned current bar end to %.2f ms", (double)x->current_bar_end * 1000.0 / sr);
+                skipsilence_log(x, "SCAN: re-aligned to bar boundary: next bar starts at %.2f ms", (double)x->current_bar_end * 1000.0 / sr);
             }
         }
         trigger = x->scanner_trigger && !x->next_bar_ready;
