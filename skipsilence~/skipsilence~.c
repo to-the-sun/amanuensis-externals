@@ -244,14 +244,16 @@ void skipsilence_int(t_skipsilence *x, long n) {
 
 void skipsilence_play(t_skipsilence *x, t_symbol *s) {
     critical_enter(x->lock);
-    if (x->voices[x->active_idx].playing) {
+    if (x->voices[x->active_idx].playing || x->xfade_busy) {
         x->pending_play_sym = s;
         buffer_ref_set(x->scan_ref, s);
         x->scan_sym = s;
-        skipsilence_log(x, "PLAY: deferring playback of buffer '%s' until next bar", s->s_name);
+        x->next_bar_ready = 0; // Clear current next bar as we are switching buffers
+        x->scan_from = 0;
+        x->scanner_trigger = 1;
+        skipsilence_log(x, "PLAY: deferring playback of buffer '%s' until next bar (crossfade)", s->s_name);
     } else {
         buffer_ref_set(x->voices[0].play_ref, s);
-        x->voices[0].play_sym = s;
         buffer_ref_set(x->scan_ref, s);
         x->scan_sym = s;
 
@@ -263,8 +265,8 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
             return;
         }
 
-        x->active_idx = 1; // Start at index 1 (silent)
-        x->xfade_target = 1.0; // Currently at voice 1
+        x->active_idx = 0;
+        x->xfade_target = 0.0;
         x->xfade_busy = 0;
 
         for (int i = 0; i < 2; i++) {
@@ -272,8 +274,13 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
             x->voices[i].playhead = 0;
             x->voices[i].bar_start = -1;
             x->voices[i].bar_end = -1;
-            if (i > 0) x->voices[i].play_sym = _sym_nothing;
+            x->voices[i].play_sym = _sym_nothing;
         }
+        x->voices[0].play_sym = s;
+
+        double sr = sys_getsr(); if (sr <= 0) sr = 44100.0;
+        crossfade_init(&x->xfade_l, sr, x->xfade_low, x->xfade_high);
+        crossfade_init(&x->xfade_r, sr, x->xfade_low, x->xfade_high);
 
         x->next_bar_start = -1;
         x->next_bar_end = -1;
@@ -318,18 +325,38 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
             int v = x->active_idx;
             int next_v = 1 - x->active_idx;
             if (x->pending_play_sym) {
-                skipsilence_log(x, "PERFORM: switching to pending buffer '%s' (fade-out to wait for scanner)", x->pending_play_sym->s_name);
-                buffer_ref_set(x->voices[0].play_ref, x->pending_play_sym);
-                x->voices[0].play_sym = x->pending_play_sym;
-                x->voices[0].playing = 0;
-                x->voices[1].playing = 0;
-                x->next_bar_ready = 0;
-                x->scan_from = 0;
-                x->scanner_trigger = 1;
-                x->pending_play_sym = NULL;
-                x->active_idx = 1;
-                x->xfade_target = 1.0;
-                x->xfade_busy = 1;
+                if (x->next_bar_ready) {
+                    skipsilence_log(x, "PERFORM: switching to pending buffer '%s' (direct crossfade)", x->pending_play_sym->s_name);
+                    buffer_ref_set(x->voices[next_v].play_ref, x->pending_play_sym);
+                    x->voices[next_v].play_sym = x->pending_play_sym;
+                    x->voices[next_v].bar_start = x->next_bar_start;
+                    x->voices[next_v].bar_end = x->next_bar_end;
+                    x->voices[next_v].playhead = (double)x->voices[next_v].bar_start;
+                    x->voices[next_v].playing = 1;
+                    x->voices[v].playing = 0;
+
+                    x->next_bar_ready = 0;
+                    x->scan_from = x->voices[next_v].bar_end;
+                    x->scanner_trigger = 1;
+                    x->pending_play_sym = NULL;
+
+                    x->active_idx = next_v;
+                    x->xfade_target = (double)next_v;
+                    x->xfade_busy = 1;
+                } else {
+                    skipsilence_log(x, "PERFORM: switching to pending buffer '%s' (fade-out to wait for scanner)", x->pending_play_sym->s_name);
+                    buffer_ref_set(x->voices[0].play_ref, x->pending_play_sym);
+                    x->voices[0].play_sym = x->pending_play_sym;
+                    x->voices[0].playing = 0;
+                    x->voices[1].playing = 0;
+                    x->next_bar_ready = 0;
+                    x->scan_from = 0;
+                    x->scanner_trigger = 1;
+                    x->pending_play_sym = NULL;
+                    x->active_idx = 1;
+                    x->xfade_target = 1.0;
+                    x->xfade_busy = 1;
+                }
             } else if (x->play_mode == 2) {
                 skipsilence_log(x, "PERFORM: enacting deferred stop (fade-out)");
                 x->voices[v].playing = 0;
@@ -339,28 +366,35 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 x->xfade_target = (double)next_v;
                 x->xfade_busy = 1;
             } else if (x->next_bar_ready) {
-                skipsilence_log(x, "PERFORM: switching to next bar");
-                buffer_ref_set(x->voices[next_v].play_ref, x->voices[v].play_sym);
-                x->voices[next_v].play_sym = x->voices[v].play_sym;
-                x->voices[next_v].bar_start = x->next_bar_start;
-                x->voices[next_v].bar_end = x->next_bar_end;
-                x->voices[next_v].playhead = (double)x->voices[next_v].bar_start;
-                x->voices[next_v].playing = 1;
-                x->voices[v].playing = 0;
-                x->next_bar_ready = 0;
-                x->scan_from = x->voices[next_v].bar_end;
-                x->scanner_trigger = 1;
-                x->active_idx = next_v;
-                x->xfade_target = (double)next_v;
-                x->xfade_busy = 1;
+                if (x->next_bar_start < x->voices[v].bar_end) {
+                    skipsilence_log(x, "PERFORM: looping back to start (crossfade)");
+                    buffer_ref_set(x->voices[next_v].play_ref, x->voices[v].play_sym);
+                    x->voices[next_v].play_sym = x->voices[v].play_sym;
+                    x->voices[next_v].bar_start = x->next_bar_start;
+                    x->voices[next_v].bar_end = x->next_bar_end;
+                    x->voices[next_v].playhead = (double)x->voices[next_v].bar_start;
+                    x->voices[next_v].playing = 1;
+                    x->voices[v].playing = 0;
+                    x->next_bar_ready = 0;
+                    x->scan_from = x->voices[next_v].bar_end;
+                    x->scanner_trigger = 1;
+                    x->active_idx = next_v;
+                    x->xfade_target = (double)next_v;
+                    x->xfade_busy = 1;
+                } else {
+                    skipsilence_log(x, "PERFORM: skipping forward/continuing (instant)");
+                    x->voices[v].bar_start = x->next_bar_start;
+                    x->voices[v].bar_end = x->next_bar_end;
+                    x->voices[v].playhead = (double)x->voices[v].bar_start;
+                    x->next_bar_ready = 0;
+                    x->scan_from = x->voices[v].bar_end;
+                    x->scanner_trigger = 1;
+                }
             } else if (x->play_mode == 1) {
                 x->voices[v].playhead = (double)x->voices[v].bar_end;
             } else {
-                skipsilence_log(x, "PERFORM: end reached, next bar not ready. stopping.");
+                skipsilence_log(x, "PERFORM: end reached, next bar not ready. stopping (instant)");
                 x->voices[v].playing = 0;
-                x->active_idx = next_v;
-                x->xfade_target = (double)next_v;
-                x->xfade_busy = 1;
             }
         }
 
@@ -495,7 +529,7 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 x->scanner_trigger = 0;
 
                 if (!x->voices[0].playing && !x->voices[1].playing) {
-                    // Both voices silent, start with voice 0 and fade in
+                    // Both voices silent, start with voice 0 instantly
                     buffer_ref_set(x->voices[0].play_ref, x->scan_sym);
                     x->voices[0].play_sym = x->scan_sym;
                     x->voices[0].bar_start = x->next_bar_start;
@@ -505,11 +539,12 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
 
                     x->active_idx = 0;
                     x->xfade_target = 0.0;
+                    x->xfade_busy = 0;
 
                     x->next_bar_ready = 0;
                     x->scan_from = x->voices[0].bar_end;
                     x->scanner_trigger = 1;
-                    skipsilence_log(x, "SCAN: found audio, starting playback at %.2f to %.2f ms (fade-in)", (double)x->voices[0].bar_start * 1000.0 / sr, (double)x->voices[0].bar_end * 1000.0 / sr);
+                    skipsilence_log(x, "SCAN: found audio, starting playback at %.2f to %.2f ms (instant)", (double)x->voices[0].bar_start * 1000.0 / sr, (double)x->voices[0].bar_end * 1000.0 / sr);
                 } else {
                     skipsilence_log(x, "SCAN: found next audio bar at %.2f to %.2f ms", (double)x->next_bar_start * 1000.0 / sr, (double)x->next_bar_end * 1000.0 / sr);
                 }
