@@ -21,6 +21,7 @@ typedef struct _skipsilence {
     double playhead; // In frames
     int playing;
     int play_mode;
+    t_symbol *pending_play_sym;
     long long current_bar_start;
     long long current_bar_end;
 
@@ -101,6 +102,7 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->playhead = 0;
         x->playing = 0;
         x->play_mode = 0;
+        x->pending_play_sym = NULL;
         x->current_bar_start = -1;
         x->current_bar_end = -1;
         x->next_bar_start = -1;
@@ -150,7 +152,7 @@ void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (signal): Left Channel"); break;
             case 1: sprintf(s, "Outlet 2 (signal): Right Channel"); break;
-            case 2: sprintf(s, "Outlet 3 (signal): Playhead (current sample)"); break;
+            case 2: sprintf(s, "Outlet 3 (signal): Playhead (milliseconds)"); break;
             case 3: sprintf(s, "Outlet 4 (anything): Logging Outlet"); break;
         }
     }
@@ -162,10 +164,13 @@ void skipsilence_int(t_skipsilence *x, long n) {
         critical_enter(x->lock);
         x->play_mode = (int)n;
         if (x->play_mode == 2) {
-            x->playing = 0;
-            x->scanner_trigger = 0;
-            x->next_bar_ready = 0;
-            skipsilence_log(x, "INT: stop mode (2) received, stopping playback immediately");
+            if (x->playing) {
+                skipsilence_log(x, "INT: stop mode (2) received, deferring stop until next bar");
+            } else {
+                x->scanner_trigger = 0;
+                x->next_bar_ready = 0;
+                skipsilence_log(x, "INT: stop mode (2) received, stopping immediately");
+            }
         } else {
             skipsilence_log(x, "INT: play mode set to %d", x->play_mode);
         }
@@ -175,27 +180,32 @@ void skipsilence_int(t_skipsilence *x, long n) {
 
 void skipsilence_play(t_skipsilence *x, t_symbol *s) {
     critical_enter(x->lock);
-    buffer_ref_set(x->play_ref, s);
+    if (x->playing) {
+        x->pending_play_sym = s;
+        skipsilence_log(x, "PLAY: deferring playback of buffer '%s' until next bar", s->s_name);
+    } else {
+        buffer_ref_set(x->play_ref, s);
 
-    t_buffer_obj *b = buffer_ref_getobject(x->play_ref);
-    if (!b) {
-        object_error((t_object *)x, "buffer ~ %s not found", s->s_name);
+        t_buffer_obj *b = buffer_ref_getobject(x->play_ref);
+        if (!b) {
+            object_error((t_object *)x, "buffer ~ %s not found", s->s_name);
+            x->playing = 0;
+            critical_exit(x->lock);
+            return;
+        }
+
         x->playing = 0;
-        critical_exit(x->lock);
-        return;
+        x->playhead = 0;
+        x->current_bar_start = -1;
+        x->current_bar_end = -1;
+        x->next_bar_start = -1;
+        x->next_bar_end = -1;
+        x->next_bar_ready = 0;
+        x->scan_from = 0;
+        x->scanner_trigger = 1;
+        skipsilence_log(x, "PLAY: starting playback of buffer '%s' immediately", s->s_name);
     }
-
-    x->playing = 0;
-    x->playhead = 0;
-    x->current_bar_start = -1;
-    x->current_bar_end = -1;
-    x->next_bar_start = -1;
-    x->next_bar_end = -1;
-    x->next_bar_ready = 0;
-    x->scan_from = 0;
-    x->scanner_trigger = 1;
     critical_exit(x->lock);
-    skipsilence_log(x, "PLAY: starting playback of buffer '%s'", s->s_name);
 }
 
 void skipsilence_dsp64(t_skipsilence *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -207,12 +217,15 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
     float *samples = NULL;
     long long n_frames = 0;
     long n_chans = 0;
+    double sr = sys_getsr();
 
     if (b) {
         samples = buffer_locksamples(b);
         if (samples) {
             n_frames = buffer_getframecount(b);
             n_chans = buffer_getchannelcount(b);
+            sr = buffer_getsamplerate(b);
+            if (sr <= 0) sr = sys_getsr();
         }
     }
 
@@ -228,17 +241,30 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 } else if (n_chans == 1) {
                     out_l = out_r = (double)samples[f];
                 }
-            } else {
-                // Out of bounds safety
-                x->playing = 0;
             }
 
             if (x->playing) {
                 x->playhead += 1.0;
                 if (x->playhead >= (double)x->current_bar_end) {
-                    if (x->next_bar_ready) {
-                        double ms_s = (double)x->next_bar_start * 1000.0 / (n_frames > 0 ? (buffer_getsamplerate(b) > 0 ? buffer_getsamplerate(b) : sys_getsr()) : sys_getsr());
-                        double ms_e = (double)x->next_bar_end * 1000.0 / (n_frames > 0 ? (buffer_getsamplerate(b) > 0 ? buffer_getsamplerate(b) : sys_getsr()) : sys_getsr());
+                    if (x->pending_play_sym) {
+                        skipsilence_log(x, "PERFORM: switching to pending buffer '%s'", x->pending_play_sym->s_name);
+                        buffer_ref_set(x->play_ref, x->pending_play_sym);
+                        x->playhead = 0;
+                        x->current_bar_start = -1;
+                        x->current_bar_end = -1;
+                        x->next_bar_ready = 0;
+                        x->scan_from = 0;
+                        x->scanner_trigger = 1;
+                        x->playing = 0;
+                        x->pending_play_sym = NULL;
+                    } else if (x->play_mode == 2) {
+                        skipsilence_log(x, "PERFORM: enacting deferred stop");
+                        x->playing = 0;
+                        x->next_bar_ready = 0;
+                        x->scanner_trigger = 0;
+                    } else if (x->next_bar_ready) {
+                        double ms_s = (double)x->next_bar_start * 1000.0 / sr;
+                        double ms_e = (double)x->next_bar_end * 1000.0 / sr;
                         skipsilence_log(x, "PERFORM: switching to next bar %.2f to %.2f ms", ms_s, ms_e);
                         x->current_bar_start = x->next_bar_start;
                         x->current_bar_end = x->next_bar_end;
@@ -246,6 +272,9 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                         x->next_bar_ready = 0;
                         x->scan_from = x->current_bar_end;
                         x->scanner_trigger = 1;
+                    } else if (x->play_mode == 1) {
+                        // Repeat mode: wait for scanner at bar boundary
+                        x->playhead = (double)x->current_bar_end;
                     } else {
                         skipsilence_log(x, "PERFORM: end of current bar reached, next bar not ready. stopping.");
                         x->playing = 0;
@@ -255,7 +284,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
         }
         outs[0][i] = out_l;
         outs[1][i] = out_r;
-        outs[2][i] = x->playing ? x->playhead : 0.0;
+        outs[2][i] = x->playing ? (x->playhead * 1000.0 / sr) : 0.0;
     }
     critical_exit(x->lock);
 
@@ -328,16 +357,18 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
             }
 
             long long b_end = b_start + bar_frames;
-            if (b_end > total_frames) b_end = total_frames;
+            // Removed clipping of b_end to total_frames
 
             skipsilence_log(x, "SCAN: checking segment %.2f to %.2f ms (bar_ms: %.2f)", (double)b_start * 1000.0 / sr, (double)b_end * 1000.0 / sr, bar_ms);
 
             int has_audio = 0;
             for (long long f = b_start; f < b_end; f++) {
-                for (long c = 0; c < chans; c++) {
-                    if (fabs(play_s[f * chans + c]) > 0.00009) {
-                        has_audio = 1;
-                        break;
+                if (f < total_frames) {
+                    for (long c = 0; c < chans; c++) {
+                        if (fabs(play_s[f * chans + c]) > 0.00009) {
+                            has_audio = 1;
+                            break;
+                        }
                     }
                 }
                 if (has_audio) break;

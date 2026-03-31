@@ -27,7 +27,7 @@
 		</inlet>
 		<inlet id="1" type="int">
 			<digest>Play Mode</digest>
-			<description>Sets the playback mode: 0 (once), 1 (repeat), or 2 (stop immediately).</description>
+			<description>Sets the playback mode: 0 (once), 1 (repeat), or 2 (stop). Stops and buffer changes are deferred until the beginning of the next bar.</description>
 		</inlet>
 	</inletlist>
 
@@ -43,7 +43,7 @@
 		</outlet>
 		<outlet id="2" type="signal">
 			<digest>Playhead Output</digest>
-			<description>Continuously outputs the current sample position (0 if not playing).</description>
+			<description>Continuously outputs the current playback position in milliseconds (0 if not playing).</description>
 		</outlet>
 		<outlet id="3" type="anything">
 			<digest>Logging Outlet</digest>
