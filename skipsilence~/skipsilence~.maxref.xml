@@ -8,7 +8,7 @@
 	</digest>
 
 	<description>
-		The <inlinehelp>skipsilence~</inlinehelp> object plays audio from a specified buffer while automatically skipping over silent segments. Silence detection is performed on one-bar segments, using a noise floor of 0.00009. The object is responsive to changes in bar length, which is retrieved from an external buffer named 'bar'.
+		The <inlinehelp>skipsilence~</inlinehelp> object plays audio from a specified buffer while automatically skipping over silent segments. Silence detection is performed on one-bar segments, using a noise floor of 0.00009. The object is responsive to changes in bar length, which is retrieved from an external buffer named 'bar'. If the bar length is zero or unavailable, the object skips leading silence and plays the rest of the buffer without skipping. While the bar length is zero, it polls the 'bar' buffer every millisecond for updates.
 	</description>
 
 	<!--METADATA-->

@@ -39,6 +39,8 @@ typedef struct _skipsilence {
     void *proxy;
     long proxy_id;
 
+    int zero_bar_mode;
+
 } t_skipsilence;
 
 void *skipsilence_new(t_symbol *s, long argc, t_atom *argv);
@@ -110,6 +112,7 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->next_bar_ready = 0;
         x->scanner_trigger = 0;
         x->scan_from = 0;
+        x->zero_bar_mode = 0;
 
         critical_new(&x->lock);
         x->scanner_should_exit = 0;
@@ -203,6 +206,7 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
         x->next_bar_ready = 0;
         x->scan_from = 0;
         x->scanner_trigger = 1;
+        x->zero_bar_mode = 0;
         skipsilence_log(x, "PLAY: starting playback of buffer '%s' immediately", s->s_name);
     }
     critical_exit(x->lock);
@@ -257,6 +261,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                         x->scanner_trigger = 1;
                         x->playing = 0;
                         x->pending_play_sym = NULL;
+                        x->zero_bar_mode = 0;
                     } else if (x->play_mode == 2) {
                         skipsilence_log(x, "PERFORM: enacting deferred stop");
                         x->playing = 0;
@@ -293,30 +298,102 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
 
 void *skipsilence_scanner_thread(t_skipsilence *x) {
     while (!x->scanner_should_exit) {
+        double bar_ms = 0;
+        t_buffer_obj *bar_b = buffer_ref_getobject(x->bar_ref);
+        if (bar_b) {
+            float *bar_s = buffer_locksamples(bar_b);
+            if (bar_s) {
+                if (buffer_getframecount(bar_b) > 0) {
+                    bar_ms = (double)bar_s[0];
+                }
+                buffer_unlocksamples(bar_b);
+            }
+        }
+
+        t_buffer_obj *play_b = buffer_ref_getobject(x->play_ref);
+
+        if (bar_ms <= 0) {
+            critical_enter(x->lock);
+            if (!x->zero_bar_mode) {
+                skipsilence_log(x, "SCAN: entering zero-bar mode (bar_length <= 0)");
+                x->zero_bar_mode = 1;
+                if (x->playing) {
+                    t_buffer_obj *pb = buffer_ref_getobject(x->play_ref);
+                    if (pb) {
+                        x->current_bar_end = buffer_getframecount(pb);
+                        x->scanner_trigger = 0;
+                        skipsilence_log(x, "SCAN: zero-bar mode: extending current bar to buffer end (%lld frames)", x->current_bar_end);
+                    }
+                }
+            }
+
+            if (x->scanner_trigger && !x->next_bar_ready && !x->playing && play_b) {
+                float *play_s = buffer_locksamples(play_b);
+                if (play_s) {
+                    long long total_frames = buffer_getframecount(play_b);
+                    long chans = buffer_getchannelcount(play_b);
+                    double sr = buffer_getsamplerate(play_b);
+                    if (sr <= 0) sr = sys_getsr();
+
+                    long long found_f = -1;
+                    for (long long f = x->scan_from; f < total_frames; f++) {
+                        for (long c = 0; c < chans; c++) {
+                            if (fabs(play_s[f * chans + c]) > 0.00009) {
+                                found_f = f;
+                                break;
+                            }
+                        }
+                        if (found_f != -1) break;
+                    }
+                    buffer_unlocksamples(play_b);
+
+                    if (found_f != -1) {
+                        x->current_bar_start = found_f;
+                        x->current_bar_end = total_frames;
+                        x->playhead = (double)found_f;
+                        x->playing = 1;
+                        x->scanner_trigger = 0;
+                        skipsilence_log(x, "SCAN (Zero Bar): found leading audio at %.2f ms, playing to end", (double)found_f * 1000.0 / sr);
+                    } else {
+                        if (x->play_mode == 1) {
+                            x->scan_from = 0;
+                            skipsilence_log(x, "SCAN (Zero Bar): no audio found, repeat mode active, restarting from 0");
+                        } else {
+                            x->scanner_trigger = 0;
+                            skipsilence_log(x, "SCAN (Zero Bar): no audio found, stopping scan");
+                        }
+                    }
+                }
+            }
+            critical_exit(x->lock);
+            systhread_sleep(1);
+            continue;
+        }
+
+        // bar_ms > 0
         int trigger = 0;
         critical_enter(x->lock);
+        if (x->zero_bar_mode) {
+            skipsilence_log(x, "SCAN: exiting zero-bar mode (bar_length > 0)");
+            x->zero_bar_mode = 0;
+            if (x->playing && play_b) {
+                double sr = buffer_getsamplerate(play_b);
+                if (sr <= 0) sr = sys_getsr();
+                long long bar_frames = (long long)ceil(bar_ms * sr / 1000.0);
+                if (bar_frames <= 0) bar_frames = 1;
+
+                long long frames_played = (long long)x->playhead - x->current_bar_start;
+                long long bars_played = frames_played / bar_frames;
+                x->current_bar_end = x->current_bar_start + (bars_played + 1) * bar_frames;
+                x->scan_from = x->current_bar_end;
+                x->scanner_trigger = 1;
+                skipsilence_log(x, "SCAN: re-aligned current bar end to %.2f ms", (double)x->current_bar_end * 1000.0 / sr);
+            }
+        }
         trigger = x->scanner_trigger && !x->next_bar_ready;
         critical_exit(x->lock);
 
         if (trigger) {
-            double bar_ms = 0;
-            t_buffer_obj *bar_b = buffer_ref_getobject(x->bar_ref);
-            if (bar_b) {
-                float *bar_s = buffer_locksamples(bar_b);
-                if (bar_s) {
-                    if (buffer_getframecount(bar_b) > 0) {
-                        bar_ms = (double)bar_s[0];
-                    }
-                    buffer_unlocksamples(bar_b);
-                }
-            }
-
-            if (bar_ms <= 0) {
-                systhread_sleep(10);
-                continue;
-            }
-
-            t_buffer_obj *play_b = buffer_ref_getobject(x->play_ref);
             if (!play_b) {
                 systhread_sleep(10);
                 continue;
@@ -357,7 +434,6 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
             }
 
             long long b_end = b_start + bar_frames;
-            // Removed clipping of b_end to total_frames
 
             skipsilence_log(x, "SCAN: checking segment %.2f to %.2f ms (bar_ms: %.2f)", (double)b_start * 1000.0 / sr, (double)b_end * 1000.0 / sr, bar_ms);
 
@@ -400,9 +476,7 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 x->scan_from = b_end;
                 if (x->scan_from >= total_frames) {
                     x->scanner_trigger = 0;
-                    // If we were playing and reached the end of scanning, x->playing will be set to 0 in perform routine when current bar ends
                 }
-                // Continue scanning in next iteration (x->scanner_trigger remains 1)
             }
             critical_exit(x->lock);
         } else {
