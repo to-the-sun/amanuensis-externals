@@ -9,6 +9,7 @@
 
 	<description>
 		The <inlinehelp>skipsilence~</inlinehelp> object plays audio from a specified buffer while automatically skipping over silent segments. Silence detection is performed on one-bar segments, using a noise floor of 0.00009. The object is responsive to changes in bar length, which is retrieved from an external buffer named 'bar'. If the bar length is zero or unavailable, the object skips leading silence and plays the rest of the buffer without skipping. While the bar length is zero, it polls the 'bar' buffer every millisecond for updates.
+		Playback can be synchronized to an external time ramp (in milliseconds) provided in the third inlet. When a non-zero bar length is set, any transition to a new buffer or a new bar segment is deferred until the time ramp reaches a multiple of the bar length (or zero).
 	</description>
 
 	<!--METADATA-->
@@ -28,6 +29,10 @@
 		<inlet id="1" type="int">
 			<digest>Play Mode</digest>
 			<description>Sets the playback mode: 0 (once), 1 (repeat), or 2 (stop). Stops and buffer changes are deferred until the beginning of the next bar.</description>
+		</inlet>
+		<inlet id="2" type="signal">
+			<digest>Time Ramp Sync</digest>
+			<description>Accepts a signal representing a time ramp in milliseconds. Playback transitions synchronize to multiples of the bar length (or zero) based on this ramp.</description>
 		</inlet>
 	</inletlist>
 

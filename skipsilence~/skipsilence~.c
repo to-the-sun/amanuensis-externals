@@ -38,9 +38,18 @@ typedef struct _skipsilence {
 
     void *proxy;
     long proxy_id;
+    void *proxy2;
+    long proxy_id2;
 
     int zero_bar_mode;
     double last_bar_ms;
+
+    // Sync state
+    double bar_ms;
+    double last_ramp_ms;
+    int sync_waiting;
+    int next_bar_needs_sync;
+    int is_repeating;
 
 } t_skipsilence;
 
@@ -89,8 +98,9 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
     t_skipsilence *x = (t_skipsilence *)object_alloc(skipsilence_class);
 
     if (x) {
-        dsp_setup((t_pxobject *)x, 0);
+        dsp_setup((t_pxobject *)x, 3);
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
+        x->proxy2 = proxy_new((t_object *)x, 2, &x->proxy_id2);
 
         // Create outlets from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);           // Index 3
@@ -116,6 +126,12 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->zero_bar_mode = 0;
         x->last_bar_ms = -1;
 
+        x->bar_ms = 0.0;
+        x->last_ramp_ms = -1.0;
+        x->sync_waiting = 0;
+        x->next_bar_needs_sync = 0;
+        x->is_repeating = 0;
+
         critical_new(&x->lock);
         x->scanner_should_exit = 0;
 
@@ -139,6 +155,7 @@ void skipsilence_free(t_skipsilence *x) {
     if (x->play_ref) object_free(x->play_ref);
     if (x->bar_ref) object_free(x->bar_ref);
     if (x->proxy) object_free(x->proxy);
+    if (x->proxy2) object_free(x->proxy2);
 }
 
 t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
@@ -152,6 +169,7 @@ void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Inlet 1 (messages): play [buffer_name]"); break;
             case 1: sprintf(s, "Inlet 2 (int): Play Mode (0: once, 1: repeat, 2: stop)"); break;
+            case 2: sprintf(s, "Inlet 3 (signal): Time Ramp (milliseconds)"); break;
         }
     } else {
         switch (a) {
@@ -184,6 +202,9 @@ void skipsilence_int(t_skipsilence *x, long n) {
 }
 
 void skipsilence_play(t_skipsilence *x, t_symbol *s) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet != 0) return;
+
     critical_enter(x->lock);
     if (x->playing) {
         x->pending_play_sym = s;
@@ -209,6 +230,11 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
         x->scan_from = 0;
         x->scanner_trigger = 1;
         x->zero_bar_mode = 0;
+
+        x->sync_waiting = 0;
+        x->next_bar_needs_sync = 0;
+        x->is_repeating = 0;
+
         skipsilence_log(x, "PLAY: starting playback of buffer '%s' immediately", s->s_name);
     }
     critical_exit(x->lock);
@@ -238,7 +264,53 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
     critical_enter(x->lock);
     for (int i = 0; i < sampleframes; i++) {
         double out_l = 0, out_r = 0;
-        if (x->playing && samples) {
+        double ramp = ins[2][i];
+        int sync_event = 0;
+
+        if (x->bar_ms > 0) {
+            if (ramp == 0.0) {
+                sync_event = 1;
+            } else if (x->last_ramp_ms >= 0) {
+                if (ramp < x->last_ramp_ms) {
+                    // Ramp looped
+                    sync_event = 1;
+                } else {
+                    double prev_bars = floor(x->last_ramp_ms / x->bar_ms);
+                    double curr_bars = floor(ramp / x->bar_ms);
+                    if (curr_bars > prev_bars) {
+                        sync_event = 1;
+                    }
+                }
+            }
+        } else {
+            sync_event = 1; // Always sync if bar_length is not set
+        }
+        x->last_ramp_ms = ramp;
+
+        if (x->sync_waiting && sync_event) {
+            if (x->next_bar_ready) {
+                double ms_s = (double)x->next_bar_start * 1000.0 / sr;
+                double ms_e = (double)x->next_bar_end * 1000.0 / sr;
+                skipsilence_log(x, "PERFORM: sync achieved (ramp: %.2f), switching to bar %.2f to %.2f ms", ramp, ms_s, ms_e);
+                x->current_bar_start = x->next_bar_start;
+                x->current_bar_end = x->next_bar_end;
+                x->playhead = (double)x->current_bar_start;
+                x->next_bar_ready = 0;
+                x->scan_from = x->current_bar_end;
+                x->scanner_trigger = 1;
+                x->playing = 1;
+                x->sync_waiting = 0;
+                x->next_bar_needs_sync = 0;
+            } else if (!x->playing) {
+                // This shouldn't happen if sync_waiting is managed correctly by scanner,
+                // but as a safety:
+                x->playing = 1;
+                x->sync_waiting = 0;
+                skipsilence_log(x, "PERFORM: sync achieved, starting playback");
+            }
+        }
+
+        if (x->playing && !x->sync_waiting && samples) {
             long long f = (long long)x->playhead;
             if (f >= 0 && f < n_frames) {
                 if (n_chans >= 2) {
@@ -272,13 +344,19 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                     } else if (x->next_bar_ready) {
                         double ms_s = (double)x->next_bar_start * 1000.0 / sr;
                         double ms_e = (double)x->next_bar_end * 1000.0 / sr;
-                        skipsilence_log(x, "PERFORM: switching to next bar %.2f to %.2f ms", ms_s, ms_e);
-                        x->current_bar_start = x->next_bar_start;
-                        x->current_bar_end = x->next_bar_end;
-                        x->playhead = (double)x->current_bar_start;
-                        x->next_bar_ready = 0;
-                        x->scan_from = x->current_bar_end;
-                        x->scanner_trigger = 1;
+                        if (x->next_bar_needs_sync) {
+                            skipsilence_log(x, "PERFORM: next bar ready but needs sync, waiting (ramp: %.2f)", ramp);
+                            x->sync_waiting = 1;
+                            x->playhead = (double)x->current_bar_end;
+                        } else {
+                            skipsilence_log(x, "PERFORM: switching to next bar %.2f to %.2f ms", ms_s, ms_e);
+                            x->current_bar_start = x->next_bar_start;
+                            x->current_bar_end = x->next_bar_end;
+                            x->playhead = (double)x->current_bar_start;
+                            x->next_bar_ready = 0;
+                            x->scan_from = x->current_bar_end;
+                            x->scanner_trigger = 1;
+                        }
                     } else if (x->play_mode == 1) {
                         if (x->zero_bar_mode) {
                             x->playhead = 0;
@@ -327,6 +405,7 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
         critical_enter(x->lock);
         int bar_length_changed = (bar_ms != x->last_bar_ms);
         x->last_bar_ms = bar_ms;
+        x->bar_ms = bar_ms; // Update sync bar_ms
         critical_exit(x->lock);
 
         if (bar_ms <= 0) {
@@ -369,6 +448,7 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                         x->current_bar_end = total_frames;
                         x->playhead = (double)found_f;
                         x->playing = 1;
+                    x->sync_waiting = 0; // immediate start in zero-bar mode
                         x->scanner_trigger = 0;
                         skipsilence_log(x, "SCAN (Zero Bar): found leading audio at %.2f ms, playing to end", (double)found_f * 1000.0 / sr);
                     } else {
@@ -444,6 +524,7 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 if (x->play_mode == 1) {
                     x->scan_from = 0;
                     x->scanner_trigger = 1;
+                    x->is_repeating = 1; // Mark that we are looping back
                     skipsilence_log(x, "SCAN: repeat mode (1) active, restarting scan from beginning");
                 } else {
                     x->scanner_trigger = 0;
@@ -480,16 +561,30 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 x->scanner_trigger = 0;
 
                 if (!x->playing) {
-                    x->current_bar_start = x->next_bar_start;
-                    x->current_bar_end = x->next_bar_end;
-                    x->playhead = (double)x->current_bar_start;
-                    x->playing = 1;
-                    x->next_bar_ready = 0;
-                    x->scan_from = x->current_bar_end;
-                    x->scanner_trigger = 1;
-                    skipsilence_log(x, "SCAN: found audio, starting playback at %.2f to %.2f ms", (double)x->current_bar_start * 1000.0 / sr, (double)x->current_bar_end * 1000.0 / sr);
+                    if (x->bar_ms > 0) {
+                        x->sync_waiting = 1;
+                        x->next_bar_ready = 1;
+                        x->scanner_trigger = 0;
+                        skipsilence_log(x, "SCAN: found audio, waiting for sync to start playback at %.2f ms", (double)x->next_bar_start * 1000.0 / sr);
+                    } else {
+                        x->current_bar_start = x->next_bar_start;
+                        x->current_bar_end = x->next_bar_end;
+                        x->playhead = (double)x->current_bar_start;
+                        x->playing = 1;
+                        x->sync_waiting = 0;
+                        x->next_bar_ready = 0;
+                        x->scan_from = x->current_bar_end;
+                        x->scanner_trigger = 1;
+                        skipsilence_log(x, "SCAN: found audio, starting playback immediately at %.2f to %.2f ms", (double)x->current_bar_start * 1000.0 / sr, (double)x->current_bar_end * 1000.0 / sr);
+                    }
                 } else {
-                    skipsilence_log(x, "SCAN: found next audio bar at %.2f to %.2f ms", (double)x->next_bar_start * 1000.0 / sr, (double)x->next_bar_end * 1000.0 / sr);
+                    if (x->is_repeating) {
+                        x->next_bar_needs_sync = 1;
+                        x->is_repeating = 0;
+                        skipsilence_log(x, "SCAN: found next audio bar after repeat at %.2f ms, will require sync", (double)x->next_bar_start * 1000.0 / sr);
+                    } else {
+                        skipsilence_log(x, "SCAN: found next audio bar at %.2f to %.2f ms", (double)x->next_bar_start * 1000.0 / sr, (double)x->next_bar_end * 1000.0 / sr);
+                    }
                 }
             } else {
                 skipsilence_log(x, "SCAN: segment %.2f to %.2f ms was silent. skipping...", (double)b_start * 1000.0 / sr, (double)b_end * 1000.0 / sr);
