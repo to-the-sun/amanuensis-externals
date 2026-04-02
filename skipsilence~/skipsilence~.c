@@ -333,7 +333,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
             }
         }
 
-        if (x->playing && samples) {
+        if (x->playing && samples && !x->sync_waiting) {
             long long f = (long long)x->playhead;
             if (f >= 0 && f < n_frames) {
                 if (n_chans >= 2) {
@@ -358,7 +358,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                         if (x->next_bar_needs_sync) {
                             skipsilence_log(x, "PERFORM: next bar ready but needs sync, waiting (ramp: %.2f)", ramp);
                             x->sync_waiting = 1;
-                            x->playhead = (double)x->current_bar_start; // Loop the current bar while waiting
+                            x->playhead = (double)x->current_bar_end; // Hold at end (silence) while waiting
                         } else {
                             skipsilence_log(x, "PERFORM: switching to next bar %.2f to %.2f ms", ms_s, ms_e);
                             x->current_bar_start = x->next_bar_start;
@@ -378,8 +378,8 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                             x->playing = 0;
                             skipsilence_log(x, "PERFORM: zero-bar mode repeat, restarting scan from beginning");
                         } else {
-                            // Repeat mode: loop the current bar while waiting for scanner or sync
-                            x->playhead = (double)x->current_bar_start;
+                            // Repeat mode: hold at end (silence) while waiting for scanner or sync
+                            x->playhead = (double)x->current_bar_end;
                             if (x->next_bar_ready && x->next_bar_needs_sync) {
                                 x->sync_waiting = 1;
                             }
