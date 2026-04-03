@@ -42,6 +42,9 @@ typedef struct _skipsilence {
     int zero_bar_mode;
     double last_bar_ms;
 
+    int sync_waiting;
+    double last_sync_ramp;
+
 } t_skipsilence;
 
 void *skipsilence_new(t_symbol *s, long argc, t_atom *argv);
@@ -89,7 +92,7 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
     t_skipsilence *x = (t_skipsilence *)object_alloc(skipsilence_class);
 
     if (x) {
-        dsp_setup((t_pxobject *)x, 0);
+        dsp_setup((t_pxobject *)x, 1);
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
 
         // Create outlets from right to left
@@ -115,6 +118,8 @@ void *skipsilence_new(t_symbol *s, long argc, t_atom *argv) {
         x->scan_from = 0;
         x->zero_bar_mode = 0;
         x->last_bar_ms = -1;
+        x->sync_waiting = 0;
+        x->last_sync_ramp = -1.0;
 
         critical_new(&x->lock);
         x->scanner_should_exit = 0;
@@ -150,7 +155,7 @@ t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void 
 void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (messages): play [buffer_name]"); break;
+            case 0: sprintf(s, "Inlet 1 (messages/signal): play [buffer_name] or Sync Ramp Signal"); break;
             case 1: sprintf(s, "Inlet 2 (int): Play Mode (0: once, 1: repeat, 2: stop)"); break;
         }
     } else {
@@ -174,7 +179,8 @@ void skipsilence_int(t_skipsilence *x, long n) {
             } else {
                 x->scanner_trigger = 0;
                 x->next_bar_ready = 0;
-                skipsilence_log(x, "INT: stop mode (2) received, stopping immediately");
+                x->sync_waiting = 0;
+                skipsilence_log(x, "INT: stop mode (2) received, stopping immediately (including sync wait)");
             }
         } else {
             skipsilence_log(x, "INT: play mode set to %d", x->play_mode);
@@ -209,7 +215,9 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
         x->scan_from = 0;
         x->scanner_trigger = 1;
         x->zero_bar_mode = 0;
-        skipsilence_log(x, "PLAY: starting playback of buffer '%s' immediately", s->s_name);
+        x->sync_waiting = 0;
+        x->last_sync_ramp = -1.0;
+        skipsilence_log(x, "PLAY: triggered asynchronous scan of buffer '%s'", s->s_name);
     }
     critical_exit(x->lock);
 }
@@ -224,6 +232,7 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
     long long n_frames = 0;
     long n_chans = 0;
     double sr = sys_getsr();
+    double *ramp_in = ins[0];
 
     if (b) {
         samples = buffer_locksamples(b);
@@ -238,6 +247,29 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
     critical_enter(x->lock);
     for (int i = 0; i < sampleframes; i++) {
         double out_l = 0, out_r = 0;
+        double current_ramp = ramp_in[i];
+
+        if (x->sync_waiting) {
+            int do_start = 0;
+            if (x->last_bar_ms <= 0) {
+                do_start = 1;
+            } else {
+                double bar_ms = x->last_bar_ms;
+                // Check if current ramp is at a bar boundary (multiple of bar_ms or 0)
+                // Using floor of fmod provides a 1ms window for synchronization
+                if (floor(fmod(current_ramp, bar_ms)) == 0.0) {
+                    do_start = 1;
+                }
+            }
+
+            if (do_start) {
+                skipsilence_log(x, "PERFORM: sync achieved (ramp: %.2f), starting playback", current_ramp);
+                x->playing = 1;
+                x->sync_waiting = 0;
+            }
+        }
+        x->last_sync_ramp = current_ramp;
+
         if (x->playing && samples) {
             long long f = (long long)x->playhead;
             if (f >= 0 && f < n_frames) {
@@ -368,9 +400,9 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                         x->current_bar_start = found_f;
                         x->current_bar_end = total_frames;
                         x->playhead = (double)found_f;
-                        x->playing = 1;
+                        x->sync_waiting = 1;
                         x->scanner_trigger = 0;
-                        skipsilence_log(x, "SCAN (Zero Bar): found leading audio at %.2f ms, playing to end", (double)found_f * 1000.0 / sr);
+                        skipsilence_log(x, "SCAN (Zero Bar): found leading audio at %.2f ms, waiting for sync to start playback", (double)found_f * 1000.0 / sr);
                     } else {
                         if (x->play_mode == 1) {
                             x->scan_from = 0;
@@ -479,15 +511,15 @@ void *skipsilence_scanner_thread(t_skipsilence *x) {
                 x->next_bar_ready = 1;
                 x->scanner_trigger = 0;
 
-                if (!x->playing) {
+                if (!x->playing && !x->sync_waiting) {
                     x->current_bar_start = x->next_bar_start;
                     x->current_bar_end = x->next_bar_end;
                     x->playhead = (double)x->current_bar_start;
-                    x->playing = 1;
+                    x->sync_waiting = 1;
                     x->next_bar_ready = 0;
                     x->scan_from = x->current_bar_end;
                     x->scanner_trigger = 1;
-                    skipsilence_log(x, "SCAN: found audio, starting playback at %.2f to %.2f ms", (double)x->current_bar_start * 1000.0 / sr, (double)x->current_bar_end * 1000.0 / sr);
+                    skipsilence_log(x, "SCAN: found audio, waiting for sync to start playback at %.2f to %.2f ms", (double)x->current_bar_start * 1000.0 / sr, (double)x->current_bar_end * 1000.0 / sr);
                 } else {
                     skipsilence_log(x, "SCAN: found next audio bar at %.2f to %.2f ms", (double)x->next_bar_start * 1000.0 / sr, (double)x->next_bar_end * 1000.0 / sr);
                 }
