@@ -255,15 +255,10 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 do_start = 1;
             } else {
                 double bar_ms = x->last_bar_ms;
-                // Check for 0 or any boundary crossing (including loops)
-                if (floor(current_ramp) == 0.0) {
+                // Check if current ramp is at a bar boundary (multiple of bar_ms or 0)
+                // Using floor of fmod provides a 1ms window for synchronization
+                if (floor(fmod(current_ramp, bar_ms)) == 0.0) {
                     do_start = 1;
-                } else if (x->last_sync_ramp >= 0.0) {
-                    double prev_bars = floor(x->last_sync_ramp / bar_ms);
-                    double curr_bars = floor(current_ramp / bar_ms);
-                    if (curr_bars != prev_bars) {
-                        do_start = 1;
-                    }
                 }
             }
 
