@@ -179,7 +179,8 @@ void skipsilence_int(t_skipsilence *x, long n) {
             } else {
                 x->scanner_trigger = 0;
                 x->next_bar_ready = 0;
-                skipsilence_log(x, "INT: stop mode (2) received, stopping immediately");
+                x->sync_waiting = 0;
+                skipsilence_log(x, "INT: stop mode (2) received, stopping immediately (including sync wait)");
             }
         } else {
             skipsilence_log(x, "INT: play mode set to %d", x->play_mode);
@@ -214,7 +215,9 @@ void skipsilence_play(t_skipsilence *x, t_symbol *s) {
         x->scan_from = 0;
         x->scanner_trigger = 1;
         x->zero_bar_mode = 0;
-        skipsilence_log(x, "PLAY: starting playback of buffer '%s' immediately", s->s_name);
+        x->sync_waiting = 0;
+        x->last_sync_ramp = -1.0;
+        skipsilence_log(x, "PLAY: triggered asynchronous scan of buffer '%s'", s->s_name);
     }
     critical_exit(x->lock);
 }
@@ -252,13 +255,13 @@ void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long
                 do_start = 1;
             } else {
                 double bar_ms = x->last_bar_ms;
-                // Check for 0 or multiple of bar_ms
-                if (current_ramp == 0.0) {
+                // Check for 0 or any boundary crossing (including loops)
+                if (floor(current_ramp) == 0.0) {
                     do_start = 1;
                 } else if (x->last_sync_ramp >= 0.0) {
                     double prev_bars = floor(x->last_sync_ramp / bar_ms);
                     double curr_bars = floor(current_ramp / bar_ms);
-                    if (curr_bars > prev_bars) {
+                    if (curr_bars != prev_bars) {
                         do_start = 1;
                     }
                 }
