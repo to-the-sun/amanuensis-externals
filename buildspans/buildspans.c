@@ -517,8 +517,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_outlet = outlet_new((t_object *)x, NULL);
         visualize_init();
         x->out_bar_data = outlet_new((t_object *)x, NULL); // Generic outlet for logs
-        x->track_outlet = intout((t_object *)x);
-        x->span_outlet = outlet_new((t_object *)x, "list");
+        x->track_outlet = outlet_new((t_object *)x, NULL);
+        x->span_outlet = outlet_new((t_object *)x, NULL);
     }
     return (x);
 }
@@ -1460,10 +1460,12 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             buildspans_output_span_data(x, palette_sym, track_sym, span_to_output);
 
             // Outlet 2: Track number
-            outlet_int(x->track_outlet, track_num_to_output);
+            t_atom t_atom_track;
+            atom_setlong(&t_atom_track, track_num_to_output);
+            outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
 
             // Outlet 1: Span list
-            outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
+            outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
         }
 
         if (local_span_created || (span_found_robustly && span_to_output != span_aa)) {
@@ -1668,8 +1670,8 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (list)"); break;
-            case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
+            case 0: sprintf(s, "Outlet 1: Span Data (span list)"); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (track int)"); break;
             case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
             case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
         }
@@ -1761,10 +1763,12 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             buildspans_output_span_data(x, palette_sym, track_sym, ended_span_array);
 
             // Outlet 2: Track number
-            outlet_int(x->track_outlet, track_num_to_output);
+            t_atom t_atom_track;
+            atom_setlong(&t_atom_track, track_num_to_output);
+            outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
 
             // Outlet 1: Span list
-            outlet_anything(x->span_outlet, gensym("list"), (short)span_size, span_atoms);
+            outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
         }
         object_free(ended_span_array);
     }

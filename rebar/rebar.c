@@ -375,7 +375,7 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
         else if (vo->index == 4) rebar_buildspans_bang(x->buildspans_inst);
     } else if (vo->type == MOD_BUILDSPANS) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
-        else if (vo->index == 1) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
+        else if (vo->index == 1 || vo->index == 2 || vo->index == 3) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
     }

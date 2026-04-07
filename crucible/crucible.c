@@ -11,7 +11,7 @@
 typedef struct _crucible {
     t_object s_obj;
     t_dictionary *challenger_dict;
-    t_dictionary *span_tracker_dict;
+    t_symbol *last_track_id;
     t_symbol *incumbent_dict_name;
     void *outlet_data;
     void *outlet_fill;
@@ -155,7 +155,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     t_crucible *x = (t_crucible *)object_alloc(crucible_class);
     if (x) {
         x->challenger_dict = dictionary_new();
-        x->span_tracker_dict = dictionary_new();
+        x->last_track_id = gensym("");
         x->incumbent_dict_name = gensym("");
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         if (!buffer_ref_getobject(x->buffer_ref)) {
@@ -193,9 +193,6 @@ void crucible_free(t_crucible *x) {
     if (x->challenger_dict) {
         object_release((t_object *)x->challenger_dict);
     }
-    if (x->span_tracker_dict) {
-        object_release((t_object *)x->span_tracker_dict);
-    }
     if (x->track_reaches_dict) {
         object_release((t_object *)x->track_reaches_dict);
     }
@@ -219,6 +216,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     } else if (dictionary_getatom(bar_dict, gensym("span"), &span_atom) == MAX_ERR_NONE) {
         span_atoms = &span_atom;
         span_len = 1;
+    } else {
+        object_error((t_object *)x, "Missing 'span' key for bar %lld on track %s", (long long)bar_ts_long, track_sym->s_name);
     }
 
     // Right-to-Left execution order: Reach, Offset, Bar, Track, Palette
@@ -266,6 +265,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     } else if (dictionary_getatom(bar_dict, gensym("palette"), &palette_atom) == MAX_ERR_NONE) {
         palette_atoms = &palette_atom;
         palette_len = 1;
+    } else {
+        object_error((t_object *)x, "Missing 'palette' key for bar %lld on track %s", (long long)bar_ts_long, track_sym->s_name);
     }
     if (palette_len > 0 && atom_gettype(palette_atoms) == A_SYM) palette_sym = atom_getsym(palette_atoms);
 
@@ -279,6 +280,8 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     } else if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
         offset_atoms = &offset_atom;
         offset_len = 1;
+    } else {
+        object_error((t_object *)x, "Missing 'offset' key for bar %lld on track %s", (long long)bar_ts_long, track_sym->s_name);
     }
     if (offset_len > 0) {
         if (atom_gettype(offset_atoms) == A_FLOAT) {
@@ -320,7 +323,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&challenger_track_dict);
     if (!challenger_track_dict) {
         object_error((t_object *)x, "Could not find challenger track dict for %s", track_sym->s_name);
-        return;
+        goto cleanup;
     }
 
     for (long i = 0; i < span_len; i++) {
@@ -332,7 +335,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         // Get challenger bar dictionary
         t_dictionary *challenger_bar_dict = NULL;
         dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
-        if (!challenger_bar_dict) continue;
+        if (!challenger_bar_dict) {
+            object_error((t_object *)x, "Missing challenger bar dictionary for bar %s on track %s", bar_sym->s_name, track_sym->s_name);
+            continue;
+        }
 
         t_atom *challenger_rating_atoms = NULL;
         long challenger_rating_len = 0;
@@ -345,7 +351,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             challenger_rating_atoms = &challenger_rating_atom;
             challenger_rating_len = 1;
         }
-        if (challenger_rating_len == 0) continue;
+        if (challenger_rating_len == 0) {
+            object_error((t_object *)x, "Missing rating for challenger bar %s", bar_sym->s_name);
+            continue;
+        }
         double challenger_rating = atom_getfloat(challenger_rating_atoms);
 
 
@@ -390,13 +399,17 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
     }
 
+    t_dictionary *incumbent_track_dict = NULL;
+    t_dictionary *defeated_dict = NULL;
+    t_dictionary *challenger_span_ts_dict = NULL;
+    t_atom_long max_reach = 0;
+
     if (challenger_wins) {
         crucible_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
 
-        t_dictionary *defeated_dict = dictionary_new();
-        t_dictionary *challenger_span_ts_dict = dictionary_new();
+        defeated_dict = dictionary_new();
+        challenger_span_ts_dict = dictionary_new();
 
-        t_atom_long max_reach = 0;
         for (long i = 0; i < span_len; i++) {
             t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[64];
@@ -406,32 +419,37 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_appendlong(challenger_span_ts_dict, bar_sym, 1);
 
             // Check if this bar replaces an incumbent bar
-            t_dictionary *incumbent_track_dict = NULL;
+            t_dictionary *temp_incumbent_track_dict = NULL;
             if (dictionary_hasentry(incumbent_dict, track_sym)) {
-                dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
-                if (incumbent_track_dict && dictionary_hasentry(incumbent_track_dict, bar_sym)) {
+                dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&temp_incumbent_track_dict);
+                if (temp_incumbent_track_dict && dictionary_hasentry(temp_incumbent_track_dict, bar_sym)) {
                     dictionary_appendlong(defeated_dict, bar_sym, 1);
                 }
             }
 
             t_dictionary *challenger_bar_dict = NULL;
             dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
-            if (!challenger_bar_dict) continue;
+            if (!challenger_bar_dict) {
+                object_error((t_object *)x, "Missing challenger bar dictionary for bar %s on track %s", bar_sym->s_name, track_sym->s_name);
+                continue;
+            }
 
             t_atomarray *bar_span_aa = crucible_get_span_as_atomarray(challenger_bar_dict);
-            if (bar_span_aa) {
+            if (!bar_span_aa) {
+                object_error((t_object *)x, "Missing 'span' key for challenger bar %s on track %s", bar_sym->s_name, track_sym->s_name);
+            } else {
                 long bar_span_len = 0;
                 t_atom *bar_span_atoms = NULL;
                 atomarray_getatoms(bar_span_aa, &bar_span_len, &bar_span_atoms);
 
-                t_atom_long max_val = 0;
+                t_atom_long local_max_val = 0;
                 for (long j = 0; j < bar_span_len; j++) {
                     t_atom_long current_val = atom_getlong(bar_span_atoms + j);
-                    if (current_val > max_val) max_val = current_val;
+                    if (current_val > local_max_val) local_max_val = current_val;
                 }
 
-                t_atom_long bar_length = crucible_get_bar_length(x);
-                t_atom_long current_reach = max_val + bar_length;
+                t_atom_long local_bar_length = crucible_get_bar_length(x);
+                t_atom_long current_reach = local_max_val + local_bar_length;
                 if (current_reach > max_reach) {
                     max_reach = current_reach;
                 }
@@ -440,7 +458,6 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         // Get or create incumbent track dictionary
-        t_dictionary *incumbent_track_dict = NULL;
         if (!dictionary_hasentry(incumbent_dict, track_sym)) {
             incumbent_track_dict = dictionary_new();
             dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
@@ -464,13 +481,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 t_dictionary *defeated_bar_dict = NULL;
                 dictionary_getdictionary(incumbent_track_dict, defeated_bar_sym, (t_object **)&defeated_bar_dict);
                 if (defeated_bar_dict) {
-                    t_atomarray *span_aa = crucible_get_span_as_atomarray(defeated_bar_dict);
-                    if (span_aa) {
+                    t_atomarray *item_span_aa = crucible_get_span_as_atomarray(defeated_bar_dict);
+                    if (item_span_aa) {
                         long span_count = 0;
-                        t_atom *span_atoms = NULL;
-                        atomarray_getatoms(span_aa, &span_count, &span_atoms);
+                        t_atom *item_span_atoms = NULL;
+                        atomarray_getatoms(item_span_aa, &span_count, &item_span_atoms);
                         for (long j = 0; j < span_count; j++) {
-                            t_atom_long ts = atom_getlong(span_atoms + j);
+                            t_atom_long ts = atom_getlong(item_span_atoms + j);
                             char ts_str[64];
                             snprintf(ts_str, 64, "%lld", (long long)ts);
                             t_symbol *ts_sym = gensym(ts_str);
@@ -478,7 +495,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                 dictionary_appendlong(to_delete_dict, ts_sym, 1);
                             }
                         }
-                        object_release((t_object *)span_aa);
+                        object_release((t_object *)item_span_aa);
                     }
                 }
             }
@@ -544,9 +561,23 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 }
             }
         }
+    } else {
+        crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
+    }
 
-        if (defeated_dict) object_release((t_object *)defeated_dict);
-        if (challenger_span_ts_dict) object_release((t_object *)challenger_span_ts_dict);
+    // Cleanup challenger dict for this track IMMEDIATELY after update
+    if (dictionary_hasentry(x->challenger_dict, track_sym)) {
+        dictionary_deleteentry(x->challenger_dict, track_sym);
+        crucible_log(x, "Cleaned up challenger data for track %s.", track_sym->s_name);
+    }
+
+    // Now handle output if it won
+    if (challenger_wins && incumbent_track_dict) {
+        t_atom_long current_track_reach = 0;
+        dictionary_getlong(x->track_reaches_dict, track_sym, &current_track_reach);
+
+        int track_grew = (max_reach > current_track_reach);
+        int song_grew = (max_reach > x->song_reach);
 
         // Standard Max right-to-left outlet firing order:
         // Reach Lists (Index 2) -> Fill (Index 1) -> Data (Index 0)
@@ -581,17 +612,14 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_output_bar_data(x, bar_dict, bar_ts_long, track_sym, incumbent_track_dict);
             }
         }
-    } else {
-        crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
     }
 
-    // Cleanup challenger dict for this track
-    if (dictionary_hasentry(x->challenger_dict, track_sym)) {
-        dictionary_deleteentry(x->challenger_dict, track_sym);
-        crucible_log(x, "Cleaned up challenger data for track %s.", track_sym->s_name);
+cleanup:
+    if (defeated_dict) object_release((t_object *)defeated_dict);
+    if (challenger_span_ts_dict) object_release((t_object *)challenger_span_ts_dict);
+    if (incumbent_dict) {
+        object_release((t_object *)incumbent_dict);
     }
-
-    object_release((t_object *)incumbent_dict);
 }
 
 t_atom_long crucible_get_bar_length(t_crucible *x) {
@@ -715,12 +743,35 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->challenger_dict) {
             dictionary_clear(x->challenger_dict);
         }
-        if (x->span_tracker_dict) {
-            dictionary_clear(x->span_tracker_dict);
-        }
+        x->last_track_id = gensym("");
         x->local_bar_length = 0;
         x->bar_warn_sent = 0;
         crucible_log(x, "Internal state cleared.");
+        return;
+    }
+
+    if (s == gensym("track") && argc > 0) {
+        if (atom_gettype(argv) == A_LONG) {
+            char track_id_str[64];
+            snprintf(track_id_str, 64, "%lld", (long long)atom_getlong(argv));
+            x->last_track_id = gensym(track_id_str);
+        } else if (atom_gettype(argv) == A_SYM) {
+            x->last_track_id = atom_getsym(argv);
+        } else {
+            return;
+        }
+        crucible_log(x, "Last track ID set to: %s", x->last_track_id->s_name);
+        return;
+    }
+
+    if (s == gensym("span") && argc > 0) {
+        if (x->last_track_id == _sym_nothing || x->last_track_id == gensym("")) {
+            object_error((t_object *)x, "Received span message before track ID was set");
+            return;
+        }
+        t_atomarray *span_aa = atomarray_new(argc, argv);
+        crucible_process_span(x, x->last_track_id, span_aa);
+        object_release((t_object *)span_aa);
         return;
     }
 
@@ -754,56 +805,6 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         // Add data to bar dictionary
         dictionary_appendatomarray(bar_dict, key_sym, (t_object *)atomarray_new(argc, argv));
 
-        // Use span_tracker_dict to know when a span is complete
-        char received_keys_key_str[256];
-        snprintf(received_keys_key_str, 256, "%s::received_keys", track_sym->s_name);
-        t_symbol *received_keys_sym = gensym(received_keys_key_str);
-
-        t_atom_long received_keys = 0;
-        if (dictionary_hasentry(x->span_tracker_dict, received_keys_sym)) {
-            dictionary_getlong(x->span_tracker_dict, received_keys_sym, &received_keys);
-        }
-        received_keys++;
-        dictionary_appendlong(x->span_tracker_dict, received_keys_sym, received_keys);
-
-        if (strcmp(key_str, "span") == 0) {
-            t_atom_long num_bars = (t_atom_long)argc;
-            t_atom_long expected_keys = num_bars * 7;
-            char expected_keys_key_str[256];
-            snprintf(expected_keys_key_str, 256, "%s::expected_keys", track_sym->s_name);
-            dictionary_appendlong(x->span_tracker_dict, gensym(expected_keys_key_str), expected_keys);
-
-            char span_bars_key_str[256];
-            snprintf(span_bars_key_str, 256, "%s::span_bars", track_sym->s_name);
-            dictionary_appendatomarray(x->span_tracker_dict, gensym(span_bars_key_str), (t_object *)atomarray_new(argc, argv));
-        }
-
-        char expected_keys_key_str[256];
-        snprintf(expected_keys_key_str, 256, "%s::expected_keys", track_sym->s_name);
-        t_symbol *expected_keys_sym = gensym(expected_keys_key_str);
-
-        if (dictionary_hasentry(x->span_tracker_dict, expected_keys_sym)) {
-            t_atom_long expected_keys = 0;
-            dictionary_getlong(x->span_tracker_dict, expected_keys_sym, &expected_keys);
-
-            if (received_keys >= expected_keys) {
-                char span_bars_key_str[256];
-                snprintf(span_bars_key_str, 256, "%s::span_bars", track_sym->s_name);
-                t_symbol *span_bars_sym = gensym(span_bars_key_str);
-
-                t_atomarray *span_atomarray = NULL;
-                dictionary_getatomarray(x->span_tracker_dict, span_bars_sym, (t_object **)&span_atomarray);
-                if (span_atomarray) {
-                    crucible_process_span(x, track_sym, span_atomarray);
-                }
-
-                // Clean up tracker dict for this track
-                dictionary_deleteentry(x->span_tracker_dict, received_keys_sym);
-                dictionary_deleteentry(x->span_tracker_dict, expected_keys_sym);
-                dictionary_deleteentry(x->span_tracker_dict, span_bars_sym);
-            }
-        }
-
         sysmem_freeptr(track_str);
         sysmem_freeptr(bar_str);
         sysmem_freeptr(key_str);
@@ -816,7 +817,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans, (symbol) Incumbent Dictionary Name, (clear) reset internal state. Supports @defer deferral."); break;
+            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans (track, span, anything), (symbol) Incumbent Dictionary Name, (clear) reset internal state. Supports @defer deferral."); break;
             case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
