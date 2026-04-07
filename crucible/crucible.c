@@ -336,7 +336,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         t_dictionary *challenger_bar_dict = NULL;
         dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
         if (!challenger_bar_dict) {
-            object_error((t_object *)x, "Missing challenger bar dictionary for bar %s on track %s", bar_sym->s_name, track_sym->s_name);
+            object_error((t_object *)x, "Missing challenger bar dictionary for bar %s", bar_sym->s_name);
             continue;
         }
 
@@ -403,6 +403,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     t_dictionary *defeated_dict = NULL;
     t_dictionary *challenger_span_ts_dict = NULL;
     t_atom_long max_reach = 0;
+    int track_grew = 0;
+    int song_grew = 0;
 
     if (challenger_wins) {
         crucible_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
@@ -419,8 +421,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_appendlong(challenger_span_ts_dict, bar_sym, 1);
 
             // Check if this bar replaces an incumbent bar
-            t_dictionary *temp_incumbent_track_dict = NULL;
             if (dictionary_hasentry(incumbent_dict, track_sym)) {
+                t_dictionary *temp_incumbent_track_dict = NULL;
                 dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&temp_incumbent_track_dict);
                 if (temp_incumbent_track_dict && dictionary_hasentry(temp_incumbent_track_dict, bar_sym)) {
                     dictionary_appendlong(defeated_dict, bar_sym, 1);
@@ -444,8 +446,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
                 t_atom_long local_max_val = 0;
                 for (long j = 0; j < bar_span_len; j++) {
-                    t_atom_long current_val = atom_getlong(bar_span_atoms + j);
-                    if (current_val > local_max_val) local_max_val = current_val;
+                    t_atom_long ts_val = atom_getlong(bar_span_atoms + j);
+                    if (ts_val > local_max_val) local_max_val = ts_val;
                 }
 
                 t_atom_long local_bar_length = crucible_get_bar_length(x);
@@ -455,6 +457,24 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 }
                 object_release((t_object *)bar_span_aa);
             }
+        }
+
+        t_atom_long current_track_reach = 0;
+        dictionary_getlong(x->track_reaches_dict, track_sym, &current_track_reach);
+        track_grew = (max_reach > current_track_reach);
+        song_grew = (max_reach > x->song_reach);
+
+        // Update reach state
+        if (track_grew) {
+            if (dictionary_hasentry(x->track_reaches_dict, track_sym)) {
+                dictionary_deleteentry(x->track_reaches_dict, track_sym);
+            }
+            dictionary_appendlong(x->track_reaches_dict, track_sym, max_reach);
+        }
+        if (song_grew) {
+            t_atom_long old_song_reach = x->song_reach;
+            x->song_reach = max_reach;
+            crucible_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
         }
 
         // Get or create incumbent track dictionary
@@ -467,7 +487,6 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         // Deep Delete logic
         t_atom_long num_defeated = dictionary_getentrycount(defeated_dict);
-
         if (x->consume && num_defeated > 0) {
             crucible_log(x, "Performing deep delete (consume enabled). %lld bars directly defeated.", (long long)num_defeated);
 
@@ -483,10 +502,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (defeated_bar_dict) {
                     t_atomarray *item_span_aa = crucible_get_span_as_atomarray(defeated_bar_dict);
                     if (item_span_aa) {
-                        long span_count = 0;
+                        long item_span_count = 0;
                         t_atom *item_span_atoms = NULL;
-                        atomarray_getatoms(item_span_aa, &span_count, &item_span_atoms);
-                        for (long j = 0; j < span_count; j++) {
+                        atomarray_getatoms(item_span_aa, &item_span_count, &item_span_atoms);
+                        for (long j = 0; j < item_span_count; j++) {
                             t_atom_long ts = atom_getlong(item_span_atoms + j);
                             char ts_str[64];
                             snprintf(ts_str, 64, "%lld", (long long)ts);
@@ -522,25 +541,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             object_release((t_object *)to_delete_dict);
         }
 
-        t_atom_long current_track_reach = 0;
-        dictionary_getlong(x->track_reaches_dict, track_sym, &current_track_reach);
-
-        int track_grew = (max_reach > current_track_reach);
-        int song_grew = (max_reach > x->song_reach);
-
-        if (track_grew) {
-            if (dictionary_hasentry(x->track_reaches_dict, track_sym)) {
-                dictionary_deleteentry(x->track_reaches_dict, track_sym);
-            }
-            dictionary_appendlong(x->track_reaches_dict, track_sym, max_reach);
-        }
-
-        t_atom_long old_song_reach = x->song_reach;
-        if (song_grew) {
-            x->song_reach = max_reach;
-            crucible_log(x, "Song has grown. New reach is %lld (previously %lld).", (long long)x->song_reach, (long long)old_song_reach);
-        }
-
+        // Copy bars to incumbent
         for (long i = 0; i < span_len; i++) {
             t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[64];
@@ -551,21 +552,18 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
 
             if (challenger_bar_dict) {
-                if (incumbent_track_dict && dictionary_hasentry(incumbent_track_dict, bar_sym)) {
+                if (dictionary_hasentry(incumbent_track_dict, bar_sym)) {
                      dictionary_deleteentry(incumbent_track_dict, bar_sym);
                 }
-                t_dictionary *copied_bar_dict = dictionary_deep_copy(challenger_bar_dict);
-                if (copied_bar_dict && incumbent_track_dict) {
-                    dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copied_bar_dict);
-                    crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-                }
+                dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)dictionary_deep_copy(challenger_bar_dict));
+                crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
             }
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
     }
 
-    // Cleanup challenger dict for this track IMMEDIATELY after update
+    // CLEAN SLATE: Cleanup challenger dict for this track IMMEDIATELY after update
     if (dictionary_hasentry(x->challenger_dict, track_sym)) {
         dictionary_deleteentry(x->challenger_dict, track_sym);
         crucible_log(x, "Cleaned up challenger data for track %s.", track_sym->s_name);
@@ -573,12 +571,6 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
     // Now handle output if it won
     if (challenger_wins && incumbent_track_dict) {
-        t_atom_long current_track_reach = 0;
-        dictionary_getlong(x->track_reaches_dict, track_sym, &current_track_reach);
-
-        int track_grew = (max_reach > current_track_reach);
-        int song_grew = (max_reach > x->song_reach);
-
         // Standard Max right-to-left outlet firing order:
         // Reach Lists (Index 2) -> Fill (Index 1) -> Data (Index 0)
         if (song_grew || track_grew) {
