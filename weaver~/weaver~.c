@@ -977,9 +977,24 @@ void weaver_audio_qtask(t_weaver *x) {
                         char stems_name[64];
                         snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
                         t_symbol *s_stems = gensym(stems_name);
-                        weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset 0.0)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
-                        palette = s_stems;
-                        offset = 0.0;
+                        t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
+
+                        if (!buffer_ref_getobject(stems_ref)) {
+                            // Kick
+                            buffer_ref_set(stems_ref, _sym_nothing);
+                            buffer_ref_set(stems_ref, s_stems);
+                        }
+
+                        if (buffer_ref_getobject(stems_ref)) {
+                            weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset 0.0)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
+                            palette = s_stems;
+                            offset = 0.0;
+                        } else {
+                            object_error((t_object *)x, "Track %lld: bar %s palette '%s' not found and fallback '%s' could not be bound", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
+                            palette = _sym_dash;
+                            offset = 0.0;
+                        }
+                        object_free(stems_ref);
                     } else {
                         weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
                     }
