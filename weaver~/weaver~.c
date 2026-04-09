@@ -964,7 +964,26 @@ void weaver_audio_qtask(t_weaver *x) {
                         offset = atom_getfloat(&o_atom);
                     }
 
-                    weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
+                    int palette_exists = 0;
+                    if (palette != _sym_nothing && palette != _sym_dash) {
+                        t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, palette);
+                        if (buffer_ref_getobject(temp_ref)) {
+                            palette_exists = 1;
+                        }
+                        object_free(temp_ref);
+                    }
+
+                    if (!palette_exists) {
+                        char stems_name[64];
+                        snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
+                        t_symbol *s_stems = gensym(stems_name);
+                        weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset 0.0)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
+                        palette = s_stems;
+                        offset = 0.0;
+                    } else {
+                        weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
+                    }
+
                     weaver_update_track_metadata(x, target_track, palette, hit.value, offset, no_crossfade, bar_key);
                 }
             }
