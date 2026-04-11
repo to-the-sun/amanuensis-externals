@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="doubles~" module="msp">
+	<digest>Vocal alignment using DTW and WSOLA</digest>
+	<description>
+		The <o>doubles~</o> object aligns the timing of a subject vocal buffer to match a reference vocal buffer. It uses Mel-Frequency Cepstral Coefficients (MFCC) for feature extraction, Dynamic Time Warping (DTW) for finding the optimal alignment path, and Waveform Similarity Overlap-Add (WSOLA) for artifact-free time-stretching.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Vocal</metadata>
+		<metadata name="tag">Alignment</metadata>
+		<metadata name="tag">DSP</metadata>
+	</metadatalist>
+
+	<!-- INLETS -->
+	<inletlist>
+		<inlet id="0" type="anything">
+			<digest>align message</digest>
+			<description>Accepts the 'align' message to trigger the offline alignment process.</description>
+		</inlet>
+	</inletlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="float/bang">
+			<digest>Progress and status</digest>
+			<description>Outputs progress as a float (0.0-1.0), followed by a 'finished [buffer]' message and a bang when complete.</description>
+		</outlet>
+		<outlet id="1" type="anything">
+			<digest>Logging</digest>
+			<description>Diagnostic logging messages.</description>
+		</outlet>
+	</outletlist>
+
+	<!-- METHODS -->
+	<methodlist>
+		<method name="align">
+			<arglist>
+				<arg name="reference_buffer" type="symbol" optional="0" />
+				<arg name="subject_buffer" type="symbol" optional="0" />
+				<arg name="destination_buffer" type="symbol" optional="0" />
+			</arglist>
+			<digest>Align subject to reference</digest>
+			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length.</description>
+		</method>
+	</methodlist>
+
+	<!-- ATTRIBUTES -->
+	<attrlist>
+		<attr name="log" type="long" size="1">
+			<digest>Enable Logging</digest>
+			<description>Enable or disable detailed diagnostic logging to the second outlet.</description>
+		</attr>
+	</attrlist>
+
+	<!-- SEEALSO -->
+	<seealsolist>
+		<seealso name="cropsilence~" />
+		<seealso name="weaver~" />
+		<seealso name="skipsilence~" />
+	</seealsolist>
+</c74object>
