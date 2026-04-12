@@ -357,6 +357,16 @@ void doubles_worker_thread(t_doubles *x) {
             x->defer_dest_name = wd->dest_buf_name;
 
             if (wd->path_buf_name != _sym_nothing) {
+                // Normalize mapping to [-1, 1] for visualization
+                if (subj_mfcc_len > 1) {
+                    for (int i = 0; i < mapping_len; i++) {
+                        mapping[i] = (2.0 * mapping[i] / (subj_mfcc_len - 1)) - 1.0;
+                    }
+                } else {
+                    for (int i = 0; i < mapping_len; i++) {
+                        mapping[i] = 0.0;
+                    }
+                }
                 x->defer_path_mapping = mapping;
                 x->defer_path_len = mapping_len;
                 x->defer_path_name = wd->path_buf_name;
@@ -507,7 +517,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (optional path_buf)' to start processing");
+        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (optional path_buf, normalized -1 to 1)' to start processing");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
