@@ -25,6 +25,7 @@ void fft_forward(double *real, double *imag, int n);
 // MFCC functions
 t_mel_filterbank *mel_filterbank_init(int num_filters, int fft_size, double sample_rate, double low_freq, double high_freq);
 void mel_filterbank_free(t_mel_filterbank *mfb);
+void normalize_mfccs(double **mfccs, int num_frames, int num_ceps);
 void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel_filterbank *mfb, int num_ceps, double *mfccs);
 
 // DTW functions

@@ -13,7 +13,8 @@ typedef struct _doubles_worker_data {
     long long ref_frames;
     float *subj_samples;
     long long subj_frames;
-    double sr;
+    double ref_sr;
+    double subj_sr;
     t_symbol *dest_buf_name;
 } t_doubles_worker_data;
 
@@ -182,7 +183,8 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
 
     wd->ref_frames = ref_frames;
     wd->subj_frames = subj_frames;
-    wd->sr = sr;
+    wd->ref_sr = sr;
+    wd->subj_sr = buffer_getsamplerate(subj_obj);
     wd->dest_buf_name = dest_name;
 
     object_free(ref_ref);
@@ -214,14 +216,8 @@ void doubles_worker_thread(t_doubles *x) {
     int num_filters = 26;
     int num_ceps = 13;
 
-    t_mel_filterbank *mfb = mel_filterbank_init(num_filters, fft_size, wd->sr, 0, wd->sr/2);
-    if (!mfb) {
-        critical_enter(x->lock);
-        snprintf(x->last_error, 256, "Filterbank initialization failed");
-        x->progress = 1.0;
-        critical_exit(x->lock);
-        goto cleanup;
-    }
+    t_mel_filterbank *mfb_ref = mel_filterbank_init(num_filters, fft_size, wd->ref_sr, 0, wd->ref_sr/2);
+    t_mel_filterbank *mfb_subj = mel_filterbank_init(num_filters, fft_size, wd->subj_sr, 0, wd->subj_sr/2);
 
     int ref_mfcc_len = (int)((wd->ref_frames - win_size) / hop_size) + 1;
     int subj_mfcc_len = (int)((wd->subj_frames - win_size) / hop_size) + 1;
@@ -229,14 +225,15 @@ void doubles_worker_thread(t_doubles *x) {
     double **ref_mfccs = (double **)malloc(ref_mfcc_len * sizeof(double *));
     double **subj_mfccs = (double **)malloc(subj_mfcc_len * sizeof(double *));
 
-    if (!ref_mfccs || !subj_mfccs) {
+    if (!mfb_ref || !mfb_subj || !ref_mfccs || !subj_mfccs) {
         critical_enter(x->lock);
-        snprintf(x->last_error, 256, "MFCC memory allocation failed");
+        snprintf(x->last_error, 256, "Memory allocation failed in background thread");
         x->progress = 1.0;
         critical_exit(x->lock);
         if (ref_mfccs) free(ref_mfccs);
         if (subj_mfccs) free(subj_mfccs);
-        mel_filterbank_free(mfb);
+        if (mfb_ref) mel_filterbank_free(mfb_ref);
+        if (mfb_subj) mel_filterbank_free(mfb_subj);
         goto cleanup;
     }
 
@@ -246,7 +243,7 @@ void doubles_worker_thread(t_doubles *x) {
         double *segment = (double *)malloc(win_size * sizeof(double));
         if (segment) {
             for(int j=0; j<win_size; j++) segment[j] = wd->ref_samples[i * hop_size + j];
-            calculate_mfcc(segment, win_size, fft_size, mfb, num_ceps, ref_mfccs[i]);
+            calculate_mfcc(segment, win_size, fft_size, mfb_ref, num_ceps, ref_mfccs[i]);
             free(segment);
         }
 
@@ -264,7 +261,7 @@ void doubles_worker_thread(t_doubles *x) {
         double *segment = (double *)malloc(win_size * sizeof(double));
         if (segment) {
             for(int j=0; j<win_size; j++) segment[j] = wd->subj_samples[i * hop_size + j];
-            calculate_mfcc(segment, win_size, fft_size, mfb, num_ceps, subj_mfccs[i]);
+            calculate_mfcc(segment, win_size, fft_size, mfb_subj, num_ceps, subj_mfccs[i]);
             free(segment);
         }
 
@@ -275,6 +272,10 @@ void doubles_worker_thread(t_doubles *x) {
             qelem_set(x->qelem);
         }
     }
+
+    // Apply Cepstral Mean Subtraction (CMS)
+    normalize_mfccs(ref_mfccs, ref_mfcc_len, num_ceps);
+    normalize_mfccs(subj_mfccs, subj_mfcc_len, num_ceps);
 
     t_dtw_path *path = dtw_calculate(ref_mfccs, ref_mfcc_len, subj_mfccs, subj_mfcc_len, num_ceps);
     if (!path) {
@@ -316,7 +317,8 @@ void doubles_worker_thread(t_doubles *x) {
         for(int i=0; i<subj_mfcc_len; i++) if (subj_mfccs[i]) free(subj_mfccs[i]);
         free(subj_mfccs);
     }
-    mel_filterbank_free(mfb);
+    mel_filterbank_free(mfb_ref);
+    mel_filterbank_free(mfb_subj);
 
     critical_enter(x->lock);
     x->progress = 1.0;

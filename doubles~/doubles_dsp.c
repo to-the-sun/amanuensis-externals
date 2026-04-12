@@ -112,6 +112,15 @@ void mel_filterbank_free(t_mel_filterbank *mfb) {
     }
 }
 
+void normalize_mfccs(double **mfccs, int num_frames, int num_ceps) {
+    for (int i = 0; i < num_ceps; i++) {
+        double sum = 0;
+        for (int j = 0; j < num_frames; j++) sum += mfccs[j][i];
+        double mean = sum / num_frames;
+        for (int j = 0; j < num_frames; j++) mfccs[j][i] -= mean;
+    }
+}
+
 void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel_filterbank *mfb, int num_ceps, double *mfccs) {
     double *real = (double *)calloc(fft_size, sizeof(double));
     double *imag = (double *)calloc(fft_size, sizeof(double));
@@ -156,7 +165,8 @@ void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel
 
 static double euclidean_distance(double *v1, double *v2, int n) {
     double dist = 0.0;
-    for (int i = 0; i < n; i++) {
+    // Skip the first coefficient (C0/Energy) to make alignment invariant to volume differences
+    for (int i = 1; i < n; i++) {
         double diff = v1[i] - v2[i];
         dist += diff * diff;
     }
@@ -167,8 +177,8 @@ t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, 
     if (ref_len == 0 || subj_len == 0) return NULL;
 
     // Use a Sakoe-Chiba band to restrict the search space and save memory/time.
-    // Band width 'r' is 10% of the maximum length or a minimum of 50.
-    int r = (int)(0.1 * (ref_len > subj_len ? ref_len : subj_len));
+    // Band width 'r' is 20% of the maximum length to accommodate larger timing variations.
+    int r = (int)(0.2 * (ref_len > subj_len ? ref_len : subj_len));
     if (r < 50) r = 50;
 
     double *cost_matrix = (double *)malloc(ref_len * subj_len * sizeof(double));
@@ -320,12 +330,21 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
             double max_corr = -1e20;
             for (long long s = search_start; s <= search_end; s++) {
                 double corr = 0;
+                double energy_s = 0;
                 for (int i = 0; i < search_range; i++) {
                     // Correlate the current candidate grain with the expected natural progression
                     if (natural_subj_pos + i < subj_frames && s + i < subj_frames) {
-                        corr += (double)subj_samples[natural_subj_pos + i] * subj_samples[s + i];
+                        double val_n = subj_samples[natural_subj_pos + i];
+                        double val_s = subj_samples[s + i];
+                        corr += val_n * val_s;
+                        energy_s += val_s * val_s;
                     }
                 }
+
+                // Add a small bias towards the target position to prevent drift in silence
+                double dist_to_target = (double)abs((int)(s - target_subj_pos)) / search_range;
+                corr = corr - 0.01 * dist_to_target * energy_s;
+
                 if (corr > max_corr) {
                     max_corr = corr;
                     best_subj_pos = s;
@@ -376,6 +395,9 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
     for (long long i = 0; i < ref_frames; i++) {
         if (ola_norm[i] > 1e-6) {
             dest_samples[i] /= ola_norm[i];
+        } else if (i < ref_frames) {
+            // Fill holes with silence
+            dest_samples[i] = 0;
         }
     }
 
