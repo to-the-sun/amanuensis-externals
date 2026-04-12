@@ -548,6 +548,10 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                 if (tr) {
                     critical_enter(x->lock);
                     tr->track_length = length;
+                    if (x->visualize) {
+                        tr->viz_track_length = length;
+                        tr->viz_dirty = 1;
+                    }
                     critical_exit(x->lock);
                     weaver_log(x, "Track %ld length manually updated to %.2f ms", track_id, length);
                 }
@@ -1055,8 +1059,8 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }
