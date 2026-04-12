@@ -19,7 +19,6 @@ typedef struct _mel_filterbank {
 } t_mel_filterbank;
 
 // FFT functions
-void fft_init();
 void fft_forward(double *real, double *imag, int n);
 
 // MFCC functions
@@ -27,6 +26,9 @@ t_mel_filterbank *mel_filterbank_init(int num_filters, int fft_size, double samp
 void mel_filterbank_free(t_mel_filterbank *mfb);
 void normalize_mfccs(double **mfccs, int num_frames, int num_ceps);
 void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel_filterbank *mfb, int num_ceps, double *mfccs);
+
+// Transient detection
+void detect_transients(float *samples, long long num_frames, int win_size, int hop_size, double *transients);
 
 // DTW functions
 typedef struct _dtw_point {
@@ -39,8 +41,9 @@ typedef struct _dtw_path {
     int length;
 } t_dtw_path;
 
-t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, int subj_len, int num_ceps);
+t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, int subj_len, int num_ceps, double *ref_transients, double *subj_transients);
 void dtw_path_free(t_dtw_path *path);
+double *dtw_path_to_mapping(t_dtw_path *path, int *out_mapping_len);
 
 // WSOLA functions
 void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size);

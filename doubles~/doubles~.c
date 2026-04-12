@@ -16,6 +16,7 @@ typedef struct _doubles_worker_data {
     double ref_sr;
     double subj_sr;
     t_symbol *dest_buf_name;
+    t_symbol *path_buf_name;
 } t_doubles_worker_data;
 
 typedef struct _doubles {
@@ -37,6 +38,10 @@ typedef struct _doubles {
     float *defer_samples;
     long long defer_new_frames;
     t_symbol *defer_dest_name;
+
+    double *defer_path_mapping;
+    int defer_path_len;
+    t_symbol *defer_path_name;
 
     t_doubles_worker_data *current_wd;
 } t_doubles;
@@ -77,6 +82,7 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
         x->progress = 0.0;
         x->last_error[0] = '\0';
         x->defer_samples = NULL;
+        x->defer_path_mapping = NULL;
         x->current_wd = NULL;
 
         attr_args_process(x, argc, argv);
@@ -100,6 +106,9 @@ void doubles_free(t_doubles *x) {
     if (x->defer_samples) {
         sysmem_freeptr(x->defer_samples);
     }
+    if (x->defer_path_mapping) {
+        free(x->defer_path_mapping);
+    }
     critical_free(x->lock);
 }
 
@@ -119,6 +128,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     t_symbol *ref_name = atom_getsym(argv);
     t_symbol *subj_name = atom_getsym(argv + 1);
     t_symbol *dest_name = atom_getsym(argv + 2);
+    t_symbol *path_name = (argc > 3) ? atom_getsym(argv + 3) : _sym_nothing;
 
     t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, ref_name);
     t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, subj_name);
@@ -186,6 +196,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     wd->ref_sr = sr;
     wd->subj_sr = buffer_getsamplerate(subj_obj);
     wd->dest_buf_name = dest_name;
+    wd->path_buf_name = path_name;
 
     object_free(ref_ref);
     object_free(subj_ref);
@@ -277,7 +288,15 @@ void doubles_worker_thread(t_doubles *x) {
     normalize_mfccs(ref_mfccs, ref_mfcc_len, num_ceps);
     normalize_mfccs(subj_mfccs, subj_mfcc_len, num_ceps);
 
-    t_dtw_path *path = dtw_calculate(ref_mfccs, ref_mfcc_len, subj_mfccs, subj_mfcc_len, num_ceps);
+    // Transient Detection
+    double *ref_transients = (double *)calloc(ref_mfcc_len, sizeof(double));
+    double *subj_transients = (double *)calloc(subj_mfcc_len, sizeof(double));
+    if (ref_transients && subj_transients) {
+        detect_transients(wd->ref_samples, wd->ref_frames, win_size, hop_size, ref_transients);
+        detect_transients(wd->subj_samples, wd->subj_frames, win_size, hop_size, subj_transients);
+    }
+
+    t_dtw_path *path = dtw_calculate(ref_mfccs, ref_mfcc_len, subj_mfccs, subj_mfcc_len, num_ceps, ref_transients, subj_transients);
     if (!path) {
         critical_enter(x->lock);
         snprintf(x->last_error, 256, "DTW calculation failed");
@@ -289,6 +308,44 @@ void doubles_worker_thread(t_doubles *x) {
         critical_exit(x->lock);
         qelem_set(x->qelem);
 
+        // Path analysis for warnings
+        for (int i = 1; i < path->length; i++) {
+            int dr = path->points[i].ref_idx - path->points[i-1].ref_idx;
+            int ds = path->points[i].subj_idx - path->points[i-1].subj_idx;
+
+            // If stretching more than 4x (arbitrary threshold for 'extreme')
+            if (dr > 0 && ds == 0) {
+                // Potential repeat/stretch
+                // We'd need to count consecutive ones, but let's look for mapping slope instead
+            }
+        }
+
+        int mapping_len = 0;
+        double *mapping = dtw_path_to_mapping(path, &mapping_len);
+
+        // Analyze mapping for extreme warp factors
+        int consecutive_repeats = 0;
+        int max_repeats = 0;
+        int max_repeat_idx = 0;
+        for (int i = 1; i < mapping_len; i++) {
+            if (mapping[i] == mapping[i-1]) {
+                consecutive_repeats++;
+                if (consecutive_repeats > max_repeats) {
+                    max_repeats = consecutive_repeats;
+                    max_repeat_idx = i;
+                }
+            } else {
+                consecutive_repeats = 0;
+            }
+        }
+
+        if (max_repeats > 10) { // e.g., more than 10 frames (~250ms)
+            critical_enter(x->lock);
+            double timestamp_ms = (max_repeat_idx * hop_size * 1000.0) / wd->ref_sr;
+            snprintf(x->last_error, 256, "Warning: Extreme stretching detected at %.2f ms (%d consecutive frames)", timestamp_ms, max_repeats);
+            critical_exit(x->lock);
+        }
+
         float *dest_samples = (float *)sysmem_newptrclear(wd->ref_frames * sizeof(float));
         if (dest_samples) {
             wsola_process(wd->ref_samples, wd->ref_frames, wd->subj_samples, wd->subj_frames, dest_samples, path, hop_size, win_size);
@@ -298,6 +355,13 @@ void doubles_worker_thread(t_doubles *x) {
             x->defer_samples = dest_samples;
             x->defer_new_frames = wd->ref_frames;
             x->defer_dest_name = wd->dest_buf_name;
+
+            if (wd->path_buf_name != _sym_nothing) {
+                x->defer_path_mapping = mapping;
+                x->defer_path_len = mapping_len;
+                x->defer_path_name = wd->path_buf_name;
+                mapping = NULL; // qfn will free
+            }
             critical_exit(x->lock);
         } else {
             critical_enter(x->lock);
@@ -305,8 +369,12 @@ void doubles_worker_thread(t_doubles *x) {
             x->progress = 1.0;
             critical_exit(x->lock);
         }
+        if (mapping) free(mapping);
         dtw_path_free(path);
     }
+
+    if (ref_transients) free(ref_transients);
+    if (subj_transients) free(subj_transients);
 
     // Cleanup
     if (ref_mfccs) {
@@ -343,6 +411,9 @@ void doubles_qfn(t_doubles *x) {
     float *samples = x->defer_samples;
     long long frames = x->defer_new_frames;
     t_symbol *dest_name = x->defer_dest_name;
+    double *mapping = x->defer_path_mapping;
+    int mapping_len = x->defer_path_len;
+    t_symbol *mapping_name = x->defer_path_name;
     critical_exit(x->lock);
 
     if (err[0]) {
@@ -380,6 +451,39 @@ void doubles_qfn(t_doubles *x) {
         critical_exit(x->lock);
     }
 
+    if (mapping) {
+        t_buffer_ref *path_ref = buffer_ref_new((t_object *)x, mapping_name);
+        t_buffer_obj *path_obj = buffer_ref_getobject(path_ref);
+        if (path_obj) {
+            t_atom av;
+            atom_setlong(&av, (t_atom_long)mapping_len);
+            object_method_typed(path_obj, gensym("sizeinsamps"), 1, &av, NULL);
+
+            float *path_ext = buffer_locksamples(path_obj);
+            if (path_ext) {
+                for (int i = 0; i < mapping_len; i++) {
+                    path_ext[i] = (float)mapping[i];
+
+                    // Simple warning for extreme stretching
+                    if (i > 0) {
+                        double delta = mapping[i] - mapping[i-1];
+                        if (delta == 0 && x->log) {
+                            // This frame is a repeat of previous subject frame
+                        }
+                    }
+                }
+                buffer_unlocksamples(path_obj);
+                buffer_setdirty(path_obj);
+            }
+        }
+        object_free(path_ref);
+
+        critical_enter(x->lock);
+        free(x->defer_path_mapping);
+        x->defer_path_mapping = NULL;
+        critical_exit(x->lock);
+    }
+
     t_atom a;
     atom_setfloat(&a, (float)p);
     outlet_float(x->status_outlet, (float)p);
@@ -403,7 +507,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest]' to start processing");
+        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (optional path_buf)' to start processing");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;

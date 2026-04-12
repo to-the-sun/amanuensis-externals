@@ -58,6 +58,7 @@ static double mel_to_hz(double mel) {
 
 t_mel_filterbank *mel_filterbank_init(int num_filters, int fft_size, double sample_rate, double low_freq, double high_freq) {
     t_mel_filterbank *mfb = (t_mel_filterbank *)malloc(sizeof(t_mel_filterbank));
+    if (!mfb) return NULL;
     mfb->num_filters = num_filters;
     mfb->fft_size = fft_size;
     mfb->sample_rate = sample_rate;
@@ -69,6 +70,13 @@ t_mel_filterbank *mel_filterbank_init(int num_filters, int fft_size, double samp
     mfb->filter_starts = (int *)malloc(num_filters * sizeof(int));
     mfb->filter_ends = (int *)malloc(num_filters * sizeof(int));
     mfb->weights = (double **)malloc(num_filters * sizeof(double *));
+    if (!mfb->filter_starts || !mfb->filter_ends || !mfb->weights) {
+        if (mfb->filter_starts) free(mfb->filter_starts);
+        if (mfb->filter_ends) free(mfb->filter_ends);
+        if (mfb->weights) free(mfb->weights);
+        free(mfb);
+        return NULL;
+    }
 
     for (int i = 0; i < num_filters; i++) {
         double m_left = min_mel + i * mel_step;
@@ -163,6 +171,28 @@ void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel
     free(filter_energies);
 }
 
+void detect_transients(float *samples, long long num_frames, int win_size, int hop_size, double *transients) {
+    int num_windows = (int)((num_frames - win_size) / hop_size) + 1;
+    double prev_energy = 0;
+
+    for (int i = 0; i < num_windows; i++) {
+        double energy = 0;
+        for (int j = 0; j < win_size; j++) {
+            float s = samples[i * hop_size + j];
+            energy += s * s;
+        }
+        energy = sqrt(energy / win_size);
+
+        // Simple onset detection based on energy increase
+        if (i > 0 && energy > prev_energy * 2.0 && energy > 0.01) {
+            transients[i] = 1.0;
+        } else {
+            transients[i] = 0.0;
+        }
+        prev_energy = energy;
+    }
+}
+
 static double euclidean_distance(double *v1, double *v2, int n) {
     double dist = 0.0;
     // Skip the first coefficient (C0/Energy) to make alignment invariant to volume differences
@@ -173,21 +203,23 @@ static double euclidean_distance(double *v1, double *v2, int n) {
     return sqrt(dist);
 }
 
-t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, int subj_len, int num_ceps) {
+t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, int subj_len, int num_ceps, double *ref_transients, double *subj_transients) {
     if (ref_len == 0 || subj_len == 0) return NULL;
 
-    // Use a Sakoe-Chiba band to restrict the search space and save memory/time.
-    // Band width 'r' is 20% of the maximum length to accommodate larger timing variations.
     int r = (int)(0.2 * (ref_len > subj_len ? ref_len : subj_len));
     if (r < 50) r = 50;
 
     double *cost_matrix = (double *)malloc(ref_len * subj_len * sizeof(double));
     if (!cost_matrix) return NULL;
 
-    // Initialize with infinity
     for (int i = 0; i < ref_len * subj_len; i++) cost_matrix[i] = 1e30;
 
     cost_matrix[0] = euclidean_distance(ref_mfccs[0], subj_mfccs[0], num_ceps);
+
+    // Track consecutive horizontal/vertical steps to enforce slope constraints
+    // For simplicity in a 2D matrix, we'll just use a basic DTW and handle constraints
+    // during the cost calculation or by using a more complex state-space DTW.
+    // Let's refine the cost to penalize staying too long on one frame.
 
     for (int i = 0; i < ref_len; i++) {
         int j_start = (int)floor((double)i * subj_len / ref_len) - r;
@@ -199,21 +231,33 @@ t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, 
             if (i == 0 && j == 0) continue;
 
             double dist = euclidean_distance(ref_mfccs[i], subj_mfccs[j], num_ceps);
-            double v1 = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e30;
-            double v2 = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e30;
-            double v3 = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e30;
 
-            double min_prev = v1;
-            if (v2 < min_prev) min_prev = v2;
-            if (v3 < min_prev) min_prev = v3;
+            // Penalty for stretching/compressing transients
+            double transient_penalty = 1.0;
+            if (ref_transients[i] > 0.5 || subj_transients[j] > 0.5) {
+                transient_penalty = 5.0; // Make non-diagonal moves more expensive during transients
+            }
+
+            double v_diag = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e30;
+            double v_horz = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e30;
+            double v_vert = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e30;
+
+            // Apply transient penalty to non-diagonal moves
+            v_horz += dist * transient_penalty;
+            v_vert += dist * transient_penalty;
+            v_diag += dist;
+
+            double min_prev = v_diag;
+            if (v_horz < min_prev) min_prev = v_horz;
+            if (v_vert < min_prev) min_prev = v_vert;
 
             if (min_prev < 1e30) {
-                cost_matrix[i * subj_len + j] = dist + min_prev;
+                cost_matrix[i * subj_len + j] = min_prev;
             }
         }
     }
 
-    // Backtracking
+    // Backtracking with slope constraint (don't stay on same frame too long)
     t_dtw_point *temp_path = (t_dtw_point *)malloc((ref_len + subj_len) * sizeof(t_dtw_point));
     if (!temp_path) {
         free(cost_matrix);
@@ -222,26 +266,37 @@ t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, 
     int path_len = 0;
     int i = ref_len - 1;
     int j = subj_len - 1;
+    int consecutive_horz = 0;
+    int consecutive_vert = 0;
 
     while (i > 0 || j > 0) {
         temp_path[path_len].ref_idx = i;
         temp_path[path_len].subj_idx = j;
         path_len++;
 
-        double v1 = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e31;
-        double v2 = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e31;
-        double v3 = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e31;
+        double v_diag = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e31;
+        double v_horz = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e31;
+        double v_vert = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e31;
 
-        if (v3 <= v1 && v3 <= v2) {
+        // Slope constraint: If we've moved horizontally 2 times, force a diagonal or vertical move
+        if (consecutive_horz >= 2) v_horz = 1e32;
+        if (consecutive_vert >= 2) v_vert = 1e32;
+
+        if (v_diag <= v_horz && v_diag <= v_vert) {
             i--; j--;
-        } else if (v1 < v2) {
-            i--;
-        } else {
+            consecutive_horz = 0;
+            consecutive_vert = 0;
+        } else if (v_horz < v_vert) {
             j--;
+            consecutive_horz++;
+            consecutive_vert = 0;
+        } else {
+            i--;
+            consecutive_vert++;
+            consecutive_horz = 0;
         }
 
-        // Safety break for out of band issues
-        if (v1 >= 1e30 && v2 >= 1e30 && v3 >= 1e30) break;
+        if (v_diag >= 1e30 && v_horz >= 1e30 && v_vert >= 1e30) break;
     }
     temp_path[path_len].ref_idx = 0;
     temp_path[path_len].subj_idx = 0;
@@ -273,6 +328,35 @@ void dtw_path_free(t_dtw_path *path) {
     }
 }
 
+double *dtw_path_to_mapping(t_dtw_path *path, int *out_mapping_len) {
+    if (!path || path->length == 0) return NULL;
+
+    int max_ref_idx = 0;
+    for (int i = 0; i < path->length; i++) {
+        if (path->points[i].ref_idx > max_ref_idx) max_ref_idx = path->points[i].ref_idx;
+    }
+
+    int mapping_len = max_ref_idx + 1;
+    double *mapping = (double *)malloc(mapping_len * sizeof(double));
+    int *counts = (int *)calloc(mapping_len, sizeof(int));
+
+    for (int i = 0; i < mapping_len; i++) mapping[i] = 0;
+
+    for (int i = 0; i < path->length; i++) {
+        mapping[path->points[i].ref_idx] += path->points[i].subj_idx;
+        counts[path->points[i].ref_idx]++;
+    }
+
+    for (int i = 0; i < mapping_len; i++) {
+        if (counts[i] > 0) mapping[i] /= counts[i];
+        else if (i > 0) mapping[i] = mapping[i - 1];
+    }
+
+    free(counts);
+    if (out_mapping_len) *out_mapping_len = mapping_len;
+    return mapping;
+}
+
 void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size) {
     int search_range = win_size / 2;
     float *win = (float *)malloc(win_size * sizeof(float));
@@ -281,8 +365,6 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         win[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (win_size - 1)));
     }
 
-    // Pre-calculate mapping from ref_mfcc_idx to subj_mfcc_idx
-    // Find the max ref_idx in the path
     int max_ref_idx = 0;
     for (int i = 0; i < path->length; i++) {
         if (path->points[i].ref_idx > max_ref_idx) max_ref_idx = path->points[i].ref_idx;
@@ -302,22 +384,17 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
     }
     free(ref_counts);
 
-    // Initialize dest_samples with 0
     memset(dest_samples, 0, ref_frames * sizeof(float));
 
     long long out_pos = 0;
     long long last_actual_subj_pos = -hop_size;
 
-    // We step through the output (which matches ref_frames) in hop_size increments
-    // We ensure the loop covers the entire ref_frames by allowing out_pos to go slightly further
     while (out_pos < ref_frames - hop_size) {
         int ref_mfcc_idx = (int)(out_pos / hop_size);
         if (ref_mfcc_idx > max_ref_idx) ref_mfcc_idx = max_ref_idx;
 
         double target_subj_pos = ref_to_subj[ref_mfcc_idx] * hop_size;
 
-        // WSOLA refinement: search for best cross-correlation around target_subj_pos
-        // to maintain phase continuity with the previous grain.
         long long natural_subj_pos = last_actual_subj_pos + hop_size;
         long long search_start = (long long)target_subj_pos - search_range;
         long long search_end = (long long)target_subj_pos + search_range;
@@ -332,7 +409,6 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
                 double corr = 0;
                 double energy_s = 0;
                 for (int i = 0; i < search_range; i++) {
-                    // Correlate the current candidate grain with the expected natural progression
                     if (natural_subj_pos + i < subj_frames && s + i < subj_frames) {
                         double val_n = subj_samples[natural_subj_pos + i];
                         double val_s = subj_samples[s + i];
@@ -341,7 +417,6 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
                     }
                 }
 
-                // Add a small bias towards the target position to prevent drift in silence
                 double dist_to_target = (double)abs((int)(s - target_subj_pos)) / search_range;
                 corr = corr - 0.01 * dist_to_target * energy_s;
 
@@ -354,7 +429,6 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
 
         last_actual_subj_pos = best_subj_pos;
 
-        // OLA
         for (int i = 0; i < win_size; i++) {
             if (out_pos + i < ref_frames && best_subj_pos + i < subj_frames) {
                 dest_samples[out_pos + i] += subj_samples[best_subj_pos + i] * win[i];
@@ -365,8 +439,6 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         out_pos += hop_size;
     }
 
-    // Handle the tail: ensure the last part of the destination buffer is filled
-    // if out_pos didn't reach the end.
     if (out_pos < ref_frames) {
         int ref_mfcc_idx = (int)(out_pos / hop_size);
         if (ref_mfcc_idx > max_ref_idx) ref_mfcc_idx = max_ref_idx;
@@ -380,23 +452,19 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         for (long long i = out_pos; i < ref_frames; i++) {
             long long s_idx = best_subj_pos + (i - out_pos);
             if (s_idx < subj_frames) {
-                // For the tail, we just copy or use a simple OLA if it's within a window
                 dest_samples[i] = subj_samples[s_idx];
                 ola_norm[i] = 1.0;
             } else {
-                // If we run out of subject, fill with silence to ensure no holes in norm
                 dest_samples[i] = 0;
                 ola_norm[i] = 1.0;
             }
         }
     }
 
-    // Normalize OLA
     for (long long i = 0; i < ref_frames; i++) {
         if (ola_norm[i] > 1e-6) {
             dest_samples[i] /= ola_norm[i];
         } else if (i < ref_frames) {
-            // Fill holes with silence
             dest_samples[i] = 0;
         }
     }
