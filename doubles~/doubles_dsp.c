@@ -166,31 +166,49 @@ static double euclidean_distance(double *v1, double *v2, int n) {
 t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, int subj_len, int num_ceps) {
     if (ref_len == 0 || subj_len == 0) return NULL;
 
-    double *cost_matrix = (double *)malloc(ref_len * subj_len * sizeof(double));
+    // Use a Sakoe-Chiba band to restrict the search space and save memory/time.
+    // Band width 'r' is 10% of the maximum length or a minimum of 50.
+    int r = (int)(0.1 * (ref_len > subj_len ? ref_len : subj_len));
+    if (r < 50) r = 50;
 
-    // Initialize cost matrix
+    double *cost_matrix = (double *)malloc(ref_len * subj_len * sizeof(double));
+    if (!cost_matrix) return NULL;
+
+    // Initialize with infinity
+    for (int i = 0; i < ref_len * subj_len; i++) cost_matrix[i] = 1e30;
+
     cost_matrix[0] = euclidean_distance(ref_mfccs[0], subj_mfccs[0], num_ceps);
 
-    for (int i = 1; i < ref_len; i++) {
-        cost_matrix[i * subj_len] = cost_matrix[(i - 1) * subj_len] + euclidean_distance(ref_mfccs[i], subj_mfccs[0], num_ceps);
-    }
+    for (int i = 0; i < ref_len; i++) {
+        int j_start = (int)floor((double)i * subj_len / ref_len) - r;
+        int j_end = (int)floor((double)i * subj_len / ref_len) + r;
+        if (j_start < 0) j_start = 0;
+        if (j_end >= subj_len) j_end = subj_len - 1;
 
-    for (int j = 1; j < subj_len; j++) {
-        cost_matrix[j] = cost_matrix[j - 1] + euclidean_distance(ref_mfccs[0], subj_mfccs[j], num_ceps);
-    }
+        for (int j = j_start; j <= j_end; j++) {
+            if (i == 0 && j == 0) continue;
 
-    for (int i = 1; i < ref_len; i++) {
-        for (int j = 1; j < subj_len; j++) {
             double dist = euclidean_distance(ref_mfccs[i], subj_mfccs[j], num_ceps);
-            double min_prev = cost_matrix[(i - 1) * subj_len + j]; // Insertion
-            if (cost_matrix[i * subj_len + (j - 1)] < min_prev) min_prev = cost_matrix[i * subj_len + (j - 1)]; // Deletion
-            if (cost_matrix[(i - 1) * subj_len + (j - 1)] < min_prev) min_prev = cost_matrix[(i - 1) * subj_len + (j - 1)]; // Match
-            cost_matrix[i * subj_len + j] = dist + min_prev;
+            double v1 = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e30;
+            double v2 = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e30;
+            double v3 = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e30;
+
+            double min_prev = v1;
+            if (v2 < min_prev) min_prev = v2;
+            if (v3 < min_prev) min_prev = v3;
+
+            if (min_prev < 1e30) {
+                cost_matrix[i * subj_len + j] = dist + min_prev;
+            }
         }
     }
 
     // Backtracking
     t_dtw_point *temp_path = (t_dtw_point *)malloc((ref_len + subj_len) * sizeof(t_dtw_point));
+    if (!temp_path) {
+        free(cost_matrix);
+        return NULL;
+    }
     int path_len = 0;
     int i = ref_len - 1;
     int j = subj_len - 1;
@@ -200,33 +218,37 @@ t_dtw_path *dtw_calculate(double **ref_mfccs, int ref_len, double **subj_mfccs, 
         temp_path[path_len].subj_idx = j;
         path_len++;
 
-        if (i == 0) j--;
-        else if (j == 0) i--;
-        else {
-            double v1 = cost_matrix[(i - 1) * subj_len + j];
-            double v2 = cost_matrix[i * subj_len + (j - 1)];
-            double v3 = cost_matrix[(i - 1) * subj_len + (j - 1)];
+        double v1 = (i > 0) ? cost_matrix[(i - 1) * subj_len + j] : 1e31;
+        double v2 = (j > 0) ? cost_matrix[i * subj_len + (j - 1)] : 1e31;
+        double v3 = (i > 0 && j > 0) ? cost_matrix[(i - 1) * subj_len + (j - 1)] : 1e31;
 
-            if (v3 <= v1 && v3 <= v2) {
-                i--; j--;
-            } else if (v1 < v2) {
-                i--;
-            } else {
-                j--;
-            }
+        if (v3 <= v1 && v3 <= v2) {
+            i--; j--;
+        } else if (v1 < v2) {
+            i--;
+        } else {
+            j--;
         }
+
+        // Safety break for out of band issues
+        if (v1 >= 1e30 && v2 >= 1e30 && v3 >= 1e30) break;
     }
     temp_path[path_len].ref_idx = 0;
     temp_path[path_len].subj_idx = 0;
     path_len++;
 
     t_dtw_path *path = (t_dtw_path *)malloc(sizeof(t_dtw_path));
-    path->length = path_len;
-    path->points = (t_dtw_point *)malloc(path_len * sizeof(t_dtw_point));
-
-    // Reverse path to be from start to end
-    for (int k = 0; k < path_len; k++) {
-        path->points[k] = temp_path[path_len - 1 - k];
+    if (path) {
+        path->length = path_len;
+        path->points = (t_dtw_point *)malloc(path_len * sizeof(t_dtw_point));
+        if (path->points) {
+            for (int k = 0; k < path_len; k++) {
+                path->points[k] = temp_path[path_len - 1 - k];
+            }
+        } else {
+            free(path);
+            path = NULL;
+        }
     }
 
     free(temp_path);
@@ -249,6 +271,27 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         win[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (win_size - 1)));
     }
 
+    // Pre-calculate mapping from ref_mfcc_idx to subj_mfcc_idx
+    // Find the max ref_idx in the path
+    int max_ref_idx = 0;
+    for (int i = 0; i < path->length; i++) {
+        if (path->points[i].ref_idx > max_ref_idx) max_ref_idx = path->points[i].ref_idx;
+    }
+
+    double *ref_to_subj = (double *)malloc((max_ref_idx + 1) * sizeof(double));
+    int *ref_counts = (int *)calloc((max_ref_idx + 1), sizeof(int));
+    for (int i = 0; i <= max_ref_idx; i++) ref_to_subj[i] = 0;
+
+    for (int i = 0; i < path->length; i++) {
+        ref_to_subj[path->points[i].ref_idx] += path->points[i].subj_idx;
+        ref_counts[path->points[i].ref_idx]++;
+    }
+    for (int i = 0; i <= max_ref_idx; i++) {
+        if (ref_counts[i] > 0) ref_to_subj[i] /= ref_counts[i];
+        else if (i > 0) ref_to_subj[i] = ref_to_subj[i-1];
+    }
+    free(ref_counts);
+
     // Initialize dest_samples with 0
     memset(dest_samples, 0, ref_frames * sizeof(float));
 
@@ -256,11 +299,12 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
     long long last_actual_subj_pos = -hop_size;
 
     // We step through the output (which matches ref_frames) in hop_size increments
-    while (out_pos + win_size < ref_frames) {
-        int mfcc_idx = (int)(out_pos / hop_size);
-        if (mfcc_idx >= path->length) mfcc_idx = path->length - 1;
+    // We ensure the loop covers the entire ref_frames by allowing out_pos to go slightly further
+    while (out_pos < ref_frames - hop_size) {
+        int ref_mfcc_idx = (int)(out_pos / hop_size);
+        if (ref_mfcc_idx > max_ref_idx) ref_mfcc_idx = max_ref_idx;
 
-        double target_subj_pos = (double)path->points[mfcc_idx].subj_idx * hop_size;
+        double target_subj_pos = ref_to_subj[ref_mfcc_idx] * hop_size;
 
         // WSOLA refinement: search for best cross-correlation around target_subj_pos
         // to maintain phase continuity with the previous grain.
@@ -302,6 +346,32 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         out_pos += hop_size;
     }
 
+    // Handle the tail: ensure the last part of the destination buffer is filled
+    // if out_pos didn't reach the end.
+    if (out_pos < ref_frames) {
+        int ref_mfcc_idx = (int)(out_pos / hop_size);
+        if (ref_mfcc_idx > max_ref_idx) ref_mfcc_idx = max_ref_idx;
+        double target_subj_pos = ref_to_subj[ref_mfcc_idx] * hop_size;
+        long long best_subj_pos = (long long)target_subj_pos;
+        if (best_subj_pos + (ref_frames - out_pos) > subj_frames) {
+            best_subj_pos = subj_frames - (ref_frames - out_pos);
+        }
+        if (best_subj_pos < 0) best_subj_pos = 0;
+
+        for (long long i = out_pos; i < ref_frames; i++) {
+            long long s_idx = best_subj_pos + (i - out_pos);
+            if (s_idx < subj_frames) {
+                // For the tail, we just copy or use a simple OLA if it's within a window
+                dest_samples[i] = subj_samples[s_idx];
+                ola_norm[i] = 1.0;
+            } else {
+                // If we run out of subject, fill with silence to ensure no holes in norm
+                dest_samples[i] = 0;
+                ola_norm[i] = 1.0;
+            }
+        }
+    }
+
     // Normalize OLA
     for (long long i = 0; i < ref_frames; i++) {
         if (ola_norm[i] > 1e-6) {
@@ -309,6 +379,7 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         }
     }
 
+    free(ref_to_subj);
     free(win);
     free(ola_norm);
 }
