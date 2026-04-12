@@ -42,9 +42,10 @@
 				<arg name="reference_buffer" type="symbol" optional="0" />
 				<arg name="subject_buffer" type="symbol" optional="0" />
 				<arg name="destination_buffer" type="symbol" optional="0" />
+				<arg name="path_buffer" type="symbol" optional="1" />
 			</arglist>
 			<digest>Align subject to reference</digest>
-			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length.</description>
+			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. If an optional path_buffer name is provided, the DTW mapping (subject frame index per reference frame index) will be written into it for visualization.</description>
 		</method>
 	</methodlist>
 
