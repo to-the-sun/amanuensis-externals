@@ -51,6 +51,6 @@ void dtw_path_free(t_dtw_path *path);
 double *dtw_path_to_mapping(t_dtw_path *path, int *out_mapping_len);
 
 // WSOLA functions
-void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size, double target_bias);
+void wsola_process(float **ref_samples, int ref_chans, long long ref_frames, float **subj_samples, int subj_chans, long long subj_frames, float **dest_samples, t_dtw_path *path, int hop_size, int win_size, double target_bias);
 
 #endif

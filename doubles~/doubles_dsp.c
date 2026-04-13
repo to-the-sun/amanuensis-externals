@@ -172,25 +172,39 @@ void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel
 }
 
 void detect_transients(float *samples, long long num_frames, int win_size, int hop_size, double *transients) {
+    if (num_frames < win_size) return;
     int num_windows = (int)((num_frames - win_size) / hop_size) + 1;
-    double prev_energy = 0;
+    double *energy = (double *)calloc(num_windows, sizeof(double));
+    if (!energy) return;
 
     for (int i = 0; i < num_windows; i++) {
-        double energy = 0;
+        double e = 0;
         for (int j = 0; j < win_size; j++) {
             float s = samples[i * hop_size + j];
-            energy += s * s;
+            e += s * s;
         }
-        energy = sqrt(energy / win_size);
+        energy[i] = sqrt(e / win_size);
+    }
 
-        // Simple onset detection based on energy increase
-        if (i > 0 && energy > prev_energy * 2.0 && energy > 0.01) {
+    // Two-stage onset detection:
+    // 1. Local energy rise (log-domain)
+    // 2. High-frequency content / spectral flux (implicit in MFCC, but here we use energy derivative)
+    for (int i = 1; i < num_windows; i++) {
+        double e_curr = energy[i];
+        double e_prev = energy[i-1];
+
+        // Use a small noise floor for log energy
+        double log_diff = log(e_curr + 1e-6) - log(e_prev + 1e-6);
+
+        // Sensitivity: Detect fast rises even if absolute energy is moderate
+        // This helps catch soft consonants (e.g., 'f', 's', 'th')
+        if (log_diff > 0.5 && e_curr > 0.005) {
             transients[i] = 1.0;
         } else {
             transients[i] = 0.0;
         }
-        prev_energy = energy;
     }
+    free(energy);
 }
 
 static double euclidean_distance(double *v1, double *v2, int n) {
@@ -357,7 +371,7 @@ double *dtw_path_to_mapping(t_dtw_path *path, int *out_mapping_len) {
     return mapping;
 }
 
-void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size, double target_bias) {
+void wsola_process(float **ref_samples, int ref_chans, long long ref_frames, float **subj_samples, int subj_chans, long long subj_frames, float **dest_samples, t_dtw_path *path, int hop_size, int win_size, double target_bias) {
     int search_range = win_size / 2;
     float *win = (float *)malloc(win_size * sizeof(float));
     float *ola_norm = (float *)calloc(ref_frames, sizeof(float));
@@ -384,7 +398,9 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
     }
     free(ref_counts);
 
-    memset(dest_samples, 0, ref_frames * sizeof(float));
+    for (int c = 0; c < subj_chans; c++) {
+        memset(dest_samples[c], 0, ref_frames * sizeof(float));
+    }
 
     long long out_pos = 0;
     long long last_actual_subj_pos = -hop_size;
@@ -408,17 +424,30 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
             for (long long s = search_start; s <= search_end; s++) {
                 double corr = 0;
                 double energy_s = 0;
+                double energy_n = 0;
+
+                // Cross-correlation is performed on the first channel to find timing
                 for (int i = 0; i < search_range; i++) {
                     if (natural_subj_pos + i < subj_frames && s + i < subj_frames) {
-                        double val_n = subj_samples[natural_subj_pos + i];
-                        double val_s = subj_samples[s + i];
+                        double val_n = subj_samples[0][natural_subj_pos + i];
+                        double val_s = subj_samples[0][s + i];
                         corr += val_n * val_s;
                         energy_s += val_s * val_s;
+                        energy_n += val_n * val_n;
                     }
                 }
 
+                // Normalized cross-correlation
+                double denom = sqrt(energy_s * energy_n);
+                if (denom > 1e-6) {
+                    corr /= denom;
+                } else {
+                    corr = 0;
+                }
+
+                // Decoupled target bias: distance penalty is independent of energy
                 double dist_to_target = (double)abs((int)(s - target_subj_pos)) / search_range;
-                corr = corr - target_bias * dist_to_target * energy_s;
+                corr = corr - target_bias * dist_to_target;
 
                 if (corr > max_corr) {
                     max_corr = corr;
@@ -431,7 +460,9 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
 
         for (int i = 0; i < win_size; i++) {
             if (out_pos + i < ref_frames && best_subj_pos + i < subj_frames) {
-                dest_samples[out_pos + i] += subj_samples[best_subj_pos + i] * win[i];
+                for (int c = 0; c < subj_chans; c++) {
+                    dest_samples[c][out_pos + i] += subj_samples[c][best_subj_pos + i] * win[i];
+                }
                 ola_norm[out_pos + i] += win[i];
             }
         }
@@ -452,10 +483,14 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
         for (long long i = out_pos; i < ref_frames; i++) {
             long long s_idx = best_subj_pos + (i - out_pos);
             if (s_idx < subj_frames) {
-                dest_samples[i] = subj_samples[s_idx];
+                for (int c = 0; c < subj_chans; c++) {
+                    dest_samples[c][i] = subj_samples[c][s_idx];
+                }
                 ola_norm[i] = 1.0;
             } else {
-                dest_samples[i] = 0;
+                for (int c = 0; c < subj_chans; c++) {
+                    dest_samples[c][i] = 0;
+                }
                 ola_norm[i] = 1.0;
             }
         }
@@ -463,9 +498,13 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
 
     for (long long i = 0; i < ref_frames; i++) {
         if (ola_norm[i] > 1e-6) {
-            dest_samples[i] /= ola_norm[i];
+            for (int c = 0; c < subj_chans; c++) {
+                dest_samples[c][i] /= ola_norm[i];
+            }
         } else if (i < ref_frames) {
-            dest_samples[i] = 0;
+            for (int c = 0; c < subj_chans; c++) {
+                dest_samples[c][i] = 0;
+            }
         }
     }
 

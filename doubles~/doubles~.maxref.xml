@@ -48,7 +48,7 @@
 				<arg name="destination_buffer" type="symbol" optional="0" />
 			</arglist>
 			<digest>Align subject to reference</digest>
-			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.</description>
+			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.</description>
 		</method>
 	</methodlist>
 
@@ -66,10 +66,10 @@
 				When warping audio, the algorithm searches a small range around the target position to find the best waveform match. In silent or quiet regions, waveform correlation can be unreliable. The target bias provides a penalty for candidates far from the target, preventing "drift" in gaps.
 				<br /><br />
 				Suggested Scale:
-				<br />• <b>0.0</b>: No bias. Pure waveform similarity. Best for complex audio but may drift in silence.
-				<br />• <b>0.01</b> (Default): Subtle guide. Only overrides waveform match if it's very poor or quiet.
-				<br />• <b>0.05 - 0.1</b>: Moderate pull. Useful if the alignment feels like it's "wandering".
-				<br />• <b>0.5 - 1.0</b>: Heavy pull. Prioritizes timing over waveform continuity (may cause artifacts).
+				<br />• <b>0.0</b>: No bias. Pure waveform similarity based on normalized cross-correlation.
+				<br />• <b>0.01</b> (Default): Subtle timing guide. Recommended for most vocal applications to maintain stability in silent gaps.
+				<br />• <b>0.05 - 0.1</b>: Moderate pull. Useful if the alignment feels like it's "wandering" or if the vocal performance is very loose.
+				<br />• <b>0.5 - 1.0</b>: Heavy pull. Prioritizes rigid timing over waveform phase-matching (use for rhythmic speech or percussive elements).
 			</description>
 		</attribute>
 	</attributelist>
