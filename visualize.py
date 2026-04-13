@@ -27,6 +27,7 @@ state = {
     # Weaver State
     "data_points_by_track": {},
     "labels_by_track": {},
+    "track_lengths": {},
     "busy_states": {},
     "tracks_seen": set(),
     "global_max_ms": 0.0,
@@ -62,6 +63,7 @@ def process_packet(text):
                         state["main_ramp_duration"] = state["global_max_ms"]
                     state["data_points_by_track"].clear()
                     state["labels_by_track"].clear()
+                    state["track_lengths"].clear()
                     state["busy_states"].clear()
                     state["tracks_seen"].clear()
                     state["global_max_ms"] = 0.0
@@ -101,6 +103,8 @@ def process_packet(text):
                         "len": pkt.get("len", 0),
                         "pos_idx": pos_idx
                     })
+                    if "len" in pkt:
+                        state["track_lengths"][track_id] = float(pkt["len"])
                     if "busy" in pkt:
                         state["busy_states"][track_id] = bool(pkt["busy"])
                     state["tracks_seen"].add(track_id)
@@ -113,6 +117,8 @@ def process_packet(text):
                     if track_id not in state["data_points_by_track"]:
                         state["data_points_by_track"][track_id] = []
                     state["data_points_by_track"][track_id].append(pkt)
+                    if "len" in pkt:
+                        state["track_lengths"][track_id] = float(pkt["len"])
                     if "busy" in pkt:
                         state["busy_states"][track_id] = bool(pkt["busy"])
                     state["tracks_seen"].add(track_id)
@@ -328,7 +334,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
             lx = left_pad + (l["ms"] / view_width_ms) * graph_w
             if left_pad <= lx <= left_pad + graph_w:
                 pygame.draw.line(surface, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
-                txt_bar = fonts["weaver_tiny"].render(f"{l.get('bar', '')}/{l.get('len', 0)}", True, (220, 220, 255))
+                txt_bar = fonts["weaver_tiny"].render(f"{l.get('bar', '')}", True, (220, 220, 255))
                 txt_label = fonts["weaver_tiny"].render(l["text"], True, (180, 180, 200))
                 if l.get("pos_idx", 0) == 0:
                     ty1, ty2 = row_top + 2, row_top + 13
@@ -342,13 +348,20 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
         y_graph = top_pad + i * row_full_h + row_spacing / 2
         pygame.draw.line(surface, (60, 60, 70), (left_pad, y_graph), (left_pad + graph_w, y_graph), 1)
         pygame.draw.line(surface, (60, 60, 70), (left_pad, y_graph + row_graph_h), (left_pad + graph_w, y_graph + row_graph_h), 1)
+
         is_busy = busy_dict.get(t, False)
+        t_len = state["track_lengths"].get(t, 0)
+
         if is_busy:
-            pygame.draw.rect(surface, (255, 255, 255), (5, y_graph + row_graph_h/2 - 10, 70, 20))
+            pygame.draw.rect(surface, (255, 255, 255), (5, y_graph + row_graph_h/2 - 15, 70, 30))
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (0, 0, 0))
+            lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (0, 0, 0))
         else:
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (200, 200, 200))
-        surface.blit(lbl, (10, y_graph + row_graph_h/2 - 7))
+            lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (150, 150, 150))
+
+        surface.blit(lbl, (10, y_graph + row_graph_h/2 - 12))
+        surface.blit(lbl_len, (10, y_graph + row_graph_h/2 + 3))
 
     axis_y = top_pad + graph_h
     pygame.draw.line(surface, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)
