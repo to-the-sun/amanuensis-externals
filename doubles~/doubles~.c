@@ -16,12 +16,12 @@ typedef struct _doubles_worker_data {
     double ref_sr;
     double subj_sr;
     t_symbol *dest_buf_name;
-    t_symbol *path_buf_name;
 } t_doubles_worker_data;
 
 typedef struct _doubles {
     t_object b_obj;
     void *status_outlet;
+    void *function_outlet;
     void *log_outlet;
     long log;
 
@@ -39,9 +39,8 @@ typedef struct _doubles {
     long long defer_new_frames;
     t_symbol *defer_dest_name;
 
-    double *defer_path_mapping;
-    int defer_path_len;
-    t_symbol *defer_path_name;
+    t_doubles_func_point *defer_func_points;
+    int defer_func_points_count;
 
     t_doubles_worker_data *current_wd;
 } t_doubles;
@@ -82,12 +81,14 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
         x->progress = 0.0;
         x->last_error[0] = '\0';
         x->defer_samples = NULL;
-        x->defer_path_mapping = NULL;
+        x->defer_func_points = NULL;
+        x->defer_func_points_count = 0;
         x->current_wd = NULL;
 
         attr_args_process(x, argc, argv);
 
         x->log_outlet = outlet_new((t_object *)x, NULL);
+        x->function_outlet = outlet_new((t_object *)x, NULL);
         x->status_outlet = outlet_new((t_object *)x, NULL);
     }
     return x;
@@ -106,8 +107,8 @@ void doubles_free(t_doubles *x) {
     if (x->defer_samples) {
         sysmem_freeptr(x->defer_samples);
     }
-    if (x->defer_path_mapping) {
-        free(x->defer_path_mapping);
+    if (x->defer_func_points) {
+        free(x->defer_func_points);
     }
     critical_free(x->lock);
 }
@@ -118,17 +119,9 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    critical_enter(x->lock);
-    if (x->is_busy) {
-        object_error((t_object *)x, "Object is busy with a previous alignment operation.");
-        critical_exit(x->lock);
-        return;
-    }
-
     t_symbol *ref_name = atom_getsym(argv);
     t_symbol *subj_name = atom_getsym(argv + 1);
     t_symbol *dest_name = atom_getsym(argv + 2);
-    t_symbol *path_name = (argc > 3) ? atom_getsym(argv + 3) : _sym_nothing;
 
     t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, ref_name);
     t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, subj_name);
@@ -137,23 +130,29 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (!ref_obj || !subj_obj) {
         object_error((t_object *)x, "Input buffers not found");
-        object_free(ref_ref);
-        object_free(subj_ref);
-        critical_exit(x->lock);
+        if (ref_ref) object_free(ref_ref);
+        if (subj_ref) object_free(subj_ref);
         return;
     }
 
     long long ref_frames = buffer_getframecount(ref_obj);
     long long subj_frames = buffer_getframecount(subj_obj);
-    double sr = buffer_getsamplerate(ref_obj);
 
-    if (ref_frames <= 0 || subj_frames <= 0) {
-        object_error((t_object *)x, "Buffers must not be empty");
+    if (ref_frames < 1024 || subj_frames < 1024) {
+        object_error((t_object *)x, "Buffers must be at least 1024 samples long");
         object_free(ref_ref);
         object_free(subj_ref);
+        return;
+    }
+
+    critical_enter(x->lock);
+    if (x->is_busy) {
+        object_error((t_object *)x, "Object is busy with a previous alignment operation.");
         critical_exit(x->lock);
         return;
     }
+
+    double sr = buffer_getsamplerate(ref_obj);
 
     t_doubles_worker_data *wd = (t_doubles_worker_data *)sysmem_newptrclear(sizeof(t_doubles_worker_data));
     if (!wd) {
@@ -196,7 +195,6 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     wd->ref_sr = sr;
     wd->subj_sr = buffer_getsamplerate(subj_obj);
     wd->dest_buf_name = dest_name;
-    wd->path_buf_name = path_name;
 
     object_free(ref_ref);
     object_free(subj_ref);
@@ -356,21 +354,34 @@ void doubles_worker_thread(t_doubles *x) {
             x->defer_new_frames = wd->ref_frames;
             x->defer_dest_name = wd->dest_buf_name;
 
-            if (wd->path_buf_name != _sym_nothing) {
-                // Normalize mapping to [-1, 1] for visualization
-                if (subj_mfcc_len > 1) {
-                    for (int i = 0; i < mapping_len; i++) {
-                        mapping[i] = (2.0 * mapping[i] / (subj_mfcc_len - 1)) - 1.0;
+            // Identify inflection points in the DTW path for the function object
+            // Inflection points: start, end, and whenever the step type changes
+            t_doubles_func_point *fpoints = (t_doubles_func_point *)malloc(path->length * sizeof(t_doubles_func_point));
+            int fp_count = 0;
+            if (fpoints) {
+                for (int i = 0; i < path->length; i++) {
+                    bool is_inflection = false;
+                    if (i == 0 || i == path->length - 1) {
+                        is_inflection = true;
+                    } else {
+                        // Check if slope changed
+                        int dx1 = path->points[i].ref_idx - path->points[i-1].ref_idx;
+                        int dy1 = path->points[i].subj_idx - path->points[i-1].subj_idx;
+                        int dx2 = path->points[i+1].ref_idx - path->points[i].ref_idx;
+                        int dy2 = path->points[i+1].subj_idx - path->points[i].subj_idx;
+                        if (dx1 != dx2 || dy1 != dy2) {
+                            is_inflection = true;
+                        }
                     }
-                } else {
-                    for (int i = 0; i < mapping_len; i++) {
-                        mapping[i] = 0.0;
+
+                    if (is_inflection) {
+                        fpoints[fp_count].x = (double)path->points[i].ref_idx / (ref_mfcc_len - 1);
+                        fpoints[fp_count].y = (double)path->points[i].subj_idx / (subj_mfcc_len - 1);
+                        fp_count++;
                     }
                 }
-                x->defer_path_mapping = mapping;
-                x->defer_path_len = mapping_len;
-                x->defer_path_name = wd->path_buf_name;
-                mapping = NULL; // qfn will free
+                x->defer_func_points = fpoints;
+                x->defer_func_points_count = fp_count;
             }
             critical_exit(x->lock);
         } else {
@@ -421,9 +432,8 @@ void doubles_qfn(t_doubles *x) {
     float *samples = x->defer_samples;
     long long frames = x->defer_new_frames;
     t_symbol *dest_name = x->defer_dest_name;
-    double *mapping = x->defer_path_mapping;
-    int mapping_len = x->defer_path_len;
-    t_symbol *mapping_name = x->defer_path_name;
+    t_doubles_func_point *fpoints = x->defer_func_points;
+    int fp_count = x->defer_func_points_count;
     critical_exit(x->lock);
 
     if (err[0]) {
@@ -461,36 +471,19 @@ void doubles_qfn(t_doubles *x) {
         critical_exit(x->lock);
     }
 
-    if (mapping) {
-        t_buffer_ref *path_ref = buffer_ref_new((t_object *)x, mapping_name);
-        t_buffer_obj *path_obj = buffer_ref_getobject(path_ref);
-        if (path_obj) {
-            t_atom av;
-            atom_setlong(&av, (t_atom_long)mapping_len);
-            object_method_typed(path_obj, gensym("sizeinsamps"), 1, &av, NULL);
-
-            float *path_ext = buffer_locksamples(path_obj);
-            if (path_ext) {
-                for (int i = 0; i < mapping_len; i++) {
-                    path_ext[i] = (float)mapping[i];
-
-                    // Simple warning for extreme stretching
-                    if (i > 0) {
-                        double delta = mapping[i] - mapping[i-1];
-                        if (delta == 0 && x->log) {
-                            // This frame is a repeat of previous subject frame
-                        }
-                    }
-                }
-                buffer_unlocksamples(path_obj);
-                buffer_setdirty(path_obj);
-            }
+    if (fpoints) {
+        outlet_anything(x->function_outlet, gensym("clear"), 0, NULL);
+        for (int i = 0; i < fp_count; i++) {
+            t_atom av[2];
+            atom_setfloat(&av[0], (float)fpoints[i].x);
+            atom_setfloat(&av[1], (float)fpoints[i].y);
+            outlet_list(x->function_outlet, NULL, 2, av);
         }
-        object_free(path_ref);
 
         critical_enter(x->lock);
-        free(x->defer_path_mapping);
-        x->defer_path_mapping = NULL;
+        free(x->defer_func_points);
+        x->defer_func_points = NULL;
+        x->defer_func_points_count = 0;
         critical_exit(x->lock);
     }
 
@@ -517,11 +510,12 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (optional path_buf, normalized -1 to 1)' to start processing");
+        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest]' to start processing");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
-            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
+            case 1: sprintf(s, "Outlet 2 (list): Inflection points for 'function' object (clear, then x y pairs)"); break;
+            case 2: sprintf(s, "Outlet 3 (anything): Logging Outlet"); break;
         }
     }
 }

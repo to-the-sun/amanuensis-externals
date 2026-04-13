@@ -31,6 +31,11 @@ void calculate_mfcc(double *audio_segment, int segment_size, int fft_size, t_mel
 void detect_transients(float *samples, long long num_frames, int win_size, int hop_size, double *transients);
 
 // DTW functions
+typedef struct _doubles_func_point {
+    double x;
+    double y;
+} t_doubles_func_point;
+
 typedef struct _dtw_point {
     int ref_idx;
     int subj_idx;
