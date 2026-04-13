@@ -53,12 +53,12 @@
 	</methodlist>
 
 	<!-- ATTRIBUTES -->
-	<attrlist>
-		<attr name="log" type="long" size="1">
+	<attributelist>
+		<attribute name="log" type="long" size="1">
 			<digest>Enable Logging</digest>
 			<description>Enable or disable detailed diagnostic logging to the second outlet.</description>
-		</attr>
-		<attr name="targetbias" type="float64" size="1">
+		</attribute>
+		<attribute name="targetbias" type="double" size="1">
 			<digest>Target Bias</digest>
 			<description>
 				Sets the strength of the "gravity" pulling the alignment towards the ideal DTW position during the synthesis (WSOLA) phase.
@@ -71,8 +71,8 @@
 				<br />• <b>0.05 - 0.1</b>: Moderate pull. Useful if the alignment feels like it's "wandering".
 				<br />• <b>0.5 - 1.0</b>: Heavy pull. Prioritizes timing over waveform continuity (may cause artifacts).
 			</description>
-		</attr>
-	</attrlist>
+		</attribute>
+	</attributelist>
 
 	<!-- SEEALSO -->
 	<seealsolist>

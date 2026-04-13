@@ -69,6 +69,7 @@ void ext_main(void *r) {
     CLASS_ATTR_DOUBLE(c, "targetbias", 0, t_doubles, targetbias);
     CLASS_ATTR_LABEL(c, "targetbias", 0, "Target Bias");
     CLASS_ATTR_DEFAULT(c, "targetbias", 0, "0.01");
+    CLASS_ATTR_SAVE(c, "targetbias", 0);
 
     class_register(CLASS_BOX, c);
     doubles_class = c;
