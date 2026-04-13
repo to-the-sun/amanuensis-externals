@@ -58,6 +58,20 @@
 			<digest>Enable Logging</digest>
 			<description>Enable or disable detailed diagnostic logging to the second outlet.</description>
 		</attr>
+		<attr name="targetbias" type="float64" size="1">
+			<digest>Target Bias</digest>
+			<description>
+				Sets the strength of the "gravity" pulling the alignment towards the ideal DTW position during the synthesis (WSOLA) phase.
+				<br /><br />
+				When warping audio, the algorithm searches a small range around the target position to find the best waveform match. In silent or quiet regions, waveform correlation can be unreliable. The target bias provides a penalty for candidates far from the target, preventing "drift" in gaps.
+				<br /><br />
+				Suggested Scale:
+				<br />• <b>0.0</b>: No bias. Pure waveform similarity. Best for complex audio but may drift in silence.
+				<br />• <b>0.01</b> (Default): Subtle guide. Only overrides waveform match if it's very poor or quiet.
+				<br />• <b>0.05 - 0.1</b>: Moderate pull. Useful if the alignment feels like it's "wandering".
+				<br />• <b>0.5 - 1.0</b>: Heavy pull. Prioritizes timing over waveform continuity (may cause artifacts).
+			</description>
+		</attr>
 	</attrlist>
 
 	<!-- SEEALSO -->
