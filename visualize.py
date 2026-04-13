@@ -29,7 +29,7 @@ state = {
     "labels_by_track": {},
     "track_lengths": {},
     "busy_states": {},
-    "tracks_seen": set(),
+    "tracks_seen": {1, 2, 3, 4},
     "global_max_ms": 0.0,
     "main_ramp_duration": 5000.0,
 
@@ -65,7 +65,7 @@ def process_packet(text):
                     state["labels_by_track"].clear()
                     state["track_lengths"].clear()
                     state["busy_states"].clear()
-                    state["tracks_seen"].clear()
+                    state["tracks_seen"] = {1, 2, 3, 4}
                     state["global_max_ms"] = 0.0
                     print(f"!!! Weaver state cleared via TCP. New scale: {state['main_ramp_duration']:.0f}ms !!!")
                     sys.stdout.flush()
@@ -91,7 +91,7 @@ def process_packet(text):
 
                 # 3. Weaver Labels
                 if all(k in pkt for k in ["track", "ms", "palette", "offset"]):
-                    track_id = pkt["track"]
+                    track_id = int(pkt["track"])
                     label_text = f"{pkt['palette']}@{pkt['offset']:.0f}"
                     if track_id not in state["labels_by_track"]:
                         state["labels_by_track"][track_id] = []
@@ -113,7 +113,7 @@ def process_packet(text):
 
                 # 4. Weaver Data Points
                 elif all(k in pkt for k in ["track", "ms", "f1", "f2"]):
-                    track_id = pkt["track"]
+                    track_id = int(pkt["track"])
                     if track_id not in state["data_points_by_track"]:
                         state["data_points_by_track"][track_id] = []
                     state["data_points_by_track"][track_id].append(pkt)
@@ -400,7 +400,7 @@ def run_gui():
                     with state_lock:
                         state["data_points_by_track"].clear()
                         state["labels_by_track"].clear()
-                        state["tracks_seen"].clear()
+                        state["tracks_seen"] = {1, 2, 3, 4}
                         state["global_max_ms"] = 0.0
 
         with state_lock:
