@@ -742,6 +742,31 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
+    if (s == gensym("reaches")) {
+        if (x->outlet_reach_int) {
+            t_atom song_reach_atom;
+            atom_setlong(&song_reach_atom, x->song_reach);
+            outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
+
+            if (x->track_reaches_dict) {
+                t_symbol **keys = NULL;
+                long numkeys = 0;
+                dictionary_getkeys(x->track_reaches_dict, &numkeys, &keys);
+                for (long i = 0; i < numkeys; i++) {
+                    t_symbol *track_id_sym = keys[i];
+                    t_atom_long reach = 0;
+                    dictionary_getlong(x->track_reaches_dict, track_id_sym, &reach);
+                    t_atom reach_list[2];
+                    atom_setlong(reach_list, (t_atom_long)atol(track_id_sym->s_name));
+                    atom_setlong(reach_list + 1, reach);
+                    outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                }
+                if (keys) sysmem_freeptr(keys);
+            }
+        }
+        return;
+    }
+
     if (s == gensym("track") && argc > 0) {
         if (atom_gettype(argv) == A_LONG) {
             char track_id_str[64];
@@ -809,15 +834,15 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: (anything) Message Stream from buildspans (track, span, anything), (symbol) Incumbent Dictionary Name, (clear) reset internal state. Supports @defer deferral."); break;
-            case 1: sprintf(s, "Inlet 2: (float) Local Bar Length"); break;
+            case 0: sprintf(s, "Inlet 1: Primary message stream. Supports 'clear', 'track [id]', 'span [list]', 'reaches', and hierarchical selectors '[track]::[bar]::[key] [data]'. Also sets the incumbent dictionary name via symbol."); break;
+            case 1: sprintf(s, "Inlet 2: Local Bar Length (float). Sets or overrides the bar length used for reach calculations (normally retrieved from the 'bar' buffer)."); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Data and Reach Lists"); break;
-            case 1: sprintf(s, "Outlet 2: Fill (symbol)"); break;
-            case 2: sprintf(s, "Outlet 3: Reach Lists (song/track)"); break;
-            case 3: sprintf(s, "Outlet 4: Logging Outlet"); break;
+            case 0: sprintf(s, "Outlet 1: Data Outlet. Outputs bar data lists '[palette] [track] [bar] [offset]' and reach update notifications '[- track reach -999999.0]'."); break;
+            case 1: sprintf(s, "Outlet 2: Fill Outlet. Outputs the symbol 'fill' whenever a song growth event is detected."); break;
+            case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]' or '[track_id] [reach]'. Triggered by growth or 'reaches' message."); break;
+            case 3: sprintf(s, "Outlet 4: Logging Outlet. Outputs verbose diagnostic and status messages when the @log attribute is enabled."); break;
         }
     }
 }

@@ -1,80 +1,126 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="crucible" module="max" category="Utility">
-	<digest>Compare "challenger" track data against "incumbent" data</digest>
-	<description>The `crucible` object receives track data and compares it against an existing dictionary. If the new data (challenger) has a higher rating than the existing data (incumbent), it overwrites the incumbent dictionary and outputs the new data.</description>
+	<digest>Intelligent Track Data Merging and Comparison</digest>
+	<description>
+		The `crucible` object is a specialized utility for managing and merging hierarchical track data. It functions by maintaining two sets of data: the "incumbent" (the current ground truth) and the "challenger" (newly arriving data). When a complete span of data is received for a track, `crucible` performs a competitive analysis. If the challenger data is deemed superior based on its "rating" property, it replaces the incumbent data. This object is designed for high-performance data processing in complex musical systems, supporting asynchronous operation via deferral and providing detailed reach and growth metrics.
+	</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Utility</metadata>
+		<metadata name="tag">Data</metadata>
+		<metadata name="tag">Dictionary</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="anything/symbol">
-			<digest>Inlet 1: Challenger data stream or Incumbent dictionary name</digest>
-			<description>Receives the detailed bar data from `buildspans` or a symbol to set the incumbent dictionary name.</description>
+			<digest>Primary message stream / Incumbent name</digest>
+			<description>
+				Accepts all primary control and data messages. This includes 'clear', 'track', 'span', 'reaches', and hierarchical data selectors. Additionally, sending a symbol sets the name of the external incumbent dictionary to be used for comparisons.
+			</description>
 		</inlet>
 		<inlet id="2" type="float">
-			<digest>Inlet 2: Local Bar Length</digest>
-			<description>Sets the local bar length.</description>
+			<digest>Local Bar Length override</digest>
+			<description>
+				Sets the local bar length in frames. This value is used for calculating song and track reaches. If set to 0 (default), the object attempts to retrieve the bar length from an external buffer~ named 'bar'.
+			</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="list">
-			<digest>Outlet 1: Data and Reach Lists</digest>
-			<description>Outputs [palette, track, bar, offset] or [- track reach offset].</description>
+			<digest>Data Outlet</digest>
+			<description>
+				Outputs processed bar data and reach updates.
+				1. Bar Data: [palette (symbol), track (long), bar (long), offset (float)] - emitted when a challenger wins or upon certain data updates.
+				2. Reach Notification: [- (symbol), track (long), reach (long), -999999.0 (float)] - emitted when a new reach is detected that doesn't exist in the incumbent.
+			</description>
 		</outlet>
 		<outlet id="2" type="symbol">
-			<digest>Outlet 2: Fill signal</digest>
-			<description>Outputs 'fill' when the song grows.</description>
+			<digest>Fill Outlet</digest>
+			<description>
+				Outputs the symbol 'fill' whenever the song's total reach grows. This can be used to trigger system-wide updates or notifications.
+			</description>
 		</outlet>
 		<outlet id="3" type="list">
-			<digest>Outlet 3: Reach lists (song/track)</digest>
-			<description>Outputs the current reach of the song (song [reach]) or track ([track_id] [reach]) when growth is detected.</description>
+			<digest>Reach Outlet</digest>
+			<description>
+				Outputs current reach information.
+				1. Song Reach: [song (symbol), reach (long)] - emitted when song growth occurs or in response to the 'reaches' message.
+				2. Track Reach: [track_id (long), reach (long)] - emitted when track growth occurs or in response to the 'reaches' message.
+			</description>
 		</outlet>
 		<outlet id="4" type="anything">
-			<digest>Outlet 4: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides diagnostic information.</description>
+			<digest>Logging Outlet</digest>
+			<description>
+				Outputs verbose diagnostic and status information. Active only when the 'log' attribute is enabled (1).
+			</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<objarglist>
 		<objarg name="incumbent-dictionary" type="symbol" optional="1">
-			<digest>Name of the incumbent dictionary</digest>
+			<digest>Initial name for the incumbent dictionary</digest>
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="anything">
-			<digest>Process incoming data</digest>
-			<description>Parses hierarchical selectors and manages comparison logic.</description>
+			<digest>Hierarchical data input</digest>
+			<description>
+				Accepts messages in the format '[track]::[bar]::[key] [data...]'. This populates the challenger dictionary with attributes for a specific bar on a specific track. Common keys include 'rating', 'palette', 'offset', and 'span'.
+			</description>
+		</method>
+		<method name="track">
+			<digest>Set the target track for subsequent span analysis</digest>
+			<description>
+				Sets the track ID (long or symbol) to be associated with the next incoming 'span' message.
+			</description>
+		</method>
+		<method name="span">
+			<digest>Trigger span comparison</digest>
+			<description>
+				Expects a list of bar timestamps. This message triggers the comparison logic: `crucible` compares the challenger bars (specified by the list) against the incumbent bars. If the challenger ratings are higher, the challenger wins and the incumbent is updated.
+			</description>
+		</method>
+		<method name="reaches">
+			<digest>Report current song and track reaches</digest>
+			<description>
+				Triggers an immediate output of the current song reach and all individual track reaches through the third outlet.
+			</description>
 		</method>
 		<method name="clear">
-			<digest>Clear internal state</digest>
-			<description>Resets internal song reach, per-track reaches, challenger data, span tracker data, and local bar length.</description>
+			<digest>Reset internal state</digest>
+			<description>
+				Clears the challenger dictionary, all track reaches, song reach, and internal track context.
+			</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="long" size="1">
-			<digest>Enable Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<digest>Enable Verbose Logging</digest>
+			<description>
+				When enabled (1), status messages regarding comparisons, dictionary operations, and reach updates are sent to the fourth outlet.
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
 		<attribute name="consume" get="1" set="1" type="long" size="1">
-			<digest>Enable Consume</digest>
-			<description>When enabled (1), a winning challenger span performs a 'deep delete' of replaced incumbent bars and their associated spans.</description>
+			<digest>Enable Deep Delete</digest>
+			<description>
+				When enabled (1), a winning challenger span will trigger a 'deep delete' of the incumbent bars it replaces. This also cleans up any other bars that were part of the defeated incumbent spans, preventing "orphaned" data fragments in the dictionary.
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
 		<attribute name="defer" get="1" set="1" type="long" size="1">
-			<digest>Deferred Execution</digest>
+			<digest>Main Thread Execution</digest>
 			<description>
-				When enabled (1), processing of incoming data and span comparisons is deferred to the Main (UI) thread. This ensures that the heavy dictionary operations do not block the high-priority Scheduler or audio threads, maintaining timing stability at the cost of slight processing latency.
+				When enabled (1), processing of incoming messages and span comparisons is deferred to the Main thread. This is critical for maintaining audio thread stability when dealing with large dictionary structures.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
@@ -84,8 +130,10 @@
 	<!--SEEALSO-->
 	<seealsolist>
 		<seealso name="buildspans" />
-		<seealso name="threads~" />
-		<seealso name="notify" />
-		<seealso name="growbuffer~" />
+		<seealso name="skipsilence~" />
+		<seealso name="weaver~" />
+		<seealso name="stoplight" />
+		<seealso name="doubles~" />
+		<seealso name="cropsilence~" />
 	</seealsolist>
 </c74object>
