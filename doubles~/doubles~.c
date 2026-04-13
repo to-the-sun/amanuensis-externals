@@ -16,6 +16,7 @@ typedef struct _doubles_worker_data {
     double ref_sr;
     double subj_sr;
     t_symbol *dest_buf_name;
+    double targetbias;
 } t_doubles_worker_data;
 
 typedef struct _doubles {
@@ -24,6 +25,7 @@ typedef struct _doubles {
     void *function_outlet;
     void *log_outlet;
     long log;
+    double targetbias;
 
     t_critical lock;
     t_systhread thread;
@@ -64,6 +66,11 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_DOUBLE(c, "targetbias", 0, t_doubles, targetbias);
+    CLASS_ATTR_LABEL(c, "targetbias", 0, "Target Bias");
+    CLASS_ATTR_DEFAULT(c, "targetbias", 0, "0.01");
+    CLASS_ATTR_SAVE(c, "targetbias", 0);
+
     class_register(CLASS_BOX, c);
     doubles_class = c;
     common_symbols_init();
@@ -74,6 +81,7 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
 
     if (x) {
         x->log = 0;
+        x->targetbias = 0.01;
         critical_new(&x->lock);
         x->qelem = qelem_new((t_object *)x, (method)doubles_qfn);
         x->thread = NULL;
@@ -195,6 +203,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     wd->ref_sr = sr;
     wd->subj_sr = buffer_getsamplerate(subj_obj);
     wd->dest_buf_name = dest_name;
+    wd->targetbias = x->targetbias;
 
     object_free(ref_ref);
     object_free(subj_ref);
@@ -346,7 +355,7 @@ void doubles_worker_thread(t_doubles *x) {
 
         float *dest_samples = (float *)sysmem_newptrclear(wd->ref_frames * sizeof(float));
         if (dest_samples) {
-            wsola_process(wd->ref_samples, wd->ref_frames, wd->subj_samples, wd->subj_frames, dest_samples, path, hop_size, win_size);
+            wsola_process(wd->ref_samples, wd->ref_frames, wd->subj_samples, wd->subj_frames, dest_samples, path, hop_size, win_size, wd->targetbias);
 
             critical_enter(x->lock);
             x->progress = 0.9;

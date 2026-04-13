@@ -357,7 +357,7 @@ double *dtw_path_to_mapping(t_dtw_path *path, int *out_mapping_len) {
     return mapping;
 }
 
-void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size) {
+void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples, long long subj_frames, float *dest_samples, t_dtw_path *path, int hop_size, int win_size, double target_bias) {
     int search_range = win_size / 2;
     float *win = (float *)malloc(win_size * sizeof(float));
     float *ola_norm = (float *)calloc(ref_frames, sizeof(float));
@@ -418,7 +418,7 @@ void wsola_process(float *ref_samples, long long ref_frames, float *subj_samples
                 }
 
                 double dist_to_target = (double)abs((int)(s - target_subj_pos)) / search_range;
-                corr = corr - 0.01 * dist_to_target * energy_s;
+                corr = corr - target_bias * dist_to_target * energy_s;
 
                 if (corr > max_corr) {
                     max_corr = corr;
