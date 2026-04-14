@@ -46,9 +46,19 @@
 				<arg name="reference_buffer" type="symbol" optional="0" />
 				<arg name="subject_buffer" type="symbol" optional="0" />
 				<arg name="destination_buffer" type="symbol" optional="0" />
+				<arg name="start_ms" type="number" optional="1" />
+				<arg name="end_ms" type="number" optional="1" />
 			</arglist>
 			<digest>Align subject to reference</digest>
-			<description>Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.</description>
+			<description>
+				Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
+				<br /><br />
+				Optional Arguments:
+				<br />• <b>start_ms</b>: The start time in milliseconds for the alignment span.
+				<br />• <b>end_ms</b>: The end time in milliseconds for the alignment span.
+				<br /><br />
+				If a span is specified, the alignment is only performed on that portion of the buffers. The destination buffer will still be sized to match the full reference buffer, with the areas outside the aligned span filled with silence.
+			</description>
 		</method>
 	</methodlist>
 

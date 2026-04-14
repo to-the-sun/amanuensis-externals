@@ -19,6 +19,8 @@ typedef struct _doubles_worker_data {
     double subj_sr;
     t_symbol *dest_buf_name;
     double targetbias;
+    long long full_ref_frames;
+    long long start_frame;
 } t_doubles_worker_data;
 
 typedef struct _doubles {
@@ -42,6 +44,8 @@ typedef struct _doubles {
     float **defer_samples;
     int defer_chans;
     long long defer_new_frames;
+    long long defer_full_ref_frames;
+    long long defer_start_frame;
     t_symbol *defer_dest_name;
 
     t_doubles_func_point *defer_func_points;
@@ -129,13 +133,16 @@ void doubles_free(t_doubles *x) {
 
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc < 3) {
-        object_error((t_object *)x, "align requires 3 arguments: [reference_buffer] [subject_buffer] [destination_buffer]");
+        object_error((t_object *)x, "align requires 3 arguments: [reference_buffer] [subject_buffer] [destination_buffer] (optional [start_ms] [end_ms])");
         return;
     }
 
     t_symbol *ref_name = atom_getsym(argv);
     t_symbol *subj_name = atom_getsym(argv + 1);
     t_symbol *dest_name = atom_getsym(argv + 2);
+
+    double start_ms = (argc >= 4) ? atom_getfloat(argv + 3) : 0.0;
+    double end_ms = (argc >= 5) ? atom_getfloat(argv + 4) : -1.0;
 
     t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, ref_name);
     t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, subj_name);
@@ -149,11 +156,26 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    long long ref_frames = buffer_getframecount(ref_obj);
-    long long subj_frames = buffer_getframecount(subj_obj);
+    long long full_ref_frames = buffer_getframecount(ref_obj);
+    long long full_subj_frames = buffer_getframecount(subj_obj);
+    double ref_sr = buffer_getsamplerate(ref_obj);
+    double subj_sr = buffer_getsamplerate(subj_obj);
+
+    long long ref_start = (long long)(start_ms * ref_sr / 1000.0);
+    long long ref_end = (end_ms < 0) ? full_ref_frames : (long long)(end_ms * ref_sr / 1000.0);
+    long long subj_start = (long long)(start_ms * subj_sr / 1000.0);
+    long long subj_end = (end_ms < 0) ? full_subj_frames : (long long)(end_ms * subj_sr / 1000.0);
+
+    if (ref_start < 0) ref_start = 0;
+    if (ref_end > full_ref_frames) ref_end = full_ref_frames;
+    if (subj_start < 0) subj_start = 0;
+    if (subj_end > full_subj_frames) subj_end = full_subj_frames;
+
+    long long ref_frames = ref_end - ref_start;
+    long long subj_frames = subj_end - subj_start;
 
     if (ref_frames < 1024 || subj_frames < 1024) {
-        object_error((t_object *)x, "Buffers must be at least 1024 samples long");
+        object_error((t_object *)x, "Analysis span must be at least 1024 samples long");
         object_free(ref_ref);
         object_free(subj_ref);
         return;
@@ -166,7 +188,6 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    double sr = buffer_getsamplerate(ref_obj);
     int ref_chans = (int)buffer_getchannelcount(ref_obj);
     int subj_chans = (int)buffer_getchannelcount(subj_obj);
 
@@ -211,7 +232,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     if (ref_ext) {
         for(long long i=0; i<ref_frames; i++) {
             for (int c = 0; c < ref_chans; c++) {
-                wd->ref_samples[c][i] = ref_ext[i * ref_chans + c];
+                wd->ref_samples[c][i] = ref_ext[(ref_start + i) * ref_chans + c];
             }
         }
         buffer_unlocksamples(ref_obj);
@@ -221,20 +242,40 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     if (subj_ext) {
         for(long long i=0; i<subj_frames; i++) {
             for (int c = 0; c < subj_chans; c++) {
-                wd->subj_samples[c][i] = subj_ext[i * subj_chans + c];
+                wd->subj_samples[c][i] = subj_ext[(subj_start + i) * subj_chans + c];
             }
         }
         buffer_unlocksamples(subj_obj);
     }
 
+    // Resize and clear destination buffer before background alignment
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
+    t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
+    if (dest_obj) {
+        int dest_chans = (int)buffer_getchannelcount(dest_obj);
+        t_atom av;
+        atom_setlong(&av, (t_atom_long)full_ref_frames);
+        object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
+
+        float *dest_ext = buffer_locksamples(dest_obj);
+        if (dest_ext) {
+            memset(dest_ext, 0, full_ref_frames * dest_chans * sizeof(float));
+            buffer_unlocksamples(dest_obj);
+            buffer_setdirty(dest_obj);
+        }
+    }
+    object_free(dest_ref);
+
     wd->ref_frames = ref_frames;
     wd->ref_chans = ref_chans;
     wd->subj_frames = subj_frames;
     wd->subj_chans = subj_chans;
-    wd->ref_sr = sr;
-    wd->subj_sr = buffer_getsamplerate(subj_obj);
+    wd->ref_sr = ref_sr;
+    wd->subj_sr = subj_sr;
     wd->dest_buf_name = dest_name;
     wd->targetbias = x->targetbias;
+    wd->full_ref_frames = full_ref_frames;
+    wd->start_frame = ref_start;
 
     object_free(ref_ref);
     object_free(subj_ref);
@@ -450,6 +491,8 @@ void doubles_worker_thread(t_doubles *x) {
             x->defer_samples = dest_samples;
             x->defer_chans = wd->subj_chans;
             x->defer_new_frames = wd->ref_frames;
+            x->defer_full_ref_frames = wd->full_ref_frames;
+            x->defer_start_frame = wd->start_frame;
             x->defer_dest_name = wd->dest_buf_name;
 
             // Identify inflection points in the DTW path for the function object
@@ -544,6 +587,8 @@ void doubles_qfn(t_doubles *x) {
     float **samples = x->defer_samples;
     int chans = x->defer_chans;
     long long frames = x->defer_new_frames;
+    long long full_ref_frames = x->defer_full_ref_frames;
+    long long start_frame = x->defer_start_frame;
     t_symbol *dest_name = x->defer_dest_name;
     t_doubles_func_point *fpoints = x->defer_func_points;
     int fp_count = x->defer_func_points_count;
@@ -562,16 +607,19 @@ void doubles_qfn(t_doubles *x) {
         if (dest_obj) {
             int dest_chans = (int)buffer_getchannelcount(dest_obj);
             t_atom av;
-            atom_setlong(&av, (t_atom_long)frames); // sizeinsamps message for buffer~ is per-channel
+            atom_setlong(&av, (t_atom_long)full_ref_frames); // sizeinsamps message for buffer~ is per-channel
             object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
 
             float *dest_ext = buffer_locksamples(dest_obj);
             if (dest_ext) {
                 for(long long i=0; i<frames; i++) {
-                    for(int c=0; c<dest_chans; c++) {
-                        // Use corresponding subject channel if available, otherwise fallback to first channel
-                        int src_c = (c < chans) ? c : 0;
-                        dest_ext[i * dest_chans + c] = samples[src_c][i];
+                    long long dest_idx = start_frame + i;
+                    if (dest_idx >= 0 && dest_idx < full_ref_frames) {
+                        for(int c=0; c<dest_chans; c++) {
+                            // Use corresponding subject channel if available, otherwise fallback to first channel
+                            int src_c = (c < chans) ? c : 0;
+                            dest_ext[dest_idx * dest_chans + c] = samples[src_c][i];
+                        }
                     }
                 }
                 buffer_unlocksamples(dest_obj);
@@ -629,7 +677,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest]' to start processing");
+        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (opt: start_ms, end_ms)' to start processing");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
