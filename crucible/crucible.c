@@ -43,6 +43,7 @@ void crucible_local_bar_length(t_crucible *x, double f);
 t_atom_long crucible_get_bar_length(t_crucible *x);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
 int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
+void crucible_recalculate_reaches(t_crucible *x);
 
 
 t_class *crucible_class;
@@ -715,6 +716,60 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
    return dest;
 }
 
+void crucible_recalculate_reaches(t_crucible *x) {
+    t_atom_long bar_length = crucible_get_bar_length(x);
+    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+    if (!incumbent_dict) return;
+
+    x->song_reach = 0;
+    dictionary_clear(x->track_reaches_dict);
+
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+
+    for (long i = 0; i < num_tracks; i++) {
+        t_symbol *track_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&track_dict);
+        if (!track_dict) continue;
+
+        t_atom_long track_max_reach = 0;
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        for (long j = 0; j < num_bars; j++) {
+            t_symbol *bar_sym = bar_keys[j];
+            t_dictionary *bar_dict = NULL;
+            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+            if (!bar_dict) continue;
+
+            t_atomarray *span_aa = crucible_get_span_as_atomarray(bar_dict);
+            if (span_aa) {
+                long span_len = 0;
+                t_atom *span_atoms = NULL;
+                atomarray_getatoms(span_aa, &span_len, &span_atoms);
+                t_atom_long local_max_val = 0;
+                for (long k = 0; k < span_len; k++) {
+                    t_atom_long ts_val = atom_getlong(span_atoms + k);
+                    if (ts_val > local_max_val) local_max_val = ts_val;
+                }
+                t_atom_long current_reach = local_max_val + bar_length;
+                if (current_reach > track_max_reach) track_max_reach = current_reach;
+                object_release((t_object *)span_aa);
+            }
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+
+        dictionary_appendlong(x->track_reaches_dict, track_sym, track_max_reach);
+        if (track_max_reach > x->song_reach) x->song_reach = track_max_reach;
+    }
+
+    if (track_keys) sysmem_freeptr(track_keys);
+    dictobj_release(incumbent_dict);
+}
+
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)crucible_anything, s, argc, argv);
@@ -743,6 +798,13 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (s == gensym("reaches")) {
+        // Mandatory kick
+        t_symbol *tmp = x->incumbent_dict_name;
+        x->incumbent_dict_name = _sym_nothing;
+        x->incumbent_dict_name = tmp;
+
+        crucible_recalculate_reaches(x);
+
         if (x->outlet_reach_int) {
             t_atom song_reach_atom;
             atom_setlong(&song_reach_atom, x->song_reach);
