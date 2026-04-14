@@ -9,9 +9,11 @@
 #include <math.h>
 
 typedef struct _doubles_worker_data {
-    float *ref_samples;
+    float **ref_samples;
+    int ref_chans;
     long long ref_frames;
-    float *subj_samples;
+    float **subj_samples;
+    int subj_chans;
     long long subj_frames;
     double ref_sr;
     double subj_sr;
@@ -37,7 +39,8 @@ typedef struct _doubles {
     char last_error[256];
 
     // For deferring results to main thread
-    float *defer_samples;
+    float **defer_samples;
+    int defer_chans;
     long long defer_new_frames;
     t_symbol *defer_dest_name;
 
@@ -113,6 +116,9 @@ void doubles_free(t_doubles *x) {
         x->qelem = NULL;
     }
     if (x->defer_samples) {
+        for (int i = 0; i < x->defer_chans; i++) {
+            if (x->defer_samples[i]) sysmem_freeptr(x->defer_samples[i]);
+        }
         sysmem_freeptr(x->defer_samples);
     }
     if (x->defer_func_points) {
@@ -161,6 +167,8 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     double sr = buffer_getsamplerate(ref_obj);
+    int ref_chans = (int)buffer_getchannelcount(ref_obj);
+    int subj_chans = (int)buffer_getchannelcount(subj_obj);
 
     t_doubles_worker_data *wd = (t_doubles_worker_data *)sysmem_newptrclear(sizeof(t_doubles_worker_data));
     if (!wd) {
@@ -171,10 +179,10 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    wd->ref_samples = (float *)sysmem_newptr(ref_frames * sizeof(float));
-    wd->subj_samples = (float *)sysmem_newptr(subj_frames * sizeof(float));
+    wd->ref_samples = (float **)sysmem_newptrclear(ref_chans * sizeof(float *));
+    wd->subj_samples = (float **)sysmem_newptrclear(subj_chans * sizeof(float *));
     if (!wd->ref_samples || !wd->subj_samples) {
-        object_error((t_object *)x, "Memory allocation failed for audio samples");
+        object_error((t_object *)x, "Memory allocation failed for audio channel pointers");
         if (wd->ref_samples) sysmem_freeptr(wd->ref_samples);
         if (wd->subj_samples) sysmem_freeptr(wd->subj_samples);
         sysmem_freeptr(wd);
@@ -184,22 +192,45 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
+    for (int c = 0; c < ref_chans; c++) {
+        wd->ref_samples[c] = (float *)sysmem_newptr(ref_frames * sizeof(float));
+        if (!wd->ref_samples[c]) {
+            object_error((t_object *)x, "Memory allocation failed for ref channel %d", c);
+            goto align_mem_err;
+        }
+    }
+    for (int c = 0; c < subj_chans; c++) {
+        wd->subj_samples[c] = (float *)sysmem_newptr(subj_frames * sizeof(float));
+        if (!wd->subj_samples[c]) {
+            object_error((t_object *)x, "Memory allocation failed for subj channel %d", c);
+            goto align_mem_err;
+        }
+    }
+
     float *ref_ext = buffer_locksamples(ref_obj);
     if (ref_ext) {
-        long chans = buffer_getchannelcount(ref_obj);
-        for(long long i=0; i<ref_frames; i++) wd->ref_samples[i] = ref_ext[i * chans];
+        for(long long i=0; i<ref_frames; i++) {
+            for (int c = 0; c < ref_chans; c++) {
+                wd->ref_samples[c][i] = ref_ext[i * ref_chans + c];
+            }
+        }
         buffer_unlocksamples(ref_obj);
     }
 
     float *subj_ext = buffer_locksamples(subj_obj);
     if (subj_ext) {
-        long chans = buffer_getchannelcount(subj_obj);
-        for(long long i=0; i<subj_frames; i++) wd->subj_samples[i] = subj_ext[i * chans];
+        for(long long i=0; i<subj_frames; i++) {
+            for (int c = 0; c < subj_chans; c++) {
+                wd->subj_samples[c][i] = subj_ext[i * subj_chans + c];
+            }
+        }
         buffer_unlocksamples(subj_obj);
     }
 
     wd->ref_frames = ref_frames;
+    wd->ref_chans = ref_chans;
     wd->subj_frames = subj_frames;
+    wd->subj_chans = subj_chans;
     wd->ref_sr = sr;
     wd->subj_sr = buffer_getsamplerate(subj_obj);
     wd->dest_buf_name = dest_name;
@@ -214,6 +245,23 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     x->current_wd = wd;
 
     systhread_create((method)doubles_worker_thread, x, 0, 0, 0, &x->thread);
+    critical_exit(x->lock);
+    return;
+
+align_mem_err:
+    if (wd->ref_samples) {
+        for (int c = 0; c < ref_chans; c++) if (wd->ref_samples[c]) sysmem_freeptr(wd->ref_samples[c]);
+        sysmem_freeptr(wd->ref_samples);
+    }
+    if (wd->subj_samples) {
+        for (int c = 0; c < subj_chans; c++) if (wd->subj_samples[c]) sysmem_freeptr(wd->subj_samples[c]);
+        sysmem_freeptr(wd->subj_samples);
+    }
+    sysmem_freeptr(wd);
+    object_free(ref_ref);
+    object_free(subj_ref);
+
+    x->is_busy = 0;
     critical_exit(x->lock);
 }
 
@@ -243,6 +291,9 @@ void doubles_worker_thread(t_doubles *x) {
     double **ref_mfccs = (double **)malloc(ref_mfcc_len * sizeof(double *));
     double **subj_mfccs = (double **)malloc(subj_mfcc_len * sizeof(double *));
 
+    if (ref_mfccs) for (int i = 0; i < ref_mfcc_len; i++) ref_mfccs[i] = NULL;
+    if (subj_mfccs) for (int i = 0; i < subj_mfcc_len; i++) subj_mfccs[i] = NULL;
+
     if (!mfb_ref || !mfb_subj || !ref_mfccs || !subj_mfccs) {
         critical_enter(x->lock);
         snprintf(x->last_error, 256, "Memory allocation failed in background thread");
@@ -257,12 +308,25 @@ void doubles_worker_thread(t_doubles *x) {
 
     for (int i = 0; i < ref_mfcc_len; i++) {
         ref_mfccs[i] = (double *)malloc(num_ceps * sizeof(double));
-        if (!ref_mfccs[i]) break;
+        if (!ref_mfccs[i]) {
+            critical_enter(x->lock);
+            snprintf(x->last_error, 256, "Memory allocation failed for ref_mfccs[%d]", i);
+            x->progress = 1.0;
+            critical_exit(x->lock);
+            goto cleanup;
+        }
         double *segment = (double *)malloc(win_size * sizeof(double));
         if (segment) {
-            for(int j=0; j<win_size; j++) segment[j] = wd->ref_samples[i * hop_size + j];
+            // MFCC uses first channel for analysis
+            for(int j=0; j<win_size; j++) segment[j] = wd->ref_samples[0][i * hop_size + j];
             calculate_mfcc(segment, win_size, fft_size, mfb_ref, num_ceps, ref_mfccs[i]);
             free(segment);
+        } else {
+            critical_enter(x->lock);
+            snprintf(x->last_error, 256, "Memory allocation failed for ref segment %d", i);
+            x->progress = 1.0;
+            critical_exit(x->lock);
+            goto cleanup;
         }
 
         if (i % 100 == 0) {
@@ -275,12 +339,25 @@ void doubles_worker_thread(t_doubles *x) {
 
     for (int i = 0; i < subj_mfcc_len; i++) {
         subj_mfccs[i] = (double *)malloc(num_ceps * sizeof(double));
-        if (!subj_mfccs[i]) break;
+        if (!subj_mfccs[i]) {
+            critical_enter(x->lock);
+            snprintf(x->last_error, 256, "Memory allocation failed for subj_mfccs[%d]", i);
+            x->progress = 1.0;
+            critical_exit(x->lock);
+            goto cleanup;
+        }
         double *segment = (double *)malloc(win_size * sizeof(double));
         if (segment) {
-            for(int j=0; j<win_size; j++) segment[j] = wd->subj_samples[i * hop_size + j];
+            // MFCC uses first channel for analysis
+            for(int j=0; j<win_size; j++) segment[j] = wd->subj_samples[0][i * hop_size + j];
             calculate_mfcc(segment, win_size, fft_size, mfb_subj, num_ceps, subj_mfccs[i]);
             free(segment);
+        } else {
+            critical_enter(x->lock);
+            snprintf(x->last_error, 256, "Memory allocation failed for subj segment %d", i);
+            x->progress = 1.0;
+            critical_exit(x->lock);
+            goto cleanup;
         }
 
         if (i % 100 == 0) {
@@ -299,8 +376,8 @@ void doubles_worker_thread(t_doubles *x) {
     double *ref_transients = (double *)calloc(ref_mfcc_len, sizeof(double));
     double *subj_transients = (double *)calloc(subj_mfcc_len, sizeof(double));
     if (ref_transients && subj_transients) {
-        detect_transients(wd->ref_samples, wd->ref_frames, win_size, hop_size, ref_transients);
-        detect_transients(wd->subj_samples, wd->subj_frames, win_size, hop_size, subj_transients);
+        detect_transients(wd->ref_samples[0], wd->ref_frames, win_size, hop_size, ref_transients);
+        detect_transients(wd->subj_samples[0], wd->subj_frames, win_size, hop_size, subj_transients);
     }
 
     t_dtw_path *path = dtw_calculate(ref_mfccs, ref_mfcc_len, subj_mfccs, subj_mfcc_len, num_ceps, ref_transients, subj_transients);
@@ -353,13 +430,25 @@ void doubles_worker_thread(t_doubles *x) {
             critical_exit(x->lock);
         }
 
-        float *dest_samples = (float *)sysmem_newptrclear(wd->ref_frames * sizeof(float));
-        if (dest_samples) {
-            wsola_process(wd->ref_samples, wd->ref_frames, wd->subj_samples, wd->subj_frames, dest_samples, path, hop_size, win_size, wd->targetbias);
+        float **dest_samples = (float **)sysmem_newptrclear(wd->subj_chans * sizeof(float *));
+        bool alloc_ok = (dest_samples != NULL);
+        if (alloc_ok) {
+            for (int c = 0; c < wd->subj_chans; c++) {
+                dest_samples[c] = (float *)sysmem_newptrclear(wd->ref_frames * sizeof(float));
+                if (!dest_samples[c]) {
+                    alloc_ok = false;
+                    break;
+                }
+            }
+        }
+
+        if (alloc_ok) {
+            wsola_process(wd->ref_samples, wd->ref_chans, wd->ref_frames, wd->subj_samples, wd->subj_chans, wd->subj_frames, dest_samples, path, hop_size, win_size, wd->targetbias);
 
             critical_enter(x->lock);
             x->progress = 0.9;
             x->defer_samples = dest_samples;
+            x->defer_chans = wd->subj_chans;
             x->defer_new_frames = wd->ref_frames;
             x->defer_dest_name = wd->dest_buf_name;
 
@@ -398,6 +487,14 @@ void doubles_worker_thread(t_doubles *x) {
             snprintf(x->last_error, 256, "Synthesis memory allocation failed");
             x->progress = 1.0;
             critical_exit(x->lock);
+
+            // Cleanup partial allocations
+            if (dest_samples) {
+                for (int c = 0; c < wd->subj_chans; c++) {
+                    if (dest_samples[c]) sysmem_freeptr(dest_samples[c]);
+                }
+                sysmem_freeptr(dest_samples);
+            }
         }
         if (mapping) free(mapping);
         dtw_path_free(path);
@@ -424,8 +521,14 @@ void doubles_worker_thread(t_doubles *x) {
 
 cleanup:
     if (wd) {
-        sysmem_freeptr(wd->ref_samples);
-        sysmem_freeptr(wd->subj_samples);
+        if (wd->ref_samples) {
+            for (int c = 0; c < wd->ref_chans; c++) if (wd->ref_samples[c]) sysmem_freeptr(wd->ref_samples[c]);
+            sysmem_freeptr(wd->ref_samples);
+        }
+        if (wd->subj_samples) {
+            for (int c = 0; c < wd->subj_chans; c++) if (wd->subj_samples[c]) sysmem_freeptr(wd->subj_samples[c]);
+            sysmem_freeptr(wd->subj_samples);
+        }
         sysmem_freeptr(wd);
         x->current_wd = NULL;
     }
@@ -438,7 +541,8 @@ void doubles_qfn(t_doubles *x) {
     double p = x->progress;
     char err[256];
     strncpy(err, x->last_error, 256);
-    float *samples = x->defer_samples;
+    float **samples = x->defer_samples;
+    int chans = x->defer_chans;
     long long frames = x->defer_new_frames;
     t_symbol *dest_name = x->defer_dest_name;
     t_doubles_func_point *fpoints = x->defer_func_points;
@@ -456,16 +560,18 @@ void doubles_qfn(t_doubles *x) {
         t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
         t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
         if (dest_obj) {
+            int dest_chans = (int)buffer_getchannelcount(dest_obj);
             t_atom av;
-            atom_setlong(&av, (t_atom_long)(frames * buffer_getchannelcount(dest_obj)));
+            atom_setlong(&av, (t_atom_long)frames); // sizeinsamps message for buffer~ is per-channel
             object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
 
             float *dest_ext = buffer_locksamples(dest_obj);
             if (dest_ext) {
-                long chans = buffer_getchannelcount(dest_obj);
                 for(long long i=0; i<frames; i++) {
-                    for(long c=0; c<chans; c++) {
-                        dest_ext[i * chans + c] = samples[i];
+                    for(int c=0; c<dest_chans; c++) {
+                        // Use corresponding subject channel if available, otherwise fallback to first channel
+                        int src_c = (c < chans) ? c : 0;
+                        dest_ext[i * dest_chans + c] = samples[src_c][i];
                     }
                 }
                 buffer_unlocksamples(dest_obj);
@@ -475,8 +581,12 @@ void doubles_qfn(t_doubles *x) {
         object_free(dest_ref);
 
         critical_enter(x->lock);
+        for (int i = 0; i < x->defer_chans; i++) {
+            if (x->defer_samples[i]) sysmem_freeptr(x->defer_samples[i]);
+        }
         sysmem_freeptr(x->defer_samples);
         x->defer_samples = NULL;
+        x->defer_chans = 0;
         critical_exit(x->lock);
     }
 
