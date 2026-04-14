@@ -51,13 +51,13 @@
 			</arglist>
 			<digest>Align subject to reference</digest>
 			<description>
-				Triggers the background alignment process. The destination buffer will be resized to match the reference buffer's length. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
+				Triggers the background alignment process. The destination buffer will be resized and cleared to match the reference buffer's length if its current length is different. If the destination buffer is already the correct length, it will not be cleared, allowing data from previous alignment operations with different spans to be retained. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
 				<br /><br />
 				Optional Arguments:
 				<br />• <b>start_ms</b>: The start time in milliseconds for the alignment span.
 				<br />• <b>end_ms</b>: The end time in milliseconds for the alignment span.
 				<br /><br />
-				If a span is specified, the alignment is only performed on that portion of the buffers. The destination buffer will still be sized to match the full reference buffer, with the areas outside the aligned span filled with silence.
+				If a span is specified, the alignment is only performed on that portion of the buffers. The destination buffer will match the full reference buffer length, with the areas outside the aligned span either remaining as they were (if the buffer was already the correct length) or filled with silence (if the buffer was resized).
 			</description>
 		</method>
 	</methodlist>
