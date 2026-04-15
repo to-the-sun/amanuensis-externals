@@ -60,6 +60,17 @@
 				If a span is specified, the alignment is only performed on that portion of the buffers. The destination buffer will match the full reference buffer length, with the areas outside the aligned span either remaining as they were (if the buffer was already the correct length) or filled with silence (if the buffer was resized).
 			</description>
 		</method>
+		<method name="export">
+			<arglist>
+				<arg name="project_path" type="symbol" optional="0" />
+			</arglist>
+			<digest>Export processed buffer to disk</digest>
+			<description>
+				Writes the contents of the last used destination buffer to disk. The export location is constructed as: [project_path]/Samples/Processed/Consolidate/[filename].
+				<br /><br />
+				The filename is determined by looking up the destination buffer name in a <o>coll</o> object named 'stems_info'. The retrieved filename is modified by inserting " (doubles) " before the timestamp and updating the timestamp to the current time in [YYYY-MM-DD HHMMSS] format.
+			</description>
+		</method>
 	</methodlist>
 
 	<!-- ATTRIBUTES -->
