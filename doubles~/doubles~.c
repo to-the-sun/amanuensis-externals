@@ -3,6 +3,7 @@
 #include "ext_buffer.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
+#include "ext_dictobj.h"
 #include "doubles_dsp.h"
 #include "../shared/logging.h"
 #include <string.h>
@@ -54,6 +55,7 @@ typedef struct _doubles {
 
     t_doubles_worker_data *current_wd;
     t_symbol *last_dest_name;
+    t_symbol *last_subj_name;
 } t_doubles;
 
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
@@ -142,48 +144,43 @@ void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    if (x->last_dest_name == _sym_nothing) {
-        object_error((t_object *)x, "no destination buffer available for export (run 'align' first)");
+    if (x->last_dest_name == _sym_nothing || x->last_subj_name == _sym_nothing) {
+        object_error((t_object *)x, "no destination or subject buffer information available for export (run 'align' first)");
         return;
     }
 
     t_symbol *project_path = atom_getsym(argv);
-    t_object *coll = (t_object *)object_findregistered(gensym("nobox"), gensym("stems_info"));
-    if (!coll) {
-        object_error((t_object *)x, "could not find coll named 'stems_info'");
+    t_dictionary *dict = dictobj_findregistered_retain(gensym("stems"));
+    if (!dict) {
+        object_error((t_object *)x, "could not find dictionary named 'stems'");
         return;
     }
 
     char found_filename[1024] = {0};
     bool found = false;
+    long numkeys = 0;
+    t_symbol **keys = NULL;
 
-    // We need to find the entry where the first element of the list matches x->last_dest_name.
-    // In the Max C API, calling the 'nth' method of a coll object can return a pointer to its data.
-    for (int i = 1; i <= 2048; i++) {
-        t_atom *atoms = (t_atom *)object_method(coll, gensym("nth"), i);
-        if (atoms) {
-            // Index 0 is the buffer name, Index 1 is the actual filename.
-            if (atom_gettype(atoms) == A_SYM && atom_getsym(atoms) == x->last_dest_name) {
-                if (atom_gettype(atoms + 1) == A_SYM) {
-                    strncpy(found_filename, atom_getsym(atoms + 1)->s_name, 1023);
-                    found = true;
-                    break;
+    if (dictionary_getkeys(dict, &numkeys, &keys) == MAX_ERR_NONE) {
+        for (long i = 0; i < numkeys; i++) {
+            long entry_ac = 0;
+            t_atom *entry_av = NULL;
+            if (dictionary_getatoms(dict, keys[i], &entry_ac, &entry_av) == MAX_ERR_NONE) {
+                if (entry_ac >= 2 && atom_gettype(entry_av) == A_SYM && atom_getsym(entry_av) == x->last_subj_name) {
+                    if (atom_gettype(entry_av + 1) == A_SYM) {
+                        strncpy(found_filename, atom_getsym(entry_av + 1)->s_name, 1023);
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
+        dictionary_freekeys(dict, numkeys, keys);
     }
-
-    // Fallback: search by key if buffer names are keys
-    if (!found) {
-        t_atom *atoms = (t_atom *)object_method(coll, gensym("sub"), x->last_dest_name);
-        if (atoms && atom_gettype(atoms) == A_SYM) {
-            strncpy(found_filename, atom_getsym(atoms)->s_name, 1023);
-            found = true;
-        }
-    }
+    dictobj_release(dict);
 
     if (!found) {
-        object_error((t_object *)x, "could not find entry for buffer '%s' in coll 'stems_info'", x->last_dest_name->s_name);
+        object_error((t_object *)x, "could not find entry for subject buffer '%s' in dict 'stems'", x->last_subj_name->s_name);
         return;
     }
 
