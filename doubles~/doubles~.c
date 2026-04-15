@@ -7,6 +7,7 @@
 #include "../shared/logging.h"
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 typedef struct _doubles_worker_data {
     float **ref_samples;
@@ -52,12 +53,14 @@ typedef struct _doubles {
     int defer_func_points_count;
 
     t_doubles_worker_data *current_wd;
+    t_symbol *last_dest_name;
 } t_doubles;
 
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
 void doubles_free(t_doubles *x);
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s);
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
+void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
 void doubles_worker_thread(t_doubles *x);
 void doubles_qfn(t_doubles *x);
 
@@ -67,6 +70,7 @@ void ext_main(void *r) {
     t_class *c = class_new("doubles~", (method)doubles_new, (method)doubles_free, sizeof(t_doubles), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)doubles_align, "align", A_GIMME, 0);
+    class_addmethod(c, (method)doubles_export, "export", A_GIMME, 0);
     class_addmethod(c, (method)doubles_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_doubles, log);
@@ -99,6 +103,7 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
         x->defer_func_points = NULL;
         x->defer_func_points_count = 0;
         x->current_wd = NULL;
+        x->last_dest_name = _sym_nothing;
 
         attr_args_process(x, argc, argv);
 
@@ -129,6 +134,117 @@ void doubles_free(t_doubles *x) {
         free(x->defer_func_points);
     }
     critical_free(x->lock);
+}
+
+void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc < 1) {
+        object_error((t_object *)x, "export message requires a project path argument");
+        return;
+    }
+
+    if (x->last_dest_name == _sym_nothing) {
+        object_error((t_object *)x, "no destination buffer available for export (run 'align' first)");
+        return;
+    }
+
+    t_symbol *project_path = atom_getsym(argv);
+    t_object *coll = (t_object *)object_findregistered(gensym("nobox"), gensym("stems_info"));
+    if (!coll) {
+        object_error((t_object *)x, "could not find coll named 'stems_info'");
+        return;
+    }
+
+    char found_filename[1024] = {0};
+    bool found = false;
+
+    // We need to find the entry where the first element of the list matches x->last_dest_name.
+    // In the Max C API, calling the 'nth' method of a coll object can return a pointer to its data.
+    for (int i = 1; i <= 2048; i++) {
+        t_atom *atoms = (t_atom *)object_method(coll, gensym("nth"), i);
+        if (atoms) {
+            // Index 0 is the buffer name, Index 1 is the actual filename.
+            if (atom_gettype(atoms) == A_SYM && atom_getsym(atoms) == x->last_dest_name) {
+                if (atom_gettype(atoms + 1) == A_SYM) {
+                    strncpy(found_filename, atom_getsym(atoms + 1)->s_name, 1023);
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fallback: search by key if buffer names are keys
+    if (!found) {
+        t_atom *atoms = (t_atom *)object_method(coll, gensym("sub"), x->last_dest_name);
+        if (atoms && atom_gettype(atoms) == A_SYM) {
+            strncpy(found_filename, atom_getsym(atoms)->s_name, 1023);
+            found = true;
+        }
+    }
+
+    if (!found) {
+        object_error((t_object *)x, "could not find entry for buffer '%s' in coll 'stems_info'", x->last_dest_name->s_name);
+        return;
+    }
+
+    // Filename modification logic
+    // Format: name [timestamp].ext -> name (doubles) [new_timestamp].ext
+    char modified_name[1024];
+    char *bracket_start = strrchr(found_filename, '[');
+    char *bracket_end = strrchr(found_filename, ']');
+
+    time_t t = time(NULL);
+    struct tm *tm_info = localtime(&t);
+    char timestamp[64];
+    strftime(timestamp, 64, "%Y-%m-%d %H%M%S", tm_info);
+
+    if (bracket_start && bracket_end && bracket_end > bracket_start) {
+        // Part 1: everything before [
+        size_t part1_len = bracket_start - found_filename;
+        while (part1_len > 0 && found_filename[part1_len - 1] == ' ') part1_len--;
+
+        char part1[1024];
+        strncpy(part1, found_filename, part1_len);
+        part1[part1_len] = '\0';
+
+        // Part 2: everything after ]
+        const char *part2 = bracket_end + 1;
+
+        snprintf(modified_name, 1024, "%s (doubles) [%s]%s", part1, timestamp, part2);
+    } else {
+        // Fallback: insert before extension or at the end
+        char *dot = strrchr(found_filename, '.');
+        if (dot) {
+            size_t base_len = dot - found_filename;
+            char base[1024];
+            strncpy(base, found_filename, base_len);
+            base[base_len] = '\0';
+            snprintf(modified_name, 1024, "%s (doubles) [%s]%s", base, timestamp, dot);
+        } else {
+            snprintf(modified_name, 1024, "%s (doubles) [%s]", found_filename, timestamp);
+        }
+    }
+
+    // Construct full export path
+    char full_path[2048];
+    const char *pp = project_path->s_name;
+    size_t pp_len = strlen(pp);
+    snprintf(full_path, 2048, "%s%sSamples/Processed/Consolidate/%s",
+             pp, (pp_len > 0 && (pp[pp_len-1] == '/' || pp[pp_len-1] == '\\')) ? "" : "/",
+             modified_name);
+
+    // Write destination buffer to disk
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, x->last_dest_name);
+    t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
+    if (dest_obj) {
+        t_atom path_atom;
+        atom_setsym(&path_atom, gensym(full_path));
+        object_method_typed(dest_obj, gensym("write"), 1, &path_atom, NULL);
+        object_post((t_object *)x, "exported buffer '%s' to: %s", x->last_dest_name->s_name, full_path);
+    } else {
+        object_error((t_object *)x, "destination buffer '%s' not found for export", x->last_dest_name->s_name);
+    }
+    object_free(dest_ref);
 }
 
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
@@ -286,6 +402,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     x->progress = 0.0;
     x->last_error[0] = '\0';
     x->current_wd = wd;
+    x->last_dest_name = dest_name;
 
     systhread_create((method)doubles_worker_thread, x, 0, 0, 0, &x->thread);
     critical_exit(x->lock);
@@ -680,7 +797,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest] (opt: start_ms, end_ms)' to start processing");
+        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest]' or 'export [project_path]'");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
