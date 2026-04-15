@@ -97,7 +97,7 @@
 	<attributelist>
 		<attribute name="log" type="long" size="1">
 			<digest>Enable Logging</digest>
-			<description>Enable or disable detailed diagnostic logging to the second outlet.</description>
+			<description>Enable or disable detailed diagnostic logging to the third outlet (Index 2). When enabled, the object will post status updates regarding buffer settings and alignment progress.</description>
 		</attribute>
 		<attribute name="targetbias" type="double" size="1">
 			<digest>Target Bias</digest>

@@ -88,6 +88,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_doubles, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_SAVE(c, "log", 0);
 
     CLASS_ATTR_DOUBLE(c, "targetbias", 0, t_doubles, targetbias);
     CLASS_ATTR_LABEL(c, "targetbias", 0, "Target Bias");
@@ -288,14 +289,17 @@ void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
 
 void doubles_reference(t_doubles *x, t_symbol *s) {
     x->ref_name = s;
+    common_log(x->log_outlet, x->log, "doubles~", "reference buffer set to '%s'", s->s_name);
 }
 
 void doubles_subject(t_doubles *x, t_symbol *s) {
     x->subj_name = s;
+    common_log(x->log_outlet, x->log, "doubles~", "subject buffer set to '%s'", s->s_name);
 }
 
 void doubles_destination(t_doubles *x, t_symbol *s) {
     x->dest_name = s;
+    common_log(x->log_outlet, x->log, "doubles~", "destination buffer set to '%s'", s->s_name);
 }
 
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
@@ -340,6 +344,8 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
 
     long long ref_frames = ref_end - ref_start;
     long long subj_frames = subj_end - subj_start;
+
+    common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", subj_name->s_name, ref_name->s_name, start_ms, end_ms);
 
     if (ref_frames < 1024 || subj_frames < 1024) {
         object_error((t_object *)x, "Analysis span must be at least 1024 samples long");
@@ -831,6 +837,8 @@ void doubles_qfn(t_doubles *x) {
     outlet_float(x->status_outlet, (float)p);
 
     if (p >= 1.0) {
+        common_log(x->log_outlet, x->log, "doubles~", "alignment complete for destination buffer '%s'", dest_name ? dest_name->s_name : "unknown");
+
         critical_enter(x->lock);
         x->is_busy = 0;
         if (x->thread) {
