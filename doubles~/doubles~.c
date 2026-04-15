@@ -56,11 +56,18 @@ typedef struct _doubles {
     t_doubles_worker_data *current_wd;
     t_symbol *last_dest_name;
     t_symbol *last_subj_name;
+
+    t_symbol *ref_name;
+    t_symbol *subj_name;
+    t_symbol *dest_name;
 } t_doubles;
 
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
 void doubles_free(t_doubles *x);
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s);
+void doubles_reference(t_doubles *x, t_symbol *s);
+void doubles_subject(t_doubles *x, t_symbol *s);
+void doubles_destination(t_doubles *x, t_symbol *s);
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
 void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
 void doubles_worker_thread(t_doubles *x);
@@ -71,6 +78,9 @@ static t_class *doubles_class;
 void ext_main(void *r) {
     t_class *c = class_new("doubles~", (method)doubles_new, (method)doubles_free, sizeof(t_doubles), 0L, A_GIMME, 0);
 
+    class_addmethod(c, (method)doubles_reference, "reference", A_SYM, 0);
+    class_addmethod(c, (method)doubles_subject, "subject", A_SYM, 0);
+    class_addmethod(c, (method)doubles_destination, "destination", A_SYM, 0);
     class_addmethod(c, (method)doubles_align, "align", A_GIMME, 0);
     class_addmethod(c, (method)doubles_export, "export", A_GIMME, 0);
     class_addmethod(c, (method)doubles_assist, "assist", A_CANT, 0);
@@ -107,6 +117,9 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_wd = NULL;
         x->last_dest_name = _sym_nothing;
         x->last_subj_name = _sym_nothing;
+        x->ref_name = _sym_nothing;
+        x->subj_name = _sym_nothing;
+        x->dest_name = _sym_nothing;
 
         attr_args_process(x, argc, argv);
 
@@ -273,18 +286,30 @@ void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     }
 }
 
+void doubles_reference(t_doubles *x, t_symbol *s) {
+    x->ref_name = s;
+}
+
+void doubles_subject(t_doubles *x, t_symbol *s) {
+    x->subj_name = s;
+}
+
+void doubles_destination(t_doubles *x, t_symbol *s) {
+    x->dest_name = s;
+}
+
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
-    if (argc < 3) {
-        object_error((t_object *)x, "align requires 3 arguments: [reference_buffer] [subject_buffer] [destination_buffer] (optional [start_ms] [end_ms])");
+    t_symbol *ref_name = x->ref_name;
+    t_symbol *subj_name = x->subj_name;
+    t_symbol *dest_name = x->dest_name;
+
+    if (ref_name == _sym_nothing || subj_name == _sym_nothing || dest_name == _sym_nothing) {
+        object_error((t_object *)x, "align requires reference, subject, and destination buffers to be set first");
         return;
     }
 
-    t_symbol *ref_name = atom_getsym(argv);
-    t_symbol *subj_name = atom_getsym(argv + 1);
-    t_symbol *dest_name = atom_getsym(argv + 2);
-
-    double start_ms = (argc >= 4) ? atom_getfloat(argv + 3) : 0.0;
-    double end_ms = (argc >= 5) ? atom_getfloat(argv + 4) : -1.0;
+    double start_ms = (argc >= 1) ? atom_getfloat(argv) : 0.0;
+    double end_ms = (argc >= 2) ? atom_getfloat(argv + 1) : -1.0;
 
     t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, ref_name);
     t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, subj_name);
@@ -824,7 +849,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'align [ref] [subj] [dest]' or 'export [project_path]'");
+        sprintf(s, "Inlet 1 (anything): 'reference [buf]', 'subject [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', or 'export [path]'");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
