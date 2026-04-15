@@ -252,16 +252,18 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
     t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
     if (dest_obj) {
-        int dest_chans = (int)buffer_getchannelcount(dest_obj);
-        t_atom av;
-        atom_setlong(&av, (t_atom_long)full_ref_frames);
-        object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
+        if (buffer_getframecount(dest_obj) != full_ref_frames) {
+            int dest_chans = (int)buffer_getchannelcount(dest_obj);
+            t_atom av;
+            atom_setlong(&av, (t_atom_long)full_ref_frames);
+            object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
 
-        float *dest_ext = buffer_locksamples(dest_obj);
-        if (dest_ext) {
-            memset(dest_ext, 0, full_ref_frames * dest_chans * sizeof(float));
-            buffer_unlocksamples(dest_obj);
-            buffer_setdirty(dest_obj);
+            float *dest_ext = buffer_locksamples(dest_obj);
+            if (dest_ext) {
+                memset(dest_ext, 0, full_ref_frames * dest_chans * sizeof(float));
+                buffer_unlocksamples(dest_obj);
+                buffer_setdirty(dest_obj);
+            }
         }
     }
     object_free(dest_ref);
@@ -605,11 +607,12 @@ void doubles_qfn(t_doubles *x) {
         t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
         t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
         if (dest_obj) {
+            if (buffer_getframecount(dest_obj) != full_ref_frames) {
+                t_atom av;
+                atom_setlong(&av, (t_atom_long)full_ref_frames); // sizeinsamps message for buffer~ is per-channel
+                object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
+            }
             int dest_chans = (int)buffer_getchannelcount(dest_obj);
-            t_atom av;
-            atom_setlong(&av, (t_atom_long)full_ref_frames); // sizeinsamps message for buffer~ is per-channel
-            object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
-
             float *dest_ext = buffer_locksamples(dest_obj);
             if (dest_ext) {
                 for(long long i=0; i<frames; i++) {
