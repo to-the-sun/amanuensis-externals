@@ -80,6 +80,12 @@
 				If a span is specified, the alignment is only performed on that portion of the buffers. The destination buffer will match the full reference buffer length, with the areas outside the aligned span either remaining as they were (if the buffer was already the correct length) or filled with silence (if the buffer was resized).
 			</description>
 		</method>
+		<method name="undo">
+			<digest>Undo the last alignment operation</digest>
+			<description>
+				Restores the destination buffer to its state prior to the most recent <m>align</m> operation. This includes reverting any resizing that occurred during that operation. Only one level of undo is supported.
+			</description>
+		</method>
 		<method name="export">
 			<arglist>
 				<arg name="project_path" type="symbol" optional="0" />
