@@ -60,6 +60,15 @@ typedef struct _doubles {
     t_symbol *ref_name;
     t_symbol *subj_name;
     t_symbol *dest_name;
+
+    // Undo state
+    t_symbol *undo_dest_name;
+    float **undo_samples;
+    int undo_chans;
+    long long undo_frames;
+    long long undo_start_frame;
+    long long undo_original_full_frames;
+    long undo_active;
 } t_doubles;
 
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
@@ -68,6 +77,9 @@ void doubles_assist(t_doubles *x, void *b, long m, long a, char *s);
 void doubles_reference(t_doubles *x, t_symbol *s);
 void doubles_subject(t_doubles *x, t_symbol *s);
 void doubles_destination(t_doubles *x, t_symbol *s);
+void doubles_clear_undo(t_doubles *x);
+void doubles_save_undo(t_doubles *x, t_symbol *dest_name, long long start_frame, long long frames, long long full_frames);
+void doubles_undo(t_doubles *x);
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
 void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv);
 void doubles_worker_thread(t_doubles *x);
@@ -82,6 +94,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)doubles_subject, "subject", A_SYM, 0);
     class_addmethod(c, (method)doubles_destination, "destination", A_SYM, 0);
     class_addmethod(c, (method)doubles_align, "align", A_GIMME, 0);
+    class_addmethod(c, (method)doubles_undo, "undo", 0);
     class_addmethod(c, (method)doubles_export, "export", A_GIMME, 0);
     class_addmethod(c, (method)doubles_assist, "assist", A_CANT, 0);
 
@@ -122,6 +135,14 @@ void *doubles_new(t_symbol *s, long argc, t_atom *argv) {
         x->subj_name = _sym_nothing;
         x->dest_name = _sym_nothing;
 
+        x->undo_dest_name = _sym_nothing;
+        x->undo_samples = NULL;
+        x->undo_chans = 0;
+        x->undo_frames = 0;
+        x->undo_start_frame = 0;
+        x->undo_original_full_frames = 0;
+        x->undo_active = 0;
+
         attr_args_process(x, argc, argv);
 
         x->log_outlet = outlet_new((t_object *)x, NULL);
@@ -150,6 +171,7 @@ void doubles_free(t_doubles *x) {
     if (x->defer_func_points) {
         free(x->defer_func_points);
     }
+    doubles_clear_undo(x);
     critical_free(x->lock);
 }
 
@@ -302,6 +324,133 @@ void doubles_destination(t_doubles *x, t_symbol *s) {
     common_log(x->log_outlet, x->log, "doubles~", "destination buffer set to '%s'", s->s_name);
 }
 
+void doubles_clear_undo(t_doubles *x) {
+    if (x->undo_samples) {
+        for (int i = 0; i < x->undo_chans; i++) {
+            if (x->undo_samples[i]) sysmem_freeptr(x->undo_samples[i]);
+        }
+        sysmem_freeptr(x->undo_samples);
+        x->undo_samples = NULL;
+    }
+    x->undo_dest_name = _sym_nothing;
+    x->undo_chans = 0;
+    x->undo_frames = 0;
+    x->undo_start_frame = 0;
+    x->undo_original_full_frames = 0;
+    x->undo_active = 0;
+}
+
+void doubles_save_undo(t_doubles *x, t_symbol *dest_name, long long start_frame, long long frames, long long new_full_frames) {
+    doubles_clear_undo(x);
+
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
+    t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
+
+    if (!dest_obj) {
+        object_free(dest_ref);
+        return;
+    }
+
+    long long old_full_frames = buffer_getframecount(dest_obj);
+    int chans = (int)buffer_getchannelcount(dest_obj);
+
+    bool full_save = (old_full_frames != new_full_frames);
+    long long save_start = full_save ? 0 : start_frame;
+    long long save_frames = full_save ? old_full_frames : frames;
+
+    x->undo_samples = (float **)sysmem_newptrclear(chans * sizeof(float *));
+    if (!x->undo_samples) {
+        object_free(dest_ref);
+        return;
+    }
+
+    for (int c = 0; c < chans; c++) {
+        x->undo_samples[c] = (float *)sysmem_newptr(save_frames * sizeof(float));
+        if (!x->undo_samples[c]) {
+            doubles_clear_undo(x);
+            object_free(dest_ref);
+            return;
+        }
+    }
+
+    float *dest_ext = buffer_locksamples(dest_obj);
+    if (dest_ext) {
+        for (long long i = 0; i < save_frames; i++) {
+            for (int c = 0; c < chans; c++) {
+                x->undo_samples[c][i] = dest_ext[(save_start + i) * chans + c];
+            }
+        }
+        buffer_unlocksamples(dest_obj);
+    }
+
+    x->undo_dest_name = dest_name;
+    x->undo_chans = chans;
+    x->undo_frames = save_frames;
+    x->undo_start_frame = save_start;
+    x->undo_original_full_frames = old_full_frames;
+    x->undo_active = 1;
+
+    object_free(dest_ref);
+}
+
+void doubles_undo(t_doubles *x) {
+    critical_enter(x->lock);
+    if (x->is_busy) {
+        object_error((t_object *)x, "cannot undo while alignment is in progress");
+        critical_exit(x->lock);
+        return;
+    }
+    if (!x->undo_active) {
+        object_error((t_object *)x, "no undo state available");
+        critical_exit(x->lock);
+        return;
+    }
+
+    t_symbol *dest_name = x->undo_dest_name;
+    float **samples = x->undo_samples;
+    int chans = x->undo_chans;
+    long long frames = x->undo_frames;
+    long long start_frame = x->undo_start_frame;
+    long long original_full_frames = x->undo_original_full_frames;
+    critical_exit(x->lock);
+
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
+    t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
+
+    if (dest_obj) {
+        // Resize back if necessary
+        if (buffer_getframecount(dest_obj) != original_full_frames) {
+            t_atom av;
+            atom_setlong(&av, (t_atom_long)original_full_frames);
+            object_method_typed(dest_obj, gensym("sizeinsamps"), 1, &av, NULL);
+        }
+
+        int dest_chans = (int)buffer_getchannelcount(dest_obj);
+        float *dest_ext = buffer_locksamples(dest_obj);
+        if (dest_ext) {
+            // Clear buffer if it was resized (optional but good for consistency)
+            // But we are about to overwrite it anyway with 'samples'
+            for (long long i = 0; i < frames; i++) {
+                long long dest_idx = start_frame + i;
+                if (dest_idx >= 0 && dest_idx < original_full_frames) {
+                    for (int c = 0; c < dest_chans; c++) {
+                        int src_c = (c < chans) ? c : 0;
+                        dest_ext[dest_idx * dest_chans + c] = samples[src_c][i];
+                    }
+                }
+            }
+            buffer_unlocksamples(dest_obj);
+            buffer_setdirty(dest_obj);
+            object_post((t_object *)x, "undo: restored buffer '%s'", dest_name->s_name);
+        }
+    } else {
+        object_error((t_object *)x, "undo: destination buffer '%s' not found", dest_name->s_name);
+    }
+
+    object_free(dest_ref);
+    doubles_clear_undo(x);
+}
+
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     t_symbol *ref_name = x->ref_name;
     t_symbol *subj_name = x->subj_name;
@@ -346,6 +495,9 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     long long subj_frames = subj_end - subj_start;
 
     common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", subj_name->s_name, ref_name->s_name, start_ms, end_ms);
+
+    // Save undo state before any modifications
+    doubles_save_undo(x, dest_name, ref_start, ref_frames, full_ref_frames);
 
     if (ref_frames < 1024 || subj_frames < 1024) {
         object_error((t_object *)x, "Analysis span must be at least 1024 samples long");
@@ -857,7 +1009,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'reference [buf]', 'subject [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', or 'export [path]'");
+        sprintf(s, "Inlet 1 (anything): 'reference [buf]', 'subject [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', 'undo', or 'export [path]'");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
