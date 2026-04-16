@@ -340,6 +340,66 @@ void doubles_clear_undo(t_doubles *x) {
     x->undo_active = 0;
 }
 
+static void doubles_normalize_filename(const char *src, char *dst, size_t dst_size) {
+    if (!src || !dst || dst_size == 0) return;
+
+    char temp[1024];
+    strncpy(temp, src, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+
+    // 1. Remove "(doubles)"
+    char *d;
+    while ((d = strstr(temp, "(doubles)")) != NULL) {
+        if (d > temp && *(d - 1) == ' ') {
+            memmove(d - 1, d + 9, strlen(d + 9) + 1);
+        } else {
+            memmove(d, d + 9, strlen(d + 9) + 1);
+        }
+    }
+
+    // 2. Remove [timestamp] and <timestamp>
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        char *s = strchr(temp, '[');
+        char *e = s ? strchr(s, ']') : NULL;
+        if (!s || !e) {
+            s = strchr(temp, '<');
+            e = s ? strchr(s, '>') : NULL;
+        }
+
+        if (s && e) {
+            if (s > temp && *(s - 1) == ' ') {
+                memmove(s - 1, e + 1, strlen(e + 1) + 1);
+            } else {
+                memmove(s, e + 1, strlen(e + 1) + 1);
+            }
+            changed = 1;
+        }
+    }
+
+    // 3. Remove redundant spaces and trailing space before extension
+    char *dot = strrchr(temp, '.');
+    char ext[64] = {0};
+    if (dot) {
+        strncpy(ext, dot, 63);
+        *dot = '\0';
+    }
+
+    size_t len = strlen(temp);
+    while (len > 0 && temp[len - 1] == ' ') {
+        temp[len - 1] = '\0';
+        len--;
+    }
+
+    if (ext[0]) {
+        strncat(temp, ext, sizeof(temp) - strlen(temp) - 1);
+    }
+
+    strncpy(dst, temp, dst_size - 1);
+    dst[dst_size - 1] = '\0';
+}
+
 void doubles_save_undo(t_doubles *x, t_symbol *dest_name, long long start_frame, long long frames, long long new_full_frames) {
     doubles_clear_undo(x);
 
@@ -452,20 +512,82 @@ void doubles_undo(t_doubles *x) {
 }
 
 void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
-    t_symbol *ref_name = x->ref_name;
-    t_symbol *subj_name = x->subj_name;
-    t_symbol *dest_name = x->dest_name;
+    t_symbol *target_subj = x->subj_name;
+    t_symbol *target_ref = x->ref_name;
+    t_symbol *target_dest = x->dest_name;
 
-    if (ref_name == _sym_nothing || subj_name == _sym_nothing || dest_name == _sym_nothing) {
-        object_error((t_object *)x, "align requires reference, subject, and destination buffers to be set first");
+    if (target_subj == _sym_nothing) {
+        object_warn((t_object *)x, "align requires at least a subject buffer to be set");
         return;
+    }
+
+    if (target_dest == _sym_nothing) {
+        target_dest = target_subj;
+    }
+
+    if (target_ref == _sym_nothing) {
+        t_dictionary *dict = dictobj_findregistered_retain(gensym("stems"));
+        if (!dict) {
+            object_error((t_object *)x, "reference buffer not set and could not find 'stems' dictionary for lookup");
+            return;
+        }
+
+        char subj_fname[1024] = {0};
+        char subj_normalized[1024] = {0};
+        bool subj_found = false;
+        long numkeys = 0;
+        t_symbol **keys = NULL;
+
+        if (dictionary_getkeys(dict, &numkeys, &keys) == MAX_ERR_NONE && keys) {
+            for (long i = 0; i < numkeys; i++) {
+                long ac = 0;
+                t_atom *av = NULL;
+                if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 2) {
+                    if (atom_gettype(av) == A_SYM && atom_getsym(av) == target_subj) {
+                        if (atom_gettype(av + 1) == A_SYM) {
+                            strncpy(subj_fname, atom_getsym(av + 1)->s_name, 1023);
+                            subj_found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (subj_found) {
+                doubles_normalize_filename(subj_fname, subj_normalized, 1024);
+                for (long i = 0; i < numkeys; i++) {
+                    long ac = 0;
+                    t_atom *av = NULL;
+                    if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 2) {
+                        t_symbol *buf_name = atom_getsym(av);
+                        if (buf_name != target_subj && atom_gettype(av + 1) == A_SYM) {
+                            char other_fname[1024] = {0};
+                            char other_normalized[1024] = {0};
+                            strncpy(other_fname, atom_getsym(av + 1)->s_name, 1023);
+                            doubles_normalize_filename(other_fname, other_normalized, 1024);
+                            if (strcmp(subj_normalized, other_normalized) == 0) {
+                                target_ref = buf_name;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            dictionary_freekeys(dict, numkeys, keys);
+        }
+        dictobj_release(dict);
+
+        if (target_ref == _sym_nothing) {
+            object_error((t_object *)x, "reference buffer not set and no matching entry found in 'stems' dictionary");
+            return;
+        }
     }
 
     double start_ms = (argc >= 1) ? atom_getfloat(argv) : 0.0;
     double end_ms = (argc >= 2) ? atom_getfloat(argv + 1) : -1.0;
 
-    t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, ref_name);
-    t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, subj_name);
+    t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, target_ref);
+    t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, target_subj);
     t_buffer_obj *ref_obj = buffer_ref_getobject(ref_ref);
     t_buffer_obj *subj_obj = buffer_ref_getobject(subj_ref);
 
@@ -494,10 +616,10 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     long long ref_frames = ref_end - ref_start;
     long long subj_frames = subj_end - subj_start;
 
-    common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", subj_name->s_name, ref_name->s_name, start_ms, end_ms);
+    common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", target_subj->s_name, target_ref->s_name, start_ms, end_ms);
 
     // Save undo state before any modifications
-    doubles_save_undo(x, dest_name, ref_start, ref_frames, full_ref_frames);
+    doubles_save_undo(x, target_dest, ref_start, ref_frames, full_ref_frames);
 
     if (ref_frames < 1024 || subj_frames < 1024) {
         object_error((t_object *)x, "Analysis span must be at least 1024 samples long");
@@ -574,7 +696,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     // Resize and clear destination buffer before background alignment
-    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest_name);
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, target_dest);
     t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
     if (dest_obj) {
         if (buffer_getframecount(dest_obj) != full_ref_frames) {
@@ -599,7 +721,7 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     wd->subj_chans = subj_chans;
     wd->ref_sr = ref_sr;
     wd->subj_sr = subj_sr;
-    wd->dest_buf_name = dest_name;
+    wd->dest_buf_name = target_dest;
     wd->targetbias = x->targetbias;
     wd->full_ref_frames = full_ref_frames;
     wd->start_frame = ref_start;
@@ -611,8 +733,8 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     x->progress = 0.0;
     x->last_error[0] = '\0';
     x->current_wd = wd;
-    x->last_dest_name = dest_name;
-    x->last_subj_name = subj_name;
+    x->last_dest_name = target_dest;
+    x->last_subj_name = target_subj;
 
     systhread_create((method)doubles_worker_thread, x, 0, 0, 0, &x->thread);
     critical_exit(x->lock);
@@ -1009,7 +1131,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'reference [buf]', 'subject [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', 'undo', or 'export [path]'");
+        sprintf(s, "Inlet 1 (anything): 'subject [buf]' (req), 'reference [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', 'undo', or 'export [path]'");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
