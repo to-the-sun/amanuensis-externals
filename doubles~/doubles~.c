@@ -347,17 +347,13 @@ static void doubles_normalize_filename(const char *src, char *dst, size_t dst_si
     strncpy(temp, src, sizeof(temp) - 1);
     temp[sizeof(temp) - 1] = '\0';
 
-    // 1. Remove "(doubles)"
+    // 1. Remove all occurrences of "(doubles)"
     char *d;
     while ((d = strstr(temp, "(doubles)")) != NULL) {
-        if (d > temp && *(d - 1) == ' ') {
-            memmove(d - 1, d + 9, strlen(d + 9) + 1);
-        } else {
-            memmove(d, d + 9, strlen(d + 9) + 1);
-        }
+        memmove(d, d + 9, strlen(d + 9) + 1);
     }
 
-    // 2. Remove [timestamp] and <timestamp>
+    // 2. Remove all bracketed content [...] and <...>
     int changed = 1;
     while (changed) {
         changed = 0;
@@ -369,16 +365,12 @@ static void doubles_normalize_filename(const char *src, char *dst, size_t dst_si
         }
 
         if (s && e) {
-            if (s > temp && *(s - 1) == ' ') {
-                memmove(s - 1, e + 1, strlen(e + 1) + 1);
-            } else {
-                memmove(s, e + 1, strlen(e + 1) + 1);
-            }
+            memmove(s, e + 1, strlen(e + 1) + 1);
             changed = 1;
         }
     }
 
-    // 3. Remove redundant spaces and trailing space before extension
+    // 3. Normalize spaces: remove leading/trailing and collapse internal
     char *dot = strrchr(temp, '.');
     char ext[64] = {0};
     if (dot) {
@@ -386,17 +378,36 @@ static void doubles_normalize_filename(const char *src, char *dst, size_t dst_si
         *dot = '\0';
     }
 
-    size_t len = strlen(temp);
-    while (len > 0 && temp[len - 1] == ' ') {
-        temp[len - 1] = '\0';
-        len--;
+    char clean[1024];
+    char *src_ptr = temp;
+    char *dst_ptr = clean;
+    while (*src_ptr == ' ') src_ptr++; // skip leading spaces
+
+    int last_was_space = 0;
+    while (*src_ptr) {
+        if (*src_ptr == ' ') {
+            if (!last_was_space) {
+                *dst_ptr++ = ' ';
+                last_was_space = 1;
+            }
+        } else {
+            *dst_ptr++ = *src_ptr;
+            last_was_space = 0;
+        }
+        src_ptr++;
+    }
+    *dst_ptr = '\0';
+
+    // Trim trailing space if any (before extension was added)
+    if (dst_ptr > clean && *(dst_ptr - 1) == ' ') {
+        *(dst_ptr - 1) = '\0';
     }
 
     if (ext[0]) {
-        strncat(temp, ext, sizeof(temp) - strlen(temp) - 1);
+        strncat(clean, ext, 1023 - strlen(clean));
     }
 
-    strncpy(dst, temp, dst_size - 1);
+    strncpy(dst, clean, dst_size - 1);
     dst[dst_size - 1] = '\0';
 }
 
