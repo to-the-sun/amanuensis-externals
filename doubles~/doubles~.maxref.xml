@@ -41,17 +41,37 @@
 
 	<!-- METHODS -->
 	<methodlist>
+		<method name="reference">
+			<arglist>
+				<arg name="buffer_name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the reference buffer</digest>
+			<description>Sets the name of the buffer to be used as the timing reference for alignment.</description>
+		</method>
+		<method name="subject">
+			<arglist>
+				<arg name="buffer_name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the subject buffer</digest>
+			<description>Sets the name of the buffer containing the audio that will be warped to match the reference.</description>
+		</method>
+		<method name="destination">
+			<arglist>
+				<arg name="buffer_name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the destination buffer</digest>
+			<description>Sets the name of the buffer where the aligned audio will be written.</description>
+		</method>
 		<method name="align">
 			<arglist>
-				<arg name="reference_buffer" type="symbol" optional="0" />
-				<arg name="subject_buffer" type="symbol" optional="0" />
-				<arg name="destination_buffer" type="symbol" optional="0" />
 				<arg name="start_ms" type="number" optional="1" />
 				<arg name="end_ms" type="number" optional="1" />
 			</arglist>
 			<digest>Align subject to reference</digest>
 			<description>
-				Triggers the background alignment process. The destination buffer will be resized and cleared to match the reference buffer's length if its current length is different. If the destination buffer is already the correct length, it will not be cleared, allowing data from previous alignment operations with different spans to be retained. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
+				Triggers the background alignment process using the buffers previously specified with the <m>reference</m>, <m>subject</m>, and <m>destination</m> messages.
+				<br /><br />
+				The destination buffer will be resized and cleared to match the reference buffer's length if its current length is different. If the destination buffer is already the correct length, it will not be cleared, allowing data from previous alignment operations with different spans to be retained. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
 				<br /><br />
 				Optional Arguments:
 				<br />• <b>start_ms</b>: The start time in milliseconds for the alignment span.
@@ -77,7 +97,7 @@
 	<attributelist>
 		<attribute name="log" type="long" size="1">
 			<digest>Enable Logging</digest>
-			<description>Enable or disable detailed diagnostic logging to the second outlet.</description>
+			<description>Enable or disable detailed diagnostic logging to the third outlet (Index 2). When enabled, the object will post status updates regarding buffer settings and alignment progress.</description>
 		</attribute>
 		<attribute name="targetbias" type="double" size="1">
 			<digest>Target Bias</digest>
