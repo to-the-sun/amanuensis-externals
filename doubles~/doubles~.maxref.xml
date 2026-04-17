@@ -64,16 +64,18 @@
 		</method>
 		<method name="align">
 			<arglist>
+				<arg name="subject_buffer" type="symbol" optional="1" />
 				<arg name="start_ms" type="number" optional="1" />
 				<arg name="end_ms" type="number" optional="1" />
 			</arglist>
 			<digest>Align subject to reference</digest>
 			<description>
-				Triggers the background alignment process using the buffers previously specified with the <m>reference</m>, <m>subject</m>, and <m>destination</m> messages. Only the subject buffer is required; if the destination buffer is unset, it defaults to the subject buffer. If the reference buffer is unset, the object attempts to find a matching reference in the 'stems' dictionary by looking for another buffer with a matching normalized filename (ignoring timestamps and '(doubles)' tags).
+				Triggers the background alignment process using the buffers previously specified with the <m>reference</m>, <m>subject</m>, and <m>destination</m> messages. Only the subject buffer is required (either set previously or provided as the first argument); if the destination buffer is unset, it defaults to the subject buffer. If the reference buffer is unset, the object attempts to find a matching reference in the 'stems' dictionary by looking for another buffer with a matching normalized filename (ignoring timestamps and '(doubles)' tags).
 				<br /><br />
 				The destination buffer will be resized and cleared to match the reference buffer's length if its current length is different. If the destination buffer is already the correct length, it will not be cleared, allowing data from previous alignment operations with different spans to be retained. If the subject is stereo, the destination will be processed as stereo, applying the same timing warp to both channels. Inflection points of the alignment path are output from the second outlet for visualization in a 'function' object.
 				<br /><br />
 				Optional Arguments:
+				<br />• <b>subject_buffer</b>: The name of the subject buffer to align. If provided, this overrides any previously set subject buffer.
 				<br />• <b>start_ms</b>: The start time in milliseconds for the alignment span.
 				<br />• <b>end_ms</b>: The end time in milliseconds for the alignment span.
 				<br /><br />

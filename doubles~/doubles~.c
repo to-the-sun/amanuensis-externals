@@ -526,9 +526,15 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     t_symbol *target_subj = x->subj_name;
     t_symbol *target_ref = x->ref_name;
     t_symbol *target_dest = x->dest_name;
+    int arg_offset = 0;
+
+    if (argc > 0 && atom_gettype(argv) == A_SYM) {
+        target_subj = atom_getsym(argv);
+        arg_offset = 1;
+    }
 
     if (target_subj == _sym_nothing) {
-        object_warn((t_object *)x, "align requires at least a subject buffer to be set");
+        object_warn((t_object *)x, "align requires at least a subject buffer to be set (either via 'subject' message or as first argument)");
         return;
     }
 
@@ -594,8 +600,8 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
         }
     }
 
-    double start_ms = (argc >= 1) ? atom_getfloat(argv) : 0.0;
-    double end_ms = (argc >= 2) ? atom_getfloat(argv + 1) : -1.0;
+    double start_ms = (argc >= (arg_offset + 1)) ? atom_getfloat(argv + arg_offset) : 0.0;
+    double end_ms = (argc >= (arg_offset + 2)) ? atom_getfloat(argv + arg_offset + 1) : -1.0;
 
     t_buffer_ref *ref_ref = buffer_ref_new((t_object *)x, target_ref);
     t_buffer_ref *subj_ref = buffer_ref_new((t_object *)x, target_subj);
@@ -1142,7 +1148,7 @@ void doubles_qfn(t_doubles *x) {
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'subject [buf]' (req), 'reference [buf]', 'destination [buf]', 'align [start_ms] [end_ms]', 'undo', or 'export [path]'");
+        sprintf(s, "Inlet 1 (anything): 'subject [buf]', 'reference [buf]', 'destination [buf]', 'align ([subj]) ([start]) ([end])', 'undo', or 'export [path]'");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;
