@@ -218,9 +218,9 @@ void doubles_export(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
             long entry_ac = 0;
             t_atom *entry_av = NULL;
             if (dictionary_getatoms(dict, keys[i], &entry_ac, &entry_av) == MAX_ERR_NONE && entry_av) {
-                if (entry_ac >= 2 && atom_gettype(entry_av) == A_SYM && atom_getsym(entry_av) == last_subj) {
-                    if (atom_gettype(entry_av + 1) == A_SYM) {
-                        t_symbol *fname_sym = atom_getsym(entry_av + 1);
+                if (entry_ac >= 3 && atom_gettype(entry_av + 1) == A_SYM && atom_getsym(entry_av + 1) == last_subj) {
+                    if (atom_gettype(entry_av + 2) == A_SYM) {
+                        t_symbol *fname_sym = atom_getsym(entry_av + 2);
                         if (fname_sym && fname_sym->s_name) {
                             strncpy(found_filename, fname_sym->s_name, 1023);
                             found_filename[1023] = '\0';
@@ -553,10 +553,10 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
             for (long i = 0; i < numkeys; i++) {
                 long ac = 0;
                 t_atom *av = NULL;
-                if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 2) {
-                    if (atom_gettype(av) == A_SYM && atom_getsym(av) == target_subj) {
-                        if (atom_gettype(av + 1) == A_SYM) {
-                            strncpy(subj_fname, atom_getsym(av + 1)->s_name, 1023);
+                if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 3) {
+                    if (atom_gettype(av + 1) == A_SYM && atom_getsym(av + 1) == target_subj) {
+                        if (atom_gettype(av + 2) == A_SYM) {
+                            strncpy(subj_fname, atom_getsym(av + 2)->s_name, 1023);
                             subj_found = true;
                             break;
                         }
@@ -569,12 +569,12 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
                 for (long i = 0; i < numkeys; i++) {
                     long ac = 0;
                     t_atom *av = NULL;
-                    if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 2) {
-                        t_symbol *buf_name = atom_getsym(av);
-                        if (buf_name != target_subj && atom_gettype(av + 1) == A_SYM) {
+                    if (dictionary_getatoms(dict, keys[i], &ac, &av) == MAX_ERR_NONE && av && ac >= 3) {
+                        t_symbol *buf_name = atom_getsym(av + 1);
+                        if (buf_name != target_subj && atom_gettype(av + 2) == A_SYM) {
                             char other_fname[1024] = {0};
                             char other_normalized[1024] = {0};
-                            strncpy(other_fname, atom_getsym(av + 1)->s_name, 1023);
+                            strncpy(other_fname, atom_getsym(av + 2)->s_name, 1023);
                             doubles_normalize_filename(other_fname, other_normalized, 1024);
                             if (strcmp(subj_normalized, other_normalized) == 0) {
                                 target_ref = buf_name;
