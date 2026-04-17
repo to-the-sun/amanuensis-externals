@@ -627,7 +627,13 @@ void doubles_align(t_doubles *x, t_symbol *s, long argc, t_atom *argv) {
     long long ref_frames = ref_end - ref_start;
     long long subj_frames = subj_end - subj_start;
 
-    common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", target_subj->s_name, target_ref->s_name, start_ms, end_ms);
+    if (argc == 0) {
+        common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (entire buffer)", target_subj->s_name, target_ref->s_name);
+    } else if (argc == 1) {
+        common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f ms to end)", target_subj->s_name, target_ref->s_name, start_ms);
+    } else {
+        common_log(x->log_outlet, x->log, "doubles~", "aligning '%s' to '%s' (span: %.2f - %.2f ms)", target_subj->s_name, target_ref->s_name, start_ms, end_ms);
+    }
 
     // Save undo state before any modifications
     doubles_save_undo(x, target_dest, ref_start, ref_frames, full_ref_frames);
