@@ -94,7 +94,7 @@
 			<description>
 				Writes the contents of the last used destination buffer to disk. The export location is constructed as: [project_path]/Samples/Processed/Consolidate/[filename].
 				<br /><br />
-				The filename is determined by looking up the destination buffer name in a <o>coll</o> object named 'stems_info'. The retrieved filename is modified by inserting " (doubles) " before the timestamp and updating the timestamp to the current time in [YYYY-MM-DD HHMMSS] format.
+				The filename is determined by looking up the destination buffer name in a <o>dict</o> object named 'stems'. The retrieved filename is modified by inserting " (doubles) " before the timestamp and updating the timestamp to the current time in [YYYY-MM-DD HHMMSS] format.
 			</description>
 		</method>
 	</methodlist>
