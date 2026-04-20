@@ -580,8 +580,8 @@ void buildspans_offset(t_buildspans *x, double f) {
     long old_rounded_offset = (long)round(x->current_offset);
 
     // Only duplicate if the rounded offset is different and the old offset was not the initial default.
-    if (new_rounded_offset == old_rounded_offset || x->current_offset <= 0.0) {
-        if (x->current_offset <= 0.0) {
+    if (new_rounded_offset == old_rounded_offset || x->current_offset == 0.0) {
+        if (x->current_offset == 0.0) {
             buildspans_log(x, "Global offset initialized via buildspans_offset.");
         }
         x->current_offset = f;
@@ -874,10 +874,10 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    if (x->current_offset <= 0.0) {
+    if (x->current_offset == 0.0) {
         double old_offset = x->current_offset;
         x->current_offset = calc_timestamp;
-        buildspans_log(x, "Offset not set (current_offset <= 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
+        buildspans_log(x, "Offset not set (current_offset == 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
     }
 
     buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);
