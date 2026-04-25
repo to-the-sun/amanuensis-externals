@@ -612,7 +612,7 @@ void buildspans_offset(t_buildspans *x, double f) {
                     const char *dash = strchr(track_str, '-');
                     if (dash) {
                         double track_offset = (double)atol(dash + 1);
-                        long relative_f = (long)round(f - track_offset);
+                        long relative_f = (long)(floor((f - track_offset) / (double)bar_length) * (double)bar_length);
                         buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
                     }
                 }
