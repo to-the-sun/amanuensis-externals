@@ -31,7 +31,6 @@ typedef struct _fifo_entry {
     double range_end; // For SWEEP
     long type; // 0 for DATA, 1 for SWEEP
     long track_id;
-    int no_crossfade;
 } t_fifo_entry;
 
 typedef struct _weaver_track {
@@ -55,7 +54,6 @@ typedef struct _weaver_track {
     t_symbol *pending_palette;
     double pending_offset;
     t_symbol *pending_bar_symbol;
-    int pending_no_crossfade;
     int has_pending_data;
     int waiting_for_dict;
 
@@ -130,7 +128,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, int no_crossfade, t_symbol *bar_symbol);
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -142,6 +140,7 @@ void weaver_clear(t_weaver *x);
 void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
 static t_symbol *_sym_dash;
+static t_symbol *_sym_0;
 
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
     t_weaver_track *tr = NULL;
@@ -182,7 +181,6 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->pending_palette = _sym_nothing;
             tr->pending_offset = 0.0;
             tr->pending_bar_symbol = _sym_nothing;
-            tr->pending_no_crossfade = 0;
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
 
@@ -328,6 +326,7 @@ void weaver_check_attachments(t_weaver *x) {
 void ext_main(void *r) {
     common_symbols_init();
     _sym_dash = gensym("-");
+    _sym_0 = gensym("0");
     t_class *c = class_new("weaver~", (method)weaver_new, (method)weaver_free, sizeof(t_weaver), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)weaver_anything, "anything", A_GIMME, 0);
@@ -508,7 +507,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, int no_crossfade, t_symbol *bar_symbol) {
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol) {
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
 
@@ -516,7 +515,6 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_palette = palette;
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
-    tr->pending_no_crossfade = no_crossfade;
     tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
     if (x->visualize) {
         tr->viz_control = tr->control;
@@ -690,19 +688,9 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
 
         if (has_lock && tr->has_pending_data) {
             int active = (int)round(tr->control);
-            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active]);
+            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active] || tr->pending_bar_symbol == _sym_0);
 
-            if (tr->pending_no_crossfade) {
-                tr->palette[active] = tr->pending_palette;
-                tr->dict_offset[active] = tr->pending_offset;
-                tr->offset[active] = tr->pending_offset - tr->viz_ms;
-                tr->xf.ramp1.toggle = (active == 0) ? 0.0 : 1.0;
-                tr->xf.ramp1.go = (double)tr->xf.elapsed - 1000000.0;
-                tr->xf.ramp2.toggle = (active == 1) ? 0.0 : 1.0;
-                tr->xf.ramp2.go = (double)tr->xf.elapsed - 1000000.0;
-                tr->xf.direction = 0.0;
-                tr->busy = 0;
-            } else if (change) {
+            if (change) {
                 int other = 1 - active;
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
@@ -778,7 +766,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         if (nt_loop != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
-                            x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
                             x->fifo_tail = nt_loop;
                         }
                     }
@@ -796,7 +783,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                                 x->hit_bars[x->fifo_tail].bar.value = current_scan; // Current ramp
                                 x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                                 x->hit_bars[x->fifo_tail].track_id = t + 1;
-                                x->hit_bars[x->fifo_tail].no_crossfade = main_looped;
                                 x->fifo_tail = nt;
                                 tr->waiting_for_dict = 1;
                                 tr->busy = 1;
@@ -813,7 +799,6 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         x->hit_bars[x->fifo_tail].bar.value = current_scan;
                         x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                         x->hit_bars[x->fifo_tail].track_id = t + 1;
-                        x->hit_bars[x->fifo_tail].no_crossfade = 0;
                         x->fifo_tail = nt_init;
                         tr->waiting_for_dict = 1;
                         tr->busy = 1;
@@ -911,7 +896,6 @@ void weaver_audio_qtask(t_weaver *x) {
         x->fifo_head = (x->fifo_head + 1) % 4096;
 
         long target_track = hit_entry.track_id;
-        int no_crossfade = hit_entry.no_crossfade;
         t_weaver_track *tr = NULL;
         if (target_track > 0 && target_track <= x->track_cache_count) {
             tr = x->track_cache[target_track - 1];
@@ -919,10 +903,6 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
-            if (x->visualize && hit_entry.no_crossfade && !clear_sent) {
-                visualize("{\"clear\": 1}");
-                clear_sent = 1;
-            }
             continue;
         }
 
@@ -1003,19 +983,19 @@ void weaver_audio_qtask(t_weaver *x) {
                         weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
                     }
 
-                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, no_crossfade, bar_key);
+                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key);
                 }
             }
 
             if (!found_in_dict) {
                 // Trigger silence if bar missing from dictionary
-                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, no_crossfade, bar_key);
+                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, no_crossfade, bar_key);
+            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
         }
     }
 
