@@ -517,8 +517,8 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->pending_no_crossfade = no_crossfade;
+    tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
     if (x->visualize) {
-        tr->viz_ms = bar_ms; // Trigger timestamp for viz
         tr->viz_control = tr->control;
         tr->viz_track_length = tr->track_length;
     }
