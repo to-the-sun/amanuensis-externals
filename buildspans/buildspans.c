@@ -199,7 +199,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
-void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long relative_comparison_val);
+void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
 double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output);
@@ -612,7 +612,7 @@ void buildspans_offset(t_buildspans *x, double f) {
                     const char *dash = strchr(track_str, '-');
                     if (dash) {
                         double track_offset = (double)atol(dash + 1);
-                        long relative_f = (long)(floor((f - track_offset) / (double)bar_length) * (double)bar_length);
+                        double relative_f = f - track_offset;
                         buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
                     }
                 }
@@ -1070,7 +1070,7 @@ void buildspans_flush_track(t_buildspans *x, long track_num) {
 }
 
 
-void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long relative_comparison_val) {
+void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val) {
     long bar_length = buildspans_get_bar_length(x);
     if (bar_length <= 0) return;
 
@@ -1123,8 +1123,8 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
             sysmem_freeptr(keys);
         }
 
-        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > most_recent_bar_after_rating_check + bar_length) {
-            buildspans_log(x, "Discontiguous gap detected. Comparison value %ld is more than %ldms after last bar %ld.", relative_comparison_val, bar_length, most_recent_bar_after_rating_check);
+        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length) {
+            buildspans_log(x, "Discontiguous gap detected. Comparison value %.2f is more than %ldms after last bar end (%ld).", relative_comparison_val, bar_length, most_recent_bar_after_rating_check + bar_length);
             buildspans_end_track_span(x, palette_sym, track_sym);
         }
     }
@@ -1171,7 +1171,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // --- Deferred span ending logic (only if a new bar is detected) ---
     if (is_new_bar && last_bar_timestamp != -1) {
-        buildspans_check_discontiguity(x, x->current_palette, track_sym, bar_timestamp_val);
+        buildspans_check_discontiguity(x, x->current_palette, track_sym, relative_timestamp);
     }
 
     // --- ADD OR UPDATE BAR ---
