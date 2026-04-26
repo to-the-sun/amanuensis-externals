@@ -31,6 +31,7 @@ typedef struct _fifo_entry {
     double range_end; // For SWEEP
     long type; // 0 for DATA, 1 for SWEEP
     long track_id;
+    int song_loop;
 } t_fifo_entry;
 
 typedef struct _weaver_track {
@@ -766,6 +767,7 @@ void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, d
                         if (nt_loop != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
+                            x->hit_bars[x->fifo_tail].song_loop = main_looped;
                             x->fifo_tail = nt_loop;
                         }
                     }
@@ -903,6 +905,10 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
+            if (x->visualize && hit_entry.song_loop && !clear_sent) {
+                visualize("{\"clear\": 1}");
+                clear_sent = 1;
+            }
             continue;
         }
 
