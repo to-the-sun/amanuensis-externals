@@ -30,7 +30,7 @@
 		</inlet>
 		<inlet id="2" type="float">
 			<digest>Inlet 2: Global offset timestamp</digest>
-			<description>Receives a high-precision float representing a global offset in milliseconds. This value is used for new bars and is stored with full precision in the dictionary.</description>
+			<description>Receives a high-precision float representing a global offset in milliseconds, or a list of two floats [offset, loop_start]. The offset value is used for new bars and is stored with full precision in the dictionary. The loop_start value is used to adjust relative bar placement when recording within a specific section of a song.</description>
 		</inlet>
 		<inlet id="3" type="int">
 			<digest>Inlet 3: Track number</digest>

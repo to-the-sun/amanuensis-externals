@@ -271,6 +271,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define buildspans_get_bar_length rebar_buildspans_get_bar_length
 #define buildspans_set_bar_buffer rebar_buildspans_set_bar_buffer
 #define buildspans_local_bar_length rebar_buildspans_local_bar_length
+#define buildspans_set_loop_start rebar_buildspans_set_loop_start
 #define atomarray_to_string rebar_atomarray_to_string
 #define atomarray_deep_copy rebar_atomarray_deep_copy
 #define parse_hierarchical_key rebar_parse_hierarchical_key
@@ -431,6 +432,7 @@ void rebar_intercept_outlet_bang(void *o) {
 void *rebar_new(t_symbol *s, long argc, t_atom *argv);
 void rebar_free(t_rebar *x);
 void rebar_int(t_rebar *x, long n);
+void rebar_list(t_rebar *x, t_symbol *s, long argc, t_atom *argv);
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s);
 
 t_max_err rebar_attr_set_log(t_rebar *x, void *attr, long ac, t_atom *av) {
@@ -500,6 +502,7 @@ void ext_main(void *r) {
     #define class_new rebar_intercept_class_new
 
     class_addmethod(c, (method)rebar_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)rebar_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)rebar_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_rebar, log);
@@ -615,6 +618,7 @@ void rebar_do_copy_back(t_rebar *x) {
 }
 
 void rebar_int(t_rebar *x, long n) {
+    rebar_buildspans_set_loop_start(x->buildspans_inst, 0.0);
     sdk_outlet_int(x->out_busy, 1);
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
@@ -629,6 +633,29 @@ void rebar_int(t_rebar *x, long n) {
     rebar_notify_bang(x->notify_inst);
 }
 
+void rebar_list(t_rebar *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc >= 1 && (atom_gettype(argv) == A_LONG || atom_gettype(argv) == A_FLOAT)) {
+        long bar_length = (long)atom_getfloat(argv);
+        double loop_start = 0.0;
+        if (argc >= 2 && (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
+            loop_start = atom_getfloat(argv + 1);
+        }
+        rebar_buildspans_set_loop_start(x->buildspans_inst, loop_start);
+        sdk_outlet_int(x->out_busy, 1);
+        t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
+        t_dictionary *tmp_dict = x->tmp_dict_ptr;
+        if (user_dict && tmp_dict) {
+            dictionary_clear(tmp_dict);
+            rebar_copy_dictionary(user_dict, tmp_dict);
+        }
+        if (user_dict) object_release((t_object *)user_dict);
+
+        rebar_buildspans_local_bar_length(x->buildspans_inst, (double)bar_length);
+        rebar_crucible_local_bar_length(x->crucible_inst, (double)bar_length);
+        rebar_notify_bang(x->notify_inst);
+    }
+}
+
 void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
     if (!src || !dst) return;
     long num_keys = 0;
@@ -641,7 +668,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
+    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length, (list) [bar_length, loop_start].");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;

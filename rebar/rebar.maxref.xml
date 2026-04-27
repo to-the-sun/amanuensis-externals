@@ -27,10 +27,10 @@
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
-		<inlet id="1" type="int">
+		<inlet id="1" type="int/list">
 			<digest>Set bar length and trigger coordinated isolated processing</digest>
 			<description>
-				Accepts an integer representing the bar length (in milliseconds). This synchronously initiates the dictionary isolation workflow: copying the user dictionary to temporary memory, setting sub-module bar lengths, and triggering the coordinated dump and comparison sequence.
+				Accepts an integer representing the bar length (in milliseconds), or a list [bar_length, loop_start]. This synchronously initiates the dictionary isolation workflow: copying the user dictionary to temporary memory, setting sub-module bar lengths and loop offsets, and triggering the coordinated dump and comparison sequence.
 			</description>
 		</inlet>
 	</inletlist>

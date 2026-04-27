@@ -159,6 +159,7 @@ typedef struct _buildspans {
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
     double current_offset;
+    double loop_start;
     t_buffer_ref *buffer_ref;
     t_symbol *s_buffer_name;
     t_symbol *current_palette;
@@ -172,6 +173,8 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
+    void *proxies[4];
+    long proxy_ids[4];
 } t_buildspans;
 
 // Function prototypes
@@ -179,7 +182,11 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_list_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_float(t_buildspans *x, double f);
+void buildspans_int(t_buildspans *x, long n);
 void buildspans_offset(t_buildspans *x, double f);
+void buildspans_offset_logic(t_buildspans *x, double f);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
@@ -207,6 +214,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
+void buildspans_set_loop_start(t_buildspans *x, double f);
 
 
 // Helper function to send verbose log messages
@@ -459,13 +467,12 @@ void ext_main(void *r) {
     c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, sizeof(t_buildspans), 0L, A_GIMME, 0);
     class_addmethod(c, (method)buildspans_clear, "clear", 0);
     class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
-    class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
+    class_addmethod(c, (method)buildspans_float, "float", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_int, "int", A_LONG, 0);
     class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
-    class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
     
     CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
@@ -490,6 +497,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->tracks_ended_in_current_event = dictionary_new();
         x->current_track = 0;
         x->current_offset = 0.0;
+        x->loop_start = 0.0;
         x->current_palette = gensym("");
         x->log_outlet = NULL;
         x->log = 0;
@@ -508,10 +516,10 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         buildspans_set_bar_buffer(x, gensym("bar"));
 
         // Inlets are created from right to left.
-        floatin((t_object *)x, 4);  // Local bar length
-        proxy_new((t_object *)x, 3, NULL); // Palette
-        intin((t_object *)x, 2);    // Track Number
-        floatin((t_object *)x, 1);  // Offset
+        x->proxies[3] = proxy_new((t_object *)x, 4, &x->proxy_ids[3]); // Local bar length
+        x->proxies[2] = proxy_new((t_object *)x, 3, &x->proxy_ids[2]); // Palette
+        x->proxies[1] = proxy_new((t_object *)x, 2, &x->proxy_ids[1]); // Track Number
+        x->proxies[0] = proxy_new((t_object *)x, 1, &x->proxy_ids[0]); // Offset & Loop Start
 
         // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
@@ -552,6 +560,7 @@ void buildspans_clear(t_buildspans *x) {
     x->tracks_ended_in_current_event = dictionary_new();
     x->current_track = 0;
     x->current_offset = 0.0;
+    x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
@@ -564,6 +573,11 @@ void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
+    x->loop_start = 0.0;
+    buildspans_offset_logic(x, f);
+}
+
+void buildspans_offset_logic(t_buildspans *x, double f) {
     if (x->defer && !systhread_ismainthread()) {
         t_atom a;
         atom_setfloat(&a, f);
@@ -612,7 +626,7 @@ void buildspans_offset(t_buildspans *x, double f) {
                     const char *dash = strchr(track_str, '-');
                     if (dash) {
                         double track_offset = (double)atol(dash + 1);
-                        double relative_f = f - track_offset;
+                        double relative_f = (f - track_offset) + x->loop_start;
                         buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
                     }
                 }
@@ -844,12 +858,37 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 }
 
 
-// Handler for list messages on the main inlet
+// Handler for list messages
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_list, s, argc, argv);
+        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
+        if (new_argv) {
+            atom_setlong(new_argv, inlet_num);
+            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
+            defer_low(x, (method)buildspans_list_deferred, s, (short)(argc + 1), new_argv);
+            sysmem_freeptr(new_argv);
+        }
         return;
     }
+
+    if (inlet_num == 1) { // Offset Inlet
+        if (argc >= 2 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT) {
+            double offset = atom_getfloat(argv);
+            double loop_start = atom_getfloat(argv + 1);
+
+            x->loop_start = loop_start;
+            buildspans_offset_logic(x, offset);
+            buildspans_log(x, "Offset list received: offset %.2f, loop_start %.2f", offset, loop_start);
+            return;
+        } else if (argc == 1 && atom_gettype(argv) == A_FLOAT) {
+            buildspans_offset(x, atom_getfloat(argv));
+            return;
+        }
+    }
+
+    if (inlet_num != 0) return;
 
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
@@ -1138,8 +1177,8 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
-    double relative_timestamp = calc_timestamp - offset;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset): %.2f", relative_timestamp);
+    double relative_timestamp = (calc_timestamp - offset) + x->loop_start;
+    buildspans_log(x, "Relative timestamp ((calc_absolute - offset) + loop_start): %.2f", relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
@@ -1656,7 +1695,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush All, (flush <int>) Flush Track, (clear) Clear. Supports @defer deferral.");
                 break;
             case 1:
-                sprintf(s, "Inlet 2: (float) Offset Timestamp");
+                sprintf(s, "Inlet 2: (float) Offset Timestamp, (list) [offset, loop_start]");
                 break;
             case 2:
                 sprintf(s, "Inlet 3: (int) Track Number");
@@ -1693,6 +1732,11 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     } else {
         object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
     }
+}
+
+void buildspans_set_loop_start(t_buildspans *x, double f) {
+    x->loop_start = f;
+    buildspans_log(x, "Loop start set to: %.2f", x->loop_start);
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
@@ -2022,6 +2066,43 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
     
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
+}
+
+void buildspans_list_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc > 0) {
+        long inlet_num = atom_getlong(argv);
+        if (inlet_num == 1) {
+             if (argc >= 3 && atom_gettype(argv+1) == A_FLOAT && atom_gettype(argv + 2) == A_FLOAT) {
+                double offset = atom_getfloat(argv+1);
+                double loop_start = atom_getfloat(argv + 2);
+                x->loop_start = loop_start;
+                buildspans_offset_logic(x, offset);
+                buildspans_log(x, "Offset list received (deferred): offset %.2f, loop_start %.2f", offset, loop_start);
+            }
+        } else if (inlet_num == 0) {
+            buildspans_list(x, s, argc - 1, argv + 1);
+        }
+    }
+}
+
+void buildspans_float(t_buildspans *x, double f) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+    if (inlet_num == 1) {
+        buildspans_offset(x, f);
+    } else if (inlet_num == 4) {
+        buildspans_local_bar_length(x, f);
+    }
+}
+
+void buildspans_int(t_buildspans *x, long n) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+    if (inlet_num == 2) {
+        buildspans_track(x, n);
+    } else if (inlet_num == 0) {
+        // Main inlet int handling
+    } else {
+        buildspans_float(x, (double)n);
+    }
 }
 
 // New comparison function for doubles
