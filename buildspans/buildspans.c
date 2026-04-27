@@ -180,7 +180,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
 void buildspans_float(t_buildspans *x, double f);
+void buildspans_do_float(t_buildspans *x, double f, long inlet_num);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
 void buildspans_track(t_buildspans *x, long n);
@@ -830,7 +832,13 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
     if (argc > 0) {
         long inlet_num = atom_getlong(argv);
-        buildspans_do_anything(x, s, argc - 1, argv + 1, inlet_num);
+        if (s == gensym("list")) {
+            buildspans_do_list(x, s, argc - 1, argv + 1, inlet_num);
+        } else if (s == gensym("float")) {
+            if (argc > 1) buildspans_do_float(x, atom_getfloat(argv + 1), inlet_num);
+        } else {
+            buildspans_do_anything(x, s, argc - 1, argv + 1, inlet_num);
+        }
     }
 }
 
@@ -860,7 +868,17 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 
 // Handler for float messages on all inlets
 void buildspans_float(t_buildspans *x, double f) {
-    long inlet_num = proxy_getinlet((t_object *)x);
+    if (x->defer && !systhread_ismainthread()) {
+        t_atom a[2];
+        atom_setlong(&a[0], proxy_getinlet((t_object *)x));
+        atom_setfloat(&a[1], f);
+        defer_low(x, (method)buildspans_anything_deferred, gensym("float"), 2, a);
+        return;
+    }
+    buildspans_do_float(x, f, proxy_getinlet((t_object *)x));
+}
+
+void buildspans_do_float(t_buildspans *x, double f, long inlet_num) {
     if (inlet_num == 1) {
         buildspans_do_offset(x, f, 0.0);
     } else {
@@ -877,8 +895,10 @@ void buildspans_float(t_buildspans *x, double f) {
 
 // Handler for list messages on the main inlet and offset inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    long inlet_num = proxy_getinlet((t_object *)x);
+    buildspans_do_list(x, s, argc, argv, proxy_getinlet((t_object *)x));
+}
 
+void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num) {
     if (inlet_num == 1) {
         int valid = 0;
         if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) &&
@@ -897,23 +917,32 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_list, s, argc, argv);
+        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
+        if (new_argv) {
+            atom_setlong(new_argv, inlet_num);
+            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
+            defer_low(x, (method)buildspans_anything_deferred, s, (short)(argc + 1), new_argv); // Using anything_deferred as generic list/msg handler
+            sysmem_freeptr(new_argv);
+        }
         return;
     }
 
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "buildspans_do_list: utilizing bar_length %ld", bar_length);
     if (bar_length <= 0) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
         return;
     }
     double calc_timestamp, store_timestamp, score;
 
-    if (argc == 2 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT) {
+    if (argc == 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) &&
+        (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
         calc_timestamp = atom_getfloat(argv);
         store_timestamp = calc_timestamp;
         score = atom_getfloat(argv + 1);
-    } else if (argc == 3 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT && atom_gettype(argv + 2) == A_FLOAT) {
+    } else if (argc == 3 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) &&
+               (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG) &&
+               (atom_gettype(argv + 2) == A_FLOAT || atom_gettype(argv + 2) == A_LONG)) {
         calc_timestamp = atom_getfloat(argv);
         score = atom_getfloat(argv + 1);
         store_timestamp = atom_getfloat(argv + 2);

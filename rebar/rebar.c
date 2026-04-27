@@ -22,6 +22,9 @@ typedef struct _rebar {
     struct _buildspans *buildspans_inst;
     struct _crucible *crucible_inst;
 
+    void *out_data;      // Crucible Outlet 0
+    void *out_fill;      // Crucible Outlet 1
+    void *out_reach;     // Crucible Outlet 2
     void *out_busy;      // Busy state (0/1)
     void *out_log;       // Consolidated logging
 
@@ -245,6 +248,9 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define buildspans_free rebar_buildspans_free
 #define buildspans_clear rebar_buildspans_clear
 #define buildspans_list rebar_buildspans_list
+#define buildspans_do_list rebar_buildspans_do_list
+#define buildspans_float rebar_buildspans_float
+#define buildspans_do_float rebar_buildspans_do_float
 #define buildspans_offset rebar_buildspans_offset
 #define buildspans_track rebar_buildspans_track
 #define buildspans_track_deferred rebar_buildspans_track_deferred
@@ -379,6 +385,9 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
         else if (vo->index == 1 || vo->index == 2 || vo->index == 3) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
+        else if (vo->index == 1 && x->out_reach) sdk_outlet_anything(x->out_reach, s, (long)ac, av);
+        else if (vo->index == 2 && x->out_fill) sdk_outlet_anything(x->out_fill, s, (long)ac, av);
+        else if (vo->index == 3 && x->out_data) sdk_outlet_anything(x->out_data, s, (long)ac, av);
     }
 }
 
@@ -389,7 +398,10 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 4) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+        if (vo->index == 4) rebar_buildspans_do_list(x->buildspans_inst, s, (long)ac, av, 0);
+    } else if (vo->type == MOD_CRUCIBLE) {
+        if (vo->index == 1 && x->out_reach) sdk_outlet_list(x->out_reach, s, (long)ac, av);
+        else if (vo->index == 3 && x->out_data) sdk_outlet_list(x->out_data, s, (long)ac, av);
     }
 }
 
@@ -400,7 +412,9 @@ void rebar_intercept_outlet_int(void *o, t_atom_long n) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 2) rebar_buildspans_track(x->buildspans_inst, (long)n);
+        if (vo->index == 2) rebar_buildspans_do_float(x->buildspans_inst, (double)n, 2);
+    } else if (vo->type == MOD_CRUCIBLE) {
+        if (vo->index == 1 && x->out_reach) sdk_outlet_int(x->out_reach, n);
     }
 }
 
@@ -411,7 +425,7 @@ void rebar_intercept_outlet_float(void *o, double f) {
     if (!x) return;
 
     if (vo->type == MOD_NOTIFY) {
-        if (vo->index == 3) rebar_buildspans_offset(x->buildspans_inst, f);
+        if (vo->index == 3) rebar_buildspans_do_float(x->buildspans_inst, f, 1);
     }
 }
 
@@ -423,6 +437,8 @@ void rebar_intercept_outlet_bang(void *o) {
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 4) rebar_buildspans_bang(x->buildspans_inst);
+    } else if (vo->type == MOD_CRUCIBLE) {
+        if (vo->index == 2 && x->out_fill) sdk_outlet_bang(x->out_fill);
     }
 }
 
@@ -554,6 +570,9 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->out_log = sdk_outlet_new((t_object *)x, NULL);
         x->out_busy = sdk_outlet_new((t_object *)x, NULL);
+        x->out_reach = sdk_outlet_new((t_object *)x, NULL);
+        x->out_fill = sdk_outlet_new((t_object *)x, NULL);
+        x->out_data = sdk_outlet_new((t_object *)x, NULL);
 
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
@@ -644,8 +663,11 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
     else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;
-            case 1: sprintf(s, "Outlet 2: Logging and Status messages"); break;
+            case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;
+            case 1: sprintf(s, "Outlet 2: Busy Outlet"); break;
+            case 2: sprintf(s, "Outlet 3: Reach Outlet"); break;
+            case 3: sprintf(s, "Outlet 4: Fill Outlet"); break;
+            case 4: sprintf(s, "Outlet 5: Data Outlet"); break;
         }
     }
 }
