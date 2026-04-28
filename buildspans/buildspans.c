@@ -159,6 +159,7 @@ typedef struct _buildspans {
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
     double current_offset;
+    double loop_start;
     t_buffer_ref *buffer_ref;
     t_symbol *s_buffer_name;
     t_symbol *current_palette;
@@ -179,7 +180,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
@@ -459,6 +462,7 @@ void ext_main(void *r) {
     c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, sizeof(t_buildspans), 0L, A_GIMME, 0);
     class_addmethod(c, (method)buildspans_clear, "clear", 0);
     class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
     class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
     class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
@@ -490,6 +494,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->tracks_ended_in_current_event = dictionary_new();
         x->current_track = 0;
         x->current_offset = 0.0;
+        x->loop_start = 0.0;
         x->current_palette = gensym("");
         x->log_outlet = NULL;
         x->log = 0;
@@ -511,7 +516,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         floatin((t_object *)x, 4);  // Local bar length
         proxy_new((t_object *)x, 3, NULL); // Palette
         intin((t_object *)x, 2);    // Track Number
-        floatin((t_object *)x, 1);  // Offset
+        proxy_new((t_object *)x, 1, NULL);  // Offset / Loop Start
 
         // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
@@ -552,6 +557,7 @@ void buildspans_clear(t_buildspans *x) {
     x->tracks_ended_in_current_event = dictionary_new();
     x->current_track = 0;
     x->current_offset = 0.0;
+    x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
@@ -560,21 +566,27 @@ void buildspans_clear(t_buildspans *x) {
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc > 0) buildspans_offset(x, atom_getfloat(argv));
+    if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
+    else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0);
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
+    buildspans_do_offset(x, f, 0.0);
+}
+
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     if (x->defer && !systhread_ismainthread()) {
-        t_atom a;
-        atom_setfloat(&a, f);
-        defer_low(x, (method)buildspans_offset_deferred, NULL, 1, &a);
+        t_atom a[2];
+        atom_setfloat(&a[0], f);
+        atom_setfloat(&a[1], loop_start);
+        defer_low(x, (method)buildspans_offset_deferred, NULL, 2, a);
         return;
     }
 
-    buildspans_log(x, "buildspans_offset received: %.2f (current_offset: %.2f)", f, x->current_offset);
+    buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
 
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_offset: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
 
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
@@ -582,17 +594,19 @@ void buildspans_offset(t_buildspans *x, double f) {
     // Only duplicate if the rounded offset is different and the old offset was not the initial default.
     if (new_rounded_offset == old_rounded_offset || x->current_offset <= 0.0) {
         if (x->current_offset <= 0.0) {
-            buildspans_log(x, "Global offset initialized via buildspans_offset.");
+            buildspans_log(x, "Global offset initialized via buildspans_do_offset.");
         }
         x->current_offset = f;
-        buildspans_log(x, "Global offset updated to: %.2f. No duplication.", f);
+        x->loop_start = loop_start;
+        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication.", f, loop_start);
         return;
     }
 
     // Update the global offset first
     double old_offset = x->current_offset;
     x->current_offset = f;
-    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld).", f, new_rounded_offset);
+    x->loop_start = loop_start;
+    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld, loop_start: %.2f).", f, new_rounded_offset, loop_start);
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
     // Conduct a modified discontiguity check for every track across every palette BEFORE duplication.
@@ -844,8 +858,44 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 }
 
 
-// Handler for list messages on the main inlet
+// Handler for float messages on all inlets
+void buildspans_float(t_buildspans *x, double f) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+    if (inlet_num == 1) {
+        buildspans_do_offset(x, f, 0.0);
+    } else {
+        // Fallback for other inlets if they are not already handled by specialized methods
+        if (inlet_num == 0) {
+             object_error((t_object *)x, "Float received in inlet 0, but list expected.");
+        } else if (inlet_num == 2) {
+             buildspans_track(x, (long)f);
+        } else if (inlet_num == 4) {
+             buildspans_local_bar_length(x, f);
+        }
+    }
+}
+
+// Handler for list messages on the main inlet and offset inlet
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    long inlet_num = proxy_getinlet((t_object *)x);
+
+    if (inlet_num == 1) {
+        int valid = 0;
+        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
+            (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
+            buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
+            valid = 1;
+        } else if (argc == 1 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
+            buildspans_do_offset(x, atom_getfloat(argv), 0.0);
+            valid = 1;
+        }
+
+        if (!valid) {
+            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start] or float offset.");
+        }
+        return;
+    }
+
     if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)buildspans_list, s, argc, argv);
         return;
@@ -1138,8 +1188,8 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     t_symbol *track_sym = gensym(track_str);
 
     // Calculate bar timestamp
-    double relative_timestamp = calc_timestamp - offset;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset): %.2f", relative_timestamp);
+    double relative_timestamp = calc_timestamp - offset + x->loop_start;
+    buildspans_log(x, "Relative timestamp (calc_absolute - offset + loop_start): %.2f", relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
@@ -1656,7 +1706,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush All, (flush <int>) Flush Track, (clear) Clear. Supports @defer deferral.");
                 break;
             case 1:
-                sprintf(s, "Inlet 2: (float) Offset Timestamp");
+                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
                 break;
             case 2:
                 sprintf(s, "Inlet 3: (int) Track Number");
