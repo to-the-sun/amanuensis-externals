@@ -173,6 +173,7 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
+    long offset_fixed;
 } t_buildspans;
 
 // Function prototypes
@@ -505,6 +506,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
+        x->offset_fixed = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -560,6 +562,7 @@ void buildspans_clear(t_buildspans *x) {
     x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
+    x->offset_fixed = 0;
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
@@ -591,13 +594,14 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
 
-    // Only duplicate if the rounded offset is different and the old offset was not the initial default.
-    if (new_rounded_offset == old_rounded_offset || x->current_offset <= 0.0) {
-        if (x->current_offset <= 0.0) {
+    // Only duplicate if the rounded offset is different and the old offset was not the initial default (unless it was already fixed).
+    if (new_rounded_offset == old_rounded_offset || (x->current_offset <= 0.0 && !x->offset_fixed)) {
+        if (x->current_offset <= 0.0 && !x->offset_fixed) {
             buildspans_log(x, "Global offset initialized via buildspans_do_offset.");
         }
         x->current_offset = f;
         x->loop_start = loop_start;
+        x->offset_fixed = 1;
         buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication.", f, loop_start);
         return;
     }
@@ -924,7 +928,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    if (x->current_offset <= 0.0) {
+    if (!x->offset_fixed && x->current_offset <= 0.0) {
         double old_offset = x->current_offset;
         x->current_offset = calc_timestamp;
         buildspans_log(x, "Offset not set (current_offset <= 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
