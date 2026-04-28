@@ -591,26 +591,30 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
 
-    long new_rounded_offset = (long)round(f);
-    long old_rounded_offset = (long)round(x->current_offset);
-
-    // Only duplicate if the rounded offset is different and the old offset was not the initial default (unless it was already fixed).
-    if (new_rounded_offset == old_rounded_offset || (x->current_offset <= 0.0 && !x->offset_fixed)) {
-        if (x->current_offset <= 0.0 && !x->offset_fixed) {
-            buildspans_log(x, "Global offset initialized via buildspans_do_offset.");
-        }
+    if (f <= 0.0) {
         x->current_offset = f;
         x->loop_start = loop_start;
-        x->offset_fixed = 1;
-        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication.", f, loop_start);
+        x->offset_fixed = 0;
+        buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
         return;
     }
 
-    // Update the global offset first
+    long new_rounded_offset = (long)round(f);
+    long old_rounded_offset = (long)round(x->current_offset);
+
+    if (x->offset_fixed && new_rounded_offset == old_rounded_offset) {
+        x->current_offset = f;
+        x->loop_start = loop_start;
+        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
+        return;
+    }
+
+    // Proceed with duplication
     double old_offset = x->current_offset;
     x->current_offset = f;
     x->loop_start = loop_start;
-    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld, loop_start: %.2f).", f, new_rounded_offset, loop_start);
+    x->offset_fixed = 1;
+    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
     // Conduct a modified discontiguity check for every track across every palette BEFORE duplication.
