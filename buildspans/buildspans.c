@@ -942,7 +942,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", x->current_track);
 
-    if (keys) {
+    if (keys && calc_timestamp != x->current_offset) {
         for (long i = 0; i < num_keys; i++) {
             char *pal_str, *track_str, *bar_str, *prop_str;
             if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
