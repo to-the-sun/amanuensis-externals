@@ -573,9 +573,20 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
 
                 if (i == 0) {
+                    t_atom *r_atoms = NULL;
+                    long r_len = 0;
+                    t_atomarray *r_aa = NULL;
                     t_atom r_atom;
-                    if (dictionary_getatom(challenger_bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
-                        winning_rating = atom_getfloat(&r_atom);
+
+                    if (dictionary_getatomarray(challenger_bar_dict, gensym("rating"), (t_object **)&r_aa) == MAX_ERR_NONE && r_aa) {
+                        atomarray_getatoms(r_aa, &r_len, &r_atoms);
+                    } else if (dictionary_getatom(challenger_bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
+                        r_atoms = &r_atom;
+                        r_len = 1;
+                    }
+
+                    if (r_len > 0) {
+                        winning_rating = atom_getfloat(r_atoms);
                     }
                 }
             }

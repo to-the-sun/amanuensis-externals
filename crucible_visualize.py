@@ -5,6 +5,7 @@ import json
 import time
 import os
 import sys
+import traceback
 
 # Set dummy video driver for headless environments
 if os.environ.get('HEADLESS'):
@@ -145,6 +146,7 @@ def run_gui():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
             for bar_ts in bars:
+                if bar_length <= 0: continue
                 col = bar_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, (80, 80, 100), rect)
@@ -165,18 +167,19 @@ def run_gui():
             color = (255, 255, 255) if is_flashing else (150, 150, 220)
 
             for bar_ts in e["bars"]:
+                if bar_length <= 0: continue
                 col = bar_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, color, rect)
 
             # Floating Rating
-            if e["bars"]:
+            if e["bars"] and bar_length > 0:
                 avg_col = sum(b // bar_length for b in e["bars"]) / len(e["bars"])
                 float_x = margin_left + avg_col * cell_w
                 float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
                 alpha = int(255 * (1.0 - t))
-                rating_text = big_font.render(f"+{e['rating']:.2f}", True, (255, 255, 100))
+                rating_text = big_font.render(f"{e['rating']:.2f}", True, (255, 255, 100))
                 rating_text.set_alpha(alpha)
                 screen.blit(rating_text, (float_x, float_y))
 
@@ -185,4 +188,14 @@ def run_gui():
 
 if __name__ == "__main__":
     threading.Thread(target=tcp_server, daemon=True).start()
-    run_gui()
+    try:
+        run_gui()
+    except Exception:
+        traceback.print_exc()
+        print("\nVisualizer encountered an error and has stopped.")
+        print("Press Enter to exit...")
+        try:
+            input()
+        except EOFError:
+            # Handle non-interactive environments
+            time.sleep(3600)
