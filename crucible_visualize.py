@@ -146,8 +146,11 @@ def run_gui():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
             for bar_ts in bars:
+                try:
+                    b_ts = int(bar_ts)
+                except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
-                col = bar_ts // bar_length
+                col = b_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, (80, 80, 100), rect)
 
@@ -166,15 +169,20 @@ def run_gui():
             is_flashing = elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
             color = (255, 255, 255) if is_flashing else (150, 150, 220)
 
+            valid_bars = []
             for bar_ts in e["bars"]:
+                try:
+                    b_ts = int(bar_ts)
+                    valid_bars.append(b_ts)
+                except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
-                col = bar_ts // bar_length
+                col = b_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, color, rect)
 
             # Floating Rating
-            if e["bars"] and bar_length > 0:
-                avg_col = sum(b // bar_length for b in e["bars"]) / len(e["bars"])
+            if valid_bars and bar_length > 0:
+                avg_col = sum(b // bar_length for b in valid_bars) / len(valid_bars)
                 float_x = margin_left + avg_col * cell_w
                 float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 

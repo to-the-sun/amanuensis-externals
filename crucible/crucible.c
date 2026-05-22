@@ -1034,8 +1034,15 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
             if (j > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
             // Check if it's a numeric bar key
             const char *bk = bar_keys[j]->s_name;
-            int is_num = 1;
-            for(int k=0; bk[k]; k++) if(!isdigit(bk[k])) { is_num=0; break; }
+            int is_num = (bk && bk[0] != '\0');
+            if (is_num) {
+                for(int k=0; bk[k]; k++) {
+                    if(!isdigit(bk[k])) {
+                        is_num = 0;
+                        break;
+                    }
+                }
+            }
 
             if (is_num) {
                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
