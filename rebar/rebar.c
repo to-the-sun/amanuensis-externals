@@ -275,6 +275,8 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define atomarray_deep_copy rebar_atomarray_deep_copy
 #define parse_hierarchical_key rebar_parse_hierarchical_key
 #define generate_hierarchical_key rebar_generate_hierarchical_key
+#define crucible_visualize_state rebar_crucible_visualize_state
+#define crucible_attr_set_visualize rebar_crucible_attr_set_visualize
 #define compare_doubles rebar_compare_doubles
 
 #define crucible_class rebar_crucible_class
@@ -465,6 +467,7 @@ t_max_err rebar_attr_set_visualize(t_rebar *x, void *attr, long ac, t_atom *av) 
     if (ac && av) {
         x->visualize = atom_getlong(av);
         if (x->buildspans_inst) x->buildspans_inst->visualize = x->visualize;
+        if (x->crucible_inst) rebar_crucible_attr_set_visualize(x->crucible_inst, NULL, ac, av);
     }
     return MAX_ERR_NONE;
 }
@@ -518,7 +521,7 @@ void ext_main(void *r) {
     CLASS_ATTR_ACCESSORS(c, "consume", NULL, (method)rebar_attr_set_consume);
 
     CLASS_ATTR_LONG(c, "visualize", 0, t_rebar, visualize);
-    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization (Buildspans)");
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization (Crucible/Buildspans)");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
     CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)rebar_attr_set_visualize);
 
@@ -580,6 +583,8 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->buildspans_inst->log = x->log;
         x->buildspans_inst->defer = x->defer;
         x->buildspans_inst->visualize = x->visualize;
+        x->crucible_inst->visualize = x->visualize;
+        if (x->visualize) rebar_crucible_visualize_state(x->crucible_inst, NULL, NULL, NULL, 0.0);
         x->crucible_inst->log = x->log;
         x->crucible_inst->defer = x->defer;
         x->crucible_inst->consume = x->consume;

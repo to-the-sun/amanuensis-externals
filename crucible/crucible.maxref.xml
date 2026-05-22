@@ -126,6 +126,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="visualize" get="1" set="1" type="long" size="1">
+			<digest>Enable Visualization</digest>
+			<description>
+				When enabled (1), the current state of the transcript and any new span entries are sent to the external visualization script via TCP on port 9999.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

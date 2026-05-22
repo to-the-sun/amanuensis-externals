@@ -6,7 +6,9 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
+#include "../shared/visualize.h"
 #include <string.h>
+#include <ctype.h>
 
 typedef struct _crucible {
     t_object s_obj;
@@ -21,6 +23,7 @@ typedef struct _crucible {
     long log;
     long consume;
     long defer;
+    long visualize;
     t_atom_long song_reach;
     t_dictionary *track_reaches_dict;
     double local_bar_length;
@@ -44,6 +47,8 @@ t_atom_long crucible_get_bar_length(t_crucible *x);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
 int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
 void crucible_recalculate_reaches(t_crucible *x);
+void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating);
+t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
 
 t_class *crucible_class;
@@ -148,6 +153,11 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
     CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
+    CLASS_ATTR_LONG(c, "visualize", 0, t_crucible, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)crucible_attr_set_visualize);
+
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
@@ -155,6 +165,7 @@ void ext_main(void *r) {
 void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     t_crucible *x = (t_crucible *)object_alloc(crucible_class);
     if (x) {
+        visualize_init();
         x->challenger_dict = dictionary_new();
         x->last_track_id = gensym("");
         x->incumbent_dict_name = gensym("");
@@ -191,6 +202,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void crucible_free(t_crucible *x) {
+    visualize_cleanup();
     if (x->challenger_dict) {
         object_release((t_object *)x->challenger_dict);
     }
@@ -543,6 +555,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         // Copy bars to incumbent
+        double winning_rating = 0.0;
         for (long i = 0; i < span_len; i++) {
             t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[64];
@@ -558,7 +571,18 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 }
                 dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)dictionary_deep_copy(challenger_bar_dict));
                 crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
+
+                if (i == 0) {
+                    t_atom r_atom;
+                    if (dictionary_getatom(challenger_bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
+                        winning_rating = atom_getfloat(&r_atom);
+                    }
+                }
             }
+        }
+
+        if (x->visualize) {
+            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, winning_rating);
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
@@ -936,4 +960,99 @@ int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict) {
         }
     }
     return 0;
+}
+
+void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating) {
+    if (!x->visualize) return;
+
+    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+    if (!incumbent_dict) return;
+
+    long buffer_size = 65536;
+    char *json_buffer = (char *)sysmem_newptr(buffer_size);
+    if (!json_buffer) {
+        dictobj_release(incumbent_dict);
+        return;
+    }
+    long offset = 0;
+
+    t_atom_long bar_length = crucible_get_bar_length(x);
+
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"type\":\"crucible\",\"bar_length\":%lld,\"song_reach\":%lld",
+                       (long long)bar_length, (long long)x->song_reach);
+
+    if (event_type && event_type != _sym_nothing) {
+        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"%s\"", event_type->s_name);
+        if (track_id_sym) {
+            offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_track\":\"%s\"", track_id_sym->s_name);
+        }
+        if (span_aa) {
+            long ac = 0;
+            t_atom *av = NULL;
+            atomarray_getatoms(span_aa, &ac, &av);
+            offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_bars\":[");
+            for (long i = 0; i < ac; i++) {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "%lld%s", (long long)atom_getlong(av + i), (i < ac - 1) ? "," : "");
+            }
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+        }
+        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
+    }
+
+    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
+
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+
+    int first_track = 1;
+    for (long i = 0; i < num_tracks; i++) {
+        t_symbol *t_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+        first_track = 0;
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
+
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        for (long j = 0; j < num_bars; j++) {
+            if (j > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            // Check if it's a numeric bar key
+            const char *bk = bar_keys[j]->s_name;
+            int is_num = 1;
+            for(int k=0; bk[k]; k++) if(!isdigit(bk[k])) { is_num=0; break; }
+
+            if (is_num) {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
+            } else {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\"", bk);
+            }
+        }
+
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+
+    visualize(json_buffer);
+
+    if (track_keys) sysmem_freeptr(track_keys);
+    sysmem_freeptr(json_buffer);
+    dictobj_release(incumbent_dict);
+}
+
+t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long val = atom_getlong(av);
+        x->visualize = val;
+        if (val) {
+            crucible_visualize_state(x, NULL, NULL, NULL, 0.0);
+        }
+    }
+    return MAX_ERR_NONE;
 }
