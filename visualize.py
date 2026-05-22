@@ -56,6 +56,9 @@ def process_packet(text):
 
         try:
             pkt = json.loads(line)
+            if pkt.get("type") == "crucible":
+                continue
+
             with state_lock:
                 # 1. Weaver 'clear'
                 if "clear" in pkt:

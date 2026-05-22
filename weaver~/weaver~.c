@@ -630,7 +630,7 @@ void weaver_clear(t_weaver *x) {
     weaver_check_attachments(x);
     critical_exit(x->lock);
 
-    if (x->visualize) visualize("{\"clear\": 1}");
+    if (x->visualize) visualize("{\"type\": \"weaver\", \"clear\": 1}");
     weaver_log(x, "cleared all track states and lengths, and reset buffer bindings");
 }
 
@@ -906,7 +906,7 @@ void weaver_audio_qtask(t_weaver *x) {
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
             if (x->visualize && hit_entry.song_loop && !clear_sent) {
-                visualize("{\"clear\": 1}");
+                visualize("{\"type\": \"weaver\", \"clear\": 1}");
                 clear_sent = 1;
             }
             continue;
@@ -1038,14 +1038,14 @@ void weaver_audio_qtask(t_weaver *x) {
                 // Capture data quickly under lock
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
+                    snprintf(l_msg, sizeof(l_msg), "{\"type\": \"weaver\", \"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
                              t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f}",
+                    snprintf(msg, sizeof(msg), "{\"type\": \"weaver\", \"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f}",
                              t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length);
                     tr->viz_dirty = 0;
                     has_m = 1;
