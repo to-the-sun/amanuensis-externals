@@ -330,6 +330,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     crucible_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
 
     int challenger_wins = 1;
+    double challenger_winning_rating = 0.0;
 
     // Get challenger track dictionary
     t_dictionary *challenger_track_dict = NULL;
@@ -369,6 +370,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             continue;
         }
         double challenger_rating = atom_getfloat(challenger_rating_atoms);
+
+        if (i == 0) {
+            challenger_winning_rating = challenger_rating;
+        }
 
 
         // Check against incumbent
@@ -555,7 +560,6 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         // Copy bars to incumbent
-        double winning_rating = 0.0;
         for (long i = 0; i < span_len; i++) {
             t_atom_long bar_ts_long = atom_getlong(&span_atoms[i]);
             char bar_ts_str[64];
@@ -571,29 +575,11 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 }
                 dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)dictionary_deep_copy(challenger_bar_dict));
                 crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
-
-                if (i == 0) {
-                    t_atom *r_atoms = NULL;
-                    long r_len = 0;
-                    t_atomarray *r_aa = NULL;
-                    t_atom r_atom;
-
-                    if (dictionary_getatomarray(challenger_bar_dict, gensym("rating"), (t_object **)&r_aa) == MAX_ERR_NONE && r_aa) {
-                        atomarray_getatoms(r_aa, &r_len, &r_atoms);
-                    } else if (dictionary_getatom(challenger_bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
-                        r_atoms = &r_atom;
-                        r_len = 1;
-                    }
-
-                    if (r_len > 0) {
-                        winning_rating = atom_getfloat(r_atoms);
-                    }
-                }
             }
         }
 
         if (x->visualize) {
-            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, winning_rating);
+            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating);
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
