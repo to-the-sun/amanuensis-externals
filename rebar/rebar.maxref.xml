@@ -41,7 +41,11 @@
 			<description>Outputs a 1 when the processing sequence begins and a 0 when it completes and data has been committed back to the user dictionary.</description>
 		</outlet>
 		<outlet id="2" type="anything">
-			<digest>Outlet 2: Consolidated Logging</digest>
+			<digest>Outlet 2: Reach messages (song/track reaches)</digest>
+			<description>Outputs current reaches: 'song [reach]' or '[track_id] [reach]'. Triggered by growth or 'reaches' message.</description>
+		</outlet>
+		<outlet id="3" type="anything">
+			<digest>Outlet 3: Consolidated Logging</digest>
 			<description>
 				When the `@log` attribute is enabled, this outlet provides detailed verbose information from all three internal modules (`notify`, `buildspans`, and `crucible`).
 			</description>
@@ -66,7 +70,7 @@
 		<attribute name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Verbose Logging</digest>
 			<description>
-				When enabled (1), enables verbose logging for all internal sub-modules and directs the output to the fourth outlet.
+				When enabled (1), enables verbose logging for all internal sub-modules and directs the output to the third outlet.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
