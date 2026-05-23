@@ -98,8 +98,8 @@ def run_gui():
     screen = None
     pygame.display.set_caption("Crucible Visualizer")
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont("Arial", 24)
-    big_font = pygame.font.SysFont("Arial", 36)
+    font = pygame.font.SysFont("Arial", 12)
+    big_font = pygame.font.SysFont("Arial", 20)
 
     while True:
         now = time.time()
@@ -123,11 +123,11 @@ def run_gui():
         margin_top = 40
         margin_bottom = 20
         margin_right = 40
-        cell_h = 60
+        cell_h = 20
 
         if num_tracks != last_num_tracks:
             target_height = margin_top + max(1, num_tracks) * cell_h + margin_bottom
-            os.environ['SDL_VIDEO_WINDOW_POS'] = "0,%d" % (screen_h - target_height)
+            os.environ['SDL_VIDEO_WINDOW_POS'] = "0,%d" % (screen_h - target_height - 60)
             screen = pygame.display.set_mode((screen_w, int(target_height)))
             last_num_tracks = num_tracks
 
@@ -199,7 +199,7 @@ def run_gui():
             if valid_bars and bar_length > 0:
                 avg_col = sum(b // bar_length for b in valid_bars) / len(valid_bars)
                 float_x = margin_left + avg_col * cell_w + (cell_w / 2)
-                float_y = margin_top + row * cell_h + (cell_h / 2) - (elapsed * 50) # Rise 50px/s
+                float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
                 alpha = int(255 * (1.0 - t))
                 rating_text = big_font.render(f"{e['rating']:.2f}", True, (255, 255, 100))
