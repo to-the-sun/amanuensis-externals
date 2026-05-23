@@ -14,7 +14,6 @@ if os.environ.get('HEADLESS'):
 
 # Configuration
 TCP_PORT = 9999
-WINDOW_SIZE = (1200, 800)
 FPS = 60
 
 # State
@@ -90,11 +89,17 @@ def handle_client(sock):
 
 def run_gui():
     pygame.init()
-    screen = pygame.display.set_mode(WINDOW_SIZE)
+    info = pygame.display.Info()
+    # Fallback to 1920x1080 if info doesn't provide valid dimensions
+    screen_w = info.current_w if info.current_w > 0 else 1920
+    screen_h = info.current_h if info.current_h > 0 else 1080
+
+    last_num_tracks = -1
+    screen = None
     pygame.display.set_caption("Crucible Visualizer")
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont("Arial", 12)
-    big_font = pygame.font.SysFont("Arial", 20)
+    font = pygame.font.SysFont("Arial", 24)
+    big_font = pygame.font.SysFont("Arial", 36)
 
     while True:
         now = time.time()
@@ -110,6 +115,22 @@ def run_gui():
             # Clean up old events
             state["events"] = [e for e in events if now - e["start_time"] < e["duration"]]
 
+        # Determine track rows
+        sorted_track_ids = sorted(tracks.keys(), key=lambda x: int(x) if x.isdigit() else 999)
+        num_tracks = len(sorted_track_ids)
+
+        margin_left = 100
+        margin_top = 40
+        margin_bottom = 20
+        margin_right = 40
+        cell_h = 60
+
+        if num_tracks != last_num_tracks:
+            target_height = margin_top + max(1, num_tracks) * cell_h + margin_bottom
+            os.environ['SDL_VIDEO_WINDOW_POS'] = "0,%d" % (screen_h - target_height)
+            screen = pygame.display.set_mode((screen_w, int(target_height)))
+            last_num_tracks = num_tracks
+
         screen.fill((30, 30, 35))
 
         if not tracks and song_reach == 0:
@@ -117,16 +138,10 @@ def run_gui():
             clock.tick(FPS)
             continue
 
-        margin_left = 60
-        margin_top = 40
-        cell_w = 20
-        cell_h = 20
-
-        # Determine track rows
-        sorted_track_ids = sorted(tracks.keys(), key=lambda x: int(x) if x.isdigit() else 999)
         track_to_row = {tid: i for i, tid in enumerate(sorted_track_ids)}
 
         num_cols = (song_reach // bar_length) + 1 if bar_length > 0 else 0
+        cell_w = (screen_w - margin_left - margin_right) / max(1, num_cols)
 
         # Draw background grid lines
         for i in range(len(sorted_track_ids) + 1):
@@ -139,7 +154,7 @@ def run_gui():
         # Draw track labels
         for tid, row in track_to_row.items():
             lbl = font.render(f"T {tid}", True, (180, 180, 180))
-            screen.blit(lbl, (10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
+            screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
 
         # Draw filled boxes for present bars
         for tid, bars in tracks.items():
@@ -183,8 +198,8 @@ def run_gui():
             # Floating Rating
             if valid_bars and bar_length > 0:
                 avg_col = sum(b // bar_length for b in valid_bars) / len(valid_bars)
-                float_x = margin_left + avg_col * cell_w
-                float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
+                float_x = margin_left + avg_col * cell_w + (cell_w / 2)
+                float_y = margin_top + row * cell_h + (cell_h / 2) - (elapsed * 50) # Rise 50px/s
 
                 alpha = int(255 * (1.0 - t))
                 rating_text = big_font.render(f"{e['rating']:.2f}", True, (255, 255, 100))
