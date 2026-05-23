@@ -23,6 +23,7 @@ typedef struct _rebar {
     struct _crucible *crucible_inst;
 
     void *out_busy;      // Busy state (0/1)
+    void *out_reach;     // Reach Outlet
     void *out_log;       // Consolidated logging
 
     long log;
@@ -381,6 +382,7 @@ void rebar_intercept_outlet_anything(void *o, t_symbol *s, short ac, t_atom *av)
         else if (vo->index == 1 || vo->index == 2 || vo->index == 3) rebar_crucible_anything(x->crucible_inst, s, (long)ac, av);
     } else if (vo->type == MOD_CRUCIBLE) {
         if (vo->index == 0 && x->log && x->out_log) sdk_outlet_anything(x->out_log, s, (long)ac, av);
+        else if (vo->index == 1 && x->out_reach) sdk_outlet_anything(x->out_reach, s, (long)ac, av);
     }
 }
 
@@ -392,6 +394,8 @@ void rebar_intercept_outlet_list(void *o, t_symbol *s, short ac, t_atom *av) {
 
     if (vo->type == MOD_NOTIFY) {
         if (vo->index == 4) rebar_buildspans_list(x->buildspans_inst, s, (long)ac, av);
+    } else if (vo->type == MOD_CRUCIBLE) {
+        if (vo->index == 1 && x->out_reach) sdk_outlet_list(x->out_reach, s, (long)ac, av);
     }
 }
 
@@ -556,6 +560,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         x->out_log = sdk_outlet_new((t_object *)x, NULL);
+        x->out_reach = sdk_outlet_new((t_object *)x, NULL);
         x->out_busy = sdk_outlet_new((t_object *)x, NULL);
 
         critical_enter(g_rebar_crit);
@@ -650,7 +655,8 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;
-            case 1: sprintf(s, "Outlet 2: Logging and Status messages"); break;
+            case 1: sprintf(s, "Outlet 2: Reach messages (song/track reaches)"); break;
+            case 2: sprintf(s, "Outlet 3: Logging and Status messages"); break;
         }
     }
 }
