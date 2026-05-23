@@ -124,12 +124,13 @@ def run_gui():
         margin_bottom = 20
         margin_right = 40
         cell_h = 20
+        display_tracks = max(4, num_tracks)
 
-        if num_tracks != last_num_tracks:
-            target_height = margin_top + max(1, num_tracks) * cell_h + margin_bottom
-            os.environ['SDL_VIDEO_WINDOW_POS'] = "0,%d" % (screen_h - target_height - 60)
+        if display_tracks != last_num_tracks:
+            target_height = margin_top + display_tracks * cell_h + margin_bottom
+            os.environ['SDL_VIDEO_WINDOW_POS'] = "0,%d" % (screen_h - target_height - 40)
             screen = pygame.display.set_mode((screen_w, int(target_height)))
-            last_num_tracks = num_tracks
+            last_num_tracks = display_tracks
 
         screen.fill((30, 30, 35))
 
