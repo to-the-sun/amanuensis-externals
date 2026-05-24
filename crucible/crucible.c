@@ -47,6 +47,7 @@ t_atom_long crucible_get_bar_length(t_crucible *x);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
 int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
 void crucible_recalculate_reaches(t_crucible *x);
+void crucible_visualize_dump_all_spans(t_crucible *x);
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating);
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
@@ -791,6 +792,66 @@ void crucible_recalculate_reaches(t_crucible *x) {
     dictobj_release(incumbent_dict);
 }
 
+void crucible_visualize_dump_all_spans(t_crucible *x) {
+    if (!x->visualize) return;
+    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+    if (!incumbent_dict) return;
+
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+
+    for (long i = 0; i < num_tracks; i++) {
+        t_symbol *t_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        t_dictionary *seen_spans = dictionary_new();
+
+        for (long j = 0; j < num_bars; j++) {
+            t_symbol *bar_sym = bar_keys[j];
+            t_dictionary *bar_dict = NULL;
+            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+            if (!bar_dict) continue;
+
+            t_atomarray *span_aa = crucible_get_span_as_atomarray(bar_dict);
+            if (!span_aa) continue;
+
+            long ac = 0;
+            t_atom *av = NULL;
+            atomarray_getatoms(span_aa, &ac, &av);
+            if (ac > 0) {
+                // Use the first bar of the span as a unique identifier for the span
+                t_atom_long first_bar = atom_getlong(av);
+                char first_bar_str[64];
+                snprintf(first_bar_str, 64, "%lld", (long long)first_bar);
+                t_symbol *first_bar_sym = gensym(first_bar_str);
+
+                if (!dictionary_hasentry(seen_spans, first_bar_sym)) {
+                    dictionary_appendlong(seen_spans, first_bar_sym, 1);
+
+                    double rating = 0.0;
+                    t_atom r_atom;
+                    if (dictionary_getatom(bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
+                        rating = atom_getfloat(&r_atom);
+                    }
+                    crucible_visualize_state(x, gensym("new_span"), t_sym, span_aa, rating);
+                }
+            }
+            object_release((t_object *)span_aa);
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+        object_release((t_object *)seen_spans);
+    }
+
+    if (track_keys) sysmem_freeptr(track_keys);
+    dictobj_release(incumbent_dict);
+}
+
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->defer && !systhread_ismainthread()) {
         defer_low(x, (method)crucible_anything, s, argc, argv);
@@ -825,6 +886,9 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         x->incumbent_dict_name = tmp;
 
         crucible_recalculate_reaches(x);
+        if (x->visualize) {
+            crucible_visualize_dump_all_spans(x);
+        }
 
         if (x->outlet_reach_int) {
             t_atom song_reach_atom;
