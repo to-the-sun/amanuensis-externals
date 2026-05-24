@@ -286,6 +286,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define crucible_anything rebar_crucible_anything
 #define crucible_process_span rebar_crucible_process_span
 #define crucible_assist rebar_crucible_assist
+#define crucible_visualize_dump_all_spans rebar_crucible_visualize_dump_all_spans
 #define crucible_log rebar_crucible_log
 #define crucible_atoms_to_string rebar_crucible_atoms_to_string
 #define parse_selector rebar_parse_selector
