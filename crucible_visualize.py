@@ -152,6 +152,15 @@ def run_gui():
             x = margin_left + j * cell_w
             pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
 
+        # Draw time legend
+        step = max(1, int(40 // cell_w)) if cell_w > 0 else 1
+        for j in range(0, int(num_cols) + 1, step):
+            x = margin_left + j * cell_w
+            total_seconds = (j * bar_length) // 1000
+            time_str = f"{int(total_seconds // 60)}:{int(total_seconds % 60):02d}"
+            lbl = font.render(time_str, True, (180, 180, 180))
+            screen.blit(lbl, (x - lbl.get_width() // 2, margin_top - lbl.get_height() - 5))
+
         # Draw track labels
         for tid, row in track_to_row.items():
             lbl = font.render(f"T {tid}", True, (180, 180, 180))
