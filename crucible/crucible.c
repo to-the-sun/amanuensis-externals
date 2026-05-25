@@ -767,6 +767,11 @@ void crucible_recalculate_reaches(t_crucible *x) {
             dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
             if (!bar_dict) continue;
 
+            // Use the bar itself as a reach fallback
+            t_atom_long bar_ts_val = atoll(bar_sym->s_name);
+            t_atom_long bar_reach = bar_ts_val + bar_length;
+            if (bar_reach > track_max_reach) track_max_reach = bar_reach;
+
             t_atomarray *span_aa = crucible_get_span_as_atomarray(bar_dict);
             if (span_aa) {
                 long span_len = 0;
@@ -872,10 +877,15 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->challenger_dict) {
             dictionary_clear(x->challenger_dict);
         }
+
         x->last_track_id = gensym("");
         x->local_bar_length = 0;
         x->bar_warn_sent = 0;
         crucible_log(x, "Internal state cleared.");
+
+        if (x->visualize) {
+            visualize("{\"type\":\"crucible\",\"song_reach\":0,\"tracks\":{}}");
+        }
         return;
     }
 
