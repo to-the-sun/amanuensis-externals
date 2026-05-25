@@ -25,6 +25,20 @@ state = {
 }
 state_lock = threading.Lock()
 
+def recalculate_reach():
+    """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
+    max_reach = 0
+    bar_length = state.get("bar_length", 125)
+    for track_bars in state["tracks"].values():
+        for bar_ts in track_bars:
+            try:
+                b_ts = float(bar_ts)
+                if b_ts + bar_length > max_reach:
+                    max_reach = b_ts + bar_length
+            except (ValueError, TypeError):
+                continue
+    state["song_reach"] = max_reach
+
 def process_packet(text):
     if not text:
         return
@@ -38,24 +52,33 @@ def process_packet(text):
                 continue
 
             with state_lock:
-                state["song_reach"] = pkt.get("song_reach", state.get("song_reach", 0))
                 state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
+
+                dirty = False
                 if "tracks" in pkt:
                     state["tracks"] = pkt["tracks"]
-                    # Ensure song_reach covers all track bars
-                    for track_bars in state["tracks"].values():
-                        for bar_ts in track_bars:
-                            try:
-                                b_ts = float(bar_ts)
-                                if b_ts + state["bar_length"] > state["song_reach"]:
-                                    state["song_reach"] = b_ts + state["bar_length"]
-                            except (ValueError, TypeError):
-                                continue
+                    dirty = True
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
                     bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
+
+                    # Update local track state from the new span event
+                    if track is not None:
+                        t_str = str(track)
+                        if t_str not in state["tracks"]:
+                            state["tracks"][t_str] = []
+
+                        existing_bars = set(state["tracks"][t_str])
+                        added = False
+                        for b in bars:
+                            if b not in existing_bars:
+                                state["tracks"][t_str].append(b)
+                                added = True
+                        if added:
+                            dirty = True
+
                     state["events"].append({
                         "type": "new_span",
                         "track": track,
@@ -64,6 +87,10 @@ def process_packet(text):
                         "start_time": time.time(),
                         "duration": 3.0
                     })
+
+                if dirty:
+                    recalculate_reach()
+
         except json.JSONDecodeError:
             continue
 

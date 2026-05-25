@@ -9,6 +9,6 @@ int visualize_init();
 void visualize_cleanup();
 
 // Call this to send a message
-void visualize(const char *message);
+void visualize(void *x, const char *message);
 
 #endif // VISUALIZE_H

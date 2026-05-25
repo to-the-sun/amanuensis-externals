@@ -590,7 +590,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->buildspans_inst->defer = x->defer;
         x->buildspans_inst->visualize = x->visualize;
         x->crucible_inst->visualize = x->visualize;
-        if (x->visualize) rebar_crucible_visualize_state(x->crucible_inst, NULL, NULL, NULL, 0.0);
+        if (x->visualize) rebar_crucible_visualize_state(x->crucible_inst, NULL, NULL, NULL, 0.0, 1);
         x->crucible_inst->log = x->log;
         x->crucible_inst->defer = x->defer;
         x->crucible_inst->consume = x->consume;

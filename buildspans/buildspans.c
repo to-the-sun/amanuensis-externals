@@ -311,7 +311,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     long buffer_size = 65536;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     long offset = 0;
-    offset += snprintf(json_buffer + offset, buffer_size, "{\"type\":\"building\",\"palettes\":{");
+    offset += snprintf(json_buffer + offset, buffer_size, "{\"palettes\":{");
 
     for (long p = 0; p < unique_palette_count; p++) {
         t_symbol *palette_sym = unique_palettes[p];
@@ -447,7 +447,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     long bar_length = buildspans_get_bar_length(x);
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld}", x->current_offset, bar_length);
 
-    visualize(json_buffer);
+    visualize((t_object *)x, json_buffer);
 
     sysmem_freeptr(json_buffer);
     sysmem_freeptr(unique_palettes);
