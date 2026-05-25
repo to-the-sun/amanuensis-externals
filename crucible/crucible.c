@@ -48,7 +48,7 @@ t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
 int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
 void crucible_recalculate_reaches(t_crucible *x);
 void crucible_visualize_dump_all_spans(t_crucible *x);
-void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating);
+void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks);
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
 
@@ -580,7 +580,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         }
 
         if (x->visualize) {
-            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating);
+            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
@@ -844,7 +844,7 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
                     if (dictionary_getatom(bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
                         rating = atom_getfloat(&r_atom);
                     }
-                    crucible_visualize_state(x, gensym("new_span"), t_sym, span_aa, rating);
+                    crucible_visualize_state(x, gensym("new_span"), t_sym, span_aa, rating, 0);
                 }
             }
             object_release((t_object *)span_aa);
@@ -884,7 +884,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         crucible_log(x, "Internal state cleared.");
 
         if (x->visualize) {
-            visualize("{\"type\":\"crucible\",\"song_reach\":0,\"tracks\":{}}");
+            visualize((t_object *)x, "{\"tracks\":{}}");
         }
         return;
     }
@@ -897,6 +897,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         crucible_recalculate_reaches(x);
         if (x->visualize) {
+            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
             crucible_visualize_dump_all_spans(x);
         }
 
@@ -1033,7 +1034,7 @@ int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict) {
     return 0;
 }
 
-void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating) {
+void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
     if (!x->visualize) return;
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
@@ -1049,8 +1050,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
     t_atom_long bar_length = crucible_get_bar_length(x);
 
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"type\":\"crucible\",\"bar_length\":%lld,\"song_reach\":%lld",
-                       (long long)bar_length, (long long)x->song_reach);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"bar_length\":%lld", (long long)bar_length);
 
     if (event_type && event_type != _sym_nothing) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"%s\"", event_type->s_name);
@@ -1070,56 +1070,58 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
         offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
     }
 
-    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
+    if (include_tracks) {
+        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
 
-    t_symbol **track_keys = NULL;
-    long num_tracks = 0;
-    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+        t_symbol **track_keys = NULL;
+        long num_tracks = 0;
+        dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
 
-    int first_track = 1;
-    for (long i = 0; i < num_tracks; i++) {
-        t_symbol *t_sym = track_keys[i];
-        t_dictionary *track_dict = NULL;
-        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+        int first_track = 1;
+        for (long i = 0; i < num_tracks; i++) {
+            t_symbol *t_sym = track_keys[i];
+            t_dictionary *track_dict = NULL;
+            if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
 
-        if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-        first_track = 0;
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
+            if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            first_track = 0;
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
 
-        t_symbol **bar_keys = NULL;
-        long num_bars = 0;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+            t_symbol **bar_keys = NULL;
+            long num_bars = 0;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
-        for (long j = 0; j < num_bars; j++) {
-            if (j > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            // Check if it's a numeric bar key
-            const char *bk = bar_keys[j]->s_name;
-            int is_num = (bk && bk[0] != '\0');
-            if (is_num) {
-                for(int k=0; bk[k]; k++) {
-                    if(!isdigit(bk[k])) {
-                        is_num = 0;
-                        break;
+            for (long j = 0; j < num_bars; j++) {
+                if (j > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                // Check if it's a numeric bar key
+                const char *bk = bar_keys[j]->s_name;
+                int is_num = (bk && bk[0] != '\0');
+                if (is_num) {
+                    for(int k=0; bk[k]; k++) {
+                        if(!isdigit(bk[k])) {
+                            is_num = 0;
+                            break;
+                        }
                     }
+                }
+
+                if (is_num) {
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
+                } else {
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\"", bk);
                 }
             }
 
-            if (is_num) {
-                offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
-            } else {
-                offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\"", bk);
-            }
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+            if (bar_keys) sysmem_freeptr(bar_keys);
         }
-
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
-        if (bar_keys) sysmem_freeptr(bar_keys);
+        if (track_keys) sysmem_freeptr(track_keys);
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
     }
 
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
 
-    visualize(json_buffer);
-
-    if (track_keys) sysmem_freeptr(track_keys);
+    visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
     dictobj_release(incumbent_dict);
 }
@@ -1129,7 +1131,7 @@ t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom
         long val = atom_getlong(av);
         x->visualize = val;
         if (val) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0);
+            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
         }
     }
     return MAX_ERR_NONE;

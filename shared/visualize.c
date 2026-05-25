@@ -1,4 +1,6 @@
 #include "visualize.h"
+#include "ext.h"
+#include "ext_obex.h"
 #include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
@@ -55,7 +57,7 @@ void visualize_cleanup() {
  *   when the visualization script is not running.
  * - While it uses non-blocking I/O, it does NOT operate on its own background thread.
  */
-void visualize(const char *message) {
+void visualize(void *x, const char *message) {
     if (sock == INVALID_SOCKET) {
         DWORD now = GetTickCount();
         if (now - last_connect_attempt < 2000) {
@@ -90,7 +92,26 @@ void visualize(const char *message) {
     }
 
     char buf[65536];
-    int n = snprintf(buf, sizeof(buf), "%s\n", message);
+    int n;
+
+    if (x && message && message[0] == '{') {
+        const char *type = "unknown";
+        t_symbol *classname = object_classname(x);
+
+        if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+            type = "crucible";
+        } else if (classname == gensym("weaver~")) {
+            type = "weaver";
+        } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
+            type = "building";
+        }
+
+        // message[1] skips the opening '{'
+        n = snprintf(buf, sizeof(buf), "{\"type\":\"%s\",%s\n", type, message + 1);
+    } else {
+        n = snprintf(buf, sizeof(buf), "%s\n", message);
+    }
+
     if (n < 0 || n >= (int)sizeof(buf)) {
         return;
     }
