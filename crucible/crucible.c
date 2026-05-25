@@ -878,20 +878,13 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             dictionary_clear(x->challenger_dict);
         }
 
-        // Also clear the incumbent dictionary
-        t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-        if (incumbent_dict) {
-            dictionary_clear(incumbent_dict);
-            dictobj_release(incumbent_dict);
-        }
-
         x->last_track_id = gensym("");
         x->local_bar_length = 0;
         x->bar_warn_sent = 0;
         crucible_log(x, "Internal state cleared.");
 
         if (x->visualize) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0);
+            visualize("{\"type\":\"crucible\",\"song_reach\":0,\"tracks\":{}}");
         }
         return;
     }
