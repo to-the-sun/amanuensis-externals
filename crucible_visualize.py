@@ -42,6 +42,15 @@ def process_packet(text):
                 state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
                 if "tracks" in pkt:
                     state["tracks"] = pkt["tracks"]
+                    # Ensure song_reach covers all track bars
+                    for track_bars in state["tracks"].values():
+                        for bar_ts in track_bars:
+                            try:
+                                b_ts = float(bar_ts)
+                                if b_ts + state["bar_length"] > state["song_reach"]:
+                                    state["song_reach"] = b_ts + state["bar_length"]
+                            except (ValueError, TypeError):
+                                continue
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
@@ -153,7 +162,9 @@ def run_gui():
             pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
 
         # Draw time legend
-        step = max(1, int(40 // cell_w)) if cell_w > 0 else 1
+        sample_lbl = font.render("00:00", True, (0,0,0))
+        label_w = sample_lbl.get_width()
+        step = max(1, int((label_w * 2) // cell_w) + 1) if cell_w > 0 else 1
         for j in range(0, int(num_cols) + 1, step):
             x = margin_left + j * cell_w
             total_seconds = (j * bar_length) // 1000
