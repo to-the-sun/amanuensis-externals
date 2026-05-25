@@ -256,6 +256,7 @@ void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s);
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_open_plug_dialog(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_bang(t_lazyvst *x);
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
@@ -460,7 +461,24 @@ void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
         post("lazyvst~: Received plug message for: %s", path->s_name);
         defer_low(x, (method)lazyvst_do_plug, path, 0, NULL);
     } else {
-        post("lazyvst~: plug message received but no path provided");
+        defer_low(x, (method)lazyvst_open_plug_dialog, NULL, 0, NULL);
+    }
+}
+
+void lazyvst_open_plug_dialog(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    char filename[MAX_FILENAME_CHARS];
+    short path_id;
+    t_fourcc type = 0;
+    char fullpath[MAX_PATH_CHARS];
+
+    filename[0] = '\0';
+    open_promptset("Select VST Plugin");
+    if (open_dialog(filename, &path_id, &type, NULL, 0) == 0) {
+        if (path_toabsolutesystempath(path_id, filename, fullpath) == MAX_ERR_NONE) {
+            t_symbol *path_sym = gensym(fullpath);
+            post("lazyvst~: Dialog selected: %s", fullpath);
+            lazyvst_do_plug(x, path_sym, 0, NULL);
+        }
     }
 }
 
