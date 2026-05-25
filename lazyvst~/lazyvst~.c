@@ -158,6 +158,7 @@ typedef struct _lazyvst {
     double cur_sr;
     long cur_ms;
     long debug_host;
+    long loading;
     t_critical lock;
 } t_lazyvst;
 
@@ -246,7 +247,7 @@ intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, int
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv);
 void lazyvst_free(t_lazyvst *x);
 void *lazyvst_worker(t_lazyvst *x);
-void lazyvst_open(t_lazyvst *x);
+void lazyvst_open(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_open(t_lazyvst *x);
 void lazyvst_do_instantiate(t_lazyvst *x);
 long lazyvst_get_counts(t_lazyvst *x);
@@ -258,14 +259,14 @@ void lazyvst_do_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_open_plug_dialog(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_do_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
-void lazyvst_bang(t_lazyvst *x);
+void lazyvst_bang(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
-void lazyvst_getchunk(t_lazyvst *x, long isbank);
-void lazyvst_vstinfo(t_lazyvst *x);
-void lazyvst_params(t_lazyvst *x);
+void lazyvst_getchunk(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_vstinfo(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_params(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
-void lazyvst_vstdebug(t_lazyvst *x, long state);
+void lazyvst_vstdebug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -323,7 +324,11 @@ void lazyvst_register_window_class() {
     RegisterClassEx(&wcex);
 }
 
-void lazyvst_open(t_lazyvst *x) {
+void lazyvst_open(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_open, s, argc, argv);
+        return;
+    }
     defer_low(x, (method)lazyvst_do_open, NULL, 0, NULL);
 }
 
@@ -331,16 +336,16 @@ void ext_main(void *r) {
     common_symbols_init();
     t_class *c = class_new("lazyvst~", (method)lazyvst_new, (method)lazyvst_free, sizeof(t_lazyvst), 0L, A_GIMME, 0);
 
-    class_addmethod(c, (method)lazyvst_open, "open", 0);
+    class_addmethod(c, (method)lazyvst_open, "open", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_snapshot, "snapshot", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_plug, "plug", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_vst, "vst", A_GIMME, 0);
-    class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_DEFLONG, 0);
-    class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", 0);
-    class_addmethod(c, (method)lazyvst_params, "params", 0);
+    class_addmethod(c, (method)lazyvst_getchunk, "getchunk", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_vstinfo, "vstinfo", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_params, "params", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)lazyvst_vstdebug, "vstdebug", A_DEFLONG, 0);
-    class_addmethod(c, (method)lazyvst_bang, "bang", 0);
+    class_addmethod(c, (method)lazyvst_vstdebug, "vstdebug", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_bang, "bang", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)lazyvst_assist, "assist", A_CANT, 0);
@@ -352,15 +357,27 @@ void ext_main(void *r) {
     lazyvst_register_window_class();
 }
 
-void lazyvst_bang(t_lazyvst *x) {
+void lazyvst_bang(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_bang, s, argc, argv);
+        return;
+    }
     post("lazyvst~: bang received");
 }
 
 void lazyvst_anything(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_anything, s, argc, argv);
+        return;
+    }
     post("lazyvst~: UNHANDLED message received: %s (argc=%ld)", s->s_name, argc);
 }
 
 void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_vst, s, argc, argv);
+        return;
+    }
     if (!x->effect) return;
     if (argc < 1) return;
 
@@ -373,10 +390,16 @@ void lazyvst_vst(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     post("lazyvst~: Result: %ld", (long)ret);
 }
 
-void lazyvst_getchunk(t_lazyvst *x, long isbank) {
+void lazyvst_getchunk(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_getchunk, s, argc, argv);
+        return;
+    }
     if (!x->effect) return;
+
+    int32_t isbank = (argc > 0) ? (int32_t)atom_getlong(argv) : 0;
     void *ptr = NULL;
-    intptr_t size = x->effect->dispatcher(x->effect, effGetChunk, (int32_t)isbank, 0, &ptr, 0.0f);
+    intptr_t size = x->effect->dispatcher(x->effect, effGetChunk, isbank, 0, &ptr, 0.0f);
     post("lazyvst~: Current chunk (isbank=%ld): size=%ld, ptr=%p", isbank, (long)size, ptr);
     if (ptr && size > 0) {
         char dump[64];
@@ -389,7 +412,11 @@ void lazyvst_getchunk(t_lazyvst *x, long isbank) {
     }
 }
 
-void lazyvst_vstinfo(t_lazyvst *x) {
+void lazyvst_vstinfo(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_vstinfo, s, argc, argv);
+        return;
+    }
     post("lazyvst~: INFO");
     post("  SR: %.1f", x->cur_sr);
     post("  MS: %ld", x->cur_ms);
@@ -399,7 +426,11 @@ void lazyvst_vstinfo(t_lazyvst *x) {
     }
 }
 
-void lazyvst_params(t_lazyvst *x) {
+void lazyvst_params(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_params, s, argc, argv);
+        return;
+    }
     if (!x->effect) return;
     post("lazyvst~: Listing parameters (%d total):", x->effect->numParams);
     for (int i = 0; i < x->effect->numParams; i++) {
@@ -415,6 +446,10 @@ void lazyvst_params(t_lazyvst *x) {
 }
 
 void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_list, s, argc, argv);
+        return;
+    }
     if (!x->effect) return;
     if (argc < 2) return;
 
@@ -428,12 +463,21 @@ void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     }
 }
 
-void lazyvst_vstdebug(t_lazyvst *x, long state) {
+void lazyvst_vstdebug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_vstdebug, s, argc, argv);
+        return;
+    }
+    long state = (argc > 0) ? atom_getlong(argv) : 0;
     x->debug_host = state;
     post("lazyvst~: Host call debugging %s.", state ? "ENABLED" : "DISABLED");
 }
 
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_snapshot, s, argc, argv);
+        return;
+    }
     t_symbol *path = NULL;
     if (argc > 0 && argv[0].a_type == A_SYM) {
         path = atom_getsym(argv);
@@ -450,6 +494,10 @@ void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_plug, s, argc, argv);
+        return;
+    }
     t_symbol *path = NULL;
     if (argc > 0 && argv[0].a_type == A_SYM) {
         path = atom_getsym(argv);
@@ -457,6 +505,7 @@ void lazyvst_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
         path = s;
     }
 
+    x->loading = 1;
     if (path) {
         post("lazyvst~: Received plug message for: %s", path->s_name);
         defer_low(x, (method)lazyvst_do_plug, path, 0, NULL);
@@ -478,8 +527,10 @@ void lazyvst_open_plug_dialog(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv
             t_symbol *path_sym = gensym(fullpath);
             post("lazyvst~: Dialog selected: %s", fullpath);
             lazyvst_do_plug(x, path_sym, 0, NULL);
+            return;
         }
     }
+    x->loading = 0;
 }
 
 void lazyvst_do_plug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
@@ -1044,6 +1095,7 @@ void lazyvst_do_instantiate(t_lazyvst *x) {
                 pluginName, (int)x->vst_inputs, (int)x->vst_outputs, effect->numParams, effect->numPrograms);
         }
     }
+    x->loading = 0;
 }
 
 void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
@@ -1076,6 +1128,7 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->cur_sr = 0;
         x->cur_ms = 0;
         x->debug_host = 0;
+        x->loading = 0;
         x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
@@ -1094,6 +1147,7 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
                     post("lazyvst~: began loading %s", filename);
                     if (x->num_inputs < 4) x->num_inputs = 4;
                     if (x->num_outputs < 4) x->num_outputs = 4;
+                    x->loading = 1;
                     systhread_create((method)lazyvst_worker, x, 0, 0, 0, &x->thread);
                 } else {
                     x->num_inputs = 4;
