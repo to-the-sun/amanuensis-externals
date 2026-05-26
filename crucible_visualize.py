@@ -65,6 +65,7 @@ def process_packet(text):
                     track = pkt.get("new_span_track")
                     bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
+                    new_span_data = pkt.get("new_span_data", {})
 
                     # Update local track state from the new span event
                     if track is not None:
@@ -79,7 +80,10 @@ def process_packet(text):
                         for b in bars:
                             b_str = str(b)
                             if b_str not in state["tracks"][t_str]:
-                                state["tracks"][t_str][b_str] = {}
+                                state["tracks"][t_str][b_str] = new_span_data.get(b_str, {})
+                                added = True
+                            elif b_str in new_span_data:
+                                state["tracks"][t_str][b_str].update(new_span_data[b_str])
                                 added = True
                         if added:
                             dirty = True
@@ -214,7 +218,6 @@ def run_gui():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
 
-            # Handle tracks as dictionaries (new state) or lists (legacy fallback)
             bars_items = bars.items() if isinstance(bars, dict) else [(b, {}) for b in bars]
 
             for bar_ts, bar_data in bars_items:
@@ -224,10 +227,8 @@ def run_gui():
                 if bar_length <= 0: continue
                 col = b_ts // bar_length
 
-                # Check if we have detailed transcript data for bar graph rendering
                 if isinstance(bar_data, dict) and "absolutes" in bar_data and "scores" in bar_data and "offset" in bar_data:
                     offset = bar_data["offset"]
-                    # Normalize to lists
                     abs_list = bar_data["absolutes"] if isinstance(bar_data["absolutes"], list) else [bar_data["absolutes"]]
                     score_list = bar_data["scores"] if isinstance(bar_data["scores"], list) else [bar_data["scores"]]
 
@@ -245,7 +246,6 @@ def run_gui():
                         except (ValueError, TypeError):
                             continue
                 else:
-                    # Fallback to solid rectangle
                     rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                     pygame.draw.rect(screen, (80, 80, 100), rect)
 
