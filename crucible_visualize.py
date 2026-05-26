@@ -30,7 +30,9 @@ def recalculate_reach():
     max_reach = 0
     bar_length = state.get("bar_length", 125)
     for track_bars in state["tracks"].values():
-        for bar_ts in track_bars:
+        # Handle track_bars as either a list of timestamps or a dictionary where keys are timestamps
+        bars_iterable = track_bars.keys() if isinstance(track_bars, dict) else track_bars
+        for bar_ts in bars_iterable:
             try:
                 b_ts = float(bar_ts)
                 if b_ts + bar_length > max_reach:
@@ -68,13 +70,16 @@ def process_packet(text):
                     if track is not None:
                         t_str = str(track)
                         if t_str not in state["tracks"]:
-                            state["tracks"][t_str] = []
+                            state["tracks"][t_str] = {}
 
-                        existing_bars = set(state["tracks"][t_str])
+                        if isinstance(state["tracks"][t_str], list):
+                            state["tracks"][t_str] = {str(b): {} for b in state["tracks"][t_str]}
+
                         added = False
                         for b in bars:
-                            if b not in existing_bars:
-                                state["tracks"][t_str].append(b)
+                            b_str = str(b)
+                            if b_str not in state["tracks"][t_str]:
+                                state["tracks"][t_str][b_str] = {}
                                 added = True
                         if added:
                             dirty = True
@@ -204,18 +209,45 @@ def run_gui():
             lbl = font.render(f"T {tid}", True, (180, 180, 180))
             screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
 
-        # Draw filled boxes for present bars
+        # Draw filled boxes/bar graphs for present bars
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
-            for bar_ts in bars:
+
+            # Handle tracks as dictionaries (new state) or lists (legacy fallback)
+            bars_items = bars.items() if isinstance(bars, dict) else [(b, {}) for b in bars]
+
+            for bar_ts, bar_data in bars_items:
                 try:
                     b_ts = int(bar_ts)
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
                 col = b_ts // bar_length
-                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                pygame.draw.rect(screen, (80, 80, 100), rect)
+
+                # Check if we have detailed transcript data for bar graph rendering
+                if isinstance(bar_data, dict) and "absolutes" in bar_data and "scores" in bar_data and "offset" in bar_data:
+                    offset = bar_data["offset"]
+                    # Normalize to lists
+                    abs_list = bar_data["absolutes"] if isinstance(bar_data["absolutes"], list) else [bar_data["absolutes"]]
+                    score_list = bar_data["scores"] if isinstance(bar_data["scores"], list) else [bar_data["scores"]]
+
+                    y_bottom = margin_top + (row + 1) * cell_h - 1
+                    for abs_val, score in zip(abs_list, score_list):
+                        try:
+                            rel_ts = float(abs_val) - float(offset)
+                            s_val = max(0.0, min(2.0, float(score)))
+
+                            x = margin_left + (rel_ts / bar_length) * cell_w
+                            h_px = (s_val / 2.0) * (cell_h - 2)
+                            y_top = y_bottom - h_px
+
+                            pygame.draw.line(screen, (100, 100, 150), (x, y_bottom), (x, y_top), 1)
+                        except (ValueError, TypeError):
+                            continue
+                else:
+                    # Fallback to solid rectangle
+                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+                    pygame.draw.rect(screen, (80, 80, 100), rect)
 
         # Draw event animations
         for e in events:
