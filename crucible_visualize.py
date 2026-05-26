@@ -40,9 +40,10 @@ def recalculate_reach():
                     # Also check detailed transcript points
                     if isinstance(bar_data, dict) and "absolutes" in bar_data and "offset" in bar_data:
                         offset = bar_data["offset"]
+                        loop_start = bar_data.get("loop_start", 0.0)
                         abs_list = bar_data["absolutes"] if isinstance(bar_data["absolutes"], list) else [bar_data["absolutes"]]
                         for abs_val in abs_list:
-                            rel_ts = float(abs_val) - float(offset)
+                            rel_ts = (float(abs_val) - float(offset)) + float(loop_start)
                             if rel_ts > max_reach:
                                 max_reach = rel_ts
                 except (ValueError, TypeError):
@@ -221,18 +222,25 @@ def run_gui():
 
                 if isinstance(bar_data, dict) and "absolutes" in bar_data and "scores" in bar_data and "offset" in bar_data:
                     offset = bar_data["offset"]
+                    loop_start = bar_data.get("loop_start", 0.0)
                     abs_list = bar_data["absolutes"] if isinstance(bar_data["absolutes"], list) else [bar_data["absolutes"]]
                     score_list = bar_data["scores"] if isinstance(bar_data["scores"], list) else [bar_data["scores"]]
 
                     y_bottom = margin_top + (row + 1) * cell_h - 1
+                    log_count = 0
                     for abs_val, score in zip(abs_list, score_list):
                         try:
-                            rel_ts = float(abs_val) - float(offset)
+                            # Formula: (abs - offset) + loop_start
+                            rel_ts = (float(abs_val) - float(offset)) + float(loop_start)
                             s_val = max(0.0, min(2.0, float(score)))
 
                             x = margin_left + (rel_ts / bar_length) * cell_w
                             h_px = (s_val / 2.0) * (cell_h - 2)
                             y_top = y_bottom - h_px
+
+                            if log_count < 2: # Sample log
+                                print(f"DEBUG: bar_ts={bar_ts}, abs={abs_val}, offset={offset}, loop_start={loop_start}, rel_ts={rel_ts:.2f}, x={x:.2f}")
+                                log_count += 1
 
                             pygame.draw.line(screen, (150, 150, 255), (x, y_bottom), (x, y_top), 1)
                         except (ValueError, TypeError):
