@@ -26,19 +26,35 @@ state = {
 state_lock = threading.Lock()
 
 def recalculate_reach():
-    """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
+    """Recalculates state['song_reach'] based on the furthest bar/data point in state['tracks']."""
     max_reach = 0
     bar_length = state.get("bar_length", 125)
     for track_bars in state["tracks"].values():
-        # Handle track_bars as either a list of timestamps or a dictionary where keys are timestamps
-        bars_iterable = track_bars.keys() if isinstance(track_bars, dict) else track_bars
-        for bar_ts in bars_iterable:
-            try:
-                b_ts = float(bar_ts)
-                if b_ts + bar_length > max_reach:
-                    max_reach = b_ts + bar_length
-            except (ValueError, TypeError):
-                continue
+        if isinstance(track_bars, dict):
+            for bar_ts, bar_data in track_bars.items():
+                try:
+                    b_ts = float(bar_ts)
+                    if b_ts + bar_length > max_reach:
+                        max_reach = b_ts + bar_length
+
+                    # Also check detailed transcript points
+                    if isinstance(bar_data, dict) and "absolutes" in bar_data and "offset" in bar_data:
+                        offset = bar_data["offset"]
+                        abs_list = bar_data["absolutes"] if isinstance(bar_data["absolutes"], list) else [bar_data["absolutes"]]
+                        for abs_val in abs_list:
+                            rel_ts = float(abs_val) - float(offset)
+                            if rel_ts > max_reach:
+                                max_reach = rel_ts
+                except (ValueError, TypeError):
+                    continue
+        else: # legacy list format
+            for bar_ts in track_bars:
+                try:
+                    b_ts = float(bar_ts)
+                    if b_ts + bar_length > max_reach:
+                        max_reach = b_ts + bar_length
+                except (ValueError, TypeError):
+                    continue
     state["song_reach"] = max_reach
 
 def process_packet(text):
@@ -189,31 +205,7 @@ def run_gui():
         num_cols = (song_reach // bar_length) + 1 if bar_length > 0 else 0
         cell_w = (screen_w - margin_left - margin_right) / max(1, num_cols)
 
-        # Draw background grid lines
-        for i in range(len(sorted_track_ids) + 1):
-            y = margin_top + i * cell_h
-            pygame.draw.line(screen, (60, 60, 65), (margin_left, y), (margin_left + num_cols * cell_w, y))
-        for j in range(int(num_cols) + 1):
-            x = margin_left + j * cell_w
-            pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
-
-        # Draw time legend
-        sample_lbl = font.render("00:00", True, (0,0,0))
-        label_w = sample_lbl.get_width()
-        step = max(1, int((label_w * 2) // cell_w) + 1) if cell_w > 0 else 1
-        for j in range(0, int(num_cols) + 1, step):
-            x = margin_left + j * cell_w
-            total_seconds = (j * bar_length) // 1000
-            time_str = f"{int(total_seconds // 60)}:{int(total_seconds % 60):02d}"
-            lbl = font.render(time_str, True, (180, 180, 180))
-            screen.blit(lbl, (x - lbl.get_width() // 2, margin_top - lbl.get_height() - 5))
-
-        # Draw track labels
-        for tid, row in track_to_row.items():
-            lbl = font.render(f"T {tid}", True, (180, 180, 180))
-            screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
-
-        # Draw filled boxes/bar graphs for present bars
+        # 1. Draw filled boxes/bar graphs for present bars
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
@@ -242,14 +234,37 @@ def run_gui():
                             h_px = (s_val / 2.0) * (cell_h - 2)
                             y_top = y_bottom - h_px
 
-                            pygame.draw.line(screen, (100, 100, 150), (x, y_bottom), (x, y_top), 1)
+                            pygame.draw.line(screen, (150, 150, 255), (x, y_bottom), (x, y_top), 1)
                         except (ValueError, TypeError):
                             continue
                 else:
                     rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                     pygame.draw.rect(screen, (80, 80, 100), rect)
 
-        # Draw event animations
+        # 2. Draw grid lines (on top of bars)
+        for i in range(len(sorted_track_ids) + 1):
+            y = margin_top + i * cell_h
+            pygame.draw.line(screen, (60, 60, 65), (margin_left, y), (margin_left + num_cols * cell_w, y))
+        for j in range(int(num_cols) + 1):
+            x = margin_left + j * cell_w
+            pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
+
+        # 3. Draw time legend & track labels
+        sample_lbl = font.render("00:00", True, (0,0,0))
+        label_w = sample_lbl.get_width()
+        step = max(1, int((label_w * 2) // cell_w) + 1) if cell_w > 0 else 1
+        for j in range(0, int(num_cols) + 1, step):
+            x = margin_left + j * cell_w
+            total_seconds = (j * bar_length) // 1000
+            time_str = f"{int(total_seconds // 60)}:{int(total_seconds % 60):02d}"
+            lbl = font.render(time_str, True, (180, 180, 180))
+            screen.blit(lbl, (x - lbl.get_width() // 2, margin_top - lbl.get_height() - 5))
+
+        for tid, row in track_to_row.items():
+            lbl = font.render(f"T {tid}", True, (180, 180, 180))
+            screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
+
+        # 4. Draw event animations
         for e in events:
             elapsed = now - e["start_time"]
             t = elapsed / e["duration"]
@@ -272,8 +287,16 @@ def run_gui():
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
                 col = b_ts // bar_length
-                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                pygame.draw.rect(screen, color, rect)
+
+                # Use semi-transparent surface for animation rectangles
+                rect_w, rect_h = max(1, int(cell_w - 1)), max(1, int(cell_h - 1))
+                overlay = pygame.Surface((rect_w, rect_h), pygame.SRCALPHA)
+
+                # Alpha 128 (out of 255) for semi-transparency
+                r, g, b_val = color
+                overlay.fill((r, g, b_val, 128))
+
+                screen.blit(overlay, (margin_left + col * cell_w + 1, margin_top + row * cell_h + 1))
 
             # Floating Rating
             if valid_bars and bar_length > 0:
