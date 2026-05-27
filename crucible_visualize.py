@@ -88,6 +88,8 @@ def process_packet(text):
                         if t_str not in state["bar_data"]:
                             state["bar_data"][t_str] = {}
 
+                        print(f"DEBUG: Storing data for T{t_str}. Bars in event: {bars}. Data keys: {list(new_data.keys())}")
+
                         existing_bars = set(state["tracks"][t_str])
                         added = False
                         for b in bars:
@@ -256,19 +258,27 @@ def run_gui():
                 offset = info.get("offset")
 
                 if absolutes is None or scores is None or offset is None:
+                    # Log once per bar if data is missing
+                    if (tid, b_ts, "missing") not in state["logged_hashes"]:
+                        print(f"DEBUG: Skipping bar {b_ts} on T{tid} - missing data (abs:{type(absolutes)}, scores:{type(scores)}, off:{type(offset)})")
+                        state["logged_hashes"].add((tid, b_ts, "missing"))
                     continue
 
-                if not isinstance(absolutes, list):
-                    absolutes = [absolutes]
-                if not isinstance(scores, list):
-                    scores = [scores]
+                # Ensure all are lists
+                if not isinstance(absolutes, list): absolutes = [absolutes]
+                if not isinstance(scores, list): scores = [scores]
+                if not isinstance(offset, list): offset = [offset]
 
                 for i in range(len(absolutes)):
                     try:
                         abs_val = float(absolutes[i])
                         score_val = float(scores[i])
-                        off_val = float(offset)
-                    except (ValueError, TypeError, IndexError):
+                        # Use i-th offset if available, else fallback to first
+                        off_val = float(offset[i]) if i < len(offset) else float(offset[0])
+                    except (ValueError, TypeError, IndexError) as err:
+                        if (tid, b_ts, i, "error") not in state["logged_hashes"]:
+                            print(f"DEBUG: Error parsing note {i} in bar {b_ts} on T{tid}: {err}")
+                            state["logged_hashes"].add((tid, b_ts, i, "error"))
                         continue
 
                     if bar_length <= 0: continue

@@ -501,6 +501,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         if (!dictionary_hasentry(incumbent_dict, track_sym)) {
             incumbent_track_dict = dictionary_new();
             dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
+            // Re-retrieve to ensure we have the internal pointer
+            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         } else {
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
