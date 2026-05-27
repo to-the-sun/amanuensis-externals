@@ -59,9 +59,11 @@ def process_packet(text):
 
             if pkt_type != "crucible":
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
+                sys.stdout.flush()
                 continue
 
             print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}")
+            sys.stdout.flush()
 
             with state_lock:
                 state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
