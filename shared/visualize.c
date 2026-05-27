@@ -91,7 +91,9 @@ void visualize(void *x, const char *message) {
         return;
     }
 
-    char buf[65536];
+    long buf_size = 524288;
+    char *buf = (char *)sysmem_newptr(buf_size);
+    if (!buf) return;
     int n;
 
     if (x && message && message[0] == '{') {
@@ -107,12 +109,13 @@ void visualize(void *x, const char *message) {
         }
 
         // message[1] skips the opening '{'
-        n = snprintf(buf, sizeof(buf), "{\"type\":\"%s\",%s\n", type, message + 1);
+        n = snprintf(buf, buf_size, "{\"type\":\"%s\",%s\n", type, message + 1);
     } else {
-        n = snprintf(buf, sizeof(buf), "%s\n", message);
+        n = snprintf(buf, buf_size, "%s\n", message);
     }
 
-    if (n < 0 || n >= (int)sizeof(buf)) {
+    if (n < 0 || n >= (int)buf_size) {
+        sysmem_freeptr(buf);
         return;
     }
 
@@ -130,19 +133,22 @@ void visualize(void *x, const char *message) {
                     closesocket(sock);
                     sock = INVALID_SOCKET;
                 }
-                return;
+                goto cleanup;
             }
             // Hard error (e.g., connection reset)
             closesocket(sock);
             sock = INVALID_SOCKET;
-            return;
+            goto cleanup;
         }
         if (sent == 0) {
             // Connection closed by peer
             closesocket(sock);
             sock = INVALID_SOCKET;
-            return;
+            goto cleanup;
         }
         total_sent += sent;
     }
+
+cleanup:
+    sysmem_freeptr(buf);
 }

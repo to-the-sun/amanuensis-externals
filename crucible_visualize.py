@@ -44,14 +44,24 @@ def recalculate_reach():
 def process_packet(text):
     if not text:
         return
+    # Pre-process text to handle multiple JSON objects in one stream
     text = text.replace("} {", "}\n{").replace("}{", "}\n{")
     for line in text.split('\n'):
         line = line.strip()
         if not line: continue
+
+        # DEBUG: Log raw received line
+        print(f"DEBUG: TCP Received ({len(line)} chars): {line[:100]}...")
+
         try:
             pkt = json.loads(line)
-            if pkt.get("type") != "crucible":
+            pkt_type = pkt.get("type")
+
+            if pkt_type != "crucible":
+                print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
+
+            print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}")
 
             with state_lock:
                 state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
@@ -103,7 +113,9 @@ def process_packet(text):
                 if dirty:
                     recalculate_reach()
 
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"ERROR: Failed to decode JSON: {e}")
+            print(f"ERROR: Raw line causing error: {line[:500]}...")
             continue
 
 def tcp_server():
@@ -264,7 +276,9 @@ def run_gui():
                     # Unique key to prevent console spam
                     hash_key = (tid, b_ts, i)
                     # x position relative to start of song
-                    # As requested: absolute - offset
+                    # Calculation per user: (absolute - offset).
+                    # This gives song-relative timestamp (assuming offset is standard transcript offset).
+                    # Map this ms value to pixels along the grid:
                     rel_ms = abs_val - off_val
                     x_pos = margin_left + (rel_ms / bar_length) * cell_w
 
