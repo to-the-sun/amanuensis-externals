@@ -51,7 +51,7 @@ def process_packet(text):
         if not line: continue
 
         # DEBUG: Log raw received line
-        print(f"DEBUG: TCP Received ({len(line)} chars): {line[:100]}...")
+        print(f"DEBUG: TCP Received ({len(line)} chars): {line}")
 
         try:
             pkt = json.loads(line)
