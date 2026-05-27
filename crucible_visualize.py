@@ -284,7 +284,7 @@ def run_gui():
 
                     with state_lock:
                         if hash_key not in state["logged_hashes"]:
-                            print(f"[Hash Mark T{tid}] absolute: {abs_val:.2f}, offset: {off_val:.2f}, rel: {rel_ms:.2f}, bar_len: {bar_length}, cell_w: {cell_w:.2f}, x_pos: {x_pos:.2f}")
+                            print(f"[Hash Mark T{tid}] {abs_val:.2f} (absolute) - {off_val:.2f} (offset) = {rel_ms:.2f} (relative) | bar_len: {bar_length}, cell_w: {cell_w:.2f}, x_pos: {x_pos:.2f}")
                             state["logged_hashes"].add(hash_key)
 
                     # Height relative to score (0.0 to 2.0)
