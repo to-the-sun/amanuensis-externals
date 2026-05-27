@@ -19,6 +19,7 @@ FPS = 60
 # State
 state = {
     "tracks": {},
+    "bar_data": {},
     "song_reach": 0,
     "bar_length": 125,
     "events": []
@@ -57,18 +58,23 @@ def process_packet(text):
                 dirty = False
                 if "tracks" in pkt:
                     state["tracks"] = pkt["tracks"]
+                    if not state["tracks"]:
+                        state["bar_data"] = {}
                     dirty = True
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
                     bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
+                    new_data = pkt.get("new_span_data", {})
 
                     # Update local track state from the new span event
                     if track is not None:
                         t_str = str(track)
                         if t_str not in state["tracks"]:
                             state["tracks"][t_str] = []
+                        if t_str not in state["bar_data"]:
+                            state["bar_data"][t_str] = {}
 
                         existing_bars = set(state["tracks"][t_str])
                         added = False
@@ -76,6 +82,10 @@ def process_packet(text):
                             if b not in existing_bars:
                                 state["tracks"][t_str].append(b)
                                 added = True
+
+                        for b_ts, b_data in new_data.items():
+                            state["bar_data"][t_str][b_ts] = b_data
+
                         if added:
                             dirty = True
 
@@ -216,6 +226,50 @@ def run_gui():
                 col = b_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, (80, 80, 100), rect)
+
+        # Draw note hash marks
+        with state_lock:
+            bar_data = state["bar_data"].copy()
+
+        for tid, bars_info in bar_data.items():
+            if tid not in track_to_row: continue
+            row = track_to_row[tid]
+            row_y_bottom = margin_top + (row + 1) * cell_h
+
+            for b_ts, info in bars_info.items():
+                absolutes = info.get("absolutes")
+                scores = info.get("scores")
+                offset = info.get("offset")
+
+                if absolutes is None or scores is None or offset is None:
+                    continue
+
+                if not isinstance(absolutes, list):
+                    absolutes = [absolutes]
+                if not isinstance(scores, list):
+                    scores = [scores]
+
+                for i in range(len(absolutes)):
+                    try:
+                        abs_val = float(absolutes[i])
+                        score_val = float(scores[i])
+                        off_val = float(offset)
+                    except (ValueError, TypeError, IndexError):
+                        continue
+
+                    if bar_length <= 0: continue
+
+                    # x position relative to start of song
+                    # As requested: absolute - offset
+                    rel_ms = abs_val - off_val
+                    x_pos = margin_left + (rel_ms / bar_length) * cell_w
+
+                    # Height relative to score (0.0 to 2.0)
+                    clipped_score = max(0.0, min(2.0, score_val))
+                    # Map 0.0 -> bottom, 2.0 -> top of 20px row
+                    h_px = (clipped_score / 2.0) * cell_h
+
+                    pygame.draw.line(screen, (255, 255, 255), (x_pos, row_y_bottom), (x_pos, row_y_bottom - h_px), 1)
 
         # Draw event animations
         for e in events:

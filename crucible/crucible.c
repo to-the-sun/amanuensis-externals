@@ -1035,13 +1035,44 @@ int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict) {
     return 0;
 }
 
+static long json_append_atom_or_array(char *buffer, long offset, long buffer_size, t_dictionary *dict, t_symbol *key) {
+    if (offset >= buffer_size - 1) return offset;
+    t_atomarray *aa = NULL;
+    t_atom a;
+    if (dictionary_getatomarray(dict, key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+        long ac = 0;
+        t_atom *av = NULL;
+        atomarray_getatoms(aa, &ac, &av);
+        offset += snprintf(buffer + offset, buffer_size - offset, "[");
+        for (long i = 0; i < ac; i++) {
+            if (offset >= buffer_size - 1) break;
+            if (atom_gettype(av + i) == A_FLOAT) {
+                offset += snprintf(buffer + offset, buffer_size - offset, "%.6f", atom_getfloat(av + i));
+            } else if (atom_gettype(av + i) == A_LONG) {
+                offset += snprintf(buffer + offset, buffer_size - offset, "%lld", (long long)atom_getlong(av + i));
+            }
+            if (i < ac - 1 && offset < buffer_size - 1) offset += snprintf(buffer + offset, buffer_size - offset, ",");
+        }
+        if (offset < buffer_size - 1) offset += snprintf(buffer + offset, buffer_size - offset, "]");
+    } else if (dictionary_getatom(dict, key, &a) == MAX_ERR_NONE) {
+        if (atom_gettype(&a) == A_FLOAT) {
+            offset += snprintf(buffer + offset, buffer_size - offset, "%.6f", atom_getfloat(&a));
+        } else if (atom_gettype(&a) == A_LONG) {
+            offset += snprintf(buffer + offset, buffer_size - offset, "%lld", (long long)atom_getlong(&a));
+        }
+    } else {
+        offset += snprintf(buffer + offset, buffer_size - offset, "null");
+    }
+    return (offset < buffer_size) ? offset : buffer_size - 1;
+}
+
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
     if (!x->visualize) return;
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
 
-    long buffer_size = 65536;
+    long buffer_size = 262144;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     if (!json_buffer) {
         dictobj_release(incumbent_dict);
@@ -1054,24 +1085,50 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"bar_length\":%lld", (long long)bar_length);
 
     if (event_type && event_type != _sym_nothing) {
-        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"%s\"", event_type->s_name);
-        if (track_id_sym) {
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"%s\"", event_type->s_name);
+        if (track_id_sym && offset < buffer_size - 1) {
             offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_track\":\"%s\"", track_id_sym->s_name);
         }
-        if (span_aa) {
+        if (span_aa && offset < buffer_size - 1) {
             long ac = 0;
             t_atom *av = NULL;
             atomarray_getatoms(span_aa, &ac, &av);
             offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_bars\":[");
             for (long i = 0; i < ac; i++) {
+                if (offset >= buffer_size - 1) break;
                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%lld%s", (long long)atom_getlong(av + i), (i < ac - 1) ? "," : "");
             }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+
+            if (track_id_sym && offset < buffer_size - 1) {
+                t_dictionary *track_dict = NULL;
+                if (dictionary_getdictionary(incumbent_dict, track_id_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_data\":{");
+                    for (long i = 0; i < ac; i++) {
+                        if (offset >= buffer_size - 1) break;
+                        t_atom_long b_ts = atom_getlong(av + i);
+                        char b_ts_str[64];
+                        snprintf(b_ts_str, 64, "%lld", (long long)b_ts);
+                        t_dictionary *bar_dict = NULL;
+                        if (dictionary_getdictionary(track_dict, gensym(b_ts_str), (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                            if (i > 0 && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%lld\":{\"absolutes\":", (long long)b_ts);
+                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("absolutes"));
+                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"scores\":");
+                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("scores"));
+                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"offset\":");
+                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("offset"));
+                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+                        }
+                    }
+                    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+                }
+            }
         }
-        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
     }
 
-    if (include_tracks) {
+    if (include_tracks && offset < buffer_size - 1) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
 
         t_symbol **track_keys = NULL;
@@ -1080,20 +1137,22 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
         int first_track = 1;
         for (long i = 0; i < num_tracks; i++) {
+            if (offset >= buffer_size - 1) break;
             t_symbol *t_sym = track_keys[i];
             t_dictionary *track_dict = NULL;
             if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
 
-            if (!first_track) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            if (!first_track && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
             first_track = 0;
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
+            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
 
             t_symbol **bar_keys = NULL;
             long num_bars = 0;
             dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
             for (long j = 0; j < num_bars; j++) {
-                if (j > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                if (offset >= buffer_size - 1) break;
+                if (j > 0 && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
                 // Check if it's a numeric bar key
                 const char *bk = bar_keys[j]->s_name;
                 int is_num = (bk && bk[0] != '\0');
@@ -1113,14 +1172,14 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
                 }
             }
 
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
             if (bar_keys) sysmem_freeptr(bar_keys);
         }
         if (track_keys) sysmem_freeptr(track_keys);
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
     }
 
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
 
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
