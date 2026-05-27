@@ -72,13 +72,13 @@ void visualize(void *x, const char *message) {
     t_viz_socket *vs = NULL;
     const char *type = "unknown";
 
-    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+    if (strcmp(classname->s_name, "crucible") == 0 || strcmp(classname->s_name, "rebar_crucible_internal") == 0) {
         vs = &crucible_viz;
         type = "crucible";
-    } else if (classname == gensym("weaver~")) {
+    } else if (strcmp(classname->s_name, "weaver~") == 0) {
         vs = &weaver_viz;
         type = "weaver";
-    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
+    } else if (strcmp(classname->s_name, "buildspans") == 0 || strcmp(classname->s_name, "rebar_buildspans_internal") == 0) {
         vs = &weaver_viz;
         type = "building";
     }
