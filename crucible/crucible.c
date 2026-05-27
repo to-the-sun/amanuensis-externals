@@ -177,6 +177,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->consume = 0;
         x->defer = 0;
+        x->visualize = 0;
         x->song_reach = 0;
         x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
