@@ -20,6 +20,7 @@ FPS = 60
 state = {
     "tracks": {},
     "bar_data": {},
+    "logged_hashes": set(),
     "song_reach": 0,
     "bar_length": 125,
     "events": []
@@ -60,6 +61,7 @@ def process_packet(text):
                     state["tracks"] = pkt["tracks"]
                     if not state["tracks"]:
                         state["bar_data"] = {}
+                        state["logged_hashes"].clear()
                     dirty = True
 
                 if pkt.get("event") == "new_span":
@@ -259,10 +261,17 @@ def run_gui():
 
                     if bar_length <= 0: continue
 
+                    # Unique key to prevent console spam
+                    hash_key = (tid, b_ts, i)
                     # x position relative to start of song
                     # As requested: absolute - offset
                     rel_ms = abs_val - off_val
                     x_pos = margin_left + (rel_ms / bar_length) * cell_w
+
+                    with state_lock:
+                        if hash_key not in state["logged_hashes"]:
+                            print(f"[Hash Mark T{tid}] absolute: {abs_val:.2f}, offset: {off_val:.2f}, rel: {rel_ms:.2f}, bar_len: {bar_length}, cell_w: {cell_w:.2f}, x_pos: {x_pos:.2f}")
+                            state["logged_hashes"].add(hash_key)
 
                     # Height relative to score (0.0 to 2.0)
                     clipped_score = max(0.0, min(2.0, score_val))
