@@ -19,6 +19,8 @@ FPS = 60
 # State
 state = {
     "tracks": {},
+    "bar_data": {},
+    "logged_hashes": set(),
     "song_reach": 0,
     "bar_length": 125,
     "events": []
@@ -42,14 +44,24 @@ def recalculate_reach():
 def process_packet(text):
     if not text:
         return
+    # Pre-process text to handle multiple JSON objects in one stream
     text = text.replace("} {", "}\n{").replace("}{", "}\n{")
     for line in text.split('\n'):
         line = line.strip()
         if not line: continue
+
+        # DEBUG: Log raw received line
+        print(f"DEBUG: TCP Received ({len(line)} chars): {line}")
+
         try:
             pkt = json.loads(line)
-            if pkt.get("type") != "crucible":
+            pkt_type = pkt.get("type")
+
+            if pkt_type != "crucible":
+                print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
+
+            print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}")
 
             with state_lock:
                 state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
@@ -57,18 +69,26 @@ def process_packet(text):
                 dirty = False
                 if "tracks" in pkt:
                     state["tracks"] = pkt["tracks"]
+                    if not state["tracks"]:
+                        state["bar_data"] = {}
+                        state["logged_hashes"].clear()
                     dirty = True
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
                     bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
+                    new_data = pkt.get("new_span_data", {})
 
                     # Update local track state from the new span event
                     if track is not None:
                         t_str = str(track)
                         if t_str not in state["tracks"]:
                             state["tracks"][t_str] = []
+                        if t_str not in state["bar_data"]:
+                            state["bar_data"][t_str] = {}
+
+                        print(f"DEBUG: Storing data for T{t_str}. Bars in event: {bars}. Data keys: {list(new_data.keys())}")
 
                         existing_bars = set(state["tracks"][t_str])
                         added = False
@@ -76,6 +96,10 @@ def process_packet(text):
                             if b not in existing_bars:
                                 state["tracks"][t_str].append(b)
                                 added = True
+
+                        for b_ts, b_data in new_data.items():
+                            state["bar_data"][t_str][b_ts] = b_data
+
                         if added:
                             dirty = True
 
@@ -91,7 +115,9 @@ def process_packet(text):
                 if dirty:
                     recalculate_reach()
 
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"ERROR: Failed to decode JSON: {e}")
+            print(f"ERROR: Raw line causing error: {line[:500]}...")
             continue
 
 def tcp_server():
@@ -216,6 +242,67 @@ def run_gui():
                 col = b_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, (80, 80, 100), rect)
+
+        # Draw note hash marks
+        with state_lock:
+            bar_data = state["bar_data"].copy()
+
+        for tid, bars_info in bar_data.items():
+            if tid not in track_to_row: continue
+            row = track_to_row[tid]
+            row_y_bottom = margin_top + (row + 1) * cell_h
+
+            for b_ts, info in bars_info.items():
+                absolutes = info.get("absolutes")
+                scores = info.get("scores")
+                offset = info.get("offset")
+
+                if absolutes is None or scores is None or offset is None:
+                    # Log once per bar if data is missing
+                    if (tid, b_ts, "missing") not in state["logged_hashes"]:
+                        print(f"DEBUG: Skipping bar {b_ts} on T{tid} - missing data (abs:{type(absolutes)}, scores:{type(scores)}, off:{type(offset)})")
+                        state["logged_hashes"].add((tid, b_ts, "missing"))
+                    continue
+
+                # Ensure all are lists
+                if not isinstance(absolutes, list): absolutes = [absolutes]
+                if not isinstance(scores, list): scores = [scores]
+                if not isinstance(offset, list): offset = [offset]
+
+                for i in range(len(absolutes)):
+                    try:
+                        abs_val = float(absolutes[i])
+                        score_val = float(scores[i])
+                        # Use i-th offset if available, else fallback to first
+                        off_val = float(offset[i]) if i < len(offset) else float(offset[0])
+                    except (ValueError, TypeError, IndexError) as err:
+                        if (tid, b_ts, i, "error") not in state["logged_hashes"]:
+                            print(f"DEBUG: Error parsing note {i} in bar {b_ts} on T{tid}: {err}")
+                            state["logged_hashes"].add((tid, b_ts, i, "error"))
+                        continue
+
+                    if bar_length <= 0: continue
+
+                    # Unique key to prevent console spam
+                    hash_key = (tid, b_ts, i)
+                    # x position relative to start of song
+                    # Calculation per user: (absolute - offset).
+                    # This gives song-relative timestamp (assuming offset is standard transcript offset).
+                    # Map this ms value to pixels along the grid:
+                    rel_ms = abs_val - off_val
+                    x_pos = margin_left + (rel_ms / bar_length) * cell_w
+
+                    with state_lock:
+                        if hash_key not in state["logged_hashes"]:
+                            print(f"[Hash Mark T{tid}] {abs_val:.2f} (absolute) - {off_val:.2f} (offset) = {rel_ms:.2f} (relative) | bar_len: {bar_length}, cell_w: {cell_w:.2f}, x_pos: {x_pos:.2f}")
+                            state["logged_hashes"].add(hash_key)
+
+                    # Height relative to score (0.0 to 2.0)
+                    clipped_score = max(0.0, min(2.0, score_val))
+                    # Map 0.0 -> bottom, 2.0 -> top of 20px row
+                    h_px = (clipped_score / 2.0) * cell_h
+
+                    pygame.draw.line(screen, (255, 255, 255), (x_pos, row_y_bottom), (x_pos, row_y_bottom - h_px), 1)
 
         # Draw event animations
         for e in events:

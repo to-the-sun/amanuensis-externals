@@ -13,7 +13,7 @@ if os.environ.get('HEADLESS'):
     os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
 # Configuration
-TCP_PORT = 9999
+TCP_PORT = 8999
 WINDOW_SIZE = (1200, 1000)
 FPS = 60
 
@@ -56,8 +56,6 @@ def process_packet(text):
 
         try:
             pkt = json.loads(line)
-            if pkt.get("type") == "crucible":
-                continue
 
             with state_lock:
                 # 1. Weaver 'clear'
