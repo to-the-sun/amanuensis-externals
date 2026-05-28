@@ -309,6 +309,9 @@ void smartloop_tick(t_smartloop *x) {
 
     double average = total_rating_sum / (double)total_bar_count;
 
+    smartloop_log(x, "Analysis: %ld bars, %ld spans. Ratings: min=%.2f, max=%.2f, avg=%.2f",
+                  total_bar_count, span_count, min_rating, max_rating, average);
+
     // Collect above average points (avoid these)
     double *above_avg_points = (double *)sysmem_newptr(bar_count * sizeof(double));
     long above_avg_count = 0;
@@ -334,6 +337,8 @@ void smartloop_tick(t_smartloop *x) {
             above_avg_points[unique_above_avg_count++] = above_avg_points[i];
         }
     }
+
+    smartloop_log(x, "Avoiding %ld unique above-average points.", unique_above_avg_count);
 
     // Below average spans (potential intervals)
     double *below_avg_starts = (double *)sysmem_newptr(span_count * sizeof(double));
@@ -392,8 +397,11 @@ void smartloop_tick(t_smartloop *x) {
     }
 
     if (max_dist >= 0.0) {
+        smartloop_log(x, "Loop identified: start=%.2f, end=%.2f, duration=%.2f", best_S, best_E, max_dist);
         outlet_float(x->out_end, best_E);
         outlet_float(x->out_start, best_S);
+    } else {
+        smartloop_log(x, "No valid loop found.");
     }
 
     sysmem_freeptr(bounded_above_avg);

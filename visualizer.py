@@ -52,6 +52,8 @@ def perform_smartloop_analysis():
         state["min_rating"] = min(all_ratings)
         state["max_rating"] = max(all_ratings)
 
+        print(f"DEBUG: Smartloop Local Analysis. Ratings: min={state['min_rating']:.2f}, max={state['max_rating']:.2f}, avg={avg:.2f}")
+
         # Above average rating bars (points to avoid)
         above_avg_points = set()
         for (tid, b_ts), rating in bar_ratings_map.items():
@@ -114,7 +116,9 @@ def perform_smartloop_analysis():
         if max_dist >= 0:
             state["smartloop_start"] = best_S
             state["smartloop_end"] = best_E
+            print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")
         else:
+            print("DEBUG: Smartloop Local Analysis. No valid loop found.")
             state["smartloop_start"] = -1
             state["smartloop_end"] = -1
 
