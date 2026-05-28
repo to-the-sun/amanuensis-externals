@@ -353,6 +353,7 @@ void smartloop_tick(t_smartloop *x) {
         }
 
         if (found_below_avg) {
+            if (cur_min_S < 0) cur_min_S = 0;
             double dist = cur_max_E - cur_min_S;
             if (dist > max_dist) {
                 max_dist = dist;
