@@ -6,10 +6,9 @@
 		The `smartloop` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "Group 2" bars.
 
 		Group classification is based on the `rating` key found in each bar:
-		1. The object identifies the minimum and maximum ratings across all bars in the transcript.
-		2. It calculates the midpoint: (min + max) / 2.
-		3. Bars with a rating &gt; midpoint are assigned to **Group 1**.
-		4. Bars with a rating &lt;= midpoint are assigned to **Group 2**.
+		1. The object calculates the average rating across all bars in the transcript.
+		2. Bars with a rating &gt; average are assigned to **Group 1**.
+		3. Bars with a rating &lt;= average are assigned to **Group 2**.
 
 		The object outputs the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any Group 2 span and the end of any Group 2 span, provided there are no Group 1 bars within that interval.
 

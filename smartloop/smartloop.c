@@ -212,8 +212,8 @@ void smartloop_tick(t_smartloop *x) {
     t_span_info *spans = (t_span_info *)sysmem_newptr(span_capacity * sizeof(t_span_info));
     long span_count = 0;
 
-    double min_rating = DBL_MAX;
-    double max_rating = -DBL_MAX;
+    double total_rating_sum = 0.0;
+    long total_bar_count = 0;
     short has_bars = 0;
 
     for (long i = 0; i < num_tracks; i++) {
@@ -230,8 +230,8 @@ void smartloop_tick(t_smartloop *x) {
 
             has_bars = 1;
             double rating = get_rating(bar_dict);
-            if (rating < min_rating) min_rating = rating;
-            if (rating > max_rating) max_rating = rating;
+            total_rating_sum += rating;
+            total_bar_count++;
 
             double bar_ts = atof(bar_keys[j]->s_name);
             if (bar_count >= bar_capacity) {
@@ -303,7 +303,7 @@ void smartloop_tick(t_smartloop *x) {
         return;
     }
 
-    double midpoint = (min_rating + max_rating) / 2.0;
+    double average = total_rating_sum / (double)total_bar_count;
 
     // Collect Group 1 points
     double *points1 = (double *)sysmem_newptr(bar_count * sizeof(double));
@@ -317,7 +317,7 @@ void smartloop_tick(t_smartloop *x) {
         for (long j = 0; j < num_bars; j++) {
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
-            if (get_rating(bar_dict) > midpoint) {
+            if (get_rating(bar_dict) > average) {
                 points1[p1_count++] = atof(bar_keys[j]->s_name);
             }
         }
@@ -336,7 +336,7 @@ void smartloop_tick(t_smartloop *x) {
     double *g2_ends = (double *)sysmem_newptr(span_count * sizeof(double));
     long g2_count = 0;
     for (long i = 0; i < span_count; i++) {
-        if (spans[i].rating < midpoint) {
+        if (spans[i].rating <= average) {
             g2_starts[g2_count] = spans[i].start;
             g2_ends[g2_count] = spans[i].end_bar + bar_length;
             g2_count++;
