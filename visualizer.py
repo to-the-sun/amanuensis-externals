@@ -256,15 +256,6 @@ def process_packet(text):
                         state["bar_ratings"][t_str][b_str] = rating
                         print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating}")
 
-                        state["events"].append({
-                            "type": "new_span",
-                            "track": track,
-                            "bars": [bar],
-                            "rating": rating,
-                            "start_time": time.time(),
-                            "duration": 3.0
-                        })
-
                 if dirty:
                     recalculate_reach()
 
