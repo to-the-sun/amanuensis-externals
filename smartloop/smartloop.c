@@ -84,16 +84,13 @@ double get_rating(t_dictionary *bar_dict) {
         if (atom_gettype(&a) == A_FLOAT) return atom_getfloat(&a);
         if (atom_gettype(&a) == A_LONG) return (double)atom_getlong(&a);
     }
-    t_object *obj;
-    if (dictionary_getobject(bar_dict, gensym("rating"), &obj) == MAX_ERR_NONE) {
-        if (obj && !object_classname_compare(obj, gensym("atomarray"))) {
-            t_atomarray *aa = (t_atomarray *)obj;
-            long ac; t_atom *av;
-            atomarray_getatoms(aa, &ac, &av);
-            if (ac > 0) {
-                if (atom_gettype(av) == A_FLOAT) return atom_getfloat(av);
-                if (atom_gettype(av) == A_LONG) return (double)atom_getlong(av);
-            }
+    t_atomarray *aa = NULL;
+    if (dictionary_getatomarray(bar_dict, gensym("rating"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+        long ac; t_atom *av;
+        atomarray_getatoms(aa, &ac, &av);
+        if (ac > 0) {
+            if (atom_gettype(av) == A_FLOAT) return atom_getfloat(av);
+            if (atom_gettype(av) == A_LONG) return (double)atom_getlong(av);
         }
     }
     return 0.0;
@@ -101,11 +98,9 @@ double get_rating(t_dictionary *bar_dict) {
 
 // Robustly get span array from bar dict
 t_atomarray* get_span_array(t_dictionary *bar_dict) {
-    t_object *obj;
-    if (dictionary_getobject(bar_dict, gensym("span"), &obj) == MAX_ERR_NONE) {
-        if (obj && !object_classname_compare(obj, gensym("atomarray"))) {
-            return (t_atomarray *)obj;
-        }
+    t_atomarray *aa = NULL;
+    if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+        return aa;
     }
     return NULL;
 }
@@ -129,15 +124,17 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->dict_name = _sym_nothing;
         x->log = 0;
 
-        if (argc > 0 && atom_gettype(argv) == A_SYM) {
+        if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
             argc--;
             argv++;
-        } else {
-            object_error((t_object *)x, "mandatory dictionary name argument missing");
         }
 
         attr_args_process(x, argc, argv);
+
+        if (x->dict_name == _sym_nothing) {
+            object_error((t_object *)x, "mandatory dictionary name argument missing");
+        }
 
         // Outlets created from right to left
         x->log_outlet = outlet_new(x, NULL); // Index 2
