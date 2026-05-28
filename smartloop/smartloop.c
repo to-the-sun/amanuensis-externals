@@ -167,10 +167,18 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
 }
 
 typedef struct {
+    double ts;
     double rating;
-    double start;
-    double end_bar;
-} t_span_info;
+} t_aggregated_bar;
+
+// Helper for sorting bars by timestamp
+int compare_bars(const void *a, const void *b) {
+    double ta = ((t_aggregated_bar *)a)->ts;
+    double tb = ((t_aggregated_bar *)b)->ts;
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+    return 0;
+}
 
 void smartloop_tick(t_smartloop *x) {
     if (x->dict_name == _sym_nothing) {
@@ -203,20 +211,11 @@ void smartloop_tick(t_smartloop *x) {
         return;
     }
 
-    // Phase 1: Scan all bars and spans
+    // Phase 1: Scan all bars from all tracks
     long bar_capacity = 1024;
-    double *all_bar_timestamps = (double *)sysmem_newptr(bar_capacity * sizeof(double));
-    long bar_count = 0;
-
-    long span_capacity = 256;
-    t_span_info *spans = (t_span_info *)sysmem_newptr(span_capacity * sizeof(t_span_info));
-    long span_count = 0;
-
-    double total_rating_sum = 0.0;
-    long total_bar_count = 0;
+    t_aggregated_bar *all_bars = (t_aggregated_bar *)sysmem_newptr(bar_capacity * sizeof(t_aggregated_bar));
+    long raw_bar_count = 0;
     short has_bars = 0;
-    double min_rating = DBL_MAX;
-    double max_rating = -DBL_MAX;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -232,136 +231,103 @@ void smartloop_tick(t_smartloop *x) {
 
             has_bars = 1;
             double rating = get_rating(bar_dict);
-            total_rating_sum += rating;
-            total_bar_count++;
-            if (rating < min_rating) min_rating = rating;
-            if (rating > max_rating) max_rating = rating;
-
             double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_count >= bar_capacity) {
+
+            if (raw_bar_count >= bar_capacity) {
                 bar_capacity *= 2;
-                all_bar_timestamps = (double *)sysmem_resizeptr(all_bar_timestamps, bar_capacity * sizeof(double));
+                all_bars = (t_aggregated_bar *)sysmem_resizeptr(all_bars, bar_capacity * sizeof(t_aggregated_bar));
             }
-            all_bar_timestamps[bar_count++] = bar_ts;
-
-            t_atomarray *span_aa = get_span_array(bar_dict);
-            if (span_aa) {
-                long ac; t_atom *av;
-                atomarray_getatoms(span_aa, &ac, &av);
-                if (ac > 0) {
-                    double s_min = DBL_MAX;
-                    double s_max = -DBL_MAX;
-                    for (long k = 0; k < ac; k++) {
-                        double ts = (atom_gettype(av+k) == A_LONG) ? (double)atom_getlong(av+k) : atom_getfloat(av+k);
-                        if (ts < s_min) s_min = ts;
-                        if (ts > s_max) s_max = ts;
-                    }
-
-                    short found = 0;
-                    for (long k = 0; k < span_count; k++) {
-                        if (spans[k].start == s_min && spans[k].end_bar == s_max) {
-                            found = 1;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        if (span_count >= span_capacity) {
-                            span_capacity *= 2;
-                            spans = (t_span_info *)sysmem_resizeptr(spans, span_capacity * sizeof(t_span_info));
-                        }
-                        spans[span_count].rating = rating;
-                        spans[span_count].start = s_min;
-                        spans[span_count].end_bar = s_max;
-                        span_count++;
-                    }
-                }
-            } else {
-                short found = 0;
-                for (long k = 0; k < span_count; k++) {
-                    if (spans[k].start == bar_ts && spans[k].end_bar == bar_ts) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    if (span_count >= span_capacity) {
-                        span_capacity *= 2;
-                        spans = (t_span_info *)sysmem_resizeptr(spans, span_capacity * sizeof(t_span_info));
-                    }
-                    spans[span_count].rating = rating;
-                    spans[span_count].start = bar_ts;
-                    spans[span_count].end_bar = bar_ts;
-                    span_count++;
-                }
-            }
+            all_bars[raw_bar_count].ts = bar_ts;
+            all_bars[raw_bar_count].rating = rating;
+            raw_bar_count++;
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
 
     if (!has_bars) {
-        sysmem_freeptr(all_bar_timestamps);
-        sysmem_freeptr(spans);
+        if (all_bars) sysmem_freeptr(all_bars);
         if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(d);
         clock_delay(x->clock, x->interval);
         return;
     }
 
-    double average = total_rating_sum / (double)total_bar_count;
+    // Phase 2: Aggregate ratings by timestamp
+    qsort(all_bars, raw_bar_count, sizeof(t_aggregated_bar), compare_bars);
 
-    smartloop_log(x, "Analysis: %ld bars, %ld spans. Ratings: min=%.2f, max=%.2f, avg=%.2f",
-                  total_bar_count, span_count, min_rating, max_rating, average);
+    t_aggregated_bar *song_bars = (t_aggregated_bar *)sysmem_newptr(raw_bar_count * sizeof(t_aggregated_bar));
+    long song_bar_count = 0;
+    double global_rating_sum = 0.0;
+    double min_rating = DBL_MAX;
+    double max_rating = -DBL_MAX;
 
-    // Collect above average points (avoid these)
-    double *above_avg_points = (double *)sysmem_newptr(bar_count * sizeof(double));
-    long above_avg_count = 0;
+    if (raw_bar_count > 0) {
+        double current_ts = all_bars[0].ts;
+        double current_sum = all_bars[0].rating;
+        int current_count = 1;
 
-    for (long i = 0; i < num_tracks; i++) {
-        t_dictionary *track_dict = NULL;
-        if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
-        long num_bars; t_symbol **bar_keys = NULL;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-        for (long j = 0; j < num_bars; j++) {
-            t_dictionary *bar_dict = NULL;
-            if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
-            if (get_rating(bar_dict) > average) {
-                above_avg_points[above_avg_count++] = atof(bar_keys[j]->s_name);
+        for (long i = 1; i < raw_bar_count; i++) {
+            if (fabs(all_bars[i].ts - current_ts) < 0.001) { // Floating point equality check
+                current_sum += all_bars[i].rating;
+                current_count++;
+            } else {
+                double avg_rating = current_sum / current_count;
+                song_bars[song_bar_count].ts = current_ts;
+                song_bars[song_bar_count].rating = avg_rating;
+                global_rating_sum += avg_rating;
+                if (avg_rating < min_rating) min_rating = avg_rating;
+                if (avg_rating > max_rating) max_rating = avg_rating;
+                song_bar_count++;
+
+                current_ts = all_bars[i].ts;
+                current_sum = all_bars[i].rating;
+                current_count = 1;
             }
         }
-        if (bar_keys) sysmem_freeptr(bar_keys);
+        double avg_rating = current_sum / current_count;
+        song_bars[song_bar_count].ts = current_ts;
+        song_bars[song_bar_count].rating = avg_rating;
+        global_rating_sum += avg_rating;
+        if (avg_rating < min_rating) min_rating = avg_rating;
+        if (avg_rating > max_rating) max_rating = avg_rating;
+        song_bar_count++;
     }
-    qsort(above_avg_points, above_avg_count, sizeof(double), compare_doubles);
+
+    double average = (song_bar_count > 0) ? (global_rating_sum / song_bar_count) : 0.0;
+
+    smartloop_log(x, "Analysis: %ld raw bars, %ld unique timestamps. Ratings: min=%.2f, max=%.2f, global_avg=%.2f",
+                  raw_bar_count, song_bar_count, min_rating, max_rating, average);
+
+    // Phase 3: Identify boundaries and potential intervals
+    double *above_avg_points = (double *)sysmem_newptr(song_bar_count * sizeof(double));
     long unique_above_avg_count = 0;
-    for (long i = 0; i < above_avg_count; i++) {
-        if (i == 0 || above_avg_points[i] != above_avg_points[i-1]) {
-            above_avg_points[unique_above_avg_count++] = above_avg_points[i];
+
+    double *below_avg_starts = (double *)sysmem_newptr(song_bar_count * sizeof(double));
+    double *below_avg_ends = (double *)sysmem_newptr(song_bar_count * sizeof(double));
+    long below_avg_count_total = 0;
+
+    for (long i = 0; i < song_bar_count; i++) {
+        if (song_bars[i].rating > average) {
+            above_avg_points[unique_above_avg_count++] = song_bars[i].ts;
+        } else {
+            below_avg_starts[below_avg_count_total] = song_bars[i].ts;
+            below_avg_ends[below_avg_count_total] = song_bars[i].ts + bar_length;
+            below_avg_count_total++;
         }
     }
 
     smartloop_log(x, "Avoiding %ld unique above-average points.", unique_above_avg_count);
 
-    // Below average spans (potential intervals)
-    double *below_avg_starts = (double *)sysmem_newptr(span_count * sizeof(double));
-    double *below_avg_ends = (double *)sysmem_newptr(span_count * sizeof(double));
-    long below_avg_count_total = 0;
-    for (long i = 0; i < span_count; i++) {
-        if (spans[i].rating <= average) {
-            below_avg_starts[below_avg_count_total] = spans[i].start;
-            below_avg_ends[below_avg_count_total] = spans[i].end_bar + bar_length;
-            below_avg_count_total++;
-        }
-    }
-
-    // Longest clean interval
+    // Phase 4: Longest clean interval
     double max_dist = -1.0;
     double best_S = 0.0;
     double best_E = 0.0;
 
     double overall_min = DBL_MAX;
     double overall_max = -DBL_MAX;
-    for (long i = 0; i < bar_count; i++) {
-        if (all_bar_timestamps[i] < overall_min) overall_min = all_bar_timestamps[i];
-        if (all_bar_timestamps[i] > overall_max) overall_max = all_bar_timestamps[i];
+    for (long i = 0; i < song_bar_count; i++) {
+        if (song_bars[i].ts < overall_min) overall_min = song_bars[i].ts;
+        if (song_bars[i].ts > overall_max) overall_max = song_bars[i].ts;
     }
     overall_max += bar_length;
 
@@ -408,8 +374,8 @@ void smartloop_tick(t_smartloop *x) {
     sysmem_freeptr(below_avg_starts);
     sysmem_freeptr(below_avg_ends);
     sysmem_freeptr(above_avg_points);
-    sysmem_freeptr(all_bar_timestamps);
-    sysmem_freeptr(spans);
+    sysmem_freeptr(all_bars);
+    sysmem_freeptr(song_bars);
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(d);
 

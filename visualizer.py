@@ -27,6 +27,7 @@ state = {
     "smartloop_start": -1,
     "smartloop_end": -1,
     "bar_ratings": {},
+    "song_bar_ratings": {},
     "average_rating": 0,
     "min_rating": 0,
     "max_rating": 0,
@@ -37,40 +38,47 @@ state_lock = threading.Lock()
 def perform_smartloop_analysis():
     """Performs the smartloop calculations locally based on gathered data."""
     with state_lock:
-        bar_ratings_map = {} # (track, bar_ts) -> rating
-        all_ratings = []
+        # Aggregate ratings by timestamp across all tracks
+        ts_to_ratings = {} # ts -> [ratings]
         for tid, bars in state["bar_ratings"].items():
             for b_ts, rating in bars.items():
-                all_ratings.append(rating)
-                bar_ratings_map[(tid, b_ts)] = rating
+                ts = float(b_ts)
+                if ts not in ts_to_ratings:
+                    ts_to_ratings[ts] = []
+                ts_to_ratings[ts].append(rating)
 
-        if not all_ratings:
+        if not ts_to_ratings:
             return
 
-        avg = sum(all_ratings) / len(all_ratings)
+        # Calculate averaged rating per timestamp
+        song_bars = {} # ts -> averaged_rating
+        for ts, ratings in ts_to_ratings.items():
+            song_bars[ts] = sum(ratings) / len(ratings)
+
+        all_song_ratings = list(song_bars.values())
+        avg = sum(all_song_ratings) / len(all_song_ratings)
         state["average_rating"] = avg
-        state["min_rating"] = min(all_ratings)
-        state["max_rating"] = max(all_ratings)
+        state["min_rating"] = min(all_song_ratings)
+        state["max_rating"] = max(all_song_ratings)
+        # Store for rendering
+        state["song_bar_ratings"] = {str(float(ts)): r for ts, r in song_bars.items()}
 
-        print(f"DEBUG: Smartloop Local Analysis. Ratings: min={state['min_rating']:.2f}, max={state['max_rating']:.2f}, avg={avg:.2f}")
+        print(f"DEBUG: Smartloop Local Analysis. Ratings: min={state['min_rating']:.2f}, max={state['max_rating']:.2f}, global_avg={avg:.2f}")
 
-        # Above average rating bars (points to avoid)
-        above_avg_points = set()
-        for (tid, b_ts), rating in bar_ratings_map.items():
-            if rating > avg:
-                above_avg_points.add(float(b_ts))
-        sorted_above_avg = sorted(list(above_avg_points))
-
-        # Below average rating spans (potential intervals)
-        below_avg_spans = [] # list of (start, end)
+        # Identify above average points and below average intervals (per bar)
+        above_avg_points = []
+        below_avg_intervals = [] # list of (start, end)
         bar_length = state.get("bar_length", 125)
-        for span in state["spans_seen"].values():
-            if span["rating"] <= avg:
-                bars = [float(b) for b in span["bars"]]
-                if bars:
-                    below_avg_spans.append((min(bars), max(bars) + bar_length))
 
-        if not below_avg_spans:
+        for ts, rating in song_bars.items():
+            if rating > avg:
+                above_avg_points.append(ts)
+            else:
+                below_avg_intervals.append((ts, ts + bar_length))
+
+        sorted_above_avg = sorted(above_avg_points)
+
+        if not below_avg_intervals:
             state["smartloop_start"] = -1
             state["smartloop_end"] = -1
             return
@@ -100,7 +108,7 @@ def perform_smartloop_analysis():
             cur_max_E = float('-inf')
             found_below_avg = False
 
-            for s_start, s_end in below_avg_spans:
+            for s_start, s_end in below_avg_intervals:
                 if s_start >= p_low and s_end <= p_high:
                     if s_start < cur_min_S: cur_min_S = s_start
                     if s_end > cur_max_E: cur_max_E = s_end
@@ -378,7 +386,8 @@ def run_gui():
 
                 # Determine color tint
                 color = [80, 80, 100]
-                rating = bar_ratings.get(tid, {}).get(str(b_ts))
+                # Use averaged song-level rating for consistency with smartloop analysis
+                rating = state.get("song_bar_ratings", {}).get(str(float(b_ts)))
                 if rating is not None:
                     if rating > avg:
                         # Tint green
