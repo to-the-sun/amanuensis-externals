@@ -5,7 +5,6 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
-#include "../shared/visualize.h"
 #include <float.h>
 #include <stdlib.h>
 #include <math.h>
@@ -21,7 +20,6 @@ typedef struct _smartloop {
     t_buffer_ref *buffer_ref;
     long bar_warn_sent;
     long log;
-    long visualize;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -115,10 +113,6 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
-    CLASS_ATTR_LONG(c, "visualize", 0, t_smartloop, visualize);
-    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
-    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
-
     class_register(CLASS_BOX, c);
     smartloop_class = c;
     common_symbols_init();
@@ -127,10 +121,8 @@ void ext_main(void *r) {
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
     t_smartloop *x = (t_smartloop *)object_alloc(smartloop_class);
     if (x) {
-        visualize_init();
         x->dict_name = _sym_nothing;
         x->log = 0;
-        x->visualize = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
@@ -160,7 +152,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void smartloop_free(t_smartloop *x) {
-    visualize_cleanup();
     object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
@@ -169,8 +160,8 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: Unused (Object scans dictionary every 999ms)");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: Start of longest Group 2 interval (ms)");
-        else if (a == 1) sprintf(s, "Outlet 2: End of longest Group 2 interval (ms)");
+        if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
+        else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
         else if (a == 2) sprintf(s, "Outlet 3: Logging Outlet");
     }
 }
@@ -318,39 +309,9 @@ void smartloop_tick(t_smartloop *x) {
 
     double average = total_rating_sum / (double)total_bar_count;
 
-    if (x->visualize) {
-        // Construct JSON for ratings and average
-        long buf_size = 65536;
-        char *buf = (char *)sysmem_newptr(buf_size);
-        if (buf) {
-            long offset = 0;
-            offset += snprintf(buf + offset, buf_size - offset, "{\"average\":%f,\"min\":%f,\"max\":%f,\"ratings\":{", average, min_rating, max_rating);
-            for (long i = 0; i < num_tracks; i++) {
-                t_dictionary *track_dict = NULL;
-                dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict);
-                if (i > 0) offset += snprintf(buf + offset, buf_size - offset, ",");
-                offset += snprintf(buf + offset, buf_size - offset, "\"%s\":{", track_keys[i]->s_name);
-
-                long num_bars; t_symbol **bar_keys = NULL;
-                dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-                for (long j = 0; j < num_bars; j++) {
-                    t_dictionary *bar_dict = NULL;
-                    dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict);
-                    if (j > 0) offset += snprintf(buf + offset, buf_size - offset, ",");
-                    offset += snprintf(buf + offset, buf_size - offset, "\"%s\":%f", bar_keys[j]->s_name, get_rating(bar_dict));
-                }
-                offset += snprintf(buf + offset, buf_size - offset, "}");
-                if (bar_keys) sysmem_freeptr(bar_keys);
-            }
-            offset += snprintf(buf + offset, buf_size - offset, "}}");
-            visualize(x, buf);
-            sysmem_freeptr(buf);
-        }
-    }
-
-    // Collect Group 1 points
-    double *points1 = (double *)sysmem_newptr(bar_count * sizeof(double));
-    long p1_count = 0;
+    // Collect above average points (avoid these)
+    double *above_avg_points = (double *)sysmem_newptr(bar_count * sizeof(double));
+    long above_avg_count = 0;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -361,28 +322,28 @@ void smartloop_tick(t_smartloop *x) {
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
             if (get_rating(bar_dict) > average) {
-                points1[p1_count++] = atof(bar_keys[j]->s_name);
+                above_avg_points[above_avg_count++] = atof(bar_keys[j]->s_name);
             }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
-    qsort(points1, p1_count, sizeof(double), compare_doubles);
-    long unique_p1_count = 0;
-    for (long i = 0; i < p1_count; i++) {
-        if (i == 0 || points1[i] != points1[i-1]) {
-            points1[unique_p1_count++] = points1[i];
+    qsort(above_avg_points, above_avg_count, sizeof(double), compare_doubles);
+    long unique_above_avg_count = 0;
+    for (long i = 0; i < above_avg_count; i++) {
+        if (i == 0 || above_avg_points[i] != above_avg_points[i-1]) {
+            above_avg_points[unique_above_avg_count++] = above_avg_points[i];
         }
     }
 
-    // Group 2 spans
-    double *g2_starts = (double *)sysmem_newptr(span_count * sizeof(double));
-    double *g2_ends = (double *)sysmem_newptr(span_count * sizeof(double));
-    long g2_count = 0;
+    // Below average spans (potential intervals)
+    double *below_avg_starts = (double *)sysmem_newptr(span_count * sizeof(double));
+    double *below_avg_ends = (double *)sysmem_newptr(span_count * sizeof(double));
+    long below_avg_count_total = 0;
     for (long i = 0; i < span_count; i++) {
         if (spans[i].rating <= average) {
-            g2_starts[g2_count] = spans[i].start;
-            g2_ends[g2_count] = spans[i].end_bar + bar_length;
-            g2_count++;
+            below_avg_starts[below_avg_count_total] = spans[i].start;
+            below_avg_ends[below_avg_count_total] = spans[i].end_bar + bar_length;
+            below_avg_count_total++;
         }
     }
 
@@ -399,28 +360,28 @@ void smartloop_tick(t_smartloop *x) {
     }
     overall_max += bar_length;
 
-    double *bounded_p1 = (double *)sysmem_newptr((unique_p1_count + 2) * sizeof(double));
-    bounded_p1[0] = overall_min - 1.0;
-    for (long i = 0; i < unique_p1_count; i++) bounded_p1[i+1] = points1[i];
-    bounded_p1[unique_p1_count + 1] = overall_max + 1.0;
+    double *bounded_above_avg = (double *)sysmem_newptr((unique_above_avg_count + 2) * sizeof(double));
+    bounded_above_avg[0] = overall_min - 1.0;
+    for (long i = 0; i < unique_above_avg_count; i++) bounded_above_avg[i+1] = above_avg_points[i];
+    bounded_above_avg[unique_above_avg_count + 1] = overall_max + 1.0;
 
-    for (long i = 0; i < unique_p1_count + 1; i++) {
-        double p_low = bounded_p1[i];
-        double p_high = bounded_p1[i+1];
+    for (long i = 0; i < unique_above_avg_count + 1; i++) {
+        double p_low = bounded_above_avg[i];
+        double p_high = bounded_above_avg[i+1];
 
         double cur_min_S = DBL_MAX;
         double cur_max_E = -DBL_MAX;
-        short found_g2 = 0;
+        short found_below_avg = 0;
 
-        for (long j = 0; j < g2_count; j++) {
-            if (g2_starts[j] >= p_low && g2_ends[j] <= p_high) {
-                if (g2_starts[j] < cur_min_S) cur_min_S = g2_starts[j];
-                if (g2_ends[j] > cur_max_E) cur_max_E = g2_ends[j];
-                found_g2 = 1;
+        for (long j = 0; j < below_avg_count_total; j++) {
+            if (below_avg_starts[j] >= p_low && below_avg_ends[j] <= p_high) {
+                if (below_avg_starts[j] < cur_min_S) cur_min_S = below_avg_starts[j];
+                if (below_avg_ends[j] > cur_max_E) cur_max_E = below_avg_ends[j];
+                found_below_avg = 1;
             }
         }
 
-        if (found_g2) {
+        if (found_below_avg) {
             double dist = cur_max_E - cur_min_S;
             if (dist > max_dist) {
                 max_dist = dist;
@@ -433,18 +394,12 @@ void smartloop_tick(t_smartloop *x) {
     if (max_dist >= 0.0) {
         outlet_float(x->out_end, best_E);
         outlet_float(x->out_start, best_S);
-
-        if (x->visualize) {
-            char buf[128];
-            snprintf(buf, 128, "{\"smartloop_start\":%f,\"smartloop_end\":%f}", best_S, best_E);
-            visualize(x, buf);
-        }
     }
 
-    sysmem_freeptr(bounded_p1);
-    sysmem_freeptr(g2_starts);
-    sysmem_freeptr(g2_ends);
-    sysmem_freeptr(points1);
+    sysmem_freeptr(bounded_above_avg);
+    sysmem_freeptr(below_avg_starts);
+    sysmem_freeptr(below_avg_ends);
+    sysmem_freeptr(above_avg_points);
     sysmem_freeptr(all_bar_timestamps);
     sysmem_freeptr(spans);
     if (track_keys) sysmem_freeptr(track_keys);
