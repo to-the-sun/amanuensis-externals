@@ -160,8 +160,8 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: Unused (Object scans dictionary every 999ms)");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: Start of longest Group 2 interval (ms)");
-        else if (a == 1) sprintf(s, "Outlet 2: End of longest Group 2 interval (ms)");
+        if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
+        else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
         else if (a == 2) sprintf(s, "Outlet 3: Logging Outlet");
     }
 }
@@ -212,9 +212,11 @@ void smartloop_tick(t_smartloop *x) {
     t_span_info *spans = (t_span_info *)sysmem_newptr(span_capacity * sizeof(t_span_info));
     long span_count = 0;
 
+    double total_rating_sum = 0.0;
+    long total_bar_count = 0;
+    short has_bars = 0;
     double min_rating = DBL_MAX;
     double max_rating = -DBL_MAX;
-    short has_bars = 0;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -230,6 +232,8 @@ void smartloop_tick(t_smartloop *x) {
 
             has_bars = 1;
             double rating = get_rating(bar_dict);
+            total_rating_sum += rating;
+            total_bar_count++;
             if (rating < min_rating) min_rating = rating;
             if (rating > max_rating) max_rating = rating;
 
@@ -303,11 +307,11 @@ void smartloop_tick(t_smartloop *x) {
         return;
     }
 
-    double midpoint = (min_rating + max_rating) / 2.0;
+    double average = total_rating_sum / (double)total_bar_count;
 
-    // Collect Group 1 points
-    double *points1 = (double *)sysmem_newptr(bar_count * sizeof(double));
-    long p1_count = 0;
+    // Collect above average points (avoid these)
+    double *above_avg_points = (double *)sysmem_newptr(bar_count * sizeof(double));
+    long above_avg_count = 0;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -317,29 +321,29 @@ void smartloop_tick(t_smartloop *x) {
         for (long j = 0; j < num_bars; j++) {
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
-            if (get_rating(bar_dict) > midpoint) {
-                points1[p1_count++] = atof(bar_keys[j]->s_name);
+            if (get_rating(bar_dict) > average) {
+                above_avg_points[above_avg_count++] = atof(bar_keys[j]->s_name);
             }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
-    qsort(points1, p1_count, sizeof(double), compare_doubles);
-    long unique_p1_count = 0;
-    for (long i = 0; i < p1_count; i++) {
-        if (i == 0 || points1[i] != points1[i-1]) {
-            points1[unique_p1_count++] = points1[i];
+    qsort(above_avg_points, above_avg_count, sizeof(double), compare_doubles);
+    long unique_above_avg_count = 0;
+    for (long i = 0; i < above_avg_count; i++) {
+        if (i == 0 || above_avg_points[i] != above_avg_points[i-1]) {
+            above_avg_points[unique_above_avg_count++] = above_avg_points[i];
         }
     }
 
-    // Group 2 spans
-    double *g2_starts = (double *)sysmem_newptr(span_count * sizeof(double));
-    double *g2_ends = (double *)sysmem_newptr(span_count * sizeof(double));
-    long g2_count = 0;
+    // Below average spans (potential intervals)
+    double *below_avg_starts = (double *)sysmem_newptr(span_count * sizeof(double));
+    double *below_avg_ends = (double *)sysmem_newptr(span_count * sizeof(double));
+    long below_avg_count_total = 0;
     for (long i = 0; i < span_count; i++) {
-        if (spans[i].rating < midpoint) {
-            g2_starts[g2_count] = spans[i].start;
-            g2_ends[g2_count] = spans[i].end_bar + bar_length;
-            g2_count++;
+        if (spans[i].rating <= average) {
+            below_avg_starts[below_avg_count_total] = spans[i].start;
+            below_avg_ends[below_avg_count_total] = spans[i].end_bar + bar_length;
+            below_avg_count_total++;
         }
     }
 
@@ -356,28 +360,28 @@ void smartloop_tick(t_smartloop *x) {
     }
     overall_max += bar_length;
 
-    double *bounded_p1 = (double *)sysmem_newptr((unique_p1_count + 2) * sizeof(double));
-    bounded_p1[0] = overall_min - 1.0;
-    for (long i = 0; i < unique_p1_count; i++) bounded_p1[i+1] = points1[i];
-    bounded_p1[unique_p1_count + 1] = overall_max + 1.0;
+    double *bounded_above_avg = (double *)sysmem_newptr((unique_above_avg_count + 2) * sizeof(double));
+    bounded_above_avg[0] = overall_min - 1.0;
+    for (long i = 0; i < unique_above_avg_count; i++) bounded_above_avg[i+1] = above_avg_points[i];
+    bounded_above_avg[unique_above_avg_count + 1] = overall_max + 1.0;
 
-    for (long i = 0; i < unique_p1_count + 1; i++) {
-        double p_low = bounded_p1[i];
-        double p_high = bounded_p1[i+1];
+    for (long i = 0; i < unique_above_avg_count + 1; i++) {
+        double p_low = bounded_above_avg[i];
+        double p_high = bounded_above_avg[i+1];
 
         double cur_min_S = DBL_MAX;
         double cur_max_E = -DBL_MAX;
-        short found_g2 = 0;
+        short found_below_avg = 0;
 
-        for (long j = 0; j < g2_count; j++) {
-            if (g2_starts[j] >= p_low && g2_ends[j] <= p_high) {
-                if (g2_starts[j] < cur_min_S) cur_min_S = g2_starts[j];
-                if (g2_ends[j] > cur_max_E) cur_max_E = g2_ends[j];
-                found_g2 = 1;
+        for (long j = 0; j < below_avg_count_total; j++) {
+            if (below_avg_starts[j] >= p_low && below_avg_ends[j] <= p_high) {
+                if (below_avg_starts[j] < cur_min_S) cur_min_S = below_avg_starts[j];
+                if (below_avg_ends[j] > cur_max_E) cur_max_E = below_avg_ends[j];
+                found_below_avg = 1;
             }
         }
 
-        if (found_g2) {
+        if (found_below_avg) {
             double dist = cur_max_E - cur_min_S;
             if (dist > max_dist) {
                 max_dist = dist;
@@ -392,10 +396,10 @@ void smartloop_tick(t_smartloop *x) {
         outlet_float(x->out_start, best_S);
     }
 
-    sysmem_freeptr(bounded_p1);
-    sysmem_freeptr(g2_starts);
-    sysmem_freeptr(g2_ends);
-    sysmem_freeptr(points1);
+    sysmem_freeptr(bounded_above_avg);
+    sysmem_freeptr(below_avg_starts);
+    sysmem_freeptr(below_avg_ends);
+    sysmem_freeptr(above_avg_points);
     sysmem_freeptr(all_bar_timestamps);
     sysmem_freeptr(spans);
     if (track_keys) sysmem_freeptr(track_keys);
