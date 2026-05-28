@@ -953,6 +953,30 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
+    if (s == gensym("replace") && argc >= 2 && x->visualize) {
+        char *sel_str = NULL;
+        if (atom_gettype(argv) == A_SYM) {
+            sel_str = atom_getsym(argv)->s_name;
+        }
+        if (sel_str) {
+            char *track = NULL;
+            char *bar = NULL;
+            char *key = NULL;
+            if (parse_selector(sel_str, &track, &bar, &key)) {
+                if (strcmp(key, "rating") == 0) {
+                    double rating = atom_getfloat(argv + 1);
+                    char msg[256];
+                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, rating);
+                    visualize((t_object *)x, msg);
+                }
+                sysmem_freeptr(track);
+                sysmem_freeptr(bar);
+                sysmem_freeptr(key);
+            }
+        }
+        return;
+    }
+
     char *track_str = NULL;
     char *bar_str = NULL;
     char *key_str = NULL;
@@ -995,7 +1019,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: Primary message stream. Supports 'clear', 'track [id]', 'span [list]', 'reaches', and hierarchical selectors '[track]::[bar]::[key] [data]'. Also sets the incumbent dictionary name via symbol."); break;
+            case 0: sprintf(s, "Inlet 1: Primary message stream. Supports 'clear', 'track [id]', 'span [list]', 'reaches', 'replace [selector] [value]', and hierarchical selectors '[track]::[bar]::[key] [data]'. Also sets the incumbent dictionary name via symbol."); break;
             case 1: sprintf(s, "Inlet 2: Local Bar Length (float). Sets or overrides the bar length used for reach calculations (normally retrieved from the 'bar' buffer)."); break;
         }
     } else { // ASSIST_OUTLET

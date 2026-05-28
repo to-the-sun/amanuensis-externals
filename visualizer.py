@@ -244,6 +244,18 @@ def process_packet(text):
                         "duration": 3.0
                     })
 
+                if pkt.get("event") == "replace":
+                    track = pkt.get("track")
+                    bar = pkt.get("bar")
+                    rating = pkt.get("rating")
+                    if track is not None and bar is not None and rating is not None:
+                        t_str = str(track)
+                        b_str = str(bar)
+                        if t_str not in state["bar_ratings"]:
+                            state["bar_ratings"][t_str] = {}
+                        state["bar_ratings"][t_str][b_str] = rating
+                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating}")
+
                 if dirty:
                     recalculate_reach()
 

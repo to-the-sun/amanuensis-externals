@@ -96,6 +96,12 @@
 				Clears the challenger dictionary, all track reaches, song reach, and internal track context.
 			</description>
 		</method>
+		<method name="replace">
+			<digest>Update bar rating for visualization</digest>
+			<description>
+				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. If the key in the selector is 'rating' and the @visualize attribute is enabled, this message sends a packet to the visualizer to update the specified bar's rating in its local database. This is used for real-time visualization updates and local smartloop analysis within the visualizer.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
