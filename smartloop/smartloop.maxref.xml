@@ -5,12 +5,13 @@
 	<description>
 		The `smartloop` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "below average" bars.
 
-		Classification is based on the `rating` key found in each bar:
-		1. The object calculates the average rating across all bars in the transcript.
-		2. Bars with a rating &gt; average are considered **above average**.
-		3. Bars with a rating &lt;= average are considered **below average**.
+		Classification is based on the `rating` key found in each bar, averaged across all tracks for each unique timestamp:
+		1. The object calculates an averaged rating for each unique bar timestamp across all tracks.
+		2. The object calculates the global average rating as the mean of these per-timestamp averaged ratings.
+		3. Timestamps with an averaged rating &gt; global average are considered **above average**.
+		4. Timestamps with an averaged rating &lt;= global average are considered **below average**.
 
-		The object outputs the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average span and the end of any below average span, provided there are no above average bars within that interval.
+		The object outputs the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually.
 
 		Temporal analysis requires the `bar_length` metadata, which is retrieved from an external `buffer~` named **bar**. If the buffer is not found, the object will periodically attempt to re-bind to it ("kick the reference").
 	</description>
