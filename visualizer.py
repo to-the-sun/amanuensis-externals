@@ -35,100 +35,115 @@ state = {
 }
 state_lock = threading.Lock()
 
+def snap_to_bar(ts, bar_length):
+    """Snaps a timestamp to the nearest bar start."""
+    if bar_length <= 0:
+        return float(ts)
+    return round(float(ts) / bar_length) * bar_length
+
 def perform_smartloop_analysis():
     """Performs the smartloop calculations locally based on gathered data."""
+    # Copy data to minimize lock duration
     with state_lock:
-        # Aggregate ratings by timestamp across all tracks
-        ts_to_ratings = {} # ts -> [ratings]
-        for tid, bars in state["bar_ratings"].items():
-            for b_ts, rating in bars.items():
-                ts = float(b_ts)
-                if ts not in ts_to_ratings:
-                    ts_to_ratings[ts] = []
-                ts_to_ratings[ts].append(rating)
-
-        if not ts_to_ratings:
-            return
-
-        # Calculate averaged rating per timestamp
-        song_bars = {} # ts -> averaged_rating
-        for ts, ratings in ts_to_ratings.items():
-            song_bars[ts] = sum(ratings) / len(ratings)
-
-        all_song_ratings = list(song_bars.values())
-        avg = sum(all_song_ratings) / len(all_song_ratings)
-        state["average_rating"] = avg
-        state["min_rating"] = min(all_song_ratings)
-        state["max_rating"] = max(all_song_ratings)
-        # Store for rendering
-        state["song_bar_ratings"] = {str(float(ts)): r for ts, r in song_bars.items()}
-
-        print(f"DEBUG: Smartloop Local Analysis. Ratings: min={state['min_rating']:.2f}, max={state['max_rating']:.2f}, global_avg={avg:.2f}")
-
-        # Identify above average points and below average intervals (per bar)
-        above_avg_points = []
-        below_avg_intervals = [] # list of (start, end)
+        bar_ratings_copy = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
+        tracks_copy = {tid: bars[:] for tid, bars in state["tracks"].items()}
         bar_length = state.get("bar_length", 125)
 
-        for ts, rating in song_bars.items():
-            if rating > avg:
-                above_avg_points.append(ts)
-            else:
-                below_avg_intervals.append((ts, ts + bar_length))
+    # Aggregate ratings by timestamp across all tracks
+    ts_to_ratings = {} # ts -> [ratings]
+    for tid, bars in bar_ratings_copy.items():
+        for b_ts, rating in bars.items():
+            ts = snap_to_bar(b_ts, bar_length)
+            if ts not in ts_to_ratings:
+                ts_to_ratings[ts] = []
+            ts_to_ratings[ts].append(rating)
 
-        sorted_above_avg = sorted(above_avg_points)
+    if not ts_to_ratings:
+        return
 
-        if not below_avg_intervals:
-            state["smartloop_start"] = -1
-            state["smartloop_end"] = -1
-            return
+    # Calculate averaged rating per timestamp
+    song_bars = {} # ts -> averaged_rating
+    for ts, ratings in ts_to_ratings.items():
+        song_bars[ts] = sum(ratings) / len(ratings)
 
+    all_song_ratings = list(song_bars.values())
+    avg = sum(all_song_ratings) / len(all_song_ratings)
+    mi = min(all_song_ratings)
+    ma = max(all_song_ratings)
+    # Store for rendering
+    song_bar_ratings = {str(float(ts)): r for ts, r in song_bars.items()}
+
+    print(f"DEBUG: Smartloop Local Analysis. Ratings: min={mi:.2f}, max={ma:.2f}, global_avg={avg:.2f}")
+
+    # Identify above average points and below average intervals (per bar)
+    above_avg_points = []
+    below_avg_intervals = [] # list of (start, end)
+
+    for ts, rating in song_bars.items():
+        if rating > avg:
+            above_avg_points.append(ts)
+        else:
+            below_avg_intervals.append((ts, ts + bar_length))
+
+    sorted_above_avg = sorted(above_avg_points)
+
+    sl_start = -1
+    sl_end = -1
+
+    if below_avg_intervals:
         # Find the longest clean interval of below average bars
         all_ts = []
-        for track_bars in state["tracks"].values():
+        for track_bars in tracks_copy.values():
             for b in track_bars:
-                try: all_ts.append(float(b))
+                try: all_ts.append(snap_to_bar(b, bar_length))
                 except: continue
 
-        if not all_ts: return
-        overall_min = min(all_ts)
-        overall_max = max(all_ts) + bar_length
+        if all_ts:
+            overall_min = min(all_ts)
+            overall_max = max(all_ts) + bar_length
 
-        bounded_above_avg = [overall_min - 1.0] + sorted_above_avg + [overall_max + 1.0]
+            bounded_above_avg = [overall_min - 1.0] + sorted_above_avg + [overall_max + 1.0]
 
-        max_dist = -1.0
-        best_S = -1
-        best_E = -1
+            max_dist = -1.0
+            best_S = -1
+            best_E = -1
 
-        for i in range(len(bounded_above_avg) - 1):
-            p_low = bounded_above_avg[i]
-            p_high = bounded_above_avg[i+1]
+            for i in range(len(bounded_above_avg) - 1):
+                p_low = bounded_above_avg[i]
+                p_high = bounded_above_avg[i+1]
 
-            cur_min_S = float('inf')
-            cur_max_E = float('-inf')
-            found_below_avg = False
+                cur_min_S = float('inf')
+                cur_max_E = float('-inf')
+                found_below_avg = False
 
-            for s_start, s_end in below_avg_intervals:
-                if s_start >= p_low and s_end <= p_high:
-                    if s_start < cur_min_S: cur_min_S = s_start
-                    if s_end > cur_max_E: cur_max_E = s_end
-                    found_below_avg = True
+                for s_start, s_end in below_avg_intervals:
+                    if s_start >= p_low and s_end <= p_high:
+                        if s_start < cur_min_S: cur_min_S = s_start
+                        if s_end > cur_max_E: cur_max_E = s_end
+                        found_below_avg = True
 
-            if found_below_avg:
-                dist = cur_max_E - cur_min_S
-                if dist > max_dist:
-                    max_dist = dist
-                    best_S = cur_min_S
-                    best_E = cur_max_E
+                if found_below_avg:
+                    dist = cur_max_E - cur_min_S
+                    if dist > max_dist:
+                        max_dist = dist
+                        best_S = cur_min_S
+                        best_E = cur_max_E
 
-        if max_dist >= 0:
-            state["smartloop_start"] = best_S
-            state["smartloop_end"] = best_E
-            print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")
-        else:
-            print("DEBUG: Smartloop Local Analysis. No valid loop found.")
-            state["smartloop_start"] = -1
-            state["smartloop_end"] = -1
+            if max_dist >= 0:
+                sl_start = best_S
+                sl_end = best_E
+                print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")
+            else:
+                print("DEBUG: Smartloop Local Analysis. No valid loop found.")
+
+    # Update state with results
+    with state_lock:
+        state["average_rating"] = avg
+        state["min_rating"] = mi
+        state["max_rating"] = ma
+        state["song_bar_ratings"] = song_bar_ratings
+        state["smartloop_start"] = sl_start
+        state["smartloop_end"] = sl_end
 
 def recalculate_reach():
     """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
@@ -137,7 +152,8 @@ def recalculate_reach():
     for track_bars in state["tracks"].values():
         for bar_ts in track_bars:
             try:
-                b_ts = float(bar_ts)
+                snapped_ts = snap_to_bar(bar_ts, bar_length)
+                b_ts = float(snapped_ts)
                 if b_ts + bar_length > max_reach:
                     max_reach = b_ts + bar_length
             except (ValueError, TypeError):
@@ -163,6 +179,7 @@ def process_packet(text):
             if pkt_type == "smartloop":
                 print(f"DEBUG: Processing 'smartloop' packet. Keys: {list(pkt.keys())}")
                 with state_lock:
+                    bar_length = state.get("bar_length", 125)
                     if "average" in pkt: state["average_rating"] = pkt["average"]
                     if "min" in pkt: state["min_rating"] = pkt["min"]
                     if "max" in pkt: state["max_rating"] = pkt["max"]
@@ -172,7 +189,8 @@ def process_packet(text):
                             if tid not in state["bar_ratings"]:
                                 state["bar_ratings"][tid] = {}
                             for b_ts, rating in bars.items():
-                                state["bar_ratings"][tid][b_ts] = rating
+                                snapped_ts = snap_to_bar(b_ts, bar_length)
+                                state["bar_ratings"][tid][str(float(snapped_ts))] = rating
                     if "smartloop_start" in pkt: state["smartloop_start"] = pkt["smartloop_start"]
                     if "smartloop_end" in pkt: state["smartloop_end"] = pkt["smartloop_end"]
                 return
@@ -188,7 +206,11 @@ def process_packet(text):
 
                 dirty = False
                 if "tracks" in pkt:
-                    state["tracks"] = pkt["tracks"]
+                    new_tracks = {}
+                    for tid, t_bars in pkt["tracks"].items():
+                        new_tracks[tid] = [snap_to_bar(b, state["bar_length"]) for b in t_bars]
+                    state["tracks"] = new_tracks
+
                     if not state["tracks"]:
                         state["bar_data"] = {}
                         state["logged_hashes"].clear()
@@ -198,9 +220,13 @@ def process_packet(text):
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
-                    bars = pkt.get("new_span_bars", [])
+                    orig_bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
                     new_data = pkt.get("new_span_data", {})
+                    bar_length = state["bar_length"]
+
+                    # Snap all bar timestamps
+                    bars = [snap_to_bar(b, bar_length) for b in orig_bars]
 
                     # Update local track state from the new span event
                     if track is not None:
@@ -220,13 +246,14 @@ def process_packet(text):
                                 added = True
 
                         for b_ts, b_data in new_data.items():
-                            state["bar_data"][t_str][b_ts] = b_data
+                            snapped_ts = snap_to_bar(b_ts, bar_length)
+                            state["bar_data"][t_str][str(float(snapped_ts))] = b_data
 
                         # Update ratings for analysis
                         if t_str not in state["bar_ratings"]:
                             state["bar_ratings"][t_str] = {}
                         for b in bars:
-                            state["bar_ratings"][t_str][str(b)] = rating
+                            state["bar_ratings"][t_str][str(float(b))] = rating
 
                         if bars:
                             span_id = (t_str, bars[0])
@@ -250,7 +277,9 @@ def process_packet(text):
                     rating = pkt.get("rating")
                     if track is not None and bar is not None and rating is not None:
                         t_str = str(track)
-                        b_str = str(bar)
+                        bar_length = state["bar_length"]
+                        snapped_ts = snap_to_bar(bar, bar_length)
+                        b_str = str(float(snapped_ts))
                         if t_str not in state["bar_ratings"]:
                             state["bar_ratings"][t_str] = {}
                         state["bar_ratings"][t_str][b_str] = rating
@@ -293,6 +322,16 @@ def handle_client(sock):
         except: break
     sock.close()
 
+def smartloop_worker():
+    """Background thread that runs the smartloop analysis periodically."""
+    print("Smartloop Analysis Worker started.")
+    while True:
+        try:
+            perform_smartloop_analysis()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(1)
+
 def run_gui():
     pygame.init()
     info = pygame.display.Info()
@@ -307,20 +346,15 @@ def run_gui():
     font = pygame.font.SysFont("Arial", 12)
     big_font = pygame.font.SysFont("Arial", 20)
 
-    last_analysis_time = 0
-
     while True:
         now = time.time()
-        if now - last_analysis_time >= 0.999:
-            perform_smartloop_analysis()
-            last_analysis_time = now
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
 
         with state_lock:
-            tracks = state["tracks"].copy()
+            tracks = {tid: bars[:] for tid, bars in state["tracks"].items()}
             song_reach = state["song_reach"]
             bar_length = state["bar_length"]
             events = state["events"][:]
@@ -382,24 +416,25 @@ def run_gui():
 
         # Draw filled boxes for present bars
         with state_lock:
-            bar_ratings = state["bar_ratings"].copy()
             avg = state["average_rating"]
             mi = state["min_rating"]
             ma = state["max_rating"]
+            song_bar_ratings = state.get("song_bar_ratings", {}).copy()
 
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
             for bar_ts in bars:
                 try:
-                    b_ts = int(bar_ts)
+                    snapped_ts = snap_to_bar(bar_ts, bar_length)
+                    b_ts = int(snapped_ts)
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
 
                 # Determine color tint
                 color = [80, 80, 100]
                 # Use averaged song-level rating for consistency with smartloop analysis
-                rating = state.get("song_bar_ratings", {}).get(str(float(b_ts)))
+                rating = song_bar_ratings.get(str(float(b_ts)))
                 if rating is not None:
                     if rating > avg:
                         # Tint green
@@ -424,7 +459,7 @@ def run_gui():
 
         # Draw note hash marks
         with state_lock:
-            bar_data = state["bar_data"].copy()
+            bar_data = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
 
         for tid, bars_info in bar_data.items():
             if tid not in track_to_row: continue
@@ -536,6 +571,7 @@ def run_gui():
 
 if __name__ == "__main__":
     threading.Thread(target=tcp_server, daemon=True).start()
+    threading.Thread(target=smartloop_worker, daemon=True).start()
     try:
         run_gui()
     except Exception:
