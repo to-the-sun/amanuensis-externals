@@ -35,100 +35,111 @@ state = {
 }
 state_lock = threading.Lock()
 
+def snap_to_bar(ts, bar_length):
+    """Snaps a timestamp to the nearest bar start based on bar_length."""
+    if bar_length <= 0: return ts
+    return round(ts / bar_length) * bar_length
+
 def perform_smartloop_analysis():
     """Performs the smartloop calculations locally based on gathered data."""
     with state_lock:
-        # Aggregate ratings by timestamp across all tracks
-        ts_to_ratings = {} # ts -> [ratings]
-        for tid, bars in state["bar_ratings"].items():
-            for b_ts, rating in bars.items():
-                ts = float(b_ts)
+        # Take local copies to perform processing outside the lock
+        bar_ratings_copy = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
+        tracks_copy = {tid: bars[:] for tid, bars in state["tracks"].items()}
+        bar_length = state.get("bar_length", 125)
+
+    if not bar_ratings_copy:
+        return
+
+    # Aggregate ratings by timestamp across all tracks
+    ts_to_ratings = {} # ts -> [ratings]
+    for tid, bars in bar_ratings_copy.items():
+        for b_ts, rating in bars.items():
+            try:
+                # Snap to bar to ensure consistency (e.g. 0.0001 -> 0.0)
+                ts = snap_to_bar(float(b_ts), bar_length)
                 if ts not in ts_to_ratings:
                     ts_to_ratings[ts] = []
                 ts_to_ratings[ts].append(rating)
+            except (ValueError, TypeError):
+                continue
 
-        if not ts_to_ratings:
-            return
+    if not ts_to_ratings:
+        return
 
-        # Calculate averaged rating per timestamp
-        song_bars = {} # ts -> averaged_rating
-        for ts, ratings in ts_to_ratings.items():
-            song_bars[ts] = sum(ratings) / len(ratings)
+    # Calculate averaged rating per timestamp
+    song_bars = {} # ts -> averaged_rating
+    for ts, ratings in ts_to_ratings.items():
+        song_bars[ts] = sum(ratings) / len(ratings)
 
-        all_song_ratings = list(song_bars.values())
-        avg = sum(all_song_ratings) / len(all_song_ratings)
-        state["average_rating"] = avg
-        state["min_rating"] = min(all_song_ratings)
-        state["max_rating"] = max(all_song_ratings)
-        # Store for rendering
-        state["song_bar_ratings"] = {str(float(ts)): r for ts, r in song_bars.items()}
+    all_song_ratings = list(song_bars.values())
+    avg = sum(all_song_ratings) / len(all_song_ratings)
+    min_val = min(all_song_ratings)
+    max_val = max(all_song_ratings)
+    # Store for rendering
+    song_bar_ratings_map = {str(float(ts)): r for ts, r in song_bars.items()}
 
-        print(f"DEBUG: Smartloop Local Analysis. Ratings: min={state['min_rating']:.2f}, max={state['max_rating']:.2f}, global_avg={avg:.2f}")
+    # Identify above average points and below average intervals (per bar)
+    above_avg_points = []
+    below_avg_intervals = [] # list of (start, end)
 
-        # Identify above average points and below average intervals (per bar)
-        above_avg_points = []
-        below_avg_intervals = [] # list of (start, end)
-        bar_length = state.get("bar_length", 125)
+    for ts, rating in song_bars.items():
+        if rating > avg:
+            above_avg_points.append(ts)
+        else:
+            below_avg_intervals.append((ts, ts + bar_length))
 
-        for ts, rating in song_bars.items():
-            if rating > avg:
-                above_avg_points.append(ts)
-            else:
-                below_avg_intervals.append((ts, ts + bar_length))
+    sorted_above_avg = sorted(above_avg_points)
 
-        sorted_above_avg = sorted(above_avg_points)
+    best_S = -1
+    best_E = -1
+    max_dist = -1.0
 
-        if not below_avg_intervals:
-            state["smartloop_start"] = -1
-            state["smartloop_end"] = -1
-            return
-
+    if below_avg_intervals:
         # Find the longest clean interval of below average bars
         all_ts = []
-        for track_bars in state["tracks"].values():
+        for track_bars in tracks_copy.values():
             for b in track_bars:
                 try: all_ts.append(float(b))
                 except: continue
 
-        if not all_ts: return
-        overall_min = min(all_ts)
-        overall_max = max(all_ts) + bar_length
+        if all_ts:
+            overall_min = min(all_ts)
+            overall_max = max(all_ts) + bar_length
 
-        bounded_above_avg = [overall_min - 1.0] + sorted_above_avg + [overall_max + 1.0]
+            bounded_above_avg = [overall_min - 1.0] + sorted_above_avg + [overall_max + 1.0]
 
-        max_dist = -1.0
-        best_S = -1
-        best_E = -1
+            for i in range(len(bounded_above_avg) - 1):
+                p_low = bounded_above_avg[i]
+                p_high = bounded_above_avg[i+1]
 
-        for i in range(len(bounded_above_avg) - 1):
-            p_low = bounded_above_avg[i]
-            p_high = bounded_above_avg[i+1]
+                cur_min_S = float('inf')
+                cur_max_E = float('-inf')
+                found_below_avg = False
 
-            cur_min_S = float('inf')
-            cur_max_E = float('-inf')
-            found_below_avg = False
+                for s_start, s_end in below_avg_intervals:
+                    if s_start >= p_low and s_end <= p_high:
+                        if s_start < cur_min_S: cur_min_S = s_start
+                        if s_end > cur_max_E: cur_max_E = s_end
+                        found_below_avg = True
 
-            for s_start, s_end in below_avg_intervals:
-                if s_start >= p_low and s_end <= p_high:
-                    if s_start < cur_min_S: cur_min_S = s_start
-                    if s_end > cur_max_E: cur_max_E = s_end
-                    found_below_avg = True
+                if found_below_avg:
+                    dist = cur_max_E - cur_min_S
+                    if dist > max_dist:
+                        max_dist = dist
+                        best_S = cur_min_S
+                        best_E = cur_max_E
 
-            if found_below_avg:
-                dist = cur_max_E - cur_min_S
-                if dist > max_dist:
-                    max_dist = dist
-                    best_S = cur_min_S
-                    best_E = cur_max_E
+    with state_lock:
+        state["average_rating"] = avg
+        state["min_rating"] = min_val
+        state["max_rating"] = max_val
+        state["song_bar_ratings"] = song_bar_ratings_map
+        state["smartloop_start"] = best_S
+        state["smartloop_end"] = best_E
 
-        if max_dist >= 0:
-            state["smartloop_start"] = best_S
-            state["smartloop_end"] = best_E
-            print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")
-        else:
-            print("DEBUG: Smartloop Local Analysis. No valid loop found.")
-            state["smartloop_start"] = -1
-            state["smartloop_end"] = -1
+    if max_dist >= 0:
+        print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")
 
 def recalculate_reach():
     """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
@@ -137,7 +148,8 @@ def recalculate_reach():
     for track_bars in state["tracks"].values():
         for bar_ts in track_bars:
             try:
-                b_ts = float(bar_ts)
+                # Snap to bar for consistency
+                b_ts = snap_to_bar(float(bar_ts), bar_length)
                 if b_ts + bar_length > max_reach:
                     max_reach = b_ts + bar_length
             except (ValueError, TypeError):
@@ -295,14 +307,8 @@ def run_gui():
     font = pygame.font.SysFont("Arial", 12)
     big_font = pygame.font.SysFont("Arial", 20)
 
-    last_analysis_time = 0
-
     while True:
         now = time.time()
-        if now - last_analysis_time >= 0.999:
-            perform_smartloop_analysis()
-            last_analysis_time = now
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
@@ -380,7 +386,8 @@ def run_gui():
             row = track_to_row[tid]
             for bar_ts in bars:
                 try:
-                    b_ts = int(bar_ts)
+                    # Snap to bar for consistency
+                    b_ts = snap_to_bar(float(bar_ts), bar_length)
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
 
@@ -522,8 +529,17 @@ def run_gui():
         pygame.display.flip()
         clock.tick(FPS)
 
+def analysis_thread():
+    while True:
+        try:
+            perform_smartloop_analysis()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(1.0)
+
 if __name__ == "__main__":
     threading.Thread(target=tcp_server, daemon=True).start()
+    threading.Thread(target=analysis_thread, daemon=True).start()
     try:
         run_gui()
     except Exception:
