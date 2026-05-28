@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="smartloop" module="max" category="Analysis">
+	<digest>Finds the longest interval of low-rating bars in a music transcript</digest>
+	<description>
+		The `smartloop` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "Group 2" bars.
+
+		Group classification is based on the `rating` key found in each bar:
+		1. The object identifies the minimum and maximum ratings across all bars in the transcript.
+		2. It calculates the midpoint: (min + max) / 2.
+		3. Bars with a rating &gt; midpoint are assigned to **Group 1**.
+		4. Bars with a rating &lt;= midpoint are assigned to **Group 2**.
+
+		The object outputs the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any Group 2 span and the end of any Group 2 span, provided there are no Group 1 bars within that interval.
+
+		Temporal analysis requires the `bar_length` metadata, which is retrieved from an external `buffer~` named **bar**. If the buffer is not found, the object will periodically attempt to re-bind to it ("kick the reference").
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Analysis</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="anything">
+			<digest>Inlet 1: Unused</digest>
+			<description>The object performs analysis automatically every 999ms. No manual triggers are required.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="float">
+			<digest>Outlet 1: Start of longest Group 2 interval (ms)</digest>
+			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of Group 2 bars.</description>
+		</outlet>
+		<outlet id="2" type="float">
+			<digest>Outlet 2: End of longest Group 2 interval (ms)</digest>
+			<description>Outputs the ending timestamp of the longest continuous interval consisting only of Group 2 bars.</description>
+		</outlet>
+		<outlet id="3" type="anything">
+			<digest>Outlet 3: Logging (Optional)</digest>
+			<description>If the log attribute is enabled, this outlet provides diagnostic status messages.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="dictionary-name" type="symbol" optional="0">
+			<digest>The name of the external dict object to bind to</digest>
+			<description>Specifies the name of the `dict` object that contains the transcript data to be analyzed.</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist />
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Enable Logging</digest>
+			<description>When enabled (1), creates an additional outlet for status and diagnostic information.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="crucible" />
+		<seealso name="buildspans" />
+		<seealso name="rebar" />
+		<seealso name="notify" />
+		<seealso name="dict" />
+		<seealso name="buffer~" />
+	</seealsolist>
+</c74object>
