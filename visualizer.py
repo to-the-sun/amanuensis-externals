@@ -23,7 +23,13 @@ state = {
     "logged_hashes": set(),
     "song_reach": 0,
     "bar_length": 125,
-    "events": []
+    "events": [],
+    "smartloop_start": -1,
+    "smartloop_end": -1,
+    "bar_ratings": {},
+    "average_rating": 0,
+    "min_rating": 0,
+    "max_rating": 0
 }
 state_lock = threading.Lock()
 
@@ -56,6 +62,23 @@ def process_packet(text):
         try:
             pkt = json.loads(line)
             pkt_type = pkt.get("type")
+
+            if pkt_type == "smartloop":
+                print(f"DEBUG: Processing 'smartloop' packet. Keys: {list(pkt.keys())}")
+                with state_lock:
+                    if "average" in pkt: state["average_rating"] = pkt["average"]
+                    if "min" in pkt: state["min_rating"] = pkt["min"]
+                    if "max" in pkt: state["max_rating"] = pkt["max"]
+                    if "ratings" in pkt:
+                        # Merge ratings
+                        for tid, bars in pkt["ratings"].items():
+                            if tid not in state["bar_ratings"]:
+                                state["bar_ratings"][tid] = {}
+                            for b_ts, rating in bars.items():
+                                state["bar_ratings"][tid][b_ts] = rating
+                    if "smartloop_start" in pkt: state["smartloop_start"] = pkt["smartloop_start"]
+                    if "smartloop_end" in pkt: state["smartloop_end"] = pkt["smartloop_end"]
+                return
 
             if pkt_type != "crucible":
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
@@ -231,6 +254,12 @@ def run_gui():
             screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
 
         # Draw filled boxes for present bars
+        with state_lock:
+            bar_ratings = state["bar_ratings"].copy()
+            avg = state["average_rating"]
+            mi = state["min_rating"]
+            ma = state["max_rating"]
+
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
@@ -239,9 +268,31 @@ def run_gui():
                     b_ts = int(bar_ts)
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
+
+                # Determine color tint
+                color = [80, 80, 100]
+                rating = bar_ratings.get(tid, {}).get(str(b_ts))
+                if rating is not None:
+                    if rating > avg:
+                        # Tint green
+                        diff = rating - avg
+                        denom = ma - avg if ma > avg else 1
+                        factor = min(1.0, diff / denom)
+                        # Interpolate (80, 80, 100) -> (80, 200, 80)
+                        color[1] = int(80 + (200 - 80) * factor)
+                        color[2] = int(100 + (80 - 100) * factor)
+                    elif rating < avg:
+                        # Tint red
+                        diff = avg - rating
+                        denom = avg - mi if avg > mi else 1
+                        factor = min(1.0, diff / denom)
+                        # Interpolate (80, 80, 100) -> (200, 80, 80)
+                        color[0] = int(80 + (200 - 80) * factor)
+                        color[2] = int(100 + (80 - 100) * factor)
+
                 col = b_ts // bar_length
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                pygame.draw.rect(screen, (80, 80, 100), rect)
+                pygame.draw.rect(screen, tuple(color), rect)
 
         # Draw note hash marks
         with state_lock:
@@ -303,6 +354,17 @@ def run_gui():
                     h_px = (clipped_score / 2.0) * cell_h
 
                     pygame.draw.line(screen, (255, 255, 255), (x_pos, row_y_bottom), (x_pos, row_y_bottom - h_px), 1)
+
+        # Draw Smartloop Range Box
+        with state_lock:
+            sl_s = state["smartloop_start"]
+            sl_e = state["smartloop_end"]
+
+        if sl_s >= 0 and sl_e > sl_s:
+            x_s = margin_left + (sl_s / bar_length) * cell_w
+            x_e = margin_left + (sl_e / bar_length) * cell_w
+            box_rect = pygame.Rect(x_s, margin_top, x_e - x_s, num_tracks * cell_h)
+            pygame.draw.rect(screen, (255, 255, 255), box_rect, 2)
 
         # Draw event animations
         for e in events:

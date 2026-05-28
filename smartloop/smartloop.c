@@ -5,6 +5,7 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
+#include "../shared/visualize.h"
 #include <float.h>
 #include <stdlib.h>
 #include <math.h>
@@ -20,6 +21,7 @@ typedef struct _smartloop {
     t_buffer_ref *buffer_ref;
     long bar_warn_sent;
     long log;
+    long visualize;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -113,6 +115,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_LONG(c, "visualize", 0, t_smartloop, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+
     class_register(CLASS_BOX, c);
     smartloop_class = c;
     common_symbols_init();
@@ -121,8 +127,10 @@ void ext_main(void *r) {
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
     t_smartloop *x = (t_smartloop *)object_alloc(smartloop_class);
     if (x) {
+        visualize_init();
         x->dict_name = _sym_nothing;
         x->log = 0;
+        x->visualize = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
@@ -152,6 +160,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void smartloop_free(t_smartloop *x) {
+    visualize_cleanup();
     object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
@@ -215,6 +224,8 @@ void smartloop_tick(t_smartloop *x) {
     double total_rating_sum = 0.0;
     long total_bar_count = 0;
     short has_bars = 0;
+    double min_rating = DBL_MAX;
+    double max_rating = -DBL_MAX;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -232,6 +243,8 @@ void smartloop_tick(t_smartloop *x) {
             double rating = get_rating(bar_dict);
             total_rating_sum += rating;
             total_bar_count++;
+            if (rating < min_rating) min_rating = rating;
+            if (rating > max_rating) max_rating = rating;
 
             double bar_ts = atof(bar_keys[j]->s_name);
             if (bar_count >= bar_capacity) {
@@ -304,6 +317,36 @@ void smartloop_tick(t_smartloop *x) {
     }
 
     double average = total_rating_sum / (double)total_bar_count;
+
+    if (x->visualize) {
+        // Construct JSON for ratings and average
+        long buf_size = 65536;
+        char *buf = (char *)sysmem_newptr(buf_size);
+        if (buf) {
+            long offset = 0;
+            offset += snprintf(buf + offset, buf_size - offset, "{\"average\":%f,\"min\":%f,\"max\":%f,\"ratings\":{", average, min_rating, max_rating);
+            for (long i = 0; i < num_tracks; i++) {
+                t_dictionary *track_dict = NULL;
+                dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict);
+                if (i > 0) offset += snprintf(buf + offset, buf_size - offset, ",");
+                offset += snprintf(buf + offset, buf_size - offset, "\"%s\":{", track_keys[i]->s_name);
+
+                long num_bars; t_symbol **bar_keys = NULL;
+                dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+                for (long j = 0; j < num_bars; j++) {
+                    t_dictionary *bar_dict = NULL;
+                    dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict);
+                    if (j > 0) offset += snprintf(buf + offset, buf_size - offset, ",");
+                    offset += snprintf(buf + offset, buf_size - offset, "\"%s\":%f", bar_keys[j]->s_name, get_rating(bar_dict));
+                }
+                offset += snprintf(buf + offset, buf_size - offset, "}");
+                if (bar_keys) sysmem_freeptr(bar_keys);
+            }
+            offset += snprintf(buf + offset, buf_size - offset, "}}");
+            visualize(x, buf);
+            sysmem_freeptr(buf);
+        }
+    }
 
     // Collect Group 1 points
     double *points1 = (double *)sysmem_newptr(bar_count * sizeof(double));
@@ -390,6 +433,12 @@ void smartloop_tick(t_smartloop *x) {
     if (max_dist >= 0.0) {
         outlet_float(x->out_end, best_E);
         outlet_float(x->out_start, best_S);
+
+        if (x->visualize) {
+            char buf[128];
+            snprintf(buf, 128, "{\"smartloop_start\":%f,\"smartloop_end\":%f}", best_S, best_E);
+            visualize(x, buf);
+        }
     }
 
     sysmem_freeptr(bounded_p1);

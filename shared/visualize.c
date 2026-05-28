@@ -81,6 +81,9 @@ void visualize(void *x, const char *message) {
     } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
         vs = &weaver_viz;
         type = "building";
+    } else if (classname == gensym("smartloop")) {
+        vs = &crucible_viz;
+        type = "smartloop";
     }
 
     if (!vs) return;
