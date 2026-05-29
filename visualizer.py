@@ -152,7 +152,17 @@ def perform_smartloop_analysis():
 def cleanup_obsolete_bars(new_bl):
     """Purges all bar-related data when bar_length changes."""
     with state_lock:
+        removed_bars = []
+        for tid, bars in state["tracks"].items():
+            for b in bars:
+                removed_bars.append(f"T{tid}:{b}")
+
         print(f"DEBUG: Bar length changed from {state.get('bar_length')} to {new_bl}. Cleaning up all bars.", flush=True)
+        if removed_bars:
+            print(f"DEBUG: Removing bars: {', '.join(removed_bars)}", flush=True)
+        else:
+            print("DEBUG: No bars to remove.", flush=True)
+
         state["tracks"] = {}
         state["bar_data"] = {}
         state["logged_hashes"].clear()

@@ -4,6 +4,7 @@
 #include "ext_buffer.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
+#include "z_dsp.h"
 #include "../shared/logging.h"
 #include "../shared/visualize.h"
 #include <float.h>
@@ -12,7 +13,7 @@
 #include <string.h>
 
 typedef struct _smartloop {
-    t_object s_obj;
+    t_pxobject s_obj;
     t_symbol *dict_name;
     void *out_start;
     void *out_end;
@@ -22,6 +23,12 @@ typedef struct _smartloop {
     t_buffer_ref *buffer_ref;
     long bar_warn_sent;
     long log;
+    long visualize;
+    double current_start;
+    double current_end;
+    double last_floored_ramp;
+    long cached_bar_length;
+    void *qelem;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -31,6 +38,9 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
 void smartloop_debug(t_smartloop *x);
+void smartloop_qfn(t_smartloop *x);
+void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
+void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
 long smartloop_get_bar_length(t_smartloop *x);
 void smartloop_log(t_smartloop *x, const char *fmt, ...);
@@ -111,12 +121,18 @@ t_atomarray* get_span_array(t_dictionary *bar_dict) {
 void ext_main(void *r) {
     t_class *c = class_new("smartloop", (method)smartloop_new, (method)smartloop_free, sizeof(t_smartloop), 0L, A_GIMME, 0);
     class_addmethod(c, (method)smartloop_debug, "debug", 0);
+    class_addmethod(c, (method)smartloop_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)smartloop_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_smartloop, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
+    CLASS_ATTR_LONG(c, "visualize", 0, t_smartloop, visualize);
+    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Visualize Analysis");
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "1");
+
+    class_dspinit(c);
     class_register(CLASS_BOX, c);
     smartloop_class = c;
     common_symbols_init();
@@ -128,6 +144,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         visualize_init();
         x->dict_name = _sym_nothing;
         x->log = 0;
+        x->visualize = 1;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->dict_name = atom_getsym(argv);
@@ -135,6 +152,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
             argv++;
         }
 
+        dsp_setup((t_pxobject *)x, 1);
         attr_args_process(x, argc, argv);
 
         if (x->dict_name == _sym_nothing) {
@@ -150,6 +168,12 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->bar_warn_sent = 0;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
+        x->current_start = -1.0;
+        x->current_end = -1.0;
+        x->last_floored_ramp = -1.0;
+        x->cached_bar_length = 0;
+        x->qelem = qelem_new(x, (method)smartloop_qfn);
+
         x->clock = clock_new(x, (method)smartloop_tick);
         clock_delay(x->clock, x->interval);
     }
@@ -158,11 +182,43 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 
 void smartloop_free(t_smartloop *x) {
     visualize_cleanup();
+    dsp_free((t_pxobject *)x);
+    qelem_free(x->qelem);
     object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
 
+void smartloop_qfn(t_smartloop *x) {
+    outlet_float(x->out_end, x->current_end);
+    outlet_float(x->out_start, x->current_start);
+}
+
+void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)smartloop_perform64, 0, NULL);
+}
+
+void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+    double *in = ins[0];
+    long bl = x->cached_bar_length;
+
+    for (int i = 0; i < sampleframes; i++) {
+        double floored = floor(in[i]);
+        if (floored != x->last_floored_ramp) {
+            if (bl > 0) {
+                if (floored == 0 || (long)floored % bl == 0) {
+                    qelem_set(x->qelem);
+                }
+            } else if (floored == 0) {
+                qelem_set(x->qelem);
+            }
+            x->last_floored_ramp = floored;
+        }
+    }
+}
+
 void smartloop_debug(t_smartloop *x) {
+    if (!x->visualize) return;
+
     if (x->dict_name == _sym_nothing) {
         object_error((t_object *)x, "no dictionary associated");
         return;
@@ -254,7 +310,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: Accepts 'debug' to compare ratings with visualizer.py.");
+        sprintf(s, "Inlet 1: (signal) Time Ramp / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
@@ -300,6 +356,7 @@ void smartloop_tick(t_smartloop *x) {
     }
 
     long bar_length = smartloop_get_bar_length(x);
+    x->cached_bar_length = bar_length;
     if (bar_length <= 0) {
         if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(d);
@@ -462,10 +519,12 @@ void smartloop_tick(t_smartloop *x) {
 
     if (max_dist >= 0.0) {
         smartloop_log(x, "Loop identified: start=%.2f, end=%.2f, duration=%.2f", best_S, best_E, max_dist);
-        outlet_float(x->out_end, best_E);
-        outlet_float(x->out_start, best_S);
+        x->current_start = best_S;
+        x->current_end = best_E;
     } else {
         smartloop_log(x, "No valid loop found.");
+        x->current_start = -1.0;
+        x->current_end = -1.0;
     }
 
     sysmem_freeptr(bounded_above_avg);
