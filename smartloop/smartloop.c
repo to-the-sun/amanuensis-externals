@@ -29,6 +29,8 @@ typedef struct _smartloop {
     double last_floored_ramp;
     long cached_bar_length;
     void *qelem;
+    double last_val;
+    long triggered_this_bar;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -172,6 +174,8 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_end = -1.0;
         x->last_floored_ramp = -1.0;
         x->cached_bar_length = 0;
+        x->last_val = 0.0;
+        x->triggered_this_bar = 0;
         x->qelem = qelem_new(x, (method)smartloop_qfn);
 
         x->clock = clock_new(x, (method)smartloop_tick);
@@ -202,19 +206,30 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     long bl = x->cached_bar_length;
 
     for (int i = 0; i < sampleframes; i++) {
-        double floored = floor(in[i]);
+        double val = in[i];
+        double floored = floor(val);
+
         if (floored != x->last_floored_ramp) {
-            if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                if (bl > 0) {
-                    if (floored == 0 || (long)floored % bl == 0) {
-                        qelem_set(x->qelem);
-                    }
-                } else if (floored == 0) {
-                    qelem_set(x->qelem);
-                }
-            }
+            x->triggered_this_bar = 0;
             x->last_floored_ramp = floored;
         }
+
+        if (!x->triggered_this_bar && x->current_start >= 0.0 && x->current_end >= 0.0) {
+            short is_boundary = 0;
+            if (bl > 0) {
+                if (floored == 0 || (long)floored % bl == 0) {
+                    is_boundary = 1;
+                }
+            } else if (floored == 0) {
+                is_boundary = 1;
+            }
+
+            if (is_boundary && val != x->last_val) {
+                qelem_set(x->qelem);
+                x->triggered_this_bar = 1;
+            }
+        }
+        x->last_val = val;
     }
 }
 
@@ -312,7 +327,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp (output on move at boundary) / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
