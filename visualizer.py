@@ -33,7 +33,7 @@ state = {
     "max_rating": 0,
     "spans_seen": {} # (track_id, first_bar_ts) -> {"rating": float, "bars": []}
 }
-state_lock = threading.Lock()
+state_lock = threading.RLock()
 
 def snap_to_bar(ts, bar_length):
     """Snaps a timestamp to the nearest bar start."""
@@ -149,20 +149,37 @@ def perform_smartloop_analysis():
         state["smartloop_start"] = sl_start
         state["smartloop_end"] = sl_end
 
+def cleanup_obsolete_bars(new_bl):
+    """Purges all bar-related data when bar_length changes."""
+    with state_lock:
+        print(f"DEBUG: Bar length changed from {state.get('bar_length')} to {new_bl}. Cleaning up all bars.", flush=True)
+        state["tracks"] = {}
+        state["bar_data"] = {}
+        state["logged_hashes"].clear()
+        state["bar_ratings"] = {}
+        state["song_bar_ratings"] = {}
+        state["spans_seen"] = {}
+        state["events"] = []
+        state["bar_length"] = new_bl
+        state["smartloop_start"] = -1
+        state["smartloop_end"] = -1
+        recalculate_reach()
+
 def recalculate_reach():
     """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
-    max_reach = 0
-    bar_length = state.get("bar_length", 125)
-    for track_bars in state["tracks"].values():
-        for bar_ts in track_bars:
-            try:
-                snapped_ts = snap_to_bar(bar_ts, bar_length)
-                b_ts = float(snapped_ts)
-                if b_ts + bar_length > max_reach:
-                    max_reach = b_ts + bar_length
-            except (ValueError, TypeError):
-                continue
-    state["song_reach"] = max_reach
+    with state_lock:
+        max_reach = 0
+        bar_length = state.get("bar_length", 125)
+        for track_bars in state["tracks"].values():
+            for bar_ts in track_bars:
+                try:
+                    snapped_ts = snap_to_bar(bar_ts, bar_length)
+                    b_ts = float(snapped_ts)
+                    if b_ts + bar_length > max_reach:
+                        max_reach = b_ts + bar_length
+                except (ValueError, TypeError):
+                    continue
+        state["song_reach"] = max_reach
 
 def process_packet(text, client_sock=None):
     if not text:
@@ -174,7 +191,7 @@ def process_packet(text, client_sock=None):
         if not line: continue
 
         # DEBUG: Log raw received line
-        print(f"DEBUG: TCP Received ({len(line)} chars): {line}")
+        print(f"DEBUG: TCP Received ({len(line)} chars): {line}", flush=True)
 
         try:
             pkt = json.loads(line)
@@ -263,10 +280,12 @@ def process_packet(text, client_sock=None):
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
-            print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}")
+            print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}", flush=True)
 
             with state_lock:
-                state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
+                new_bl = pkt.get("bar_length")
+                if new_bl is not None and new_bl > 0 and new_bl != state.get("bar_length"):
+                    cleanup_obsolete_bars(new_bl)
 
                 dirty = False
                 if "tracks" in pkt:
