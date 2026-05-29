@@ -33,13 +33,63 @@ state = {
     "max_rating": 0,
     "spans_seen": {} # (track_id, first_bar_ts) -> {"rating": float, "bars": []}
 }
-state_lock = threading.Lock()
+state_lock = threading.RLock()
 
 def snap_to_bar(ts, bar_length):
     """Snaps a timestamp to the nearest bar start."""
     if bar_length <= 0:
         return float(ts)
     return round(float(ts) / bar_length) * bar_length
+
+def is_obsolete(ts, bl):
+    """Returns True if ts is not a multiple of bl (and not 0)."""
+    try:
+        f_ts = float(ts)
+        if f_ts == 0:
+            return False
+        rem = f_ts % bl
+        return abs(rem) > 1e-5 and abs(rem - bl) > 1e-5
+    except (ValueError, TypeError):
+        return True
+
+def cleanup_obsolete_bars(new_bl):
+    """Removes bars from state that are not a multiple of new_bl."""
+    if new_bl <= 0:
+        return
+
+    with state_lock:
+        # 1. state["tracks"]
+        for tid in list(state["tracks"].keys()):
+            state["tracks"][tid] = [ts for ts in state["tracks"][tid] if not is_obsolete(ts, new_bl)]
+
+        # 2. state["bar_data"]
+        for tid in list(state["bar_data"].keys()):
+            state["bar_data"][tid] = {ts: data for ts, data in state["bar_data"][tid].items() if not is_obsolete(ts, new_bl)}
+
+        # 3. state["bar_ratings"]
+        for tid in list(state["bar_ratings"].keys()):
+            state["bar_ratings"][tid] = {ts: rating for ts, rating in state["bar_ratings"][tid].items() if not is_obsolete(ts, new_bl)}
+
+        # 4. state["song_bar_ratings"]
+        state["song_bar_ratings"] = {ts: rating for ts, rating in state["song_bar_ratings"].items() if not is_obsolete(ts, new_bl)}
+
+        # 5. state["logged_hashes"]
+        state["logged_hashes"] = {h for h in state["logged_hashes"] if len(h) < 2 or not is_obsolete(h[1], new_bl)}
+
+        # 6. state["spans_seen"]
+        new_spans_seen = {}
+        for span_id, span_data in state["spans_seen"].items():
+            if not is_obsolete(span_id[1], new_bl):
+                span_data["bars"] = [ts for ts in span_data["bars"] if not is_obsolete(ts, new_bl)]
+                new_spans_seen[span_id] = span_data
+        state["spans_seen"] = new_spans_seen
+
+        # 7. state["events"]
+        for event in state["events"]:
+            if "bars" in event:
+                event["bars"] = [ts for ts in event["bars"] if not is_obsolete(ts, new_bl)]
+
+        recalculate_reach()
 
 def perform_smartloop_analysis():
     """Performs the smartloop calculations locally based on gathered data."""
@@ -266,7 +316,13 @@ def process_packet(text, client_sock=None):
             print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}")
 
             with state_lock:
-                state["bar_length"] = pkt.get("bar_length", state.get("bar_length", 125))
+                new_bl = pkt.get("bar_length")
+                current_bl = state.get("bar_length", 125)
+                if new_bl is not None and new_bl > 0 and new_bl != current_bl:
+                    state["bar_length"] = new_bl
+                    cleanup_obsolete_bars(new_bl)
+                else:
+                    state["bar_length"] = pkt.get("bar_length", current_bl)
 
                 dirty = False
                 if "tracks" in pkt:
