@@ -29,6 +29,11 @@ typedef struct _smartloop {
     double last_floored_ramp;
     long cached_bar_length;
     void *qelem;
+    double last_val;
+    long triggered_this_bar;
+    long triggered_zero;
+    long output_zero;
+    long first_sample;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -172,6 +177,11 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_end = -1.0;
         x->last_floored_ramp = -1.0;
         x->cached_bar_length = 0;
+        x->last_val = -1.0;
+        x->triggered_this_bar = 0;
+        x->triggered_zero = 0;
+        x->output_zero = 0;
+        x->first_sample = 1;
         x->qelem = qelem_new(x, (method)smartloop_qfn);
 
         x->clock = clock_new(x, (method)smartloop_tick);
@@ -189,8 +199,14 @@ void smartloop_free(t_smartloop *x) {
 }
 
 void smartloop_qfn(t_smartloop *x) {
-    outlet_float(x->out_end, x->current_end);
-    outlet_float(x->out_start, x->current_start);
+    if (x->output_zero) {
+        outlet_float(x->out_end, 0.0);
+        outlet_float(x->out_start, 0.0);
+        x->output_zero = 0;
+    } else {
+        outlet_float(x->out_end, x->current_end);
+        outlet_float(x->out_start, x->current_start);
+    }
 }
 
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -202,19 +218,48 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     long bl = x->cached_bar_length;
 
     for (int i = 0; i < sampleframes; i++) {
-        double floored = floor(in[i]);
-        if (floored != x->last_floored_ramp) {
-            if (x->current_start >= 0.0 && x->current_end >= 0.0) {
+        double val = in[i];
+        double floored = floor(val);
+
+        if (x->first_sample) {
+            x->last_val = val;
+            x->last_floored_ramp = floored;
+            x->first_sample = 0;
+            continue;
+        }
+
+        if (val == x->last_val) {
+            if (!x->triggered_zero) {
+                x->output_zero = 1;
+                qelem_set(x->qelem);
+                x->triggered_zero = 1;
+            }
+        } else {
+            x->triggered_zero = 0;
+            x->output_zero = 0;
+
+            if (floored != x->last_floored_ramp) {
+                x->triggered_this_bar = 0;
+                x->last_floored_ramp = floored;
+            }
+
+            if (!x->triggered_this_bar && x->current_start >= 0.0 && x->current_end >= 0.0) {
+                short is_boundary = 0;
                 if (bl > 0) {
                     if (floored == 0 || (long)floored % bl == 0) {
-                        qelem_set(x->qelem);
+                        is_boundary = 1;
                     }
                 } else if (floored == 0) {
+                    is_boundary = 1;
+                }
+
+                if (is_boundary) {
                     qelem_set(x->qelem);
+                    x->triggered_this_bar = 1;
                 }
             }
-            x->last_floored_ramp = floored;
         }
+        x->last_val = val;
     }
 }
 
@@ -312,7 +357,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp (output on move at boundary, 0.0 if stationary) / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
