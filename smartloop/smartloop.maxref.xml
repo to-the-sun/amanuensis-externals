@@ -26,7 +26,7 @@
 	<inletlist>
 		<inlet id="1" type="signal/anything">
 			<digest>Inlet 1: (signal) Time Ramp / (messages) debug</digest>
-			<description>Accepts an audio signal time ramp. When the floored value of this ramp hits zero or a multiple of the bar length, the object outputs the current loop boundaries. Also accepts the 'debug' message.</description>
+			<description>Accepts an audio signal time ramp. When the floored value of this ramp hits zero or a multiple of the bar length, the object outputs the current loop boundaries, provided the bar length is greater than zero. Ramp checking and output are suppressed if the bar length is zero or less. Also accepts the 'debug' message.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->

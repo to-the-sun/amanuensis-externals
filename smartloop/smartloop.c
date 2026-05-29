@@ -201,15 +201,13 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long bl = x->cached_bar_length;
 
+    if (bl <= 0) return;
+
     for (int i = 0; i < sampleframes; i++) {
         double floored = floor(in[i]);
         if (floored != x->last_floored_ramp) {
             if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                if (bl > 0) {
-                    if (floored == 0 || (long)floored % bl == 0) {
-                        qelem_set(x->qelem);
-                    }
-                } else if (floored == 0) {
+                if (floored == 0 || (long)floored % bl == 0) {
                     qelem_set(x->qelem);
                 }
             }
