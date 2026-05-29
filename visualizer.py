@@ -152,16 +152,38 @@ def perform_smartloop_analysis():
 def cleanup_obsolete_bars(new_bl):
     """Purges all bar-related data when bar_length changes."""
     with state_lock:
+        prev_bl = state.get("bar_length", 125)
         removed_bars = []
+        invalid_bars = []
+        valid_bars = []
+
         for tid, bars in state["tracks"].items():
             for b in bars:
-                removed_bars.append(f"T{tid}:{b}")
+                label = f"T{tid}:{b}"
+                removed_bars.append(label)
+                if b == 0 or (prev_bl > 0 and b % prev_bl == 0):
+                    valid_bars.append(label)
+                else:
+                    invalid_bars.append(label)
 
-        print(f"DEBUG: Bar length changed from {state.get('bar_length')} to {new_bl}. Cleaning up all bars.", flush=True)
+        print(f"DEBUG: Bar length changed from {prev_bl} to {new_bl}. Cleaning up all bars.", flush=True)
         if removed_bars:
             print(f"DEBUG: Removing bars: {', '.join(removed_bars)}", flush=True)
         else:
             print("DEBUG: No bars to remove.", flush=True)
+
+        if invalid_bars:
+            print("\n" + "*" * 80)
+            print("*" * 80)
+            print("!!! WARNING: NON-MULTIPLE BAR TIMESTAMPS DETECTED DURING CLEANUP !!!")
+            print(f"The following bars are NOT multiples of the previous bar_length ({prev_bl}) and are not 0:")
+            for ib in invalid_bars:
+                print(f"  - {ib}")
+            print("\nFor comparison, these bars WERE valid multiples:")
+            for vb in valid_bars:
+                print(f"  - {vb}")
+            print("*" * 80)
+            print("*" * 80 + "\n", flush=True)
 
         state["tracks"] = {}
         state["bar_data"] = {}
