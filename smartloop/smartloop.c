@@ -229,9 +229,11 @@ void smartloop_tick(t_smartloop *x) {
             t_dictionary *bar_dict = NULL;
             if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
 
+            double bar_ts = atof(bar_keys[j]->s_name);
+            if (bar_ts < 0.0) continue;
+
             has_bars = 1;
             double rating = get_rating(bar_dict);
-            double bar_ts = atof(bar_keys[j]->s_name);
 
             if (raw_bar_count >= bar_capacity) {
                 bar_capacity *= 2;

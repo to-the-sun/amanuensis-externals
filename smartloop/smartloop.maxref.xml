@@ -13,6 +13,8 @@
 
 		The object outputs the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually.
 
+		**Note:** Bars with negative timestamps are artificially ignored in all calculations (averaging, global average calculation, and loop identification) as if they did not exist.
+
 		Temporal analysis requires the `bar_length` metadata, which is retrieved from an external `buffer~` named **bar**. If the buffer is not found, the object will periodically attempt to re-bind to it ("kick the reference").
 	</description>
 	<!--METADATA-->
