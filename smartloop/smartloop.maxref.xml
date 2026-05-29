@@ -52,7 +52,12 @@
 		</objarg>
 	</objarglist>
 	<!--MESSAGES-->
-	<methodlist />
+	<methodlist>
+		<method name="debug">
+			<digest>Compare ratings with visualizer.py</digest>
+			<description>Collects all ratings from the associated dictionary and sends them to the `visualizer.py` script. The visualizer compares these against its own internal state and reports any discrepancies (missing bars or mismatched ratings) back to the Max console and its own console.</description>
+		</method>
+	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="long" size="1">

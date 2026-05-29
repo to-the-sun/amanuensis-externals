@@ -5,9 +5,11 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
+#include "../shared/visualize.h"
 #include <float.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 typedef struct _smartloop {
     t_object s_obj;
@@ -28,6 +30,7 @@ t_class *smartloop_class;
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
+void smartloop_debug(t_smartloop *x);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
 long smartloop_get_bar_length(t_smartloop *x);
 void smartloop_log(t_smartloop *x, const char *fmt, ...);
@@ -107,6 +110,7 @@ t_atomarray* get_span_array(t_dictionary *bar_dict) {
 
 void ext_main(void *r) {
     t_class *c = class_new("smartloop", (method)smartloop_new, (method)smartloop_free, sizeof(t_smartloop), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)smartloop_debug, "debug", 0);
     class_addmethod(c, (method)smartloop_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_smartloop, log);
@@ -121,6 +125,7 @@ void ext_main(void *r) {
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
     t_smartloop *x = (t_smartloop *)object_alloc(smartloop_class);
     if (x) {
+        visualize_init();
         x->dict_name = _sym_nothing;
         x->log = 0;
 
@@ -152,13 +157,104 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void smartloop_free(t_smartloop *x) {
+    visualize_cleanup();
     object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
 
+void smartloop_debug(t_smartloop *x) {
+    if (x->dict_name == _sym_nothing) {
+        object_error((t_object *)x, "no dictionary associated");
+        return;
+    }
+
+    t_dictionary *d = dictobj_findregistered_retain(x->dict_name);
+    if (!d) {
+        object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
+        return;
+    }
+
+    long num_tracks;
+    t_symbol **track_keys = NULL;
+    dictionary_getkeys(d, &num_tracks, &track_keys);
+
+    long buf_size = 262144;
+    char *json = (char *)sysmem_newptr(buf_size);
+    if (!json) {
+        if (track_keys) sysmem_freeptr(track_keys);
+        dictobj_release(d);
+        return;
+    }
+
+    long offset = 0;
+    int n;
+    int first_track = 1;
+
+    n = snprintf(json + offset, buf_size - offset, "{\"event\":\"debug\",\"inventory\":{");
+    if (n > 0 && n < buf_size - offset) offset += n;
+
+    for (long i = 0; i < num_tracks && offset < buf_size - 1; i++) {
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        if (!first_track && offset < buf_size - 1) {
+            json[offset++] = ',';
+        }
+        first_track = 0;
+
+        n = snprintf(json + offset, buf_size - offset, "\"%s\":{", track_keys[i]->s_name);
+        if (n > 0 && n < buf_size - offset) offset += n;
+
+        long num_bars;
+        t_symbol **bar_keys = NULL;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        int first_bar = 1;
+        for (long j = 0; j < num_bars && offset < buf_size - 1; j++) {
+            t_dictionary *bar_dict = NULL;
+            if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
+
+            if (!first_bar && offset < buf_size - 1) {
+                json[offset++] = ',';
+            }
+            first_bar = 0;
+
+            double rating = get_rating(bar_dict);
+            n = snprintf(json + offset, buf_size - offset, "\"%s\":%.6f", bar_keys[j]->s_name, rating);
+            if (n > 0 && n < buf_size - offset) offset += n;
+        }
+
+        if (offset < buf_size - 1) {
+            json[offset++] = '}';
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+
+    if (offset < buf_size - 2) {
+        json[offset++] = '}';
+        json[offset++] = '}';
+        json[offset] = '\0';
+    } else if (offset < buf_size) {
+        json[offset] = '\0';
+    }
+
+    char response[4096];
+    int ret = visualize_exchange(x, json, response, sizeof(response));
+
+    if (ret > 0) {
+        object_post((t_object *)x, "Debug comparison results: %s", response);
+    } else {
+        object_error((t_object *)x, "Failed to get response from visualizer for debug comparison.");
+    }
+
+    sysmem_freeptr(json);
+    if (track_keys) sysmem_freeptr(track_keys);
+    dictobj_release(d);
+}
+
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: Unused (Object scans dictionary every 999ms)");
+        sprintf(s, "Inlet 1: Accepts 'debug' to compare ratings with visualizer.py.");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");

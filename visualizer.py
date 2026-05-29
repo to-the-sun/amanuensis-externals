@@ -164,7 +164,7 @@ def recalculate_reach():
                 continue
     state["song_reach"] = max_reach
 
-def process_packet(text):
+def process_packet(text, client_sock=None):
     if not text:
         return
     # Pre-process text to handle multiple JSON objects in one stream
@@ -182,6 +182,66 @@ def process_packet(text):
 
             if pkt_type == "smartloop":
                 print(f"DEBUG: Processing 'smartloop' packet. Keys: {list(pkt.keys())}")
+                if pkt.get("event") == "debug":
+                    max_inventory = pkt.get("inventory", {})
+                    results = []
+                    print("\n--- DEBUG INVENTORY COMPARISON ---")
+                    with state_lock:
+                        local_inventory = state["bar_ratings"]
+
+                        # Check all tracks in Max inventory
+                        for tid, m_bars in max_inventory.items():
+                            # Normalize local keys for the current track
+                            l_bars = local_inventory.get(tid, {})
+                            normalized_l_bars = {}
+                            for k, v in l_bars.items():
+                                try:
+                                    normalized_l_bars[str(float(k))] = v
+                                except ValueError: continue
+
+                            # Normalize Max keys for this track
+                            normalized_m_bars = {}
+                            for k, v in m_bars.items():
+                                try:
+                                    normalized_m_bars[str(float(k))] = v
+                                except ValueError: continue
+
+                            for b_key, m_rating in normalized_m_bars.items():
+                                l_rating = normalized_l_bars.get(b_key)
+
+                                if l_rating is None:
+                                    msg = f"T{tid} Bar {b_key}: Missing in Visualizer"
+                                    print(msg)
+                                    results.append(msg)
+                                elif abs(l_rating - m_rating) > 0.0001:
+                                    msg = f"T{tid} Bar {b_key}: Rating mismatch (Max: {m_rating:.4f}, Viz: {l_rating:.4f})"
+                                    print(msg)
+                                    results.append(msg)
+
+                            # Check for extra bars in this track in Visualizer
+                            for b_key in normalized_l_bars:
+                                if b_key not in normalized_m_bars:
+                                    msg = f"T{tid} Bar {b_key}: Extra in Visualizer (Missing in Max)"
+                                    print(msg)
+                                    results.append(msg)
+
+                        # Check for tracks in Visualizer that are NOT in Max
+                        for tid in local_inventory:
+                            if tid not in max_inventory:
+                                msg = f"T{tid}: Entire track missing in Max"
+                                print(msg)
+                                results.append(msg)
+
+                    print(f"Comparison finished. {len(results)} discrepancies found.")
+                    print("----------------------------------\n")
+
+                    if client_sock:
+                        response = "OK: No discrepancies found." if not results else f"Found {len(results)} discrepancies: " + "; ".join(results[:5]) + ("..." if len(results) > 5 else "")
+                        try:
+                            client_sock.sendall((response + "\n").encode("utf-8"))
+                        except: pass
+                    return
+
                 with state_lock:
                     bar_length = state.get("bar_length", 125)
                     if "average" in pkt: state["average_rating"] = pkt["average"]
@@ -322,7 +382,7 @@ def handle_client(sock):
             buffer += data.decode("utf-8", errors="replace")
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
-                process_packet(line.strip())
+                process_packet(line.strip(), sock)
         except: break
     sock.close()
 

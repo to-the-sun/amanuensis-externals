@@ -21,6 +21,24 @@ static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0 };
 static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0 };
 static int ref_count = 0;
 
+static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
+    t_symbol *classname = object_classname(x);
+    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+        if (type_out) *type_out = "crucible";
+        return &crucible_viz;
+    } else if (classname == gensym("smartloop")) {
+        if (type_out) *type_out = "smartloop";
+        return &crucible_viz;
+    } else if (classname == gensym("weaver~")) {
+        if (type_out) *type_out = "weaver";
+        return &weaver_viz;
+    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
+        if (type_out) *type_out = "building";
+        return &weaver_viz;
+    }
+    return NULL;
+}
+
 static void viz_socket_init(t_viz_socket *vs, int port) {
     memset((char *) &vs->addr, 0, sizeof(vs->addr));
     vs->addr.sin_family = AF_INET;
@@ -68,20 +86,8 @@ void visualize_cleanup() {
 void visualize(void *x, const char *message) {
     if (!x || !message) return;
 
-    t_symbol *classname = object_classname(x);
-    t_viz_socket *vs = NULL;
     const char *type = "unknown";
-
-    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
-        vs = &crucible_viz;
-        type = "crucible";
-    } else if (classname == gensym("weaver~")) {
-        vs = &weaver_viz;
-        type = "weaver";
-    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
-        vs = &weaver_viz;
-        type = "building";
-    }
+    t_viz_socket *vs = get_socket_for_object(x, &type);
 
     if (!vs) return;
 
@@ -154,4 +160,43 @@ void visualize(void *x, const char *message) {
 
 cleanup:
     sysmem_freeptr(buf);
+}
+
+int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {
+    if (!x || !message || !response || response_size == 0) return -1;
+
+    t_viz_socket *vs = get_socket_for_object(x, NULL);
+
+    if (!vs) return -1;
+
+    // Send the message first (this handles connection if needed)
+    visualize(x, message);
+
+    if (vs->sock == INVALID_SOCKET) return -1;
+
+    // Wait for response
+    fd_set read_fds;
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+
+    FD_ZERO(&read_fds);
+    FD_SET(vs->sock, &read_fds);
+
+    // On Windows, the first parameter to select is ignored, but on POSIX it must be nfds
+    int ret = select((int)vs->sock + 1, &read_fds, NULL, NULL, &tv);
+    if (ret > 0) {
+        int received = recv(vs->sock, response, (int)response_size - 1, 0);
+        if (received > 0) {
+            response[received] = '\0';
+            // Trim any trailing newline
+            for (int i = received - 1; i >= 0 && (response[i] == '\n' || response[i] == '\r'); i--) {
+                response[i] = '\0';
+                received = i;
+            }
+            return received;
+        }
+    }
+
+    return -1;
 }
