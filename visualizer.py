@@ -54,6 +54,7 @@ def perform_smartloop_analysis():
     for tid, bars in bar_ratings_copy.items():
         for b_ts, rating in bars.items():
             ts = snap_to_bar(b_ts, bar_length)
+            if ts < 0: continue
             if ts not in ts_to_ratings:
                 ts_to_ratings[ts] = []
             ts_to_ratings[ts].append(rating)
@@ -95,7 +96,10 @@ def perform_smartloop_analysis():
         all_ts = []
         for track_bars in tracks_copy.values():
             for b in track_bars:
-                try: all_ts.append(snap_to_bar(b, bar_length))
+                try:
+                    ts = snap_to_bar(b, bar_length)
+                    if ts >= 0:
+                        all_ts.append(ts)
                 except: continue
 
         if all_ts:
