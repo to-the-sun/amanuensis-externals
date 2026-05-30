@@ -118,7 +118,11 @@ typedef struct _weaver_consolidate_job {
     long num_tracks;
 } t_weaver_consolidate_job;
 
+struct _weaver;
+typedef struct _weaver t_weaver;
+
 void *weaver_consolidate_worker(t_weaver_consolidate_job *job);
+t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref);
 
 typedef struct _weaver {
     t_pxobject t_obj;
@@ -186,6 +190,29 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void weaver_audio_qtask(t_weaver *x);
 
+t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref) {
+    if (!name || name == _sym_nothing || name == gensym("-")) return NULL;
+
+    t_buffer_ref *br = buffer_ref_new((t_object *)x, name);
+    t_buffer_obj *bo = buffer_ref_getobject(br);
+
+    if (!bo) {
+        object_warn((t_object *)x, "buffer~ '%s' not found, attempting kick", name->s_name);
+        buffer_ref_set(br, _sym_nothing);
+        buffer_ref_set(br, name);
+        bo = buffer_ref_getobject(br);
+    }
+
+    if (!bo) {
+        object_error((t_object *)x, "buffer~ '%s' still not found after kick", name->s_name);
+        object_free(br);
+        return NULL;
+    }
+
+    if (out_ref) *out_ref = br;
+    return bo;
+}
+
 void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     t_weaver *x = job->x;
     t_dictionary *dict = dictobj_findregistered_retain(job->audio_dict_name);
@@ -224,6 +251,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
 
         float *samples_dest = buffer_locksamples(dest_buf);
         if (!samples_dest) {
+            object_error((t_object *)x, "Track %ld: Could not lock destination samples", i);
             weaver_queue_log(x, "Track %ld: Could not lock destination samples", i);
             continue;
         }
@@ -260,6 +288,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                 if (src_bufs[j]) {
                     src_samples[j] = buffer_locksamples(src_bufs[j]);
                     if (!src_samples[j]) {
+                        object_error((t_object *)x, "Track %ld: Failed to lock source buffer samples", i);
                         src_bufs[j] = NULL; // Mark as failed to lock
                         continue;
                     }
@@ -350,14 +379,16 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                     // Lock NEW buffer
                     if (src_bufs[other]) {
                         src_samples[other] = buffer_locksamples(src_bufs[other]);
-                        n_frames_src[other] = buffer_getframecount(src_bufs[other]);
-                        n_chans_src[other] = buffer_getchannelcount(src_bufs[other]);
-                        sr_src[other] = buffer_getsamplerate(src_bufs[other]);
-                        if (sr_src[other] <= 0) sr_src[other] = sr_dest;
+                        if (!src_samples[other]) {
+                             object_error((t_object *)x, "Track %ld: Failed to lock new buffer samples", i);
+                        } else {
+                            n_frames_src[other] = buffer_getframecount(src_bufs[other]);
+                            n_chans_src[other] = buffer_getchannelcount(src_bufs[other]);
+                            sr_src[other] = buffer_getsamplerate(src_bufs[other]);
+                            if (sr_src[other] <= 0) sr_src[other] = sr_dest;
 
-                        // Debug audio check
-                        if (src_samples[other]) {
-                             weaver_queue_log(x, "Track %ld: First sample of new buffer: %.4f", i, (double)src_samples[other][0]);
+                            // Debug audio check
+                            weaver_queue_log(x, "Track %ld: First sample of new buffer: %.4f", i, (double)src_samples[other][0]);
                         }
                     } else {
                         src_samples[other] = NULL;
@@ -1003,14 +1034,11 @@ void weaver_consolidate(t_weaver *x) {
 
                         if (palette != _sym_nothing && palette != gensym("-")) {
                             if (hashtab_lookup(job->palette_lookup, palette, NULL) != MAX_ERR_NONE) {
-                                t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
-                                buffer_ref_set(br, palette); // Kick
-                                t_buffer_obj *bo = buffer_ref_getobject(br);
-                                if (bo) {
+                                t_buffer_ref *br = NULL;
+                                t_buffer_obj *bo = weaver_resolve_buffer_with_kick(x, palette, &br);
+                                if (bo && br) {
                                     hashtab_store(job->palette_lookup, palette, (t_object *)bo);
                                     hashtab_store(job->palette_refs, palette, (t_object *)br);
-                                } else {
-                                    object_free(br);
                                 }
                             }
 
@@ -1019,14 +1047,11 @@ void weaver_consolidate(t_weaver *x) {
                             snprintf(stems_name, 64, "stems.%ld", track_id);
                             t_symbol *s_stems = gensym(stems_name);
                             if (hashtab_lookup(job->palette_lookup, s_stems, NULL) != MAX_ERR_NONE) {
-                                t_buffer_ref *br_stems = buffer_ref_new((t_object *)x, _sym_nothing);
-                                buffer_ref_set(br_stems, s_stems);
-                                t_buffer_obj *bo_stems = buffer_ref_getobject(br_stems);
-                                if (bo_stems) {
+                                t_buffer_ref *br_stems = NULL;
+                                t_buffer_obj *bo_stems = weaver_resolve_buffer_with_kick(x, s_stems, &br_stems);
+                                if (bo_stems && br_stems) {
                                     hashtab_store(job->palette_lookup, s_stems, (t_object *)bo_stems);
                                     hashtab_store(job->palette_refs, s_stems, (t_object *)br_stems);
-                                } else {
-                                    object_free(br_stems);
                                 }
                             }
                         }
@@ -1046,14 +1071,11 @@ void weaver_consolidate(t_weaver *x) {
             char bufname[256];
             snprintf(bufname, 256, "%s.%ld", job->poly_prefix->s_name, i);
             t_symbol *s_bufname = gensym(bufname);
-            t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
-            buffer_ref_set(br, s_bufname);
-            t_buffer_obj *bo = buffer_ref_getobject(br);
+            t_buffer_ref *br = NULL;
+            t_buffer_obj *bo = weaver_resolve_buffer_with_kick(x, s_bufname, &br);
             job->tracks[i].dest_buf = bo;
-            if (bo) {
+            if (bo && br) {
                  hashtab_store(job->palette_refs, s_bufname, (t_object *)br);
-            } else {
-                 object_free(br);
             }
         }
 
