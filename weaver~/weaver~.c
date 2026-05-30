@@ -99,31 +99,19 @@ typedef struct _weaver_log_queue {
     t_critical lock;
 } t_weaver_log_queue;
 
-typedef struct _weaver_consolidate_track_data {
-    t_buffer_obj *dest_buf;
-    double length;
-} t_weaver_consolidate_track_data;
-
 typedef struct _weaver_consolidate_job {
     struct _weaver *x;
     t_symbol *audio_dict_name;
     t_symbol *poly_prefix;
     double bar_length;
-    double song_length;
     double low_ms;
     double high_ms;
-    t_hashtab *palette_lookup;
-    t_hashtab *palette_refs;
-    t_weaver_consolidate_track_data tracks[MAX_WEAVER_TRACKS + 1];
-    long num_tracks;
 } t_weaver_consolidate_job;
 
 struct _weaver;
 typedef struct _weaver t_weaver;
 
 void *weaver_consolidate_worker(t_weaver_consolidate_job *job);
-t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref);
-t_symbol *trim_symbol(t_symbol *s);
 
 typedef struct _weaver {
     t_pxobject t_obj;
@@ -191,124 +179,88 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void weaver_audio_qtask(t_weaver *x);
 
-t_symbol *trim_symbol(t_symbol *s) {
-    if (!s || !s->s_name) return s;
-    const char *str = s->s_name;
-    while (isspace((unsigned char)*str)) str++;
-    if (*str == 0) return gensym("");
-    const char *end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    char buf[256];
-    size_t len = (end - str) + 1;
-    if (len >= 256) len = 255;
-    strncpy(buf, str, len);
-    buf[len] = '\0';
-    return gensym(buf);
-}
-
-t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref) {
-    if (!name || name == _sym_nothing || name == gensym("-")) return NULL;
-
-    t_symbol *trimmed = trim_symbol(name);
-    if (trimmed != name) {
-        object_warn((t_object *)x, "trimmed palette name from '%s' to '%s'", name->s_name, trimmed->s_name);
-        name = trimmed;
-    }
-
-    t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
-    buffer_ref_set(br, name);
-    t_buffer_obj *bo = buffer_ref_getobject(br);
-
-    // 1. Try stripping extension if first attempt fails
-    if (!bo && strstr(name->s_name, ".")) {
-        char base[256];
-        strncpy(base, name->s_name, 255);
-        char *dot = strrchr(base, '.');
-        if (dot) {
-            *dot = '\0';
-            t_symbol *s_base = gensym(base);
-            buffer_ref_set(br, s_base);
-            bo = buffer_ref_getobject(br);
-            if (bo) {
-                object_warn((t_object *)x, "found buffer '%s' by stripping extension from '%s'", s_base->s_name, name->s_name);
-                name = s_base;
-            }
-        }
-    }
-
-    // 2. Perform kick if still not found
-    if (!bo) {
-        char hex[512] = "";
-        for(int i=0; i<(int)strlen(name->s_name) && i<120; i++) snprintf(hex+i*3, 4, "%02x ", (unsigned char)name->s_name[i]);
-        object_warn((t_object *)x, "buffer~ '%s' not found (HEX: %s), attempting kick (Context: %p)", name->s_name, hex, x);
-
-        buffer_ref_set(br, _sym_nothing);
-        systhread_sleep(2); // very brief pause
-        buffer_ref_set(br, name);
-        bo = buffer_ref_getobject(br);
-    }
-
-    // 3. Last ditch effort: search global namespaces directly
-    if (!bo) {
-        bo = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
-        if (!bo) bo = (t_buffer_obj *)object_findregistered(gensym("__buffer__"), name);
-        if (bo) {
-            object_warn((t_object *)x, "buffer~ '%s' found via direct object search after ref failed", name->s_name);
-            // If found directly, we still want to bind the ref to it for lifetime management
-            buffer_ref_set(br, name);
-        }
-    }
-
-    if (!bo) {
-        object_error((t_object *)x, "buffer~ '%s' still not found after kick and search", name->s_name);
-        object_free(br);
-        return NULL;
-    }
-
-    if (out_ref) *out_ref = br;
-    return bo;
-}
-
 void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     t_weaver *x = job->x;
     t_dictionary *dict = dictobj_findregistered_retain(job->audio_dict_name);
     if (!dict) {
         weaver_queue_log(x, "Consolidate failed: dictionary %s not found", job->audio_dict_name->s_name);
         x->consolidate_running = 0;
-        if (job->palette_lookup) object_free(job->palette_lookup);
-        sysmem_freeptr(job);
+        weaver_queue_finish(x, job);
         return NULL;
     }
 
-    double song_length = job->song_length;
-    weaver_queue_log(x, "Consolidate started. Song length: %.2f ms, Bar length: %.2f ms", song_length, job->bar_length);
+    // 1. Determine Global Song Length
+    double song_length = 0;
+    long num_tracks_in_dict = 0;
+    t_symbol **track_keys = NULL;
+    dictionary_getkeys(dict, &num_tracks_in_dict, &track_keys);
 
-    // Process each track
-    for (long i = 1; i <= job->num_tracks; i++) {
+    for (long i = 0; i < num_tracks_in_dict; i++) {
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+            long num_bars = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+            for (long j = 0; j < num_bars; j++) {
+                double bar_ts = atof(bar_keys[j]->s_name);
+                if (bar_ts + job->bar_length > song_length) {
+                    song_length = bar_ts + job->bar_length;
+                }
+            }
+            if (bar_keys) sysmem_freeptr(bar_keys);
+        }
+    }
+
+    weaver_queue_log(x, "Consolidate started (Worker: %p). Song length: %.2f ms, Bar length: %.2f ms", systhread_self(), song_length, job->bar_length);
+
+    // 2. Process each track sequentially
+    for (long i = 1; i <= x->max_tracks; i++) {
         if (x->consolidate_stop) break;
 
-        t_buffer_obj *dest_buf = job->tracks[i].dest_buf;
-        double track_length = job->tracks[i].length;
+        char bufname[256];
+        snprintf(bufname, 256, "%s.%ld", job->poly_prefix->s_name, i);
+        t_symbol *s_bufname = gensym(bufname);
+        t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, _sym_nothing);
+        buffer_ref_set(dest_ref, s_bufname);
+        t_buffer_obj *dest_buf = buffer_ref_getobject(dest_ref);
 
-        if (!dest_buf) continue;
-
-        if (track_length <= 0) {
-            weaver_queue_log(x, "Track %ld: No bars found in dictionary, skipping", i);
+        if (!dest_buf) {
+            object_warn((t_object *)x, "Track %ld: Destination buffer %s not found. Skipping track.", i, bufname);
+            object_free(dest_ref);
             continue;
         }
 
-        weaver_queue_log(x, "Track %ld: Consolidating (Length %.2f ms)", i, track_length);
+        weaver_queue_log(x, "Track %ld: Starting consolidation to %s", i, bufname);
 
+        // 3. Determine Track Looping Length
+        double track_length = 0;
         char tstr[64];
         snprintf(tstr, 64, "%ld", i);
         t_symbol *track_sym = gensym(tstr);
         t_dictionary *track_dict = NULL;
-        dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
+        if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+            long num_bars = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+            for (long j = 0; j < num_bars; j++) {
+                double bar_ts = atof(bar_keys[j]->s_name);
+                if (bar_ts + job->bar_length > track_length) {
+                    track_length = bar_ts + job->bar_length;
+                }
+            }
+            if (bar_keys) sysmem_freeptr(bar_keys);
+        }
+
+        if (track_length <= 0) {
+            weaver_queue_log(x, "Track %ld: No bars defined in transcript. Skipping.", i);
+            object_free(dest_ref);
+            continue;
+        }
 
         float *samples_dest = buffer_locksamples(dest_buf);
         if (!samples_dest) {
-            object_error((t_object *)x, "Track %ld: Could not lock destination samples", i);
-            weaver_queue_log(x, "Track %ld: Could not lock destination samples", i);
+            weaver_queue_log(x, "Track %ld: Failed to lock destination buffer %s.", i, bufname);
+            object_free(dest_ref);
             continue;
         }
 
@@ -323,7 +275,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
         t_symbol *palette[2] = {gensym("-"), gensym("-")};
         double offset[2] = {-1.0, -1.0};
         double control = 0.0;
-        t_buffer_obj *src_bufs[2] = {NULL, NULL};
+        t_buffer_ref *src_refs[2] = {buffer_ref_new((t_object *)x, _sym_nothing), buffer_ref_new((t_object *)x, _sym_nothing)};
 
         long long total_samples = (long long)round(song_length * sr_dest / 1000.0);
         if (total_samples > n_frames_dest) total_samples = n_frames_dest;
@@ -335,35 +287,20 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             if (x->consolidate_stop) break;
             int current_vector = (s + vector_size > total_samples) ? (int)(total_samples - s) : vector_size;
 
-            // Lock buffers in slots at start of vector
+            // Vector-level buffer resolution and locking
             float *src_samples[2] = {NULL, NULL};
             long long n_frames_src[2] = {0, 0};
             int n_chans_src[2] = {0, 0};
             double sr_src[2] = {0, 0};
-            for (int j = 0; j < 2; j++) {
-                if (src_bufs[j]) {
-                    src_samples[j] = buffer_locksamples(src_bufs[j]);
-                    if (!src_samples[j]) {
-                        object_error((t_object *)x, "Track %ld: Failed to lock source buffer samples", i);
-                        src_bufs[j] = NULL; // Mark as failed to lock
-                        continue;
-                    }
-                    n_frames_src[j] = buffer_getframecount(src_bufs[j]);
-                    n_chans_src[j] = buffer_getchannelcount(src_bufs[j]);
-                    sr_src[j] = buffer_getsamplerate(src_bufs[j]);
-                    if (sr_src[j] <= 0) sr_src[j] = sr_dest;
-                }
-            }
+            t_buffer_obj *src_bufs[2] = {NULL, NULL};
 
-            // Process vector
             for (int v = 0; v < current_vector; v++) {
                 long long f_dest = s + v;
                 double vec_ms = (double)f_dest * 1000.0 / sr_dest;
-                double tr_ms = fmod(vec_ms + 0.0001, track_length); // Slight epsilon to avoid fmod issues at boundaries
+                double tr_ms = fmod(vec_ms + 0.0001, track_length);
                 double bar_ts = floor(tr_ms / job->bar_length) * job->bar_length;
 
                 if (bar_ts != last_bar_ts) {
-                    // New Bar!
                     last_bar_ts = bar_ts;
                     char bstr[64];
                     snprintf(bstr, 64, "%ld", (long)round(bar_ts));
@@ -374,7 +311,6 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
 
                     t_dictionary *bar_dict = NULL;
                     if (track_dict && dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
-                        // Extract palette and offset
                         t_atom p_atom, o_atom;
                         t_atomarray *palette_aa = NULL;
                         if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
@@ -384,77 +320,72 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                             new_palette = atom_getsym(&p_atom);
                         }
 
-                        t_atomarray *offset_aa = NULL;
-                        if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
-                            atomarray_getindex(offset_aa, 0, &o_atom);
-                            new_offset = atom_getfloat(&o_atom);
+                        if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                             atomarray_getindex(palette_aa, 0, &o_atom);
+                             new_offset = atom_getfloat(&o_atom);
                         } else if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) {
                             new_offset = atom_getfloat(&o_atom);
                         }
 
-                        // Fallback check in lookup table
-                        if (new_palette != gensym("-")) {
-                            if (hashtab_lookup(job->palette_lookup, new_palette, NULL) != MAX_ERR_NONE) {
-                                 char stems_name[64];
-                                 snprintf(stems_name, 64, "stems.%ld", i);
-                                 t_symbol *s_stems = gensym(stems_name);
-                                 if (hashtab_lookup(job->palette_lookup, s_stems, NULL) == MAX_ERR_NONE) {
-                                     new_palette = s_stems;
-                                     new_offset = 0.0;
-                                 } else {
-                                     new_palette = gensym("-");
-                                     new_offset = 0.0;
-                                 }
-                            }
+                        // Fallback check
+                        t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, _sym_nothing);
+                        buffer_ref_set(temp_ref, new_palette);
+                        if (!buffer_ref_getobject(temp_ref)) {
+                             char stems_name[64];
+                             snprintf(stems_name, 64, "stems.%ld", i);
+                             t_symbol *s_stems = gensym(stems_name);
+                             buffer_ref_set(temp_ref, s_stems);
+                             if (buffer_ref_getobject(temp_ref)) {
+                                 new_palette = s_stems;
+                                 new_offset = 0.0;
+                             } else {
+                                 new_palette = gensym("-");
+                                 new_offset = 0.0;
+                             }
                         }
+                        object_free(temp_ref);
                     }
 
-                    // Apply metadata update logic
+                    weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s", i, bar_ts, new_palette->s_name);
+
                     int active = (int)round(control);
                     int other = 1 - active;
-
-                    // Unlock OLD buffer from this slot if it exists
-                    if (src_bufs[other]) {
-                        buffer_unlocksamples(src_bufs[other]);
-                    }
-
                     palette[other] = new_palette;
                     offset[other] = new_offset - vec_ms;
                     control = (double)other;
                     xf.direction = control - xf.last_control;
+                    buffer_ref_set(src_refs[other], palette[other]);
 
-                    // background thread safe lookup from pre-resolved table
-                    t_buffer_obj *found = NULL;
-                    if (palette[other] != _sym_nothing && palette[other] != gensym("-")) {
-                        hashtab_lookup(job->palette_lookup, palette[other], (t_object **)&found);
-                    }
-                    src_bufs[other] = found;
-
-                    weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s, Lookup: %s", i, bar_ts, new_palette->s_name, src_bufs[other] ? "FOUND" : "NOT FOUND");
-                    if (!src_bufs[other] && new_palette != gensym("-")) {
-                         char stems_name[64];
-                         snprintf(stems_name, 64, "stems.%ld", i);
-                         object_error((t_object *)x, "Track %ld: lookup failed for palette '%s' and fallback '%s' at bar %.0fms", i, new_palette->s_name, stems_name, bar_ts);
-                    }
-
-                    // Lock NEW buffer
-                    if (src_bufs[other]) {
-                        src_samples[other] = buffer_locksamples(src_bufs[other]);
-                        if (!src_samples[other]) {
-                             object_error((t_object *)x, "Track %ld: Failed to lock new buffer samples", i);
-                        } else {
-                            n_frames_src[other] = buffer_getframecount(src_bufs[other]);
-                            n_chans_src[other] = buffer_getchannelcount(src_bufs[other]);
-                            sr_src[other] = buffer_getsamplerate(src_bufs[other]);
-                            if (sr_src[other] <= 0) sr_src[other] = sr_dest;
-
-                            // Debug audio check
-                            weaver_queue_log(x, "Track %ld: First sample of new buffer: %.4f", i, (double)src_samples[other][0]);
+                    if (palette[other] != gensym("-")) {
+                        t_buffer_obj *bo = buffer_ref_getobject(src_refs[other]);
+                        if (!bo) {
+                             object_warn((t_object *)x, "Track %ld: Failed to bind palette '%s'. Kicking...", i, palette[other]->s_name);
+                             buffer_ref_set(src_refs[other], _sym_nothing);
+                             buffer_ref_set(src_refs[other], palette[other]);
+                             bo = buffer_ref_getobject(src_refs[other]);
+                             if (!bo) object_error((t_object *)x, "Track %ld: Palette '%s' still NOT FOUND after kick.", i, palette[other]->s_name);
                         }
-                    } else {
-                        src_samples[other] = NULL;
                     }
                 }
+            }
+
+            // Lock once per vector
+            for (int j = 0; j < 2; j++) {
+                if (palette[j] != gensym("-")) {
+                    src_bufs[j] = buffer_ref_getobject(src_refs[j]);
+                    if (src_bufs[j]) {
+                        src_samples[j] = buffer_locksamples(src_bufs[j]);
+                        n_frames_src[j] = buffer_getframecount(src_bufs[j]);
+                        n_chans_src[j] = buffer_getchannelcount(src_bufs[j]);
+                        sr_src[j] = buffer_getsamplerate(src_bufs[j]);
+                        if (sr_src[j] <= 0) sr_src[j] = sr_dest;
+                    }
+                }
+            }
+
+            for (int v = 0; v < current_vector; v++) {
+                long long f_dest = s + v;
+                double vec_ms = (double)f_dest * 1000.0 / sr_dest;
 
                 double max_abs[2] = {0.0, 0.0};
                 long long f_src[2] = {-1, -1};
@@ -489,18 +420,23 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
 
                 xf.last_control = control;
                 xf.elapsed++;
-            }
 
-            for (int j = 0; j < 2; j++) {
-                if (src_bufs[j]) buffer_unlocksamples(src_bufs[j]);
+                for (int j = 0; j < 2; j++) {
+                    if (src_bufs[j]) buffer_unlocksamples(src_bufs[j]);
+                }
             }
         }
 
         buffer_unlocksamples(dest_buf);
         weaver_queue_dirty(x, dest_buf);
+        object_free(dest_ref);
+        object_free(src_refs[0]);
+        object_free(src_refs[1]);
+
         weaver_queue_log(x, "Track %ld: Consolidation complete", i);
     }
 
+    if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(dict);
     weaver_queue_log(x, "Consolidate finished");
     x->consolidate_running = 0;
@@ -511,7 +447,6 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
 void weaver_clear(t_weaver *x);
 void weaver_consolidate(t_weaver *x);
-void weaver_consolidate_deferred(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
 static t_symbol *_sym_dash;
@@ -1030,11 +965,6 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void weaver_consolidate(t_weaver *x) {
-    // Just a placeholder to keep the method table valid if needed,
-    // but weaver_anything now defers directly.
-}
-
-void weaver_consolidate_deferred(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->consolidate_running) {
         object_error((t_object *)x, "consolidate is already running");
         return;
@@ -1046,112 +976,23 @@ void weaver_consolidate_deferred(t_weaver *x, t_symbol *s, long argc, t_atom *ar
         return;
     }
 
-    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
-    if (!dict) {
-        object_error((t_object *)x, "missing transcript dictionary %s", x->audio_dict_name->s_name);
+    if (x->audio_dict_name == _sym_nothing) {
+        object_error((t_object *)x, "missing transcript dictionary");
         return;
     }
 
-    weaver_check_attachments(x);
-
     t_weaver_consolidate_job *job = (t_weaver_consolidate_job *)sysmem_newptr(sizeof(t_weaver_consolidate_job));
     if (job) {
-        memset(job, 0, sizeof(t_weaver_consolidate_job));
         job->x = x;
         job->audio_dict_name = x->audio_dict_name;
         job->poly_prefix = x->poly_prefix;
         job->bar_length = bar_len;
         job->low_ms = x->low_ms;
         job->high_ms = x->high_ms;
-        job->palette_lookup = hashtab_new(0);
-        job->palette_refs = hashtab_new(0);
-        job->num_tracks = x->max_tracks;
 
-        // Determine lengths and unique palettes
-        double song_length = 0;
-        long num_track_keys = 0;
-        t_symbol **track_keys = NULL;
-        dictionary_getkeys(dict, &num_track_keys, &track_keys);
-
-        for (long i = 0; i < num_track_keys; i++) {
-            t_dictionary *track_dict = NULL;
-            if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-                long track_id = atol(track_keys[i]->s_name);
-                double track_length = 0;
-                long num_bars = 0;
-                t_symbol **bar_keys = NULL;
-                dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-                for (long j = 0; j < num_bars; j++) {
-                    double bar_ts = atof(bar_keys[j]->s_name);
-                    if (bar_ts + bar_len > song_length) song_length = bar_ts + bar_len;
-                    if (bar_ts + bar_len > track_length) track_length = bar_ts + bar_len;
-
-                    // Resolve Palette
-                    t_dictionary *bar_dict = NULL;
-                    if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
-                        t_symbol *palette = _sym_nothing;
-                        t_atom p_atom;
-                        t_atomarray *palette_aa = NULL;
-                        if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
-                            atomarray_getindex(palette_aa, 0, &p_atom);
-                            palette = atom_getsym(&p_atom);
-                        } else if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) {
-                            palette = atom_getsym(&p_atom);
-                        }
-
-                        if (palette != _sym_nothing && palette != gensym("-")) {
-                            if (hashtab_lookup(job->palette_lookup, palette, NULL) != MAX_ERR_NONE) {
-                                t_buffer_ref *br = NULL;
-                                t_buffer_obj *bo = weaver_resolve_buffer_with_kick(x, palette, &br);
-                                if (bo && br) {
-                                    hashtab_store(job->palette_lookup, palette, (t_object *)bo);
-                                    hashtab_store(job->palette_refs, palette, (t_object *)br);
-                                }
-                            }
-
-                            // Always also ensure fallback stems buffer is resolved for this track
-                            char stems_name[64];
-                            snprintf(stems_name, 64, "stems.%ld", track_id);
-                            t_symbol *s_stems = gensym(stems_name);
-                            if (hashtab_lookup(job->palette_lookup, s_stems, NULL) != MAX_ERR_NONE) {
-                                t_buffer_ref *br_stems = NULL;
-                                t_buffer_obj *bo_stems = weaver_resolve_buffer_with_kick(x, s_stems, &br_stems);
-                                if (bo_stems && br_stems) {
-                                    hashtab_store(job->palette_lookup, s_stems, (t_object *)bo_stems);
-                                    hashtab_store(job->palette_refs, s_stems, (t_object *)br_stems);
-                                }
-                            }
-                        }
-                    }
-                }
-                if (track_id > 0 && track_id <= job->num_tracks) {
-                    job->tracks[track_id].length = track_length;
-                }
-                if (bar_keys) sysmem_freeptr(bar_keys);
-            }
-        }
-        job->song_length = song_length;
-        if (track_keys) sysmem_freeptr(track_keys);
-
-        // Resolve Destination Buffers
-        for (long i = 1; i <= job->num_tracks; i++) {
-            char bufname[256];
-            snprintf(bufname, 256, "%s.%ld", job->poly_prefix->s_name, i);
-            t_symbol *s_bufname = gensym(bufname);
-            t_buffer_ref *br = NULL;
-            t_buffer_obj *bo = weaver_resolve_buffer_with_kick(x, s_bufname, &br);
-            job->tracks[i].dest_buf = bo;
-            if (bo && br) {
-                 hashtab_store(job->palette_refs, s_bufname, (t_object *)br);
-            }
-        }
-
-        dictobj_release(dict);
         x->consolidate_running = 1;
         x->consolidate_stop = 0;
         systhread_create((method)weaver_consolidate_worker, job, 0, 0, 0, &x->consolidate_thread);
-    } else {
-        dictobj_release(dict);
     }
 }
 
@@ -1239,7 +1080,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     } else if (s == gensym("clear")) {
         weaver_clear(x);
     } else if (s == gensym("consolidate")) {
-        defer_low(x, (method)weaver_consolidate_deferred, s, argc, argv);
+        weaver_consolidate(x);
     } else if (s != x->audio_dict_name) {
         // Inlet 0: Transcript Dictionary Reference
         x->audio_dict_name = s;
@@ -1505,19 +1346,6 @@ void weaver_audio_qtask(t_weaver *x) {
         } else if (log_entry->type == WEAVER_LOG_FINISH) {
             t_weaver_consolidate_job *job = (t_weaver_consolidate_job *)log_entry->job;
             if (job) {
-                if (job->palette_lookup) object_free(job->palette_lookup);
-                if (job->palette_refs) {
-                    long num_items = 0;
-                    t_symbol **keys = NULL;
-                    hashtab_getkeys(job->palette_refs, &num_items, &keys);
-                    for (long i = 0; i < num_items; i++) {
-                        t_buffer_ref *br = NULL;
-                        hashtab_lookup(job->palette_refs, keys[i], (t_object **)&br);
-                        if (br) object_free(br);
-                    }
-                    if (keys) sysmem_freeptr(keys);
-                    object_free(job->palette_refs);
-                }
                 sysmem_freeptr(job);
             }
         }
