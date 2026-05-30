@@ -318,8 +318,12 @@ def process_packet(text, client_sock=None):
 
             with state_lock:
                 new_bl = pkt.get("bar_length")
-                if new_bl is not None and new_bl > 0 and new_bl != state.get("bar_length"):
-                    cleanup_obsolete_bars(new_bl)
+
+                if pkt.get("event") == "cleanup":
+                    if new_bl is not None and new_bl > 0:
+                        cleanup_obsolete_bars(new_bl)
+                elif new_bl is not None and new_bl > 0:
+                    state["bar_length"] = new_bl
 
                 dirty = False
                 if "tracks" in pkt:
