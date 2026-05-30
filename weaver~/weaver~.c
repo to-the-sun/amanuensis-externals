@@ -964,6 +964,12 @@ void weaver_consolidate(t_weaver *x) {
     systhread_create((method)weaver_consolidate_worker, x, 0, 0, 0, &x->consolidate_thread);
 }
 
+t_buffer_obj *weaver_resolve_buffer(t_symbol *name) {
+    if (!name || name == _sym_nothing || name == gensym("-")) return NULL;
+    t_buffer_obj *b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+    return b;
+}
+
 void *weaver_consolidate_worker(t_weaver *x) {
     double bar_len = round(weaver_get_bar_length(x));
     if (bar_len <= 0) {
@@ -991,52 +997,80 @@ void *weaver_consolidate_worker(t_weaver *x) {
             continue;
         }
 
+        long long n_frames_dest = buffer_getframecount(dest_buf);
+        int n_chans_dest = buffer_getchannelcount(dest_buf);
+        double sr_dest = buffer_getsamplerate(dest_buf);
+        if (sr_dest <= 0) sr_dest = sys_getsr();
+
         float *samples_dest = buffer_locksamples(dest_buf);
         if (!samples_dest) {
             weaver_log(x, "Stem %ld: could not lock destination buffer, skipping.", t_idx + 1);
             continue;
         }
 
-        long long n_frames_dest = buffer_getframecount(dest_buf);
-        int n_chans_dest = buffer_getchannelcount(dest_buf);
-        double sr_dest = buffer_getsamplerate(dest_buf);
-        if (sr_dest <= 0) sr_dest = sys_getsr();
+        char stems_name[64];
+        snprintf(stems_name, 64, "stems.%ld", t_idx + 1);
+        t_symbol *s_stems = gensym(stems_name);
+        int is_self_src = (weaver_resolve_buffer(s_stems) == dest_buf);
 
-        buffer_edit_begin(dest_buf);
-        memset(samples_dest, 0, n_frames_dest * n_chans_dest * sizeof(float));
+        if (!is_self_src) {
+            memset(samples_dest, 0, (size_t)n_frames_dest * n_chans_dest * sizeof(float));
+        }
 
         t_crossfade_state xf;
         crossfade_init(&xf, sr_dest, x->low_ms, x->high_ms);
 
         t_symbol *palette[2] = { _sym_dash, _sym_dash };
-        double offset[2] = { -1.0, -1.0 };
         double dict_offset[2] = { -1.0, -1.0 };
         double control = 0.0;
         double last_control = 0.0;
 
-        t_buffer_ref *src_refs[2];
-        src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
-        src_refs[1] = buffer_ref_new((t_object *)x, _sym_nothing);
-
-        long long limit_frames = (long long)round(tr->track_length * sr_dest / 1000.0);
-        if (limit_frames > n_frames_dest) limit_frames = n_frames_dest;
+        long long limit_frames = n_frames_dest;
 
         long last_bar_idx = -1;
         long long current_frame = 0;
         xf.elapsed = 0;
+        double trigger_ms[2] = { 0.0, 0.0 };
+        double last_track_ramp_ms = -1.0;
 
         while (current_frame < limit_frames) {
             double current_ms = (double)current_frame * 1000.0 / sr_dest;
-            long bar_idx = (long)floor(current_ms / bar_len);
+            double track_ramp_ms = fmod(current_ms, tr->track_length);
+            long bar_idx = (long)floor(track_ramp_ms / bar_len);
 
-            if (bar_idx != last_bar_idx) {
-                // New bar hit - lookup in dictionary
-                char bstr[64];
-                snprintf(bstr, 64, "%ld", (long)(bar_idx * bar_len));
-                t_symbol *bar_key = gensym(bstr);
+            int hit = 0;
+            t_symbol *bar_key_sym = NULL;
+
+            if (last_track_ramp_ms == -1.0) {
+                hit = 1;
+            } else {
+                long r_scan = (long)floor(track_ramp_ms);
+                long r_last = (long)floor(last_track_ramp_ms);
+                int track_looped = (track_ramp_ms < last_track_ramp_ms);
+
+                if (r_scan != r_last) {
+                    long long start = (track_looped) ? 0 : r_last + 1;
+                    long long end = r_scan;
+                    long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
+                    if (latest_j >= start) {
+                        hit = 1;
+                        char bstr[64];
+                        snprintf(bstr, 64, "%ld", (long)latest_j);
+                        bar_key_sym = gensym(bstr);
+                    }
+                }
+            }
+
+            if (hit) {
+                if (!bar_key_sym) {
+                    char bstr[64];
+                    snprintf(bstr, 64, "%ld", (long)(bar_idx * bar_len));
+                    bar_key_sym = gensym(bstr);
+                }
 
                 t_symbol *new_palette = _sym_dash;
                 double new_offset = 0.0;
+                t_symbol *new_bar_symbol = _sym_nothing;
 
                 char tstr[64];
                 snprintf(tstr, 64, "%ld", t_idx + 1);
@@ -1045,7 +1079,8 @@ void *weaver_consolidate_worker(t_weaver *x) {
 
                 if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
                     t_dictionary *bar_dict = NULL;
-                    if (dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                    if (dictionary_getdictionary(track_dict, bar_key_sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                        new_bar_symbol = bar_key_sym;
                         t_atomarray *palette_aa = NULL;
                         t_atom p_atom;
                         if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
@@ -1065,46 +1100,46 @@ void *weaver_consolidate_worker(t_weaver *x) {
                         // Check if palette exists, fallback to stems.N
                         int palette_exists = 0;
                         if (new_palette != _sym_nothing && new_palette != _sym_dash) {
-                            t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, new_palette);
-                            if (buffer_ref_getobject(temp_ref)) palette_exists = 1;
-                            object_free(temp_ref);
+                            if (weaver_resolve_buffer(new_palette)) palette_exists = 1;
                         }
 
                         if (!palette_exists) {
                             char stems_name[64];
                             snprintf(stems_name, 64, "stems.%ld", t_idx + 1);
                             t_symbol *s_stems = gensym(stems_name);
-                            t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
-                            if (buffer_ref_getobject(stems_ref)) {
+                            if (weaver_resolve_buffer(s_stems)) {
                                 new_palette = s_stems;
                                 new_offset = 0.0;
                             } else {
                                 new_palette = _sym_dash;
                                 new_offset = 0.0;
                             }
-                            object_free(stems_ref);
                         }
                     }
                 }
 
                 int active = (int)round(control);
-                if (new_palette != palette[active] || new_offset != dict_offset[active]) {
-                    int other = 1 - active;
-                    palette[other] = new_palette;
-                    dict_offset[other] = new_offset;
-                    offset[other] = new_offset - (bar_idx * bar_len);
-                    control = (double)other;
-                    xf.direction = control - last_control;
-                    buffer_ref_set(src_refs[other], palette[other]);
-                }
+                int other = 1 - active;
+                palette[other] = new_palette;
+                dict_offset[other] = new_offset;
+                trigger_ms[other] = current_ms;
+                control = (double)other;
+                xf.direction = control - last_control;
                 last_bar_idx = bar_idx;
+                xf.elapsed = 0; // Force reset of crossfade timing on every bar hit
             }
 
             // Determine how many frames we can process with current buffers
-            long long next_bar_frame = (long long)ceil((double)(bar_idx + 1) * bar_len * sr_dest / 1000.0);
+            double ms_to_bar = (double)(bar_idx + 1) * bar_len - track_ramp_ms;
+            double ms_to_loop = tr->track_length - track_ramp_ms;
+            double ms_to_event = (ms_to_bar < ms_to_loop) ? ms_to_bar : ms_to_loop;
+
+            long long frames_to_event = (long long)floor(ms_to_event * sr_dest / 1000.0);
+            if (frames_to_event < 1) frames_to_event = 1;
+
             long long v_size = 512;
             long long frames_to_process = v_size;
-            if (current_frame + frames_to_process > next_bar_frame) frames_to_process = next_bar_frame - current_frame;
+            if (frames_to_process > frames_to_event) frames_to_process = frames_to_event;
             if (current_frame + frames_to_process > limit_frames) frames_to_process = limit_frames - current_frame;
             if (frames_to_process <= 0) break;
 
@@ -1117,7 +1152,7 @@ void *weaver_consolidate_worker(t_weaver *x) {
 
             for (int j = 0; j < 2; j++) {
                 if (palette[j] != _sym_nothing && palette[j] != _sym_dash) {
-                    buf_src[j] = buffer_ref_getobject(src_refs[j]);
+                    buf_src[j] = weaver_resolve_buffer(palette[j]);
                     if (buf_src[j]) {
                         samples_src[j] = buffer_locksamples(buf_src[j]);
                         if (samples_src[j]) {
@@ -1139,7 +1174,7 @@ void *weaver_consolidate_worker(t_weaver *x) {
 
                 for (int j = 0; j < 2; j++) {
                     if (samples_src[j]) {
-                        double src_ms = offset[j] + (v_current_ms - (last_bar_idx * bar_len));
+                        double src_ms = dict_offset[j] + (v_current_ms - trigger_ms[j]);
                         f_src[j] = (long long)round(src_ms * sr_src[j] / 1000.0);
                         if (f_src[j] >= 0 && f_src[j] < n_frames_src[j]) {
                             for (int c = 0; c < n_chans_src[j]; c++) {
@@ -1177,14 +1212,11 @@ void *weaver_consolidate_worker(t_weaver *x) {
             }
 
             current_frame += frames_to_process;
+            last_track_ramp_ms = track_ramp_ms;
         }
 
-        buffer_edit_end(dest_buf, 1);
         buffer_unlocksamples(dest_buf);
         buffer_setdirty(dest_buf);
-
-        object_free(src_refs[0]);
-        object_free(src_refs[1]);
 
         weaver_log(x, "Stem %ld: consolidation complete", t_idx + 1);
     }
