@@ -123,6 +123,7 @@ typedef struct _weaver t_weaver;
 
 void *weaver_consolidate_worker(t_weaver_consolidate_job *job);
 t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref);
+t_symbol *trim_symbol(t_symbol *s);
 
 typedef struct _weaver {
     t_pxobject t_obj;
@@ -190,21 +191,76 @@ void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate,
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void weaver_audio_qtask(t_weaver *x);
 
+t_symbol *trim_symbol(t_symbol *s) {
+    if (!s || !s->s_name) return s;
+    const char *str = s->s_name;
+    while (isspace((unsigned char)*str)) str++;
+    if (*str == 0) return gensym("");
+    const char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    char buf[256];
+    size_t len = (end - str) + 1;
+    if (len >= 256) len = 255;
+    strncpy(buf, str, len);
+    buf[len] = '\0';
+    return gensym(buf);
+}
+
 t_buffer_obj *weaver_resolve_buffer_with_kick(t_weaver *x, t_symbol *name, t_buffer_ref **out_ref) {
     if (!name || name == _sym_nothing || name == gensym("-")) return NULL;
 
-    t_buffer_ref *br = buffer_ref_new((t_object *)x, name);
+    t_symbol *trimmed = trim_symbol(name);
+    if (trimmed != name) {
+        object_warn((t_object *)x, "trimmed palette name from '%s' to '%s'", name->s_name, trimmed->s_name);
+        name = trimmed;
+    }
+
+    t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
+    buffer_ref_set(br, name);
     t_buffer_obj *bo = buffer_ref_getobject(br);
 
+    // 1. Try stripping extension if first attempt fails
+    if (!bo && strstr(name->s_name, ".")) {
+        char base[256];
+        strncpy(base, name->s_name, 255);
+        char *dot = strrchr(base, '.');
+        if (dot) {
+            *dot = '\0';
+            t_symbol *s_base = gensym(base);
+            buffer_ref_set(br, s_base);
+            bo = buffer_ref_getobject(br);
+            if (bo) {
+                object_warn((t_object *)x, "found buffer '%s' by stripping extension from '%s'", s_base->s_name, name->s_name);
+                name = s_base;
+            }
+        }
+    }
+
+    // 2. Perform kick if still not found
     if (!bo) {
-        object_warn((t_object *)x, "buffer~ '%s' not found, attempting kick", name->s_name);
+        char hex[512] = "";
+        for(int i=0; i<(int)strlen(name->s_name) && i<120; i++) snprintf(hex+i*3, 4, "%02x ", (unsigned char)name->s_name[i]);
+        object_warn((t_object *)x, "buffer~ '%s' not found (HEX: %s), attempting kick (Context: %p)", name->s_name, hex, x);
+
         buffer_ref_set(br, _sym_nothing);
+        systhread_sleep(2); // very brief pause
         buffer_ref_set(br, name);
         bo = buffer_ref_getobject(br);
     }
 
+    // 3. Last ditch effort: search global namespaces directly
     if (!bo) {
-        object_error((t_object *)x, "buffer~ '%s' still not found after kick", name->s_name);
+        bo = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+        if (!bo) bo = (t_buffer_obj *)object_findregistered(gensym("__buffer__"), name);
+        if (bo) {
+            object_warn((t_object *)x, "buffer~ '%s' found via direct object search after ref failed", name->s_name);
+            // If found directly, we still want to bind the ref to it for lifetime management
+            buffer_ref_set(br, name);
+        }
+    }
+
+    if (!bo) {
+        object_error((t_object *)x, "buffer~ '%s' still not found after kick and search", name->s_name);
         object_free(br);
         return NULL;
     }
@@ -375,6 +431,11 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                     src_bufs[other] = found;
 
                     weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s, Lookup: %s", i, bar_ts, new_palette->s_name, src_bufs[other] ? "FOUND" : "NOT FOUND");
+                    if (!src_bufs[other] && new_palette != gensym("-")) {
+                         char stems_name[64];
+                         snprintf(stems_name, 64, "stems.%ld", i);
+                         object_error((t_object *)x, "Track %ld: lookup failed for palette '%s' and fallback '%s' at bar %.0fms", i, new_palette->s_name, stems_name, bar_ts);
+                    }
 
                     // Lock NEW buffer
                     if (src_bufs[other]) {
@@ -450,6 +511,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
 void weaver_clear_track_states(t_weaver *x);
 void weaver_clear(t_weaver *x);
 void weaver_consolidate(t_weaver *x);
+void weaver_consolidate_deferred(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
 static t_symbol *_sym_dash;
@@ -968,6 +1030,11 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void weaver_consolidate(t_weaver *x) {
+    // Just a placeholder to keep the method table valid if needed,
+    // but weaver_anything now defers directly.
+}
+
+void weaver_consolidate_deferred(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->consolidate_running) {
         object_error((t_object *)x, "consolidate is already running");
         return;
@@ -1172,7 +1239,7 @@ void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     } else if (s == gensym("clear")) {
         weaver_clear(x);
     } else if (s == gensym("consolidate")) {
-        weaver_consolidate(x);
+        defer_low(x, (method)weaver_consolidate_deferred, s, argc, argv);
     } else if (s != x->audio_dict_name) {
         // Inlet 0: Transcript Dictionary Reference
         x->audio_dict_name = s;
