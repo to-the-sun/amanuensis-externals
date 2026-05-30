@@ -250,6 +250,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
             if (!x->triggered_this_bar && x->current_start >= 0.0 && x->current_end >= 0.0) {
                 short is_boundary = 0;
                 double target = (x->last_output_end == 1.0) ? 0.0 : x->last_output_end;
+                if (target > 0.0) target -= 1.0;
 
                 if (floored == floor(target)) {
                     is_boundary = 1;
