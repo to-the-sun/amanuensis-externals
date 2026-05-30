@@ -205,7 +205,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
         }
     }
 
-    weaver_queue_log(x, "Consolidate started. Song length: %.2f ms", song_length);
+    weaver_queue_log(x, "Consolidate started. Song length: %.2f ms, Bar length: %.2f ms", song_length, job->bar_length);
 
     // Process each track
     for (long i = 1; i <= x->max_tracks; i++) {
@@ -244,10 +244,12 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
         }
 
         if (track_length <= 0) {
-            weaver_queue_log(x, "Track %ld: No bars found, skipping", i);
+            weaver_queue_log(x, "Track %ld: No bars found in dictionary, skipping", i);
             object_free(dest_ref);
             continue;
         }
+
+        weaver_queue_log(x, "Track %ld: Length %.2f ms", i, track_length);
 
         float *samples_dest = buffer_locksamples(dest_buf);
         if (!samples_dest) {
@@ -280,7 +282,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             if (x->consolidate_stop) break;
             int current_vector = (s + vector_size > total_samples) ? (int)(total_samples - s) : vector_size;
 
-            // Pre-process vector: lock buffers once
+            // Lock buffers in slots at start of vector
             float *src_samples[2] = {NULL, NULL};
             long long n_frames_src[2] = {0, 0};
             int n_chans_src[2] = {0, 0};
@@ -299,7 +301,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             for (int v = 0; v < current_vector; v++) {
                 long long f_dest = s + v;
                 double vec_ms = (double)f_dest * 1000.0 / sr_dest;
-                double tr_ms = fmod(vec_ms, track_length);
+                double tr_ms = fmod(vec_ms + 0.0001, track_length); // Slight epsilon to avoid fmod issues at boundaries
                 double bar_ts = floor(tr_ms / job->bar_length) * job->bar_length;
 
                 if (bar_ts != last_bar_ts) {
@@ -338,6 +340,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                              char stems_name[64];
                              snprintf(stems_name, 64, "stems.%ld", i);
                              t_symbol *s_stems = gensym(stems_name);
+                             buffer_ref_set(temp_ref, _sym_nothing); // Clear before set to ensure kick
                              buffer_ref_set(temp_ref, s_stems);
                              if (buffer_ref_getobject(temp_ref)) {
                                  new_palette = s_stems;
@@ -350,37 +353,14 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                         object_free(temp_ref);
                     }
 
-                    weaver_queue_log(x, "Track %ld: Processing bar %.0fms (Palette: %s)", i, bar_ts, new_palette->s_name);
-
                     // Apply metadata update logic
                     int active = (int)round(control);
                     int other = 1 - active;
 
-                    // If we have a previous source buffer locked, we need to unlock it before changing pointers
-                    // but we are in the middle of a vector. This is tricky.
-                    // Actually, let's keep the locks for the WHOLE vector for simplicity,
-                    // and just update the src_bufs pointers.
-                    // But if a palette change happens, we might not have the new buffer locked!
-
-                    // A better way: If a palette change happens, finish the current vector up to this sample,
-                    // unlock, update palette, lock again, and continue.
-                    // But for consolidation "as fast as possible", maybe we can just lock ALL
-                    // potential buffers once? No, there are too many.
-
-                    // Simple solution: If a bar change happens, we just accept that the next vector
-                    // will pick up the new buffer. But that's not sample accurate.
-
-                    // Correct solution: When bar_ts changes, we need to handle the new buffer.
-                    // Let's just do the dictionary lookup and palette swap, and if the buffer
-                    // is not locked, we'll just have silence for the rest of this vector?
-                    // No, let's just make the vector size 1 if we want perfect accuracy,
-                    // but that's slow.
-
-                    // How about: we only detect bar changes at the start of a vector.
-                    // 512 samples is only 11ms. In real-time, the qelem/main-thread loop
-                    // already has much more jitter than that.
-                    // So detecting at vector boundaries is probably fine and matches
-                    // the "spirit" of the real-time process.
+                    // Unlock OLD buffer from this slot if it exists
+                    if (src_bufs[other]) {
+                        buffer_unlocksamples(src_bufs[other]);
+                    }
 
                     palette[other] = new_palette;
                     offset[other] = new_offset - vec_ms;
@@ -391,24 +371,23 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                     src_bufs[other] = (palette[other] != _sym_nothing && palette[other] != gensym("-")) ?
                         (t_buffer_obj *)object_findregistered(gensym("buffer"), palette[other]) : NULL;
 
-                    // We need the new samples immediately for the rest of the vector.
+                    weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s, Lookup: %s", i, bar_ts, new_palette->s_name, src_bufs[other] ? "FOUND" : "NOT FOUND");
+
+                    // Lock NEW buffer
                     if (src_bufs[other]) {
                         src_samples[other] = buffer_locksamples(src_bufs[other]);
                         n_frames_src[other] = buffer_getframecount(src_bufs[other]);
                         n_chans_src[other] = buffer_getchannelcount(src_bufs[other]);
                         sr_src[other] = buffer_getsamplerate(src_bufs[other]);
                         if (sr_src[other] <= 0) sr_src[other] = sr_dest;
+
+                        // Debug audio check
+                        if (src_samples[other]) {
+                             weaver_queue_log(x, "Track %ld: First sample of new buffer: %.4f", i, (double)src_samples[other][0]);
+                        }
                     } else {
                         src_samples[other] = NULL;
                     }
-
-                    // We also need to unlock the OLD buffer if it was locked in the vector pre-process,
-                    // otherwise we leak locks. But wait, if we unlock it here, and the next sample
-                    // in this vector tries to use it...
-
-                    // This is getting complicated. Let's stick to the boundary-only detection
-                    // for sample accuracy within ~11ms, or just process in smaller vectors.
-                    // Actually, moving it back outside the inner loop is safer for performance.
                 }
 
                 double max_abs[2] = {0.0, 0.0};
@@ -769,6 +748,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
         critical_new(&x->log_queue.lock);
+        _sym_buffer = gensym("buffer");
         x->log_queue.head = NULL;
         x->log_queue.tail = NULL;
         x->consolidate_running = 0;
