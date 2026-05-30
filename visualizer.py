@@ -134,6 +134,8 @@ def perform_smartloop_analysis():
                         best_E = cur_max_E
 
             if max_dist >= 0:
+                if best_S == 0.0: best_S = 1.0
+                if best_E == 0.0: best_E = 1.0
                 sl_start = best_S
                 sl_end = best_E
                 print(f"DEBUG: Smartloop Local Analysis. Identified Loop: start={best_S:.2f}, end={best_E:.2f}, duration={max_dist:.2f}")

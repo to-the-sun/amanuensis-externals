@@ -13,6 +13,8 @@
 
 		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the first two outlets whenever the audio signal ramp in the first inlet (floored) hits zero or a multiple of the bar length, provided that the signal is moving. If the ramp is stationary, both outlets will output 0.0.
 
+		**Note:** Valid start or end points for a loop that are exactly 0.0 are output as 1.0. This ensures that 0.0 is reserved exclusively for when the time ramp is stationary.
+
 		**Note:** Bars with negative timestamps are artificially ignored in all calculations (averaging, global average calculation, and loop identification) as if they did not exist.
 
 		Temporal analysis requires the `bar_length` metadata, which is retrieved from an external `buffer~` named **bar**. If the buffer is not found, the object will periodically attempt to re-bind to it ("kick the reference").
@@ -33,11 +35,11 @@
 	<outletlist>
 		<outlet id="1" type="float">
 			<digest>Outlet 1: Start of longest below average interval (ms)</digest>
-			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars.</description>
+			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars. If the valid start point is 0.0, it is output as 1.0 to distinguish it from the stationary ramp state (0.0).</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: End of longest below average interval (ms)</digest>
-			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars.</description>
+			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars. If the valid end point is 0.0, it is output as 1.0 to distinguish it from the stationary ramp state (0.0).</description>
 		</outlet>
 		<outlet id="3" type="anything">
 			<digest>Outlet 3: Logging (Optional)</digest>
