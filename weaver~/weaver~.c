@@ -124,6 +124,8 @@ typedef struct _weaver {
     int log_tail;
     t_critical log_lock;
     void *log_qelem;
+
+    t_hashtab *buffer_map;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -423,6 +425,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_head = 0;
         x->log_tail = 0;
         x->track_states = hashtab_new(0);
+        x->buffer_map = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
         // 2. Create outlets (before any logging happens)
@@ -491,6 +494,7 @@ void weaver_free(t_weaver *x) {
     }
     weaver_clear_track_states(x);
     if (x->track_states) object_free(x->track_states);
+    if (x->buffer_map) object_free(x->buffer_map);
     if (x->lock) critical_free(x->lock);
     if (x->log_lock) critical_free(x->log_lock);
 }
@@ -959,14 +963,74 @@ void weaver_consolidate(t_weaver *x) {
         return;
     }
 
+    // Pre-resolve all potential buffers from the main thread
+    hashtab_clear(x->buffer_map);
+
+    // 1. Resolve all stems.N fallback buffers based on track cache
+    for (long i = 0; i < x->track_cache_count; i++) {
+        char stems_name[64];
+        snprintf(stems_name, 64, "stems.%ld", i + 1);
+        t_symbol *s_stems = gensym(stems_name);
+        t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
+        t_buffer_obj *stems_obj = buffer_ref_getobject(stems_ref);
+        if (stems_obj) hashtab_store(x->buffer_map, s_stems, (t_object *)stems_obj);
+        object_free(stems_ref);
+    }
+
+    // 2. Scan dictionary for explicit palette names
+    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
+    if (dict) {
+        t_symbol **track_keys = NULL;
+        long num_tracks = 0;
+        dictionary_getkeys(dict, &num_tracks, &track_keys);
+
+        for (long i = 0; i < num_tracks; i++) {
+            t_symbol *track_sym = track_keys[i];
+            t_dictionary *track_dict = NULL;
+            dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
+            if (!track_dict) continue;
+
+            t_symbol **bar_keys = NULL;
+            long num_bars = 0;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+            for (long j = 0; j < num_bars; j++) {
+                t_symbol *bar_sym = bar_keys[j];
+                t_dictionary *bar_dict = NULL;
+                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                if (!bar_dict) continue;
+
+                t_symbol *palette = _sym_nothing;
+                t_atom p_atom;
+                t_atomarray *palette_aa = NULL;
+                if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                    if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
+                } else if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) {
+                    palette = atom_getsym(&p_atom);
+                }
+
+                if (palette != _sym_nothing && palette != gensym("-") && !hashtab_lookup(x->buffer_map, palette, NULL)) {
+                    t_buffer_ref *pref = buffer_ref_new((t_object *)x, palette);
+                    t_buffer_obj *pobj = buffer_ref_getobject(pref);
+                    if (pobj) hashtab_store(x->buffer_map, palette, (t_object *)pobj);
+                    object_free(pref);
+                }
+            }
+            if (bar_keys) sysmem_freeptr(bar_keys);
+        }
+        if (track_keys) sysmem_freeptr(track_keys);
+        dictobj_release(dict);
+    }
+
     x->consolidate_busy = 1;
     weaver_log(x, "Starting background consolidation process...");
     systhread_create((method)weaver_consolidate_worker, x, 0, 0, 0, &x->consolidate_thread);
 }
 
-t_buffer_obj *weaver_resolve_buffer(t_symbol *name) {
+t_buffer_obj *weaver_resolve_buffer(t_weaver *x, t_symbol *name) {
     if (!name || name == _sym_nothing || name == gensym("-")) return NULL;
-    t_buffer_obj *b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+    t_buffer_obj *b = NULL;
+    hashtab_lookup(x->buffer_map, name, (t_object **)&b);
     return b;
 }
 
@@ -1002,20 +1066,12 @@ void *weaver_consolidate_worker(t_weaver *x) {
         double sr_dest = buffer_getsamplerate(dest_buf);
         if (sr_dest <= 0) sr_dest = sys_getsr();
 
-        float *samples_dest = buffer_locksamples(dest_buf);
-        if (!samples_dest) {
-            weaver_log(x, "Stem %ld: could not lock destination buffer, skipping.", t_idx + 1);
+        float *temp_samples = (float *)sysmem_newptr(n_frames_dest * n_chans_dest * sizeof(float));
+        if (!temp_samples) {
+            weaver_log(x, "Stem %ld: could not allocate temporary buffer, skipping.", t_idx + 1);
             continue;
         }
-
-        char stems_name[64];
-        snprintf(stems_name, 64, "stems.%ld", t_idx + 1);
-        t_symbol *s_stems = gensym(stems_name);
-        int is_self_src = (weaver_resolve_buffer(s_stems) == dest_buf);
-
-        if (!is_self_src) {
-            memset(samples_dest, 0, (size_t)n_frames_dest * n_chans_dest * sizeof(float));
-        }
+        memset(temp_samples, 0, n_frames_dest * n_chans_dest * sizeof(float));
 
         t_crossfade_state xf;
         crossfade_init(&xf, sr_dest, x->low_ms, x->high_ms);
@@ -1023,7 +1079,6 @@ void *weaver_consolidate_worker(t_weaver *x) {
         t_symbol *palette[2] = { _sym_dash, _sym_dash };
         double dict_offset[2] = { -1.0, -1.0 };
         double control = 0.0;
-        double last_control = 0.0;
 
         long long limit_frames = n_frames_dest;
 
@@ -1032,6 +1087,10 @@ void *weaver_consolidate_worker(t_weaver *x) {
         xf.elapsed = 0;
         double trigger_ms[2] = { 0.0, 0.0 };
         double last_track_ramp_ms = -1.0;
+
+        char tstr[64];
+        snprintf(tstr, 64, "%ld", t_idx + 1);
+        t_symbol *track_sym = gensym(tstr);
 
         while (current_frame < limit_frames) {
             double current_ms = (double)current_frame * 1000.0 / sr_dest;
@@ -1072,11 +1131,7 @@ void *weaver_consolidate_worker(t_weaver *x) {
                 double new_offset = 0.0;
                 t_symbol *new_bar_symbol = _sym_nothing;
 
-                char tstr[64];
-                snprintf(tstr, 64, "%ld", t_idx + 1);
-                t_symbol *track_sym = gensym(tstr);
                 t_dictionary *track_dict = NULL;
-
                 if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
                     t_dictionary *bar_dict = NULL;
                     if (dictionary_getdictionary(track_dict, bar_key_sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
@@ -1100,15 +1155,15 @@ void *weaver_consolidate_worker(t_weaver *x) {
                         // Check if palette exists, fallback to stems.N
                         int palette_exists = 0;
                         if (new_palette != _sym_nothing && new_palette != _sym_dash) {
-                            if (weaver_resolve_buffer(new_palette)) palette_exists = 1;
+                            if (weaver_resolve_buffer(x, new_palette)) palette_exists = 1;
                         }
 
                         if (!palette_exists) {
-                            char stems_name[64];
-                            snprintf(stems_name, 64, "stems.%ld", t_idx + 1);
-                            t_symbol *s_stems = gensym(stems_name);
-                            if (weaver_resolve_buffer(s_stems)) {
-                                new_palette = s_stems;
+                            char local_stems_name[64];
+                            snprintf(local_stems_name, 64, "stems.%ld", t_idx + 1);
+                            t_symbol *s_local_stems = gensym(local_stems_name);
+                            if (weaver_resolve_buffer(x, s_local_stems)) {
+                                new_palette = s_local_stems;
                                 new_offset = 0.0;
                             } else {
                                 new_palette = _sym_dash;
@@ -1119,14 +1174,18 @@ void *weaver_consolidate_worker(t_weaver *x) {
                 }
 
                 int active = (int)round(control);
-                int other = 1 - active;
-                palette[other] = new_palette;
-                dict_offset[other] = new_offset;
-                trigger_ms[other] = current_ms;
-                control = (double)other;
-                xf.direction = control - last_control;
+                int change = (new_palette != palette[active] || new_offset != dict_offset[active] || new_bar_symbol == _sym_0);
+
+                if (change) {
+                    int other = 1 - active;
+                    palette[other] = new_palette;
+                    dict_offset[other] = new_offset;
+                    trigger_ms[other] = current_ms;
+                    control = (double)other;
+                    xf.direction = control - xf.last_control;
+                    xf.elapsed = 0;
+                }
                 last_bar_idx = bar_idx;
-                xf.elapsed = 0; // Force reset of crossfade timing on every bar hit
             }
 
             // Determine how many frames we can process with current buffers
@@ -1152,7 +1211,7 @@ void *weaver_consolidate_worker(t_weaver *x) {
 
             for (int j = 0; j < 2; j++) {
                 if (palette[j] != _sym_nothing && palette[j] != _sym_dash) {
-                    buf_src[j] = weaver_resolve_buffer(palette[j]);
+                    buf_src[j] = weaver_resolve_buffer(x, palette[j]);
                     if (buf_src[j]) {
                         samples_src[j] = buffer_locksamples(buf_src[j]);
                         if (samples_src[j]) {
@@ -1200,10 +1259,10 @@ void *weaver_consolidate_worker(t_weaver *x) {
                     if (samples_src[1] && f_src[1] >= 0 && f_src[1] < n_frames_src[1] && c < n_chans_src[1]) {
                         mix2 = (double)samples_src[1][f_src[1] * n_chans_src[1] + c] * f2;
                     }
-                    samples_dest[f * n_chans_dest + c] = (float)(mix1 + mix2);
+                    temp_samples[f * n_chans_dest + c] = (float)(mix1 + mix2);
                 }
 
-                last_control = control;
+                xf.last_control = control;
                 xf.elapsed++;
             }
 
@@ -1215,8 +1274,15 @@ void *weaver_consolidate_worker(t_weaver *x) {
             last_track_ramp_ms = track_ramp_ms;
         }
 
-        buffer_unlocksamples(dest_buf);
-        buffer_setdirty(dest_buf);
+        float *samples_dest = buffer_locksamples(dest_buf);
+        if (samples_dest) {
+            memcpy(samples_dest, temp_samples, (size_t)n_frames_dest * n_chans_dest * sizeof(float));
+            buffer_unlocksamples(dest_buf);
+            buffer_setdirty(dest_buf);
+        } else {
+            weaver_log(x, "Stem %ld: final write failed (buffer locked).", t_idx + 1);
+        }
+        sysmem_freeptr(temp_samples);
 
         weaver_log(x, "Stem %ld: consolidation complete", t_idx + 1);
     }
