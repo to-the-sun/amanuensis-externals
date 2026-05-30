@@ -307,23 +307,21 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                             new_offset = atom_getfloat(&o_atom);
                         }
 
-                        // Fallback check
-                        t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, new_palette);
-                        if (!buffer_ref_getobject(temp_ref)) {
-                             char stems_name[64];
-                             snprintf(stems_name, 64, "stems.%ld", i);
-                             t_symbol *s_stems = gensym(stems_name);
-                             buffer_ref_set(temp_ref, _sym_nothing); // Clear before set to ensure kick
-                             buffer_ref_set(temp_ref, s_stems);
-                             if (buffer_ref_getobject(temp_ref)) {
-                                 new_palette = s_stems;
-                                 new_offset = 0.0;
-                             } else {
-                                 new_palette = gensym("-");
-                                 new_offset = 0.0;
-                             }
+                        // Fallback check in lookup table
+                        if (new_palette != gensym("-")) {
+                            if (hashtab_lookup(job->palette_lookup, new_palette, NULL) != MAX_ERR_NONE) {
+                                 char stems_name[64];
+                                 snprintf(stems_name, 64, "stems.%ld", i);
+                                 t_symbol *s_stems = gensym(stems_name);
+                                 if (hashtab_lookup(job->palette_lookup, s_stems, NULL) == MAX_ERR_NONE) {
+                                     new_palette = s_stems;
+                                     new_offset = 0.0;
+                                 } else {
+                                     new_palette = gensym("-");
+                                     new_offset = 0.0;
+                                 }
+                            }
                         }
-                        object_free(temp_ref);
                     }
 
                     // Apply metadata update logic
@@ -1008,21 +1006,27 @@ void weaver_consolidate(t_weaver *x) {
                                 t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
                                 buffer_ref_set(br, palette); // Kick
                                 t_buffer_obj *bo = buffer_ref_getobject(br);
-                                if (!bo) {
-                                    // Fallback
-                                    char stems_name[64];
-                                    snprintf(stems_name, 64, "stems.%ld", track_id);
-                                    t_symbol *s_stems = gensym(stems_name);
-                                    buffer_ref_set(br, _sym_nothing);
-                                    buffer_ref_set(br, s_stems);
-                                    bo = buffer_ref_getobject(br);
-                                    if (bo) palette = s_stems;
-                                }
                                 if (bo) {
                                     hashtab_store(job->palette_lookup, palette, (t_object *)bo);
                                     hashtab_store(job->palette_refs, palette, (t_object *)br);
                                 } else {
                                     object_free(br);
+                                }
+                            }
+
+                            // Always also ensure fallback stems buffer is resolved for this track
+                            char stems_name[64];
+                            snprintf(stems_name, 64, "stems.%ld", track_id);
+                            t_symbol *s_stems = gensym(stems_name);
+                            if (hashtab_lookup(job->palette_lookup, s_stems, NULL) != MAX_ERR_NONE) {
+                                t_buffer_ref *br_stems = buffer_ref_new((t_object *)x, _sym_nothing);
+                                buffer_ref_set(br_stems, s_stems);
+                                t_buffer_obj *bo_stems = buffer_ref_getobject(br_stems);
+                                if (bo_stems) {
+                                    hashtab_store(job->palette_lookup, s_stems, (t_object *)bo_stems);
+                                    hashtab_store(job->palette_refs, s_stems, (t_object *)br_stems);
+                                } else {
+                                    object_free(br_stems);
                                 }
                             }
                         }
