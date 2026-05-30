@@ -565,6 +565,8 @@ void smartloop_tick(t_smartloop *x) {
     }
 
     if (max_dist >= 0.0) {
+        if (best_S == 0.0) best_S = 1.0;
+        if (best_E == 0.0) best_E = 1.0;
         smartloop_log(x, "Loop identified: start=%.2f, end=%.2f, duration=%.2f", best_S, best_E, max_dist);
         x->current_start = best_S;
         x->current_end = best_E;
