@@ -314,8 +314,6 @@ def process_packet(text, client_sock=None):
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
-            print(f"DEBUG: Processing 'crucible' packet. Keys: {list(pkt.keys())}", flush=True)
-
             with state_lock:
                 new_bl = pkt.get("bar_length")
 
