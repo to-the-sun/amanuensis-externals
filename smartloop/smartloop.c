@@ -176,7 +176,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->current_start = -1.0;
         x->current_end = -1.0;
-        x->last_output_end = -1.0;
+        x->last_output_end = 0.0;
         x->last_floored_ramp = -1.0;
         x->cached_bar_length = 0;
         x->last_val = -1.0;
@@ -249,20 +249,10 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
 
             if (!x->triggered_this_bar && x->current_start >= 0.0 && x->current_end >= 0.0) {
                 short is_boundary = 0;
+                double target = (x->last_output_end == 1.0) ? 0.0 : x->last_output_end;
 
-                if (x->last_output_end > 0.0) {
-                    double target = (x->last_output_end == 1.0) ? 0.0 : x->last_output_end;
-                    if (floored == floor(target)) {
-                        is_boundary = 1;
-                    }
-                } else {
-                    if (bl > 0) {
-                        if (floored == 0 || (long)floored % bl == 0) {
-                            is_boundary = 1;
-                        }
-                    } else if (floored == 0) {
-                        is_boundary = 1;
-                    }
+                if (floored == floor(target)) {
+                    is_boundary = 1;
                 }
 
                 if (is_boundary) {

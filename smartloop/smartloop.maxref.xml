@@ -11,7 +11,7 @@
 		3. Timestamps with an averaged rating &gt; global average are considered **above average**.
 		4. Timestamps with an averaged rating &lt;= global average are considered **below average**.
 
-		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the first two outlets whenever the audio signal ramp in the first inlet (floored) hits the last output endpoint for the loop, provided that the signal is moving. If no loop has been output yet, it triggers at zero or a multiple of the bar length. If the ramp is stationary, both outlets will output 0.0.
+		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the first two outlets whenever the audio signal ramp in the first inlet (floored) hits the last output endpoint for the loop, provided that the signal is moving. Initially, this endpoint is 0.0, so the first loop points are released when the ramp moves from zero. If the ramp is stationary, both outlets will output 0.0.
 
 		**Note:** Valid start or end points for a loop that are exactly 0.0 are output as 1.0. This ensures that 0.0 is reserved exclusively for when the time ramp is stationary.
 
@@ -28,7 +28,7 @@
 	<inletlist>
 		<inlet id="1" type="signal/anything">
 			<digest>Inlet 1: (signal) Time Ramp / (messages) debug</digest>
-			<description>Accepts an audio signal time ramp. When the floored value of this ramp hits the last output endpoint for the loop, the object outputs the current loop boundaries, provided the ramp value is actually moving. If no loop has been output yet, it triggers when the ramp hits zero or a multiple of the bar length. This two-part release mechanism ensures that points are only released when the signal moves. If the ramp is stationary, the object outputs 0.0 from each loop point outlet. Also accepts the 'debug' message.</description>
+			<description>Accepts an audio signal time ramp. When the floored value of this ramp hits the last output endpoint for the loop, the object outputs the current loop boundaries, provided the ramp value is actually moving. Initially, this endpoint is 0.0, so the first loop points are released when the ramp moves from zero. This two-part release mechanism ensures that points are only released when the signal moves. If the ramp is stationary, the object outputs 0.0 from each loop point outlet. Also accepts the 'debug' message.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
