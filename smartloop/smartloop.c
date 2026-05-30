@@ -26,12 +26,9 @@ typedef struct _smartloop {
     long visualize;
     double current_start;
     double current_end;
-    double last_output_end;
-    double last_floored_ramp;
     long cached_bar_length;
     void *qelem;
     double last_val;
-    long triggered_this_bar;
     long triggered_zero;
     long output_zero;
     long first_sample;
@@ -176,11 +173,8 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->current_start = -1.0;
         x->current_end = -1.0;
-        x->last_output_end = 0.0;
-        x->last_floored_ramp = -1.0;
         x->cached_bar_length = 0;
         x->last_val = -1.0;
-        x->triggered_this_bar = 0;
         x->triggered_zero = 0;
         x->output_zero = 0;
         x->first_sample = 1;
@@ -205,11 +199,9 @@ void smartloop_qfn(t_smartloop *x) {
         outlet_float(x->out_end, 0.0);
         outlet_float(x->out_start, 0.0);
         x->output_zero = 0;
-        x->last_output_end = 0.0;
     } else {
         outlet_float(x->out_end, x->current_end);
         outlet_float(x->out_start, x->current_start);
-        x->last_output_end = x->current_end;
     }
 }
 
@@ -219,15 +211,12 @@ void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double sampl
 
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
-    long bl = x->cached_bar_length;
 
     for (int i = 0; i < sampleframes; i++) {
         double val = in[i];
-        double floored = floor(val);
 
         if (x->first_sample) {
             x->last_val = val;
-            x->last_floored_ramp = floored;
             x->first_sample = 0;
             continue;
         }
@@ -242,24 +231,8 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
             x->triggered_zero = 0;
             x->output_zero = 0;
 
-            if (floored != x->last_floored_ramp) {
-                x->triggered_this_bar = 0;
-                x->last_floored_ramp = floored;
-            }
-
-            if (!x->triggered_this_bar && x->current_start >= 0.0 && x->current_end >= 0.0) {
-                short is_boundary = 0;
-                double target = (x->last_output_end == 1.0) ? 0.0 : x->last_output_end;
-                if (target > 0.0) target -= 1.0;
-
-                if (floored == floor(target)) {
-                    is_boundary = 1;
-                }
-
-                if (is_boundary) {
-                    qelem_set(x->qelem);
-                    x->triggered_this_bar = 1;
-                }
+            if (val < x->last_val && x->current_start >= 0.0 && x->current_end >= 0.0) {
+                qelem_set(x->qelem);
             }
         }
         x->last_val = val;
@@ -360,7 +333,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp (output on move at last endpoint, 0.0 if stationary) / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp (output on move when looping left, 0.0 if stationary) / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
