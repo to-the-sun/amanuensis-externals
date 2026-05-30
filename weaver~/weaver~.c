@@ -81,13 +81,15 @@ typedef struct _weaver_track {
 
 typedef enum {
     WEAVER_LOG_MSG,
-    WEAVER_LOG_DIRTY
+    WEAVER_LOG_DIRTY,
+    WEAVER_LOG_FINISH
 } t_weaver_log_type;
 
 typedef struct _weaver_log_entry {
     t_weaver_log_type type;
     char message[256];
     t_buffer_obj *buffer;
+    void *job;
     struct _weaver_log_entry *next;
 } t_weaver_log_entry;
 
@@ -111,6 +113,7 @@ typedef struct _weaver_consolidate_job {
     double low_ms;
     double high_ms;
     t_hashtab *palette_lookup;
+    t_hashtab *palette_refs;
     t_weaver_consolidate_track_data tracks[MAX_WEAVER_TRACKS + 1];
     long num_tracks;
 } t_weaver_consolidate_job;
@@ -175,6 +178,7 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_dirty(t_weaver *x, t_buffer_obj *b);
+void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job);
 void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
@@ -410,8 +414,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     dictobj_release(dict);
     weaver_queue_log(x, "Consolidate finished");
     x->consolidate_running = 0;
-    if (job->palette_lookup) object_free(job->palette_lookup);
-    sysmem_freeptr(job);
+    weaver_queue_finish(x, job);
     return NULL;
 }
 t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
@@ -560,6 +563,27 @@ void weaver_queue_dirty(t_weaver *x, t_buffer_obj *b) {
     if (entry) {
         entry->type = WEAVER_LOG_DIRTY;
         entry->buffer = b;
+        entry->job = NULL;
+        entry->next = NULL;
+        critical_enter(x->log_queue.lock);
+        if (x->log_queue.tail) {
+            x->log_queue.tail->next = entry;
+            x->log_queue.tail = entry;
+        } else {
+            x->log_queue.head = entry;
+            x->log_queue.tail = entry;
+        }
+        critical_exit(x->log_queue.lock);
+        qelem_set(x->audio_qelem);
+    }
+}
+
+void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job) {
+    t_weaver_log_entry *entry = (t_weaver_log_entry *)sysmem_newptr(sizeof(t_weaver_log_entry));
+    if (entry) {
+        entry->type = WEAVER_LOG_FINISH;
+        entry->buffer = NULL;
+        entry->job = job;
         entry->next = NULL;
         critical_enter(x->log_queue.lock);
         if (x->log_queue.tail) {
@@ -932,6 +956,8 @@ void weaver_consolidate(t_weaver *x) {
         return;
     }
 
+    weaver_check_attachments(x);
+
     t_weaver_consolidate_job *job = (t_weaver_consolidate_job *)sysmem_newptr(sizeof(t_weaver_consolidate_job));
     if (job) {
         memset(job, 0, sizeof(t_weaver_consolidate_job));
@@ -942,6 +968,7 @@ void weaver_consolidate(t_weaver *x) {
         job->low_ms = x->low_ms;
         job->high_ms = x->high_ms;
         job->palette_lookup = hashtab_new(0);
+        job->palette_refs = hashtab_new(0);
         job->num_tracks = x->max_tracks;
 
         // Determine lengths and unique palettes
@@ -978,19 +1005,25 @@ void weaver_consolidate(t_weaver *x) {
 
                         if (palette != _sym_nothing && palette != gensym("-")) {
                             if (hashtab_lookup(job->palette_lookup, palette, NULL) != MAX_ERR_NONE) {
-                                t_buffer_ref *br = buffer_ref_new((t_object *)x, palette);
+                                t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
+                                buffer_ref_set(br, palette); // Kick
                                 t_buffer_obj *bo = buffer_ref_getobject(br);
                                 if (!bo) {
                                     // Fallback
                                     char stems_name[64];
                                     snprintf(stems_name, 64, "stems.%ld", track_id);
                                     t_symbol *s_stems = gensym(stems_name);
+                                    buffer_ref_set(br, _sym_nothing);
                                     buffer_ref_set(br, s_stems);
                                     bo = buffer_ref_getobject(br);
                                     if (bo) palette = s_stems;
                                 }
-                                if (bo) hashtab_store(job->palette_lookup, palette, (t_object *)bo);
-                                object_free(br);
+                                if (bo) {
+                                    hashtab_store(job->palette_lookup, palette, (t_object *)bo);
+                                    hashtab_store(job->palette_refs, palette, (t_object *)br);
+                                } else {
+                                    object_free(br);
+                                }
                             }
                         }
                     }
@@ -1008,9 +1041,16 @@ void weaver_consolidate(t_weaver *x) {
         for (long i = 1; i <= job->num_tracks; i++) {
             char bufname[256];
             snprintf(bufname, 256, "%s.%ld", job->poly_prefix->s_name, i);
-            t_buffer_ref *br = buffer_ref_new((t_object *)x, gensym(bufname));
-            job->tracks[i].dest_buf = buffer_ref_getobject(br);
-            object_free(br);
+            t_symbol *s_bufname = gensym(bufname);
+            t_buffer_ref *br = buffer_ref_new((t_object *)x, _sym_nothing);
+            buffer_ref_set(br, s_bufname);
+            t_buffer_obj *bo = buffer_ref_getobject(br);
+            job->tracks[i].dest_buf = bo;
+            if (bo) {
+                 hashtab_store(job->palette_refs, s_bufname, (t_object *)br);
+            } else {
+                 object_free(br);
+            }
         }
 
         dictobj_release(dict);
@@ -1369,6 +1409,24 @@ void weaver_audio_qtask(t_weaver *x) {
             weaver_log(x, "%s", log_entry->message);
         } else if (log_entry->type == WEAVER_LOG_DIRTY) {
             if (log_entry->buffer) buffer_setdirty(log_entry->buffer);
+        } else if (log_entry->type == WEAVER_LOG_FINISH) {
+            t_weaver_consolidate_job *job = (t_weaver_consolidate_job *)log_entry->job;
+            if (job) {
+                if (job->palette_lookup) object_free(job->palette_lookup);
+                if (job->palette_refs) {
+                    long num_items = 0;
+                    t_symbol **keys = NULL;
+                    hashtab_getkeys(job->palette_refs, &num_items, &keys);
+                    for (long i = 0; i < num_items; i++) {
+                        t_buffer_ref *br = NULL;
+                        hashtab_lookup(job->palette_refs, keys[i], (t_object **)&br);
+                        if (br) object_free(br);
+                    }
+                    if (keys) sysmem_freeptr(keys);
+                    object_free(job->palette_refs);
+                }
+                sysmem_freeptr(job);
+            }
         }
         t_weaver_log_entry *next = log_entry->next;
         sysmem_freeptr(log_entry);
