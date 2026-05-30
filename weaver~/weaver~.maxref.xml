@@ -58,6 +58,10 @@
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
+		<method name="consolidate">
+			<digest>Perform offline weaving for all stems</digest>
+			<description>Processes every bar of every track as fast as possible in a background thread, overwriting the audio in the referenced polybuffer's stem buffers with the woven result. Status messages are sent to the log outlet for each stem.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
