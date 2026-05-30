@@ -51,6 +51,10 @@
 			<digest>Reset the object to its initial state</digest>
 			<description>Resets all track lengths to 0 and clears the internal state, effectively stopping all audio weaving until new track lengths and data are received.</description>
 		</method>
+		<method name="consolidate">
+			<digest>Process all stems offline</digest>
+			<description>Runs each stem buffer in the referenced polybuffer~ through the same weaving process that would be done in real-time, for the full list of bars on the associated track, in faster than real-time, overwriting the existing audio in that stem buffer. Sends verbose logging messages to the second outlet.</description>
+		</method>
 		<method name="list">
 			<digest>Update individual track lengths</digest>
 			<description>Accepts a two-item list [track_id, length] on the second inlet to set the loop length for a specific track in milliseconds.</description>
