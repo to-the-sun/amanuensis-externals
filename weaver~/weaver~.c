@@ -153,6 +153,8 @@ void weaver_kick_qtask(t_weaver *x);
 t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 double weaver_get_bar_length(t_weaver *x);
+t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
+void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
 void weaver_check_attachments(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -169,18 +171,14 @@ void weaver_consolidate(t_weaver *x) {
         return;
     }
 
+    weaver_check_attachments(x);
+
     t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
     if (!dict) {
         object_error((t_object *)x, "consolidate: transcript dictionary '%s' not found", x->audio_dict_name->s_name);
         return;
     }
     dictobj_release(dict);
-
-    t_buffer_obj *bar_buf = buffer_ref_getobject(x->bar_buffer_ref);
-    if (!bar_buf) {
-        object_error((t_object *)x, "consolidate: bar buffer not found");
-        return;
-    }
 
     x->consolidate_stop = 0;
     x->is_consolidating = 1;
@@ -358,8 +356,8 @@ void *weaver_consolidate_thread(t_weaver *x) {
                     if (pending_palette != gensym("-") && pending_palette != _sym_nothing) {
                         t_buffer_obj *p_buf = weaver_find_buffer_robust(x, pending_palette, t + 1, seen_warns);
                         if (!p_buf) {
-                            char fallback_name[64];
-                            snprintf(fallback_name, 64, "stems.%d", t + 1);
+                            char fallback_name[256];
+                            snprintf(fallback_name, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
                             pending_palette = gensym(fallback_name);
                             pending_offset = 0.0;
                         }
@@ -467,19 +465,6 @@ void *weaver_consolidate_thread(t_weaver *x) {
     weaver_consolidate_log(x, "Consolidation finished.");
     return NULL;
 }
-t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
-void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
-void weaver_log(t_weaver *x, const char *fmt, ...);
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
-void weaver_check_attachments(t_weaver *x);
-double weaver_get_bar_length(t_weaver *x);
-void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
-void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
-void weaver_audio_qtask(t_weaver *x);
-t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id);
-void weaver_clear_track_states(t_weaver *x);
-void weaver_clear(t_weaver *x);
-void weaver_update_track_cache(t_weaver *x);
 static t_class *weaver_class;
 static t_symbol *_sym_dash;
 static t_symbol *_sym_0;
@@ -649,15 +634,46 @@ void weaver_kick_qtask(t_weaver *x) {
         t_symbol *name = x->kick_queue[x->kick_head];
         x->kick_head = (x->kick_head + 1) % 256;
 
-        t_buffer_ref *ref = buffer_ref_new((t_object *)x, name);
-        buffer_ref_set(ref, _sym_nothing);
-        buffer_ref_set(ref, name);
-        object_free(ref);
+        if (name == gensym("bar")) {
+            buffer_ref_set(x->bar_buffer_ref, name);
+        } else {
+            int found_dest = 0;
+            for (int i = 0; i < x->max_tracks; i++) {
+                char bufname[256];
+                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i + 1);
+                if (name == gensym(bufname)) {
+                    t_weaver_track *tr = weaver_get_track_state(x, i + 1);
+                    if (tr) buffer_ref_set(tr->dest_ref, name);
+                    found_dest = 1;
+                    break;
+                }
+            }
+            if (!found_dest) {
+                t_buffer_ref *ref = buffer_ref_new((t_object *)x, name);
+                buffer_ref_set(ref, _sym_nothing);
+                buffer_ref_set(ref, name);
+                object_free(ref);
+            }
+        }
     }
 }
 
 t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns) {
-    t_buffer_obj *b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+    t_buffer_obj *b = NULL;
+
+    // Check object's own refs first
+    if (name == gensym("bar")) {
+        b = buffer_ref_getobject(x->bar_buffer_ref);
+    } else {
+        char bufname[256];
+        snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, track_id);
+        if (name == gensym(bufname)) {
+            t_weaver_track *tr = weaver_get_track_state(x, track_id);
+            if (tr) b = buffer_ref_getobject(tr->dest_ref);
+        }
+    }
+
+    if (!b) b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
 
     if (!b) {
         long val = 0;
@@ -667,7 +683,19 @@ t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_i
             object_warn((t_object *)x, "consolidate: buffer '%s' (Track %d) not found, attempting kick", name->s_name, track_id);
             weaver_kick_buffer(x, name);
             systhread_sleep(20);
-            b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+
+            // Re-check
+            if (name == gensym("bar")) {
+                b = buffer_ref_getobject(x->bar_buffer_ref);
+            } else {
+                char bufname[256];
+                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, track_id);
+                if (name == gensym(bufname)) {
+                    t_weaver_track *tr = weaver_get_track_state(x, track_id);
+                    if (tr) b = buffer_ref_getobject(tr->dest_ref);
+                }
+            }
+            if (!b) b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
 
             if (!b) {
                 object_error((t_object *)x, "consolidate: buffer '%s' (Track %d) still not found after kick", name->s_name, track_id);
