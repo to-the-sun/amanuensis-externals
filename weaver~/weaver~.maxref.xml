@@ -43,9 +43,13 @@
 	</objarglist>
 	<!--MESSAGES-->
 	<methodlist>
-		<method name="anything">
-			<digest>Change transcript dictionary or set maximum tracks</digest>
-			<description>Accepts a symbol to change the name of the transcript dictionary being referenced. Also accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
+		<method name="tracks">
+			<digest>Set maximum tracks</digest>
+			<description>Accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
+		</method>
+		<method name="consolidate">
+			<digest>Offline background consolidation</digest>
+			<description>Triggers a faster-than-real-time consolidation of all tracks in the background. Pauses real-time processing until finished.</description>
 		</method>
 		<method name="clear">
 			<digest>Reset the object to its initial state</digest>

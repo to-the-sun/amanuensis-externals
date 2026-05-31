@@ -112,6 +112,16 @@ typedef struct _weaver {
     double high_ms;
 
     double last_viz_check_ms;
+
+    // Consolidation
+    long is_consolidating;
+    long consolidate_stop;
+    t_systhread consolidate_thread;
+    t_critical log_lock;
+    char log_queue[8192];
+    t_qelem *log_qelem;
+    t_qelem *dirty_qelem;
+    int dirty_tracks[MAX_WEAVER_TRACKS];
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -125,7 +135,275 @@ int compare_doubles(const void *a, const void *b) {
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
-void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
+void weaver_tracks(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
+void weaver_consolidate(t_weaver *x);
+void *weaver_consolidate_thread(t_weaver *x);
+void weaver_consolidate_log(t_weaver *x, const char *fmt, ...);
+void weaver_log_qtask(t_weaver *x);
+void weaver_dirty_qtask(t_weaver *x);
+void weaver_log(t_weaver *x, const char *fmt, ...);
+double weaver_get_bar_length(t_weaver *x);
+
+void weaver_consolidate(t_weaver *x) {
+    if (x->is_consolidating) {
+        weaver_log(x, "consolidation already in progress");
+        return;
+    }
+
+    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
+    if (!dict) {
+        object_error((t_object *)x, "consolidate: transcript dictionary '%s' not found", x->audio_dict_name->s_name);
+        return;
+    }
+    dictobj_release(dict);
+
+    t_buffer_obj *bar_buf = buffer_ref_getobject(x->bar_buffer_ref);
+    if (!bar_buf) {
+        object_error((t_object *)x, "consolidate: bar buffer not found");
+        return;
+    }
+
+    x->consolidate_stop = 0;
+    x->is_consolidating = 1;
+    weaver_log(x, "starting asynchronous consolidation...");
+
+    systhread_create((method)weaver_consolidate_thread, x, 0, 0, 0, &x->consolidate_thread);
+}
+
+void *weaver_consolidate_thread(t_weaver *x) {
+    long max_tracks = x->max_tracks; // Capture local copy
+    double bar_len = weaver_get_bar_length(x);
+    if (bar_len <= 0) {
+        weaver_consolidate_log(x, "consolidate: invalid bar length %.2f", bar_len);
+        x->is_consolidating = 0;
+        return NULL;
+    }
+
+    t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
+    if (!dict) {
+        weaver_consolidate_log(x, "consolidate: dictionary lost");
+        x->is_consolidating = 0;
+        return NULL;
+    }
+
+    long track_count = 0;
+    t_symbol **track_keys = NULL;
+    dictionary_getkeys(dict, &track_count, &track_keys);
+
+    double song_length = 0;
+    double *track_lengths = (double *)sysmem_newptr(max_tracks * sizeof(double));
+    for (int i = 0; i < max_tracks; i++) track_lengths[i] = 0;
+
+    for (long i = 0; i < track_count; i++) {
+        long t_id = atol(track_keys[i]->s_name);
+        if (t_id > 0 && t_id <= max_tracks) {
+            t_dictionary *track_dict = NULL;
+            if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+                long bar_count = 0;
+                t_symbol **bar_keys = NULL;
+                dictionary_getkeys(track_dict, &bar_count, &bar_keys);
+                double max_bar = 0;
+                for (long j = 0; j < bar_count; j++) {
+                    double b_ts = atof(bar_keys[j]->s_name);
+                    if (b_ts > max_bar) max_bar = b_ts;
+                }
+                track_lengths[t_id - 1] = max_bar + bar_len;
+                if (track_lengths[t_id - 1] > song_length) song_length = track_lengths[t_id - 1];
+                if (bar_keys) dictionary_freekeys(track_dict, bar_count, bar_keys);
+            }
+        }
+    }
+    if (track_keys) dictionary_freekeys(dict, track_count, track_keys);
+
+    weaver_consolidate_log(x, "Consolidating %ld tracks, song length: %.2f ms", max_tracks, song_length);
+
+    for (int t = 0; t < max_tracks; t++) {
+        if (x->consolidate_stop) break;
+
+        weaver_consolidate_log(x, "Processing track %d...", t + 1);
+
+        char bufname[256];
+        snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
+        t_buffer_obj *dest_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), gensym(bufname));
+
+        if (!dest_buf) {
+            weaver_consolidate_log(x, "Track %d: destination buffer '%s' not found, skipping", t + 1, bufname);
+            continue;
+        }
+
+        float *samples_dest = buffer_locksamples(dest_buf);
+        if (!samples_dest) {
+            weaver_consolidate_log(x, "Track %d: could not lock destination buffer, skipping", t + 1);
+            continue;
+        }
+
+        long long n_frames_dest = buffer_getframecount(dest_buf);
+        long n_chans_dest = buffer_getchannelcount(dest_buf);
+        double sr_dest = buffer_getsamplerate(dest_buf);
+        if (sr_dest <= 0) sr_dest = sys_getsr();
+
+        t_crossfade_state xf;
+        crossfade_init(&xf, sr_dest, x->low_ms, x->high_ms);
+
+        t_symbol *palette[2] = { gensym("-"), gensym("-") };
+        double offset[2] = { -1.0, -1.0 };
+        double dict_offset[2] = { -1.0, -1.0 };
+        double tr_offset[2] = { -1.0, -1.0 };
+        double control = 0.0;
+        int busy = 0;
+
+        char tstr[64];
+        snprintf(tstr, 64, "%d", t + 1);
+        t_symbol *track_sym = gensym(tstr);
+        t_dictionary *track_dict = NULL;
+        dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict);
+
+        double last_tr_scan = -1.0;
+        long long vector_size = 512;
+        double vector_ms = (vector_size * 1000.0) / sr_dest;
+
+        for (double ramp_ms = 0; ramp_ms < song_length; ramp_ms += vector_ms) {
+            if (x->consolidate_stop) break;
+
+            double tr_scan = (track_lengths[t] > 0) ? fmod(ramp_ms, track_lengths[t]) : 0;
+            long r_scan = (long)floor(tr_scan);
+            long r_last = (long)floor(last_tr_scan);
+
+            int trigger = 0;
+            double trigger_ts = 0;
+
+            if (last_tr_scan == -1.0) {
+                trigger = 1;
+                trigger_ts = floor(tr_scan / bar_len) * bar_len;
+            } else if (r_scan != r_last) {
+                int track_looped = (tr_scan < last_tr_scan);
+                long long start = track_looped ? 0 : r_last + 1;
+                long long latest_j = (r_scan / (long long)bar_len) * (long long)bar_len;
+                if (latest_j >= start) {
+                    trigger = 1;
+                    trigger_ts = (double)latest_j;
+                }
+            }
+
+            if (trigger) {
+                t_symbol *bar_key = NULL;
+                char bstr[64];
+                snprintf(bstr, 64, "%ld", (long)round(trigger_ts));
+                bar_key = gensym(bstr);
+
+                t_symbol *pending_palette = gensym("-");
+                double pending_offset = 0.0;
+
+                t_dictionary *bar_dict = NULL;
+                if (track_dict && dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                    t_atom p_atom, o_atom;
+                    if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) pending_palette = atom_getsym(&p_atom);
+                    if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) pending_offset = atom_getfloat(&o_atom);
+
+                    // Palette check & fallback
+                    t_buffer_obj *p_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), pending_palette);
+                    if (!p_buf && pending_palette != gensym("-") && pending_palette != _sym_nothing) {
+                        char fallback_name[64];
+                        snprintf(fallback_name, 64, "stems.%d", t + 1);
+                        pending_palette = gensym(fallback_name);
+                        pending_offset = 0.0;
+                    }
+                }
+
+                int active = (int)round(control);
+                if (pending_palette != palette[active] || pending_offset != dict_offset[active]) {
+                    int other = 1 - active;
+                    palette[other] = pending_palette;
+                    dict_offset[other] = pending_offset;
+                    tr_offset[other] = pending_offset - ramp_ms;
+                    control = (double)other;
+                    xf.direction = control - xf.last_control;
+                }
+            }
+
+            // Process vector (Optimize: Move buffer lookups out of inner loop)
+            float *src_samples[2] = {NULL, NULL};
+            long long n_frames_src[2] = {0, 0};
+            long n_chans_src[2] = {0, 0};
+            double sr_src[2] = {0, 0};
+
+            for (int j = 0; j < 2; j++) {
+                if (palette[j] != _sym_nothing && palette[j] != gensym("-")) {
+                    t_buffer_obj *s_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), palette[j]);
+                    if (s_buf) {
+                        src_samples[j] = buffer_locksamples(s_buf);
+                        if (src_samples[j]) {
+                            n_frames_src[j] = buffer_getframecount(s_buf);
+                            n_chans_src[j] = buffer_getchannelcount(s_buf);
+                            sr_src[j] = buffer_getsamplerate(s_buf);
+                        }
+                    }
+                }
+            }
+
+            for (int v = 0; v < vector_size; v++) {
+                double curr_ramp = ramp_ms + (v * 1000.0 / sr_dest);
+                if (curr_ramp >= song_length) break;
+
+                long long f_dest = (long long)round(curr_ramp * sr_dest / 1000.0) % n_frames_dest;
+                double max_abs[2] = {0.0, 0.0};
+                long long f_src[2] = {-1, -1};
+
+                for (int j = 0; j < 2; j++) {
+                    if (src_samples[j]) {
+                        double src_ms = tr_offset[j] + curr_ramp;
+                        f_src[j] = (long long)round(src_ms * sr_src[j] / 1000.0);
+                        if (f_src[j] >= 0 && f_src[j] < n_frames_src[j]) {
+                            for (long c = 0; c < n_chans_src[j]; c++) {
+                                double a = fabs((double)src_samples[j][f_src[j] * n_chans_src[j] + c]);
+                                if (a > max_abs[j]) max_abs[j] = a;
+                            }
+                        }
+                    }
+                }
+
+                double f1, f2;
+                ramp_process(&xf.ramp1, max_abs[0], xf.direction, xf.elapsed, xf.samplerate, xf.low_ms, xf.high_ms, &f1);
+                ramp_process(&xf.ramp2, max_abs[1], xf.direction * -1.0, xf.elapsed, xf.samplerate, xf.low_ms, xf.high_ms, &f2);
+                xf.direction = 0.0;
+                xf.last_control = control;
+                xf.elapsed = (long long)round(curr_ramp * sr_dest / 1000.0);
+
+                for (long c = 0; c < n_chans_dest; c++) {
+                    double mix1 = 0.0, mix2 = 0.0;
+                    if (src_samples[0] && f_src[0] >= 0 && f_src[0] < n_frames_src[0] && c < n_chans_src[0])
+                        mix1 = (double)src_samples[0][f_src[0] * n_chans_src[0] + c] * f1;
+                    if (src_samples[1] && f_src[1] >= 0 && f_src[1] < n_frames_src[1] && c < n_chans_src[1])
+                        mix2 = (double)src_samples[1][f_src[1] * n_chans_src[1] + c] * f2;
+                    samples_dest[f_dest * n_chans_dest + c] = (float)(mix1 + mix2);
+                }
+            }
+
+            for (int j = 0; j < 2; j++) {
+                if (src_samples[j]) {
+                    t_buffer_obj *s_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), palette[j]);
+                    if (s_buf) buffer_unlocksamples(s_buf);
+                }
+            }
+            last_tr_scan = tr_scan;
+        }
+        buffer_unlocksamples(dest_buf);
+        if (t < MAX_WEAVER_TRACKS) {
+            x->dirty_tracks[t] = 1;
+            qelem_set(x->dirty_qelem);
+        }
+        weaver_consolidate_log(x, "Track %d complete", t + 1);
+    }
+
+    dictobj_release(dict);
+    sysmem_freeptr(track_lengths);
+    x->is_consolidating = 0;
+    weaver_consolidate_log(x, "Consolidation finished.");
+    return NULL;
+}
+void weaver_consolidate_log(t_weaver *x, const char *fmt, ...);
+void weaver_log_qtask(t_weaver *x);
+void weaver_dirty_qtask(t_weaver *x);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
@@ -247,6 +525,51 @@ void weaver_log(t_weaver *x, const char *fmt, ...) {
     va_end(args);
 }
 
+void weaver_consolidate_log(t_weaver *x, const char *fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, 1024, fmt, args);
+    va_end(args);
+
+    critical_enter(x->log_lock);
+    strncat(x->log_queue, buf, sizeof(x->log_queue) - strlen(x->log_queue) - 1);
+    strncat(x->log_queue, "\n", sizeof(x->log_queue) - strlen(x->log_queue) - 1);
+    critical_exit(x->log_lock);
+
+    qelem_set(x->log_qelem);
+}
+
+void weaver_log_qtask(t_weaver *x) {
+    char local_queue[8192];
+
+    critical_enter(x->log_lock);
+    strncpy(local_queue, x->log_queue, 8192);
+    x->log_queue[0] = '\0';
+    critical_exit(x->log_lock);
+
+    char *line = strtok(local_queue, "\n");
+    while (line) {
+        weaver_log(x, "%s", line);
+        line = strtok(NULL, "\n");
+    }
+}
+
+void weaver_dirty_qtask(t_weaver *x) {
+    critical_enter(x->lock);
+    for (int i = 0; i < x->max_tracks && i < MAX_WEAVER_TRACKS; i++) {
+        if (x->dirty_tracks[i]) {
+            t_weaver_track *tr = x->track_cache[i];
+            if (tr) {
+                t_buffer_obj *b = buffer_ref_getobject(tr->dest_ref);
+                if (b) buffer_setdirty(b);
+            }
+            x->dirty_tracks[i] = 0;
+        }
+    }
+    critical_exit(x->lock);
+}
+
 void weaver_check_attachments(t_weaver *x) {
     // Dictionary check
     if (x->audio_dict_name != _sym_nothing) {
@@ -330,7 +653,9 @@ void ext_main(void *r) {
     _sym_0 = gensym("0");
     t_class *c = class_new("weaver~", (method)weaver_new, (method)weaver_free, sizeof(t_weaver), 0L, A_GIMME, 0);
 
-    class_addmethod(c, (method)weaver_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)weaver_tracks, "tracks", A_GIMME, 0);
+    class_addmethod(c, (method)weaver_consolidate, "consolidate", 0);
+    class_addmethod(c, (method)weaver_clear, "clear", 0);
     class_addmethod(c, (method)weaver_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)weaver_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
@@ -387,12 +712,20 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
+        critical_new(&x->log_lock);
         x->track_states = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
         // 2. Create outlets (before any logging happens)
         x->log_outlet = outlet_new((t_object *)x, NULL);
         x->loop_outlet = outlet_new((t_object *)x, NULL);
+
+        x->log_qelem = qelem_new(x, (method)weaver_log_qtask);
+        x->dirty_qelem = qelem_new(x, (method)weaver_dirty_qtask);
+        x->log_queue[0] = '\0';
+        x->is_consolidating = 0;
+        x->consolidate_stop = 0;
+        memset(x->dirty_tracks, 0, sizeof(x->dirty_tracks));
 
         // 3. Process Arguments
         // Argument 1: dictionary name
@@ -437,9 +770,16 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void weaver_free(t_weaver *x) {
+    x->consolidate_stop = 1;
+    if (x->is_consolidating) {
+        systhread_join(x->consolidate_thread, NULL);
+    }
+
     dsp_free((t_pxobject *)x);
     visualize_cleanup();
     if (x->audio_qelem) qelem_free(x->audio_qelem);
+    if (x->log_qelem) qelem_free(x->log_qelem);
+    if (x->dirty_qelem) qelem_free(x->dirty_qelem);
     if (x->proxy) object_free(x->proxy);
 
     if (x->bar_buffer_ref) {
@@ -451,6 +791,7 @@ void weaver_free(t_weaver *x) {
     weaver_clear_track_states(x);
     if (x->track_states) object_free(x->track_states);
     if (x->lock) critical_free(x->lock);
+    if (x->log_lock) critical_free(x->log_lock);
 }
 
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
@@ -481,7 +822,7 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), (symbol) Dictionary Name, tracks (int), clear"); break;
+            case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), tracks (int), clear, consolidate"); break;
             case 1: sprintf(s, "Inlet 2 (list): [track_id, length] updates track length"); break;
         }
     } else { // ASSIST_OUTLET
@@ -634,19 +975,11 @@ void weaver_clear(t_weaver *x) {
     weaver_log(x, "cleared all track states and lengths, and reset buffer bindings");
 }
 
-void weaver_anything(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
+void weaver_tracks(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
     if (proxy_getinlet((t_object *)x) != 0) return;
-
-    if (s == gensym("tracks") && argc > 0) {
+    if (argc > 0) {
         x->max_tracks = atom_getlong(argv);
         weaver_update_track_cache(x);
-    } else if (s == gensym("clear")) {
-        weaver_clear(x);
-    } else if (s != x->audio_dict_name) {
-        // Inlet 0: Transcript Dictionary Reference
-        x->audio_dict_name = s;
-        x->dict_found = 0;
-        x->dict_error_sent = 0;
     }
 }
 
@@ -673,6 +1006,13 @@ typedef struct {
 } t_track_buffers;
 
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+    if (x->is_consolidating) {
+        for (long j = 0; j < numouts; j++) {
+            memset(outs[j], 0, sampleframes * sizeof(double));
+        }
+        return;
+    }
+
     double *in = ins[0];
     double last_scan = x->last_scan_val;
     double bar_len = round(weaver_get_bar_length(x));
