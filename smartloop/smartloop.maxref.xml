@@ -27,8 +27,8 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="signal/anything">
-			<digest>Inlet 1: (signal) Time Ramp / (messages) debug</digest>
-			<description>Accepts an audio signal time ramp. When this ramp loops left (i.e., its current value is less than its previous value), the object outputs the current loop boundaries, provided the ramp value is actually moving. This two-part release mechanism ensures that points are only released when the signal moves. If the ramp is stationary, the object outputs 0.0 from each loop point outlet. Also accepts the 'debug' message.</description>
+			<digest>Inlet 1: (signal) Time Ramp / (int) Pause/Resume / (messages) debug</digest>
+			<description>Accepts an audio signal time ramp. When this ramp loops left (i.e., its current value is less than its previous value), the object outputs the current loop boundaries, provided the ramp value is actually moving. This two-part release mechanism ensures that points are only released when the signal moves. If the ramp is stationary, the object outputs 0.0 from each loop point outlet. Also accepts an integer (0 to pause output from the first two outlets, non-zero to resume) and the 'debug' message.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
@@ -58,6 +58,10 @@
 		<method name="debug">
 			<digest>Compare ratings with visualizer.py</digest>
 			<description>Collects all ratings from the associated dictionary and sends them to the `visualizer.py` script. The visualizer compares these against its own internal state and reports any discrepancies (missing bars or mismatched ratings) back to the Max console and its own console.</description>
+		</method>
+		<method name="int">
+			<digest>Pause or resume output</digest>
+			<description>Sending a 0 to the first inlet pauses the output of loop boundaries from the first two outlets. Sending a non-zero integer resumes output. Internal analysis and logging continue regardless of this state.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
