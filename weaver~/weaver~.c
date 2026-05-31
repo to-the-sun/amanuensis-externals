@@ -36,6 +36,7 @@ typedef struct _fifo_entry {
 
 typedef struct _weaver_track {
     t_crossfade_state xf;
+    long length_manually_set;
     t_symbol *palette[2];
     double offset[2];
     double dict_offset[2];
@@ -193,7 +194,7 @@ void weaver_consolidate(t_weaver *x) {
     t_buffer_obj *bar_buf = buffer_ref_getobject(x->bar_buffer_ref);
     if (bar_buf) hashtab_store(x->palette_cache, gensym("bar"), (t_object *)bar_buf);
 
-    // 2. Resolve Stems (Destination buffers)
+    // 2. Resolve Stems (Destination and Fallback buffers)
     for (int i = 0; i < x->max_tracks; i++) {
         t_weaver_track *tr = weaver_get_track_state(x, i + 1);
         if (tr) {
@@ -202,6 +203,23 @@ void weaver_consolidate(t_weaver *x) {
                 char bufname[256];
                 snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i + 1);
                 hashtab_store(x->palette_cache, gensym(bufname), (t_object *)b);
+            }
+
+            char stemname[256];
+            snprintf(stemname, 256, "stems.%d", i + 1);
+            t_symbol *s_stem = gensym(stemname);
+            t_buffer_ref *s_ref = buffer_ref_new((t_object *)x, s_stem);
+            t_buffer_obj *s_obj = buffer_ref_getobject(s_ref);
+            if (!s_obj) {
+                buffer_ref_set(s_ref, _sym_nothing);
+                buffer_ref_set(s_ref, s_stem);
+                s_obj = buffer_ref_getobject(s_ref);
+            }
+            if (s_obj) {
+                hashtab_store(x->palette_cache, s_stem, (t_object *)s_obj);
+                linklist_append(x->palette_refs, (t_object *)s_ref);
+            } else {
+                object_free(s_ref);
             }
         }
     }
@@ -237,7 +255,6 @@ void weaver_consolidate(t_weaver *x) {
                             t_buffer_obj *b = buffer_ref_getobject(ref);
 
                             if (!b) {
-                                // Kick on main thread
                                 buffer_ref_set(ref, _sym_nothing);
                                 buffer_ref_set(ref, palette);
                                 b = buffer_ref_getobject(ref);
@@ -319,14 +336,16 @@ void *weaver_consolidate_thread(t_weaver *x) {
                     if (b_ts > max_bar) max_bar = b_ts;
                 }
 
-                if (tr && tr->track_length > 0) {
+                double dict_len = max_bar + bar_len;
+                if (tr && tr->length_manually_set) {
                     track_lengths[t_id - 1] = tr->track_length;
-                    if (tr->track_length > song_length) song_length = tr->track_length;
                 } else {
-                    track_lengths[t_id - 1] = max_bar + bar_len;
+                    track_lengths[t_id - 1] = dict_len;
                 }
 
-                if (max_bar + bar_len > song_length) song_length = max_bar + bar_len;
+                if (track_lengths[t_id - 1] > song_length) song_length = track_lengths[t_id - 1];
+                if (dict_len > song_length) song_length = dict_len;
+
                 if (bar_keys) dictionary_freekeys(track_dict, bar_count, bar_keys);
             }
         }
@@ -445,7 +464,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
                         hashtab_lookup(cache, pending_palette, (t_object **)&p_buf);
                         if (!p_buf) {
                             char fallback_name[256];
-                            snprintf(fallback_name, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
+                            snprintf(fallback_name, 256, "stems.%d", t + 1);
                             pending_palette = gensym(fallback_name);
                             pending_offset = 0.0;
                         }
@@ -590,6 +609,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_error_sent[0] = 0;
             tr->src_error_sent[1] = 0;
             tr->track_length = 1000.0;
+            tr->length_manually_set = 0;
             tr->last_track_scan = -1.0;
             tr->last_visualize_ms = -1000.0;
 
@@ -1146,6 +1166,7 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                 if (tr) {
                     critical_enter(x->lock);
                     tr->track_length = length;
+                    tr->length_manually_set = 1;
                     if (x->visualize) {
                         tr->viz_track_length = length;
                         tr->viz_dirty = 1;
@@ -1176,6 +1197,7 @@ void weaver_clear(t_weaver *x) {
         if (tr) {
             tr->track_length = 0.0;
             tr->viz_track_length = 0.0;
+            tr->length_manually_set = 0;
             tr->last_track_scan = -1.0;
             tr->busy = 0;
             tr->has_pending_data = 0;
