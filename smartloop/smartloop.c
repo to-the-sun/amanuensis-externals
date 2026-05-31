@@ -32,6 +32,7 @@ typedef struct _smartloop {
     long triggered_zero;
     long output_zero;
     long first_sample;
+    long output_enabled;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -41,6 +42,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
 void smartloop_debug(t_smartloop *x);
+void smartloop_int(t_smartloop *x, long n);
 void smartloop_qfn(t_smartloop *x);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -124,6 +126,7 @@ t_atomarray* get_span_array(t_dictionary *bar_dict) {
 void ext_main(void *r) {
     t_class *c = class_new("smartloop", (method)smartloop_new, (method)smartloop_free, sizeof(t_smartloop), 0L, A_GIMME, 0);
     class_addmethod(c, (method)smartloop_debug, "debug", 0);
+    class_addmethod(c, (method)smartloop_int, "int", A_LONG, 0);
     class_addmethod(c, (method)smartloop_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)smartloop_assist, "assist", A_CANT, 0);
 
@@ -178,6 +181,7 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->triggered_zero = 0;
         x->output_zero = 0;
         x->first_sample = 1;
+        x->output_enabled = 1;
         x->qelem = qelem_new(x, (method)smartloop_qfn);
 
         x->clock = clock_new(x, (method)smartloop_tick);
@@ -194,7 +198,20 @@ void smartloop_free(t_smartloop *x) {
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
 
+void smartloop_int(t_smartloop *x, long n) {
+    x->output_enabled = (n != 0);
+    if (x->output_enabled) {
+        smartloop_log(x, "Output enabled.");
+    } else {
+        smartloop_log(x, "Output paused.");
+    }
+}
+
 void smartloop_qfn(t_smartloop *x) {
+    if (!x->output_enabled) return;
+
+    // Standard Max right-to-left outlet firing order:
+    // We output the loop endpoint (Index 1) immediately before the loop start point (Index 0).
     if (x->output_zero) {
         outlet_float(x->out_end, 0.0);
         outlet_float(x->out_start, 0.0);
@@ -333,7 +350,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp (output on move when looping left, 0.0 if stationary) / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
