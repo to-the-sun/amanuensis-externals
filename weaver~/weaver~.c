@@ -228,7 +228,6 @@ void *weaver_consolidate_thread(t_weaver *x) {
         long t_id = atol(track_keys[i]->s_name);
         if (t_id > 0 && t_id <= max_tracks) {
             t_weaver_track *tr = weaver_get_track_state(x, t_id);
-            if (tr) track_lengths[t_id - 1] = tr->track_length;
 
             t_dictionary *track_dict = NULL;
             if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
@@ -240,6 +239,13 @@ void *weaver_consolidate_thread(t_weaver *x) {
                     double b_ts = atof(bar_keys[j]->s_name);
                     if (b_ts > max_bar) max_bar = b_ts;
                 }
+
+                if (tr && tr->track_length > 0) {
+                    track_lengths[t_id - 1] = tr->track_length;
+                } else {
+                    track_lengths[t_id - 1] = max_bar + bar_len;
+                }
+
                 if (max_bar + bar_len > song_length) song_length = max_bar + bar_len;
                 if (bar_keys) dictionary_freekeys(track_dict, bar_count, bar_keys);
             }
@@ -261,7 +267,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
     for (int t = 0; t < max_tracks; t++) {
         if (x->consolidate_stop) break;
 
-        weaver_consolidate_log(x, "Processing track %d...", t + 1);
+        weaver_consolidate_log(x, "Processing track %d (length: %.2f ms)...", t + 1, track_lengths[t]);
 
         char bufname[256];
         snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
@@ -351,8 +357,19 @@ void *weaver_consolidate_thread(t_weaver *x) {
                 t_dictionary *bar_dict = NULL;
                 if (track_dict && dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
                     t_atom p_atom, o_atom;
-                    if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) pending_palette = atom_getsym(&p_atom);
-                    if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) pending_offset = atom_getfloat(&o_atom);
+                    t_atomarray *palette_aa = NULL, *offset_aa = NULL;
+
+                    if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                        if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) pending_palette = atom_getsym(&p_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) {
+                        pending_palette = atom_getsym(&p_atom);
+                    }
+
+                    if (dictionary_getatomarray(bar_dict, gensym("offset"), (t_object **)&offset_aa) == MAX_ERR_NONE && offset_aa) {
+                        if (atomarray_getindex(offset_aa, 0, &o_atom) == MAX_ERR_NONE) pending_offset = atom_getfloat(&o_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) {
+                        pending_offset = atom_getfloat(&o_atom);
+                    }
 
                     if (pending_palette != gensym("-") && pending_palette != _sym_nothing) {
                         t_buffer_obj *p_buf = weaver_find_buffer_robust(x, pending_palette, t + 1, seen_warns);
@@ -369,7 +386,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
                 if (pending_palette != palette[active] || pending_offset != dict_offset[active]) {
                     int other = 1 - active;
 
-                    weaver_consolidate_log(x, "Track %d: Bar %ld -> Palette %s, Offset %.2f", t + 1, (long)round(trigger_ts), pending_palette->s_name, pending_offset);
+                    weaver_consolidate_log(x, "Track %d: Time %.2f, Bar %ld -> Palette %s, Offset %.2f", t + 1, curr_ramp, (long)round(trigger_ts), pending_palette->s_name, pending_offset);
 
                     // Optimization: Unlock old buffer if it was locked
                     if (cur_bufs[other] && cur_samples[other]) {
