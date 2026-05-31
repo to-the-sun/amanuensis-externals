@@ -122,6 +122,13 @@ typedef struct _weaver {
     t_qelem *log_qelem;
     t_qelem *dirty_qelem;
     int dirty_tracks[MAX_WEAVER_TRACKS];
+
+    // Kicking
+    t_critical kick_lock;
+    t_symbol *kick_queue[256];
+    int kick_head;
+    int kick_tail;
+    t_qelem *kick_qelem;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -141,6 +148,9 @@ void *weaver_consolidate_thread(t_weaver *x);
 void weaver_consolidate_log(t_weaver *x, const char *fmt, ...);
 void weaver_log_qtask(t_weaver *x);
 void weaver_dirty_qtask(t_weaver *x);
+void weaver_kick_buffer(t_weaver *x, t_symbol *name);
+void weaver_kick_qtask(t_weaver *x);
+t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 double weaver_get_bar_length(t_weaver *x);
 
@@ -172,7 +182,20 @@ void weaver_consolidate(t_weaver *x) {
 
 void *weaver_consolidate_thread(t_weaver *x) {
     long max_tracks = x->max_tracks; // Capture local copy
-    double bar_len = weaver_get_bar_length(x);
+    t_hashtab *seen_warns = hashtab_new(0);
+
+    t_buffer_obj *bar_buf = weaver_find_buffer_robust(x, gensym("bar"), 0, seen_warns);
+    double bar_len = 0;
+    if (bar_buf) {
+        float *samples = buffer_locksamples(bar_buf);
+        if (samples) {
+            if (buffer_getframecount(bar_buf) > 0) {
+                bar_len = (double)samples[0];
+            }
+            buffer_unlocksamples(bar_buf);
+        }
+    }
+
     if (bar_len <= 0) {
         weaver_consolidate_log(x, "consolidate: invalid bar length %.2f", bar_len);
         x->is_consolidating = 0;
@@ -224,10 +247,11 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
         char bufname[256];
         snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
-        t_buffer_obj *dest_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), gensym(bufname));
+        t_symbol *s_dest = gensym(bufname);
+        t_buffer_obj *dest_buf = weaver_find_buffer_robust(x, s_dest, t + 1, seen_warns);
 
         if (!dest_buf) {
-            weaver_consolidate_log(x, "Track %d: destination buffer '%s' not found, skipping", t + 1, bufname);
+            weaver_consolidate_log(x, "Track %d: destination buffer '%s' missing, skipping", t + 1, bufname);
             continue;
         }
 
@@ -301,12 +325,14 @@ void *weaver_consolidate_thread(t_weaver *x) {
                     if (dictionary_getatom(bar_dict, gensym("offset"), &o_atom) == MAX_ERR_NONE) pending_offset = atom_getfloat(&o_atom);
 
                     // Palette check & fallback
-                    t_buffer_obj *p_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), pending_palette);
-                    if (!p_buf && pending_palette != gensym("-") && pending_palette != _sym_nothing) {
-                        char fallback_name[64];
-                        snprintf(fallback_name, 64, "stems.%d", t + 1);
-                        pending_palette = gensym(fallback_name);
-                        pending_offset = 0.0;
+                    if (pending_palette != gensym("-") && pending_palette != _sym_nothing) {
+                        t_buffer_obj *p_buf = weaver_find_buffer_robust(x, pending_palette, t + 1, seen_warns);
+                        if (!p_buf) {
+                            char fallback_name[64];
+                            snprintf(fallback_name, 64, "stems.%d", t + 1);
+                            pending_palette = gensym(fallback_name);
+                            pending_offset = 0.0;
+                        }
                     }
                 }
 
@@ -329,7 +355,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
             for (int j = 0; j < 2; j++) {
                 if (palette[j] != _sym_nothing && palette[j] != gensym("-")) {
-                    t_buffer_obj *s_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), palette[j]);
+                    t_buffer_obj *s_buf = weaver_find_buffer_robust(x, palette[j], t + 1, seen_warns);
                     if (s_buf) {
                         src_samples[j] = buffer_locksamples(s_buf);
                         if (src_samples[j]) {
@@ -381,7 +407,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
             for (int j = 0; j < 2; j++) {
                 if (src_samples[j]) {
-                    t_buffer_obj *s_buf = (t_buffer_obj *)object_findregistered(gensym("buffer"), palette[j]);
+                    t_buffer_obj *s_buf = weaver_find_buffer_robust(x, palette[j], t + 1, seen_warns);
                     if (s_buf) buffer_unlocksamples(s_buf);
                 }
             }
@@ -397,13 +423,11 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
     dictobj_release(dict);
     sysmem_freeptr(track_lengths);
+    if (seen_warns) object_free(seen_warns);
     x->is_consolidating = 0;
     weaver_consolidate_log(x, "Consolidation finished.");
     return NULL;
 }
-void weaver_consolidate_log(t_weaver *x, const char *fmt, ...);
-void weaver_log_qtask(t_weaver *x);
-void weaver_dirty_qtask(t_weaver *x);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
@@ -570,6 +594,53 @@ void weaver_dirty_qtask(t_weaver *x) {
     critical_exit(x->lock);
 }
 
+void weaver_kick_buffer(t_weaver *x, t_symbol *name) {
+    critical_enter(x->kick_lock);
+    int next = (x->kick_tail + 1) % 256;
+    if (next != x->kick_head) {
+        x->kick_queue[x->kick_tail] = name;
+        x->kick_tail = next;
+    }
+    critical_exit(x->kick_lock);
+    qelem_set(x->kick_qelem);
+}
+
+void weaver_kick_qtask(t_weaver *x) {
+    while (x->kick_head != x->kick_tail) {
+        t_symbol *name = x->kick_queue[x->kick_head];
+        x->kick_head = (x->kick_head + 1) % 256;
+
+        t_buffer_ref *ref = buffer_ref_new((t_object *)x, name);
+        buffer_ref_set(ref, _sym_nothing);
+        buffer_ref_set(ref, name);
+        object_free(ref);
+    }
+}
+
+t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns) {
+    t_buffer_obj *b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+
+    if (!b) {
+        long val = 0;
+        hashtab_lookup(seen_warns, name, (t_object **)&val);
+
+        if (val == 0) {
+            object_warn((t_object *)x, "consolidate: buffer '%s' (Track %d) not found, attempting kick", name->s_name, track_id);
+            weaver_kick_buffer(x, name);
+            systhread_sleep(20);
+            b = (t_buffer_obj *)object_findregistered(gensym("buffer"), name);
+
+            if (!b) {
+                object_error((t_object *)x, "consolidate: buffer '%s' (Track %d) still not found after kick", name->s_name, track_id);
+                hashtab_store(seen_warns, name, (t_object *)2);
+            } else {
+                hashtab_store(seen_warns, name, (t_object *)1);
+            }
+        }
+    }
+    return b;
+}
+
 void weaver_check_attachments(t_weaver *x) {
     // Dictionary check
     if (x->audio_dict_name != _sym_nothing) {
@@ -713,6 +784,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
         critical_new(&x->log_lock);
+        critical_new(&x->kick_lock);
         x->track_states = hashtab_new(0);
         x->bar_buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
@@ -722,9 +794,12 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         x->log_qelem = qelem_new(x, (method)weaver_log_qtask);
         x->dirty_qelem = qelem_new(x, (method)weaver_dirty_qtask);
+        x->kick_qelem = qelem_new(x, (method)weaver_kick_qtask);
         x->log_queue[0] = '\0';
         x->is_consolidating = 0;
         x->consolidate_stop = 0;
+        x->kick_head = 0;
+        x->kick_tail = 0;
         memset(x->dirty_tracks, 0, sizeof(x->dirty_tracks));
 
         // 3. Process Arguments
@@ -780,6 +855,7 @@ void weaver_free(t_weaver *x) {
     if (x->audio_qelem) qelem_free(x->audio_qelem);
     if (x->log_qelem) qelem_free(x->log_qelem);
     if (x->dirty_qelem) qelem_free(x->dirty_qelem);
+    if (x->kick_qelem) qelem_free(x->kick_qelem);
     if (x->proxy) object_free(x->proxy);
 
     if (x->bar_buffer_ref) {
@@ -792,6 +868,7 @@ void weaver_free(t_weaver *x) {
     if (x->track_states) object_free(x->track_states);
     if (x->lock) critical_free(x->lock);
     if (x->log_lock) critical_free(x->log_lock);
+    if (x->kick_lock) critical_free(x->kick_lock);
 }
 
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
