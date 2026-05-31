@@ -346,7 +346,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
                         object_free(temp_ref);
                     }
 
-                    weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s", i, bar_ts, new_palette->s_name);
+                    weaver_queue_log(x, "Track %ld: Bar %.0fms, Palette: %s (Context: %p)", i, bar_ts, new_palette->s_name, systhread_self());
 
                     int active = (int)round(control);
                     int other = 1 - active;
