@@ -129,6 +129,11 @@ typedef struct _weaver {
     int kick_head;
     int kick_tail;
     t_qelem *kick_qelem;
+
+    // Palette Caching
+    t_hashtab *palette_cache;
+    t_linklist *palette_refs;
+    t_qelem *cleanup_qelem;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -150,6 +155,7 @@ void weaver_log_qtask(t_weaver *x);
 void weaver_dirty_qtask(t_weaver *x);
 void weaver_kick_buffer(t_weaver *x, t_symbol *name);
 void weaver_kick_qtask(t_weaver *x);
+void weaver_cleanup_qtask(t_weaver *x);
 t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns);
 void weaver_log(t_weaver *x, const char *fmt, ...);
 double weaver_get_bar_length(t_weaver *x);
@@ -172,26 +178,102 @@ void weaver_consolidate(t_weaver *x) {
     }
 
     weaver_check_attachments(x);
+    weaver_update_track_cache(x);
 
     t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
     if (!dict) {
         object_error((t_object *)x, "consolidate: transcript dictionary '%s' not found", x->audio_dict_name->s_name);
         return;
     }
+
+    x->palette_cache = hashtab_new(0);
+    x->palette_refs = linklist_new();
+
+    // 1. Resolve Bar
+    t_buffer_obj *bar_buf = buffer_ref_getobject(x->bar_buffer_ref);
+    if (bar_buf) hashtab_store(x->palette_cache, gensym("bar"), (t_object *)bar_buf);
+
+    // 2. Resolve Stems (Destination buffers)
+    for (int i = 0; i < x->max_tracks; i++) {
+        t_weaver_track *tr = weaver_get_track_state(x, i + 1);
+        if (tr) {
+            t_buffer_obj *b = buffer_ref_getobject(tr->dest_ref);
+            if (b) {
+                char bufname[256];
+                snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, i + 1);
+                hashtab_store(x->palette_cache, gensym(bufname), (t_object *)b);
+            }
+        }
+    }
+
+    // 3. Scan Dictionary for unique Palettes
+    long t_count = 0;
+    t_symbol **t_keys = NULL;
+    dictionary_getkeys(dict, &t_count, &t_keys);
+
+    int res_count = 0;
+    for (long i = 0; i < t_count; i++) {
+        t_dictionary *tr_dict = NULL;
+        if (dictionary_getdictionary(dict, t_keys[i], (t_object **)&tr_dict) == MAX_ERR_NONE && tr_dict) {
+            long b_count = 0;
+            t_symbol **b_keys = NULL;
+            dictionary_getkeys(tr_dict, &b_count, &b_keys);
+            for (long j = 0; j < b_count; j++) {
+                t_dictionary *bar_dict = NULL;
+                if (dictionary_getdictionary(tr_dict, b_keys[j], (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                    t_symbol *palette = _sym_nothing;
+                    t_atomarray *palette_aa = NULL;
+                    t_atom p_atom;
+                    if (dictionary_getatomarray(bar_dict, gensym("palette"), (t_object **)&palette_aa) == MAX_ERR_NONE && palette_aa) {
+                        if (atomarray_getindex(palette_aa, 0, &p_atom) == MAX_ERR_NONE) palette = atom_getsym(&p_atom);
+                    } else if (dictionary_getatom(bar_dict, gensym("palette"), &p_atom) == MAX_ERR_NONE) {
+                        palette = atom_getsym(&p_atom);
+                    }
+
+                    if (palette != _sym_nothing && palette != gensym("-")) {
+                        t_object *dummy = NULL;
+                        if (hashtab_lookup(x->palette_cache, palette, &dummy) != MAX_ERR_NONE) {
+                            t_buffer_ref *ref = buffer_ref_new((t_object *)x, palette);
+                            t_buffer_obj *b = buffer_ref_getobject(ref);
+
+                            if (!b) {
+                                // Kick on main thread
+                                buffer_ref_set(ref, _sym_nothing);
+                                buffer_ref_set(ref, palette);
+                                b = buffer_ref_getobject(ref);
+                            }
+
+                            if (b) {
+                                hashtab_store(x->palette_cache, palette, (t_object *)b);
+                                linklist_append(x->palette_refs, (t_object *)ref);
+                                res_count++;
+                            } else {
+                                object_free(ref);
+                            }
+                        }
+                    }
+                }
+            }
+            if (b_keys) dictionary_freekeys(tr_dict, b_count, b_keys);
+        }
+    }
+    if (t_keys) dictionary_freekeys(dict, t_count, t_keys);
     dictobj_release(dict);
 
     x->consolidate_stop = 0;
     x->is_consolidating = 1;
-    weaver_log(x, "starting asynchronous consolidation...");
+    weaver_log(x, "starting asynchronous consolidation (pre-resolved %d palettes)...", res_count);
 
     systhread_create((method)weaver_consolidate_thread, x, 0, 0, 0, &x->consolidate_thread);
 }
 
 void *weaver_consolidate_thread(t_weaver *x) {
     long max_tracks = x->max_tracks; // Capture local copy
-    t_hashtab *seen_warns = hashtab_new(0);
+    t_hashtab *cache = x->palette_cache;
 
-    t_buffer_obj *bar_buf = weaver_find_buffer_robust(x, gensym("bar"), 0, seen_warns);
+    t_buffer_obj *bar_buf = NULL;
+    hashtab_lookup(cache, gensym("bar"), (t_object **)&bar_buf);
+
     double bar_len = 0;
     if (bar_buf) {
         float *samples = buffer_locksamples(bar_buf);
@@ -203,16 +285,14 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
     if (bar_len <= 0) {
         weaver_consolidate_log(x, "consolidate: invalid bar length %.2f", bar_len);
-        x->is_consolidating = 0;
-        if (seen_warns) object_free(seen_warns);
+        qelem_set(x->cleanup_qelem);
         return NULL;
     }
 
     t_dictionary *dict = dictobj_findregistered_retain(x->audio_dict_name);
     if (!dict) {
         weaver_consolidate_log(x, "consolidate: dictionary lost");
-        x->is_consolidating = 0;
-        if (seen_warns) object_free(seen_warns);
+        qelem_set(x->cleanup_qelem);
         return NULL;
     }
 
@@ -220,7 +300,6 @@ void *weaver_consolidate_thread(t_weaver *x) {
     double *track_lengths = (double *)sysmem_newptr(max_tracks * sizeof(double));
     for (int i = 0; i < max_tracks; i++) track_lengths[i] = 0;
 
-    // Calculate lengths matching weaver_perform64/audio_qtask expectations
     long track_count = 0;
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &track_count, &track_keys);
@@ -242,6 +321,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
                 if (tr && tr->track_length > 0) {
                     track_lengths[t_id - 1] = tr->track_length;
+                    if (tr->track_length > song_length) song_length = tr->track_length;
                 } else {
                     track_lengths[t_id - 1] = max_bar + bar_len;
                 }
@@ -253,14 +333,6 @@ void *weaver_consolidate_thread(t_weaver *x) {
     }
     if (track_keys) dictionary_freekeys(dict, track_count, track_keys);
 
-    // Fallback: use first stem buffer length for song_length if dictionary is empty or smaller
-    char t1name[256];
-    snprintf(t1name, 256, "%s.1", x->poly_prefix->s_name);
-    t_buffer_obj *b1 = weaver_find_buffer_robust(x, gensym(t1name), 1, seen_warns);
-    if (b1) {
-        double b1_ms = (buffer_getframecount(b1) * 1000.0) / buffer_getsamplerate(b1);
-        if (b1_ms > song_length) song_length = b1_ms;
-    }
 
     weaver_consolidate_log(x, "Consolidating %ld tracks, song length: %.2f ms", max_tracks, song_length);
 
@@ -271,8 +343,8 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
         char bufname[256];
         snprintf(bufname, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
-        t_symbol *s_dest = gensym(bufname);
-        t_buffer_obj *dest_buf = weaver_find_buffer_robust(x, s_dest, t + 1, seen_warns);
+        t_buffer_obj *dest_buf = NULL;
+        hashtab_lookup(cache, gensym(bufname), (t_object **)&dest_buf);
 
         if (!dest_buf) {
             weaver_consolidate_log(x, "Track %d: destination buffer missing, skipping", t + 1);
@@ -320,29 +392,25 @@ void *weaver_consolidate_thread(t_weaver *x) {
             if (x->consolidate_stop) break;
 
             double curr_ramp = (f * 1000.0) / sr_dest;
-            if (f >= n_frames_dest) break; // Optimization: Stop if buffer filled
+            if (f >= n_frames_dest) break;
             double tr_scan = (track_lengths[t] > 0) ? fmod(curr_ramp, track_lengths[t]) : 0;
-            long r_scan = (long)floor(tr_scan);
-            long r_last = (long)floor(last_tr_scan);
 
+            long long k = (long long)floor(tr_scan / bar_len);
+            long long k_last = (last_tr_scan == -1.0) ? -1 : (long long)floor(last_tr_scan / bar_len);
             int main_looped = (curr_ramp < last_scan_val);
-            int track_looped = (r_scan < r_last);
+            int track_looped = (tr_scan < last_tr_scan);
 
             int trigger = 0;
             double trigger_ts = 0;
 
             if (last_tr_scan == -1.0) {
                 trigger = 1;
-                trigger_ts = floor(tr_scan / bar_len) * bar_len;
-            } else if ((!busy || main_looped || track_looped) && !waiting_for_dict && r_scan != r_last && bar_len > 0) {
-                long long start = (track_looped || main_looped) ? 0 : r_last + 1;
-                long long latest_j = (r_scan / (long long)bar_len) * (long long)bar_len;
-                if (latest_j >= start) {
-                    trigger = 1;
-                    trigger_ts = (double)latest_j;
-                    waiting_for_dict = 1;
-                    busy = 1;
-                }
+                trigger_ts = k * bar_len;
+            } else if ((!busy || main_looped || track_looped) && !waiting_for_dict && k != k_last && bar_len > 0) {
+                trigger = 1;
+                trigger_ts = k * bar_len;
+                waiting_for_dict = 1;
+                busy = 1;
             }
 
             if (trigger) {
@@ -356,6 +424,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
                 t_dictionary *bar_dict = NULL;
                 if (track_dict && dictionary_getdictionary(track_dict, bar_key, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                    weaver_consolidate_log(x, "Track %d: Overall Time %.2f, found bar entry '%s'", t + 1, curr_ramp, bar_key->s_name);
                     t_atom p_atom, o_atom;
                     t_atomarray *palette_aa = NULL, *offset_aa = NULL;
 
@@ -372,7 +441,8 @@ void *weaver_consolidate_thread(t_weaver *x) {
                     }
 
                     if (pending_palette != gensym("-") && pending_palette != _sym_nothing) {
-                        t_buffer_obj *p_buf = weaver_find_buffer_robust(x, pending_palette, t + 1, seen_warns);
+                        t_buffer_obj *p_buf = NULL;
+                        hashtab_lookup(cache, pending_palette, (t_object **)&p_buf);
                         if (!p_buf) {
                             char fallback_name[256];
                             snprintf(fallback_name, 256, "%s.%d", x->poly_prefix->s_name, t + 1);
@@ -386,7 +456,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
                 if (pending_palette != palette[active] || pending_offset != dict_offset[active]) {
                     int other = 1 - active;
 
-                    weaver_consolidate_log(x, "Track %d: Time %.2f, Bar %ld -> Palette %s, Offset %.2f", t + 1, curr_ramp, (long)round(trigger_ts), pending_palette->s_name, pending_offset);
+                    weaver_consolidate_log(x, "Track %d: Overall Time %.2f, Track Time %.2f, Bar %ld -> Palette %s, Offset %.2f", t + 1, curr_ramp, tr_scan, (long)round(trigger_ts), pending_palette->s_name, pending_offset);
 
                     // Optimization: Unlock old buffer if it was locked
                     if (cur_bufs[other] && cur_samples[other]) {
@@ -403,7 +473,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
                     // Lock new buffer
                     if (palette[other] != gensym("-") && palette[other] != _sym_nothing) {
-                        cur_bufs[other] = weaver_find_buffer_robust(x, palette[other], t + 1, seen_warns);
+                        hashtab_lookup(cache, palette[other], (t_object **)&cur_bufs[other]);
                         if (cur_bufs[other]) {
                             cur_samples[other] = buffer_locksamples(cur_bufs[other]);
                             if (cur_samples[other]) {
@@ -480,9 +550,8 @@ void *weaver_consolidate_thread(t_weaver *x) {
 
     dictobj_release(dict);
     sysmem_freeptr(track_lengths);
-    if (seen_warns) object_free(seen_warns);
-    x->is_consolidating = 0;
     weaver_consolidate_log(x, "Consolidation finished.");
+    qelem_set(x->cleanup_qelem);
     return NULL;
 }
 static t_class *weaver_class;
@@ -676,6 +745,31 @@ void weaver_kick_qtask(t_weaver *x) {
             }
         }
     }
+}
+
+void weaver_cleanup_qtask(t_weaver *x) {
+    if (x->is_consolidating) {
+        systhread_join(x->consolidate_thread, NULL);
+        x->is_consolidating = 0;
+    }
+
+    if (x->palette_cache) {
+        hashtab_clear(x->palette_cache);
+        object_free(x->palette_cache);
+        x->palette_cache = NULL;
+    }
+
+    if (x->palette_refs) {
+        t_buffer_ref *ref = NULL;
+        while (linklist_getsize(x->palette_refs) > 0) {
+            ref = (t_buffer_ref *)linklist_getindex(x->palette_refs, 0);
+            if (ref) object_free(ref);
+            linklist_deleteindex(x->palette_refs, 0);
+        }
+        object_free(x->palette_refs);
+        x->palette_refs = NULL;
+    }
+    weaver_log(x, "Consolidation resources released.");
 }
 
 t_buffer_obj *weaver_find_buffer_robust(t_weaver *x, t_symbol *name, int track_id, t_hashtab *seen_warns) {
@@ -882,6 +976,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->log_qelem = qelem_new(x, (method)weaver_log_qtask);
         x->dirty_qelem = qelem_new(x, (method)weaver_dirty_qtask);
         x->kick_qelem = qelem_new(x, (method)weaver_kick_qtask);
+        x->cleanup_qelem = qelem_new(x, (method)weaver_cleanup_qtask);
         x->log_queue[0] = '\0';
         x->is_consolidating = 0;
         x->consolidate_stop = 0;
@@ -933,9 +1028,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
 void weaver_free(t_weaver *x) {
     x->consolidate_stop = 1;
-    if (x->is_consolidating) {
-        systhread_join(x->consolidate_thread, NULL);
-    }
+    weaver_cleanup_qtask(x);
 
     dsp_free((t_pxobject *)x);
     visualize_cleanup();
@@ -943,6 +1036,7 @@ void weaver_free(t_weaver *x) {
     if (x->log_qelem) qelem_free(x->log_qelem);
     if (x->dirty_qelem) qelem_free(x->dirty_qelem);
     if (x->kick_qelem) qelem_free(x->kick_qelem);
+    if (x->cleanup_qelem) qelem_free(x->cleanup_qelem);
     if (x->proxy) object_free(x->proxy);
 
     if (x->bar_buffer_ref) {
