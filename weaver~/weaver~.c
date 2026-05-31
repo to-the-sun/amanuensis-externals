@@ -314,6 +314,7 @@ void *weaver_consolidate_thread(t_weaver *x) {
             if (x->consolidate_stop) break;
 
             double curr_ramp = (f * 1000.0) / sr_dest;
+            if (f >= n_frames_dest) break; // Optimization: Stop if buffer filled
             double tr_scan = (track_lengths[t] > 0) ? fmod(curr_ramp, track_lengths[t]) : 0;
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(last_tr_scan);
@@ -367,6 +368,8 @@ void *weaver_consolidate_thread(t_weaver *x) {
                 int active = (int)round(control);
                 if (pending_palette != palette[active] || pending_offset != dict_offset[active]) {
                     int other = 1 - active;
+
+                    weaver_consolidate_log(x, "Track %d: Bar %ld -> Palette %s, Offset %.2f", t + 1, (long)round(trigger_ts), pending_palette->s_name, pending_offset);
 
                     // Optimization: Unlock old buffer if it was locked
                     if (cur_bufs[other] && cur_samples[other]) {
