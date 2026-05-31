@@ -195,6 +195,8 @@ void smartloop_free(t_smartloop *x) {
 }
 
 void smartloop_qfn(t_smartloop *x) {
+    // Standard Max right-to-left outlet firing order:
+    // We output the loop endpoint (Index 1) immediately before the loop start point (Index 0).
     if (x->output_zero) {
         outlet_float(x->out_end, 0.0);
         outlet_float(x->out_start, 0.0);
