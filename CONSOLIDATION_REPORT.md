@@ -36,3 +36,19 @@ To reproduce the working behavior, one must:
 3.  Perform the "Resolution Kick" (clear ref, set name) immediately before sample access.
 
 The core lesson is that for offline audio processing in Max, **late binding** (resolving at the last possible microsecond) is far more robust than **early binding** (pre-resolving and caching pointers).
+
+## Refined Pipeline (The "Simulated Ramp" Strategy)
+Following the success of Version 7, we have moved toward a **Unified Processing Pipeline**. Instead of the worker managing its own track traversal and audio weaving logic, it now generates a high-speed "simulated ramp" and feeds it into the exact same DSP logic used for real-time processing.
+
+### Advantages of Unification
+*   **Logical Consistency:** By using the `weaver_process_vector` function for both real-time and offline tasks, we guarantee that the resulting audio is identical, regardless of processing speed.
+*   **Elegance and Maintainability:** Algorithmic changes (e.g., changes to crossfade behavior or loop detection) only need to be implemented once.
+*   **Robustness:** The "late binding" and "kick" logic are now standard across the entire object, providing improved reliability even in real-time mode.
+
+### Future Potential Improvements
+While the current approach favors elegance and consistency, there are avenues for further optimization:
+1.  **Sequential Processing:** Processing tracks one after another (sequentially) rather than in parallel could reduce memory pressure and potentially allow for larger processing buffers.
+2.  **Multithreading:** Splitting the consolidation across multiple worker threads (e.g., one per track) could significantly increase throughput on multi-core systems.
+3.  **Vector Size Optimization:** Experimenting with larger vector sizes during consolidation (beyond the standard 512 samples) might reduce the overhead of main-thread synchronization.
+
+**Note:** For the time being, we are prioritizing the cleaner unified pipeline. It has proven capable of handling and processing any speed of ramp with perfect accuracy, and its simplicity is its greatest strength.
