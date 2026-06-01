@@ -50,6 +50,7 @@ typedef struct _weaver_track {
     long src_error_sent[2];
     double track_length;
     double last_track_scan;
+    long long last_f_dest;
     double last_visualize_ms;
 
     // Thread-safe state handover
@@ -242,6 +243,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     for (long t = 0; t < x->track_cache_count; t++) {
         t_weaver_track *tr = x->track_cache[t];
         tr->last_track_scan = -1.0;
+        tr->last_f_dest = -1;
         tr->busy = 0;
         tr->waiting_for_dict = 0;
         tr->has_pending_data = 0;
@@ -338,6 +340,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_error_sent[1] = 0;
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
+            tr->last_f_dest = -1;
             tr->last_visualize_ms = -1000.0;
 
             // Thread-safe state handover init
@@ -876,6 +879,7 @@ void weaver_clear(t_weaver *x) {
             tr->track_length = 0.0;
             tr->viz_track_length = 0.0;
             tr->last_track_scan = -1.0;
+            tr->last_f_dest = -1;
             tr->busy = 0;
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
@@ -1100,54 +1104,68 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 }
             }
 
-            // 3. One-sample audio weaving (Inside samples_dest check)
+            // 3. Gap-filling audio weaving (Inside samples_dest check)
             if (!tb[t].samples_dest) {
                 tr->last_track_scan = tr_scan;
                 continue;
             }
 
-            long long f_dest = (long long)round(current_scan * tb[t].sr_dest / 1000.0) % tb[t].n_frames_dest;
-            if (f_dest < 0) f_dest += tb[t].n_frames_dest;
-
-            double max_abs[2] = {0.0, 0.0};
-            long long f_src[2] = {-1, -1};
-
-            for (int j = 0; j < 2; j++) {
-                if (tb[t].samples_src[j]) {
-                    double src_ms = tr->offset[j] + current_scan;
-                    f_src[j] = (long long)round(src_ms * tb[t].sr_src[j] / 1000.0);
-                    if (f_src[j] >= 0 && f_src[j] < tb[t].n_frames_src[j]) {
-                        for (long c = 0; c < tb[t].n_chans_src[j]; c++) {
-                            double a = fabs((double)tb[t].samples_src[j][f_src[j] * tb[t].n_chans_src[j] + c]);
-                            if (a > max_abs[j]) max_abs[j] = a;
-                        }
-                    }
-                }
+            long long f_curr = (long long)round(current_scan * tb[t].sr_dest / 1000.0);
+            if (tr->last_f_dest == -1 || main_looped || (f_curr - tr->last_f_dest > 100000)) {
+                tr->last_f_dest = f_curr - 1;
             }
 
             double f1, f2;
-            ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f1);
-            ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, tr->xf.elapsed, tr->xf.samplerate, tr->xf.low_ms, tr->xf.high_ms, &f2);
-            tr->xf.direction = 0.0;
+            for (long long f = tr->last_f_dest + 1; f <= f_curr; f++) {
+                double v_at_f = (double)f * 1000.0 / tb[t].sr_dest;
+                long long f_wrapped = f % tb[t].n_frames_dest;
+                if (f_wrapped < 0) f_wrapped += tb[t].n_frames_dest;
+
+                double max_abs[2] = {0.0, 0.0};
+                double interleaved_s[2][16]; // Max 16 channels for interpolation
+                memset(interleaved_s, 0, sizeof(interleaved_s));
+
+                // Linear Interpolation for source lookups
+                for (int j = 0; j < 2; j++) {
+                    if (tb[t].samples_src[j]) {
+                        double src_ms = tr->offset[j] + v_at_f;
+                        double f_src_raw = src_ms * tb[t].sr_src[j] / 1000.0;
+                        long long f_low = (long long)floor(f_src_raw);
+                        long long f_high = f_low + 1;
+                        double frac = f_src_raw - (double)f_low;
+
+                        if (f_low >= 0 && f_high < tb[t].n_frames_src[j]) {
+                            long n_chans = tb[t].n_chans_src[j] > 16 ? 16 : tb[t].n_chans_src[j];
+                            for (long c = 0; c < n_chans; c++) {
+                                float s_low = tb[t].samples_src[j][f_low * tb[t].n_chans_src[j] + c];
+                                float s_high = tb[t].samples_src[j][f_high * tb[t].n_chans_src[j] + c];
+                                double s_interp = (double)s_low + (double)(s_high - s_low) * frac;
+                                interleaved_s[j][c] = s_interp;
+                                double a = fabs(s_interp);
+                                if (a > max_abs[j]) max_abs[j] = a;
+                            }
+                        }
+                    }
+                }
+
+                ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, f, tb[t].sr_dest, x->low_ms, x->high_ms, &f1);
+                ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, f, tb[t].sr_dest, x->low_ms, x->high_ms, &f2);
+                tr->xf.direction = 0.0; // Direction is only applied once
+
+                for (long c = 0; c < tb[t].n_chans_dest; c++) {
+                    double mix1 = (c < 16) ? interleaved_s[0][c] * f1 : 0.0;
+                    double mix2 = (c < 16) ? interleaved_s[1][c] * f2 : 0.0;
+                    tb[t].samples_dest[f_wrapped * tb[t].n_chans_dest + c] = (float)(mix1 + mix2);
+                }
+            }
 
             int r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
             int r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
             if (r1_done && r2_done && !tr->waiting_for_dict) tr->busy = 0;
 
             tr->xf.last_control = tr->control;
-            tr->xf.elapsed = (long long)round(current_scan * tb[t].sr_dest / 1000.0);
-
-            for (long c = 0; c < tb[t].n_chans_dest; c++) {
-                double mix1 = 0.0;
-                double mix2 = 0.0;
-                if (tb[t].samples_src[0] && f_src[0] >= 0 && f_src[0] < tb[t].n_frames_src[0] && c < tb[t].n_chans_src[0]) {
-                    mix1 = (double)tb[t].samples_src[0][f_src[0] * tb[t].n_chans_src[0] + c] * f1;
-                }
-                if (tb[t].samples_src[1] && f_src[1] >= 0 && f_src[1] < tb[t].n_frames_src[1] && c < tb[t].n_chans_src[1]) {
-                    mix2 = (double)tb[t].samples_src[1][f_src[1] * tb[t].n_chans_src[1] + c] * f2;
-                }
-                tb[t].samples_dest[f_dest * tb[t].n_chans_dest + c] = (float)(mix1 + mix2);
-            }
+            tr->xf.elapsed = f_curr;
+            tr->last_f_dest = f_curr;
             tr->dirty_dest = 1;
 
             if (x->visualize) {
