@@ -48,6 +48,12 @@ typedef struct _weaver_track {
     long dest_warn_sent;
     long src_found[2];
     long src_error_sent[2];
+    long palette_found;
+    long palette_error_sent;
+    t_symbol *last_failed_palette;
+    long stems_found;
+    long stems_error_sent;
+    t_symbol *last_failed_stems;
     double track_length;
     double last_track_scan;
     long long last_f_dest;
@@ -338,6 +344,12 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->src_found[1] = 0;
             tr->src_error_sent[0] = 0;
             tr->src_error_sent[1] = 0;
+            tr->palette_found = 0;
+            tr->palette_error_sent = 0;
+            tr->last_failed_palette = _sym_nothing;
+            tr->stems_found = 0;
+            tr->stems_error_sent = 0;
+            tr->last_failed_stems = _sym_nothing;
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
@@ -510,7 +522,9 @@ void weaver_check_attachments(t_weaver *x) {
 
         t_buffer_obj *b = buffer_ref_getobject(x->track1_ref);
         if (!b) {
-            object_warn((t_object *)x, "polybuffer~ '%s' not found (via %s). Kicking...", x->poly_prefix->s_name, s_t1name->s_name);
+            if (x->poly_found || !x->poly_warn_sent) {
+                object_warn((t_object *)x, "polybuffer~ '%s' not found (via %s). Kicking...", x->poly_prefix->s_name, s_t1name->s_name);
+            }
             buffer_ref_set(x->track1_ref, _sym_nothing);
             buffer_ref_set(x->track1_ref, s_t1name);
             b = buffer_ref_getobject(x->track1_ref);
@@ -535,7 +549,9 @@ void weaver_check_attachments(t_weaver *x) {
     // Bar buffer check
     t_buffer_obj *b_bar = buffer_ref_getobject(x->bar_buffer_ref);
     if (!b_bar) {
-        object_warn((t_object *)x, "bar buffer~ not found. Kicking...");
+        if (x->bar_found || !x->bar_error_sent) {
+            object_warn((t_object *)x, "bar buffer~ not found. Kicking...");
+        }
         buffer_ref_set(x->bar_buffer_ref, _sym_nothing);
         buffer_ref_set(x->bar_buffer_ref, gensym("bar"));
         b_bar = buffer_ref_getobject(x->bar_buffer_ref);
@@ -898,6 +914,12 @@ void weaver_clear(t_weaver *x) {
             tr->src_found[1] = 0;
             tr->src_error_sent[0] = 0;
             tr->src_error_sent[1] = 0;
+            tr->palette_found = 0;
+            tr->palette_error_sent = 0;
+            tr->last_failed_palette = _sym_nothing;
+            tr->stems_found = 0;
+            tr->stems_error_sent = 0;
+            tr->last_failed_stems = _sym_nothing;
 
             crossfade_init(&tr->xf, sys_getsr(), x->low_ms, x->high_ms);
 
@@ -1297,16 +1319,29 @@ void weaver_audio_qtask(t_weaver *x) {
                     if (palette != _sym_nothing && palette != _sym_dash) {
                         t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, palette);
                         if (!buffer_ref_getobject(temp_ref)) {
-                            object_warn((t_object *)x, "Track %lld: palette '%s' not found. Kicking...", (long long)target_track, palette->s_name);
+                            int is_new_error = (tr->palette_found || tr->last_failed_palette != palette || !tr->palette_error_sent);
+                            if (is_new_error) {
+                                object_warn((t_object *)x, "Track %lld: palette '%s' not found. Kicking...", (long long)target_track, palette->s_name);
+                            }
+                            tr->last_failed_palette = palette;
+
                             buffer_ref_set(temp_ref, _sym_nothing);
                             buffer_ref_set(temp_ref, palette);
                             if (!buffer_ref_getobject(temp_ref)) {
-                                object_error((t_object *)x, "Track %lld: palette '%s' still NOT FOUND after kick.", (long long)target_track, palette->s_name);
+                                tr->palette_found = 0;
+                                if (is_new_error) {
+                                    object_error((t_object *)x, "Track %lld: palette '%s' still NOT FOUND after kick.", (long long)target_track, palette->s_name);
+                                    tr->palette_error_sent = 1;
+                                }
                             } else {
                                 palette_exists = 1;
+                                tr->palette_found = 1;
+                                tr->palette_error_sent = 0;
                             }
                         } else {
                             palette_exists = 1;
+                            tr->palette_found = 1;
+                            tr->palette_error_sent = 0;
                         }
                         object_free(temp_ref);
                     }
@@ -1318,17 +1353,30 @@ void weaver_audio_qtask(t_weaver *x) {
                         t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
 
                         if (!buffer_ref_getobject(stems_ref)) {
-                            object_warn((t_object *)x, "Track %lld: palette fallback '%s' not found. Kicking...", (long long)target_track, s_stems->s_name);
+                            int is_new_stem_error = (tr->stems_found || tr->last_failed_stems != s_stems || !tr->stems_error_sent);
+                            if (is_new_stem_error) {
+                                object_warn((t_object *)x, "Track %lld: palette fallback '%s' not found. Kicking...", (long long)target_track, s_stems->s_name);
+                            }
+                            tr->last_failed_stems = s_stems;
+
                             buffer_ref_set(stems_ref, _sym_nothing);
                             buffer_ref_set(stems_ref, s_stems);
+                            if (!buffer_ref_getobject(stems_ref)) {
+                                tr->stems_found = 0;
+                                if (is_new_stem_error) {
+                                    object_error((t_object *)x, "Track %lld: bar %s palette '%s' not found and fallback '%s' could not be bound after kick", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
+                                    tr->stems_error_sent = 1;
+                                }
+                            }
                         }
 
                         if (buffer_ref_getobject(stems_ref)) {
                             weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset 0.0)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
                             palette = s_stems;
                             offset = 0.0;
+                            tr->stems_found = 1;
+                            tr->stems_error_sent = 0;
                         } else {
-                            object_error((t_object *)x, "Track %lld: bar %s palette '%s' not found and fallback '%s' could not be bound after kick", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
                             palette = _sym_dash;
                             offset = 0.0;
                         }
@@ -1362,15 +1410,25 @@ void weaver_audio_qtask(t_weaver *x) {
                 if (!b) {
                     char bufname[256];
                     snprintf(bufname, 256, "%s.%ld", x->poly_prefix->s_name, t + 1);
-                    object_warn((t_object *)x, "Track %ld: destination buffer %s not found. Kicking...", t + 1, bufname);
+                    if (tr->dest_found || !tr->dest_warn_sent) {
+                        object_warn((t_object *)x, "Track %ld: destination buffer %s not found. Kicking...", t + 1, bufname);
+                    }
                     buffer_ref_set(tr->dest_ref, _sym_nothing);
                     buffer_ref_set(tr->dest_ref, gensym(bufname));
                     b = buffer_ref_getobject(tr->dest_ref);
                     if (!b) {
-                        object_error((t_object *)x, "Track %ld: destination buffer %s still NOT FOUND after kick.", t + 1, bufname);
+                        tr->dest_found = 0;
+                        if (!tr->dest_warn_sent) {
+                            object_error((t_object *)x, "Track %ld: destination buffer %s still NOT FOUND after kick.", t + 1, bufname);
+                            tr->dest_warn_sent = 1;
+                        }
                     }
                 }
-                if (b) buffer_setdirty(b);
+                if (b) {
+                    buffer_setdirty(b);
+                    tr->dest_found = 1;
+                    tr->dest_warn_sent = 0;
+                }
                 tr->dirty_dest = 0;
             }
 
