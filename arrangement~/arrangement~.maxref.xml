@@ -3,10 +3,10 @@
 
 <c74object name="arrangement~" module="msp" category="Audio">
 	<digest>
-		Custom arrangement processor for audio stems and palettes.
+		Multi-channel arrangement processor for audio stems and palettes.
 	</digest>
 	<description>
-		Faithfully replicates the arrangement logic for managing audio stems, palettes, and smooth loop transitions.
+		Faithfully replicates the arrangement logic for managing audio stems, palettes, and smooth loop transitions in a multi-channel (MC) environment. Each channel instance runs the arrangement logic independently.
 	</description>
 
 	<!-- METADATA -->
@@ -14,45 +14,46 @@
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">MSP</metadata>
 		<metadata name="tag">Audio</metadata>
+		<metadata name="tag">MC</metadata>
 	</metadatalist>
 
 	<!-- INLETS -->
 	<inletlist>
 		<inlet id="0" type="signal/message">
 			<digest>Signal/Messages</digest>
-			<description>Accepts signal for time ramp and various messages to control parameters and buffers.</description>
+			<description>Accepts signal for time ramp and various messages to control parameters and buffers. Standard messages apply to all channels.</description>
 		</inlet>
 	</inletlist>
 
 	<!-- OUTLETS -->
 	<outletlist>
 		<outlet id="0" type="signal">
-			<digest>out1: result</digest>
-			<description>The processed audio output.</description>
+			<digest>out1: result (MC)</digest>
+			<description>The processed audio output for all channels.</description>
 		</outlet>
 		<outlet id="1" type="signal">
-			<digest>out2: t</digest>
-			<description>Current internal time ramp.</description>
+			<digest>out2: t (MC)</digest>
+			<description>Current internal time ramp for each channel.</description>
 		</outlet>
 		<outlet id="2" type="signal">
-			<digest>out3: zoom1</digest>
-			<description>Calculated zoom start point.</description>
+			<digest>out3: zoom1 (MC)</digest>
+			<description>Calculated zoom start point for each channel.</description>
 		</outlet>
 		<outlet id="3" type="signal">
-			<digest>out4: mix2</digest>
-			<description>Internal crossfade mix output (audition mix).</description>
+			<digest>out4: mix2 (MC)</digest>
+			<description>Internal crossfade mix output (audition mix) for each channel.</description>
 		</outlet>
 		<outlet id="4" type="signal">
-			<digest>out5: zoom2</digest>
-			<description>Calculated zoom duration/end point.</description>
+			<digest>out5: zoom2 (MC)</digest>
+			<description>Calculated zoom duration/end point for each channel.</description>
 		</outlet>
 		<outlet id="5" type="signal">
-			<digest>out6: t delta &lt; 0</digest>
-			<description>Detection of time ramp loop.</description>
+			<digest>out6: t delta &lt; 0 (MC)</digest>
+			<description>Detection of time ramp loop for each channel.</description>
 		</outlet>
 		<outlet id="6" type="signal">
-			<digest>out7: domain</digest>
-			<description>Current song domain (total length in samples).</description>
+			<digest>out7: domain (MC)</digest>
+			<description>Current song domain (total length in samples) for each channel.</description>
 		</outlet>
 	</outletlist>
 
@@ -61,14 +62,25 @@
 
 	<!-- ATTRIBUTES -->
 	<attributelist>
+		<attribute name="chans" get="1" set="1" type="long" size="1">
+			<digest>Number of Channels</digest>
+			<description>Sets the number of independent arrangement instances (MC channels). Default is 1.</description>
+		</attribute>
 		<attribute name="track_id" get="1" set="1" type="long" size="1">
 			<digest>Track ID</digest>
-			<description>Sets the mc_channel to match against the 'track' parameter for auditioning logic. Default is 1.</description>
+			<description>Legacy attribute. Now use 'track' parameter to match against the 1-indexed channel number.</description>
 		</attribute>
 	</attributelist>
 
 	<!-- MESSAGES -->
 	<methodlist>
+		<method name="setvalue">
+			<arg name="channel" type="int" />
+			<arg name="message" type="symbol" />
+			<arg name="value" type="anything" />
+			<digest>Set value for specific channel</digest>
+			<description>Targets a specific channel (1-N) or all channels (0) for a given message and value.</description>
+		</method>
 		<method name="stem">
 			<arg name="buffer_name" type="symbol" />
 			<digest>Set stem buffer</digest>
