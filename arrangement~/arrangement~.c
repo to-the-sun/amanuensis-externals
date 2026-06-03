@@ -7,6 +7,7 @@
 #include "../shared/crossfade.h"
 #include <math.h>
 #include <string.h>
+#include <stdint.h>
 
 // Forward declarations for methods
 void arrangement_stem(void *x, t_symbol *s);
@@ -97,8 +98,12 @@ typedef struct _arrangement_chan {
 typedef struct _arrangement {
     t_pxobject t_obj;
     long chans;
+    long chans_dsp; // Snapshot used in perform64
     t_arrangement_chan *chan_states;
     t_critical lock;
+
+    long inlet_channels;
+    long outlet_channels[7];
 } t_arrangement;
 
 typedef struct _arrangement_buffer_info {
@@ -133,6 +138,7 @@ static inline double gen_round(double v, double step, const char *mode) {
 
 static t_arrangement_buffer_info lock_buffer(t_buffer_ref *ref) {
     t_arrangement_buffer_info info = {NULL, 0, 0};
+    if (!ref) return info;
     t_buffer_obj *obj = buffer_ref_getobject(ref);
     if (obj) {
         info.samples = buffer_locksamples(obj);
@@ -145,6 +151,7 @@ static t_arrangement_buffer_info lock_buffer(t_buffer_ref *ref) {
 }
 
 static void unlock_buffer(t_buffer_ref *ref) {
+    if (!ref) return;
     t_buffer_obj *obj = buffer_ref_getobject(ref);
     if (obj) buffer_unlocksamples(obj);
 }
@@ -170,13 +177,13 @@ void arrangement_alloc_channels(t_arrangement *x, long n) {
     critical_enter(x->lock);
     if (x->chan_states) {
         for (int i = 0; i < x->chans; i++) {
-            object_free(x->chan_states[i].stem_ref);
-            object_free(x->chan_states[i].palette_ref);
-            object_free(x->chan_states[i].product_ref);
-            object_free(x->chan_states[i].comp_ref);
-            object_free(x->chan_states[i].stats_ref);
-            object_free(x->chan_states[i].following_ref);
-            object_free(x->chan_states[i].bar_ref);
+            if (x->chan_states[i].stem_ref) object_free(x->chan_states[i].stem_ref);
+            if (x->chan_states[i].palette_ref) object_free(x->chan_states[i].palette_ref);
+            if (x->chan_states[i].product_ref) object_free(x->chan_states[i].product_ref);
+            if (x->chan_states[i].comp_ref) object_free(x->chan_states[i].comp_ref);
+            if (x->chan_states[i].stats_ref) object_free(x->chan_states[i].stats_ref);
+            if (x->chan_states[i].following_ref) object_free(x->chan_states[i].following_ref);
+            if (x->chan_states[i].bar_ref) object_free(x->chan_states[i].bar_ref);
         }
         sysmem_freeptr(x->chan_states);
     }
@@ -195,8 +202,8 @@ void arrangement_alloc_channels(t_arrangement *x, long n) {
 
             c->gain1 = 1; c->gain2 = 1; c->gain = 1; c->lead = 44;
             c->leads = 44100; c->zoom2 = 1;
-            crossfade_init(&c->xf_audition, sys_getsr(), 22.653, 4999.0);
-            crossfade_init(&c->xf_interpolation, sys_getsr(), 22.653, 4999.0);
+            crossfade_init(&c->xf_audition, sys_getsr() > 0 ? sys_getsr() : 44100.0, 22.653, 4999.0);
+            crossfade_init(&c->xf_interpolation, sys_getsr() > 0 ? sys_getsr() : 44100.0, 22.653, 4999.0);
         }
     } else {
         x->chan_states = NULL;
@@ -265,6 +272,9 @@ void *arrangement_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         x->chan_states = NULL;
         x->chans = 1;
+        x->chans_dsp = 0;
+        x->inlet_channels = 0;
+        memset(x->outlet_channels, 0, sizeof(x->outlet_channels));
 
         attr_args_process(x, argc, argv);
         arrangement_alloc_channels(x, x->chans);
@@ -292,6 +302,10 @@ t_max_err arrangement_chans_set(t_arrangement *x, void *attr, long argc, t_atom 
         if (n > MC_MAX_CHANS) n = MC_MAX_CHANS;
         if (n != x->chans) {
             arrangement_alloc_channels(x, n);
+            // Rebuild DSP chain if active
+            if (sys_getdspstate()) {
+                object_method(x, gensym("dsp_ask"));
+            }
         }
     }
     return MAX_ERR_NONE;
@@ -314,26 +328,29 @@ void arrangement_assist(t_arrangement *x, void *b, long m, long a, char *s) {
 }
 
 t_max_err arrangement_notify(t_arrangement *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
-    critical_enter(x->lock);
-    for (int i = 0; i < x->chans; i++) {
-        buffer_ref_notify(x->chan_states[i].stem_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].palette_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].product_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].comp_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].stats_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].following_ref, s, msg, sender, data);
-        buffer_ref_notify(x->chan_states[i].bar_ref, s, msg, sender, data);
+    if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
+        if (x->chan_states) {
+            for (int i = 0; i < x->chans; i++) {
+                if (x->chan_states[i].stem_ref) buffer_ref_notify(x->chan_states[i].stem_ref, s, msg, sender, data);
+                if (x->chan_states[i].palette_ref) buffer_ref_notify(x->chan_states[i].palette_ref, s, msg, sender, data);
+                if (x->chan_states[i].product_ref) buffer_ref_notify(x->chan_states[i].product_ref, s, msg, sender, data);
+                if (x->chan_states[i].comp_ref) buffer_ref_notify(x->chan_states[i].comp_ref, s, msg, sender, data);
+                if (x->chan_states[i].stats_ref) buffer_ref_notify(x->chan_states[i].stats_ref, s, msg, sender, data);
+                if (x->chan_states[i].following_ref) buffer_ref_notify(x->chan_states[i].following_ref, s, msg, sender, data);
+                if (x->chan_states[i].bar_ref) buffer_ref_notify(x->chan_states[i].bar_ref, s, msg, sender, data);
+            }
+        }
+        critical_exit(x->lock);
     }
-    critical_exit(x->lock);
     return MAX_ERR_NONE;
 }
 
 // Unified message dispatcher
 void arrangement_dispatch(t_arrangement *x, long chan_idx, t_symbol *s, long argc, t_atom *argv) {
-    if (!x->chan_states) return;
+    if (!x->chan_states || argc < 1) return;
 
-    int start = (chan_idx == 0) ? 0 : chan_idx - 1;
-    int end = (chan_idx == 0) ? x->chans : chan_idx;
+    int start = (chan_idx == 0) ? 0 : (int)chan_idx - 1;
+    int end = (chan_idx == 0) ? (int)x->chans : (int)chan_idx;
 
     if (start < 0 || end > x->chans) return;
 
@@ -394,7 +411,7 @@ void arrangement_stats(void *x, t_symbol *s) { arrangement_dispatch((t_arrangeme
 void arrangement_following(void *x, t_symbol *s) { arrangement_dispatch((t_arrangement *)x, 0, gensym("following"), 1, (t_atom *)&s); }
 void arrangement_bar(void *x, t_symbol *s) { arrangement_dispatch((t_arrangement *)x, 0, gensym("bar"), 1, (t_atom *)&s); }
 
-#define AR_PARAM_METHOD(name, sel) void arrangement_##name(void *x, double v) { t_atom a; atom_setfloat(&a, v); arrangement_dispatch((t_arrangement *)x, 0, gensym(sel), 1, &a); }
+#define AR_PARAM_METHOD(name, sel) void arrangement_##name(void *x, double v) { t_atom a; atom_setfloat(&a, (float)v); arrangement_dispatch((t_arrangement *)x, 0, gensym(sel), 1, &a); }
 AR_PARAM_METHOD(tracks, "tracks") AR_PARAM_METHOD(track, "track") AR_PARAM_METHOD(gain1, "gain1") AR_PARAM_METHOD(gain2, "gain2") AR_PARAM_METHOD(gain, "gain")
 AR_PARAM_METHOD(offset, "offset") AR_PARAM_METHOD(rt_exporting, "rt_exporting") AR_PARAM_METHOD(ready, "ready") AR_PARAM_METHOD(auditioning, "auditioning")
 AR_PARAM_METHOD(lead, "lead") AR_PARAM_METHOD(interpolation, "interpolation") AR_PARAM_METHOD(leads, "leads") AR_PARAM_METHOD(from, "from") AR_PARAM_METHOD(to, "to")
@@ -403,30 +420,52 @@ AR_PARAM_METHOD(zoom1, "zoom1") AR_PARAM_METHOD(zoom2, "zoom2") AR_PARAM_METHOD(
 AR_PARAM_METHOD(restart, "restart")
 
 void arrangement_dsp64(t_arrangement *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
-    long nchans_in = (long)object_method(dsp64, gensym("getnumchannels"), (t_object *)x, 0);
+    x->inlet_channels = (long)(uintptr_t)object_method(dsp64, gensym("getnumchannels"), (t_object *)x, 0);
+    x->chans_dsp = x->chans;
     for (int i = 0; i < 7; i++) {
-        object_method(dsp64, gensym("setnumchannels"), (t_object *)x, i, x->chans);
+        object_method(dsp64, gensym("setnumchannels"), (t_object *)x, i, x->chans_dsp);
+        x->outlet_channels[i] = x->chans_dsp;
     }
-    // We pass nchans_in as userparam. Use uintptr_t for safety on 64-bit.
-    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)arrangement_perform64, 0, (void *)(uintptr_t)nchans_in);
+
+    if (x->chan_states) {
+        for (int i = 0; i < x->chans_dsp; i++) {
+            crossfade_update_params(&x->chan_states[i].xf_audition, samplerate, 22.653, 4999.0);
+            crossfade_update_params(&x->chan_states[i].xf_interpolation, samplerate, 22.653, 4999.0);
+        }
+    }
+
+    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)arrangement_perform64, 0, NULL);
 }
 
 void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
-    long nchans_in = (long)(uintptr_t)userparam;
     double samplerate = sys_getsr();
     if (samplerate <= 0) samplerate = 44100.0;
 
-    for (int c = 0; c < x->chans; c++) {
-        t_arrangement_chan *chan = &x->chan_states[c];
-        double *in_ramp = ins[c % nchans_in];
+    // Zero all outputs first
+    for (int i = 0; i < numouts; i++) {
+        if (outs[i]) memset(outs[i], 0, sampleframes * sizeof(double));
+    }
 
-        double *out1 = outs[0 * x->chans + c];
-        double *out2 = outs[1 * x->chans + c];
-        double *out3 = outs[2 * x->chans + c];
-        double *out4 = outs[3 * x->chans + c];
-        double *out5 = outs[4 * x->chans + c];
-        double *out6 = outs[5 * x->chans + c];
-        double *out7 = outs[6 * x->chans + c];
+    if (critical_tryenter(x->lock) != MAX_ERR_NONE) return;
+
+    if (!x->chan_states) {
+        critical_exit(x->lock);
+        return;
+    }
+
+    long active_chans = x->chans_dsp;
+    if (active_chans > x->chans) active_chans = x->chans;
+
+    for (int c = 0; c < active_chans; c++) {
+        t_arrangement_chan *chan = &x->chan_states[c];
+
+        double *in_ramp = (x->inlet_channels > 0) ? ins[c % x->inlet_channels] : NULL;
+
+        double *out_vecs[7];
+        for (int j = 0; j < 7; j++) {
+            long out_idx = j * x->chans_dsp + c;
+            out_vecs[j] = (out_idx < numouts) ? outs[out_idx] : NULL;
+        }
 
         t_arrangement_buffer_info stem_info = lock_buffer(chan->stem_ref);
         t_arrangement_buffer_info palette_info = lock_buffer(chan->palette_ref);
@@ -435,7 +474,8 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
         t_arrangement_buffer_info comp_info = lock_buffer(chan->comp_ref);
 
         for (int i = 0; i < sampleframes; i++) {
-            double o1 = 0, o2 = 0, o3 = 0, o4 = 0, o5 = 0, o6 = 0, o7 = 0;
+            double o[7] = {0, 0, 0, 0, 0, 0, 0};
+            double elapsed = in_ramp ? in_ramp[i] : (double)chan->elapsed_counter;
 
             if (chan->ready || chan->rt_exporting) {
                 if (chan->domain == 0.0) {
@@ -454,15 +494,15 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
                 double start = fmax(0.0, gen_round(chan->from - chan->lead, bar_length, "floor"));
                 double end = fmin(chan->domain, gen_round(chan->to + chan->lead, bar_length, "ceil"));
 
-                chan->t = (double)chan->elapsed_counter - chan->go + start;
-                chan->extended_t = (double)chan->elapsed_counter - chan->delayed_go + start;
+                chan->t = elapsed - chan->go + start;
+                chan->extended_t = elapsed - chan->delayed_go + start;
 
                 int from_changed = (chan->from != chan->last_from);
                 int to_changed = (chan->to != chan->last_to);
 
                 if (((from_changed || to_changed) && chan->from != 0) || chan->t > end || chan->restart) {
                     chan->restart = 0;
-                    chan->go = (double)chan->elapsed_counter;
+                    chan->go = elapsed;
                     chan->loops += 1.0;
                     chan->zoom1 = fmax(0.0, start);
                     chan->zoom2 = fmin(chan->domain, end) - chan->zoom1;
@@ -486,8 +526,8 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
                     double mix1, mix2, sum;
                     int busy;
                     crossfade_process(&chan->xf_audition, (double)on, surround, audition, &mix1, &mix2, &sum, &busy);
-                    o4 = mix2;
-                    o1 = sum;
+                    o[3] = mix2;
+                    o[0] = sum;
 
                     if (!on && ((double)busy - chan->last_out6_busy < 0)) {
                         poke_info(comp_info, chan->t, 1.0f);
@@ -498,15 +538,15 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
                     }
                     chan->last_out6_busy = (double)busy;
                 } else {
-                    o1 = peek_info(stem_info, chan->t);
+                    o[0] = peek_info(stem_info, chan->t);
                 }
 
                 if (chan->interpolation) {
                     double trail = peek_info(stem_info, chan->extended_t) * chan->gain2;
                     double mix1, mix2, sum;
                     int busy;
-                    crossfade_process(&chan->xf_interpolation, chan->loops, trail, o1, &mix1, &mix2, &sum, &busy);
-                    o1 = sum;
+                    crossfade_process(&chan->xf_interpolation, chan->loops, trail, o[0], &mix1, &mix2, &sum, &busy);
+                    o[0] = sum;
                     if ((double)busy - chan->last_fading_busy < 0) {
                         chan->delayed_go = chan->go;
                     }
@@ -515,22 +555,18 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
             }
 
             if (chan->domain <= 0) chan->t *= 0;
-            o1 *= chan->gain;
-            o2 = chan->t;
-            o3 = chan->zoom1;
-            o5 = chan->zoom2;
-            o6 = (chan->t - chan->last_t < 0) ? 1.0 : 0.0;
-            o7 = chan->domain;
+            o[0] *= chan->gain;
+            o[1] = chan->t;
+            o[2] = chan->zoom1;
+            o[4] = chan->zoom2;
+            o[5] = (chan->t - chan->last_t < 0) ? 1.0 : 0.0;
+            o[6] = chan->domain;
 
             chan->last_t = chan->t;
 
-            out1[i] = o1;
-            out2[i] = o2;
-            out3[i] = o3;
-            out4[i] = o4;
-            out5[i] = o5;
-            out6[i] = o6;
-            out7[i] = o7;
+            for (int j = 0; j < 7; j++) {
+                if (out_vecs[j]) out_vecs[j][i] = o[j];
+            }
 
             chan->elapsed_counter++;
         }
@@ -541,4 +577,5 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
         unlock_buffer(chan->bar_ref);
         unlock_buffer(chan->comp_ref);
     }
+    critical_exit(x->lock);
 }
