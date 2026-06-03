@@ -164,6 +164,7 @@ static void poke_info(t_arrangement_buffer_info info, double index, float value)
 }
 
 void ext_main(void *r) {
+    common_symbols_init();
     t_class *c = class_new("arrangement~", (method)arrangement_new, (method)arrangement_free, sizeof(t_arrangement), 0L, A_GIMME, 0);
 
     class_addmethod(c, (method)arrangement_dsp64, "dsp64", A_CANT, 0);
@@ -293,7 +294,7 @@ void arrangement_assist(t_arrangement *x, void *b, long m, long a, char *s) {
             case 0: sprintf(s, "(signal) out1: result"); break;
             case 1: sprintf(s, "(signal) out2: t"); break;
             case 2: sprintf(s, "(signal) out3: zoom1"); break;
-            case 3: sprintf(s, "(signal) out4: crossfade mix (mix1)"); break;
+            case 3: sprintf(s, "(signal) out4: crossfade mix (mix2)"); break;
             case 4: sprintf(s, "(signal) out5: zoom2"); break;
             case 5: sprintf(s, "(signal) out6: t delta < 0"); break;
             case 6: sprintf(s, "(signal) out7: domain"); break;
@@ -391,7 +392,6 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
             double bar_length = mstosamps(peek_info(bar_info, 0), samplerate);
             double start = fmax(0.0, gen_round(x->from - x->lead, bar_length, "floor"));
             double end = fmin(x->domain, gen_round(x->to + x->lead, bar_length, "ceil"));
-            // double length = end - start; // Calculated in genexpr but not used as out
 
             x->t = (double)x->elapsed_counter - x->go + start;
             x->extended_t = (double)x->elapsed_counter - x->delayed_go + start;
@@ -425,7 +425,7 @@ void arrangement_perform64(t_arrangement *x, t_object *dsp64, double **ins, long
                 double mix1, mix2, sum;
                 int busy;
                 crossfade_process(&x->xf_audition, (double)on, surround, audition, &mix1, &mix2, &sum, &busy);
-                o4 = mix1;
+                o4 = mix2; // Mapping out4 to mix2 as in original genexpr
                 o1 = sum;
 
                 if (!on && ((double)busy - x->last_out6_busy < 0)) { // change(out6) < 0

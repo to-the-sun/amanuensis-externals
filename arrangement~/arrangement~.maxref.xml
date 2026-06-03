@@ -39,8 +39,8 @@
 			<description>Calculated zoom start point.</description>
 		</outlet>
 		<outlet id="3" type="signal">
-			<digest>out4: mix1</digest>
-			<description>Internal crossfade mix output (surround mix).</description>
+			<digest>out4: mix2</digest>
+			<description>Internal crossfade mix output (audition mix).</description>
 		</outlet>
 		<outlet id="4" type="signal">
 			<digest>out5: zoom2</digest>
