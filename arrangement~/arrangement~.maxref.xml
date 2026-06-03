@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="arrangement~" module="msp" category="Audio">
+	<digest>
+		Multi-channel arrangement processor for audio stems and palettes.
+	</digest>
+	<description>
+		Faithfully replicates the arrangement logic for managing audio stems, palettes, and smooth loop transitions in a multi-channel (MC) environment. Each channel instance runs the arrangement logic independently.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">MSP</metadata>
+		<metadata name="tag">Audio</metadata>
+		<metadata name="tag">MC</metadata>
+	</metadatalist>
+
+	<!-- INLETS -->
+	<inletlist>
+		<inlet id="0" type="signal/message">
+			<digest>Signal/Messages</digest>
+			<description>Accepts signal for time ramp and various messages to control parameters and buffers. Standard messages apply to all channels.</description>
+		</inlet>
+	</inletlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>out1: result (MC)</digest>
+			<description>The processed audio output for all channels.</description>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>out2: t (MC)</digest>
+			<description>Current internal time ramp for each channel.</description>
+		</outlet>
+		<outlet id="2" type="signal">
+			<digest>out3: zoom1 (MC)</digest>
+			<description>Calculated zoom start point for each channel.</description>
+		</outlet>
+		<outlet id="3" type="signal">
+			<digest>out4: mix2 (MC)</digest>
+			<description>Internal crossfade mix output (audition mix) for each channel.</description>
+		</outlet>
+		<outlet id="4" type="signal">
+			<digest>out5: zoom2 (MC)</digest>
+			<description>Calculated zoom duration/end point for each channel.</description>
+		</outlet>
+		<outlet id="5" type="signal">
+			<digest>out6: t delta &lt; 0 (MC)</digest>
+			<description>Detection of time ramp loop for each channel.</description>
+		</outlet>
+		<outlet id="6" type="signal">
+			<digest>out7: domain (MC)</digest>
+			<description>Current song domain (total length in samples) for each channel.</description>
+		</outlet>
+	</outletlist>
+
+	<!-- ARGUMENTS -->
+	<!-- No mandatory arguments for now -->
+
+	<!-- ATTRIBUTES -->
+	<attributelist>
+		<attribute name="chans" get="1" set="1" type="long" size="1">
+			<digest>Number of Channels</digest>
+			<description>Sets the number of independent arrangement instances (MC channels). Default is 1.</description>
+		</attribute>
+		<attribute name="track_id" get="1" set="1" type="long" size="1">
+			<digest>Track ID</digest>
+			<description>Legacy attribute. Now use 'track' parameter to match against the 1-indexed channel number.</description>
+		</attribute>
+	</attributelist>
+
+	<!-- MESSAGES -->
+	<methodlist>
+		<method name="setvalue">
+			<arg name="channel" type="int" />
+			<arg name="message" type="symbol" />
+			<arg name="value" type="anything" />
+			<digest>Set value for specific channel</digest>
+			<description>Targets a specific channel (1-N) or all channels (0) for a given message and value.</description>
+		</method>
+		<method name="stem">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set stem buffer</digest>
+			<description>Changes the name of the referenced stem buffer.</description>
+		</method>
+		<method name="palette">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set palette buffer</digest>
+			<description>Changes the name of the referenced palette buffer.</description>
+		</method>
+		<method name="product">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set product buffer</digest>
+			<description>Changes the name of the referenced product buffer.</description>
+		</method>
+		<method name="comp">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set comp buffer</digest>
+			<description>Changes the name of the referenced comp buffer.</description>
+		</method>
+		<method name="stats">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set stats buffer</digest>
+			<description>Changes the name of the referenced stats buffer.</description>
+		</method>
+		<method name="following">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set following buffer</digest>
+			<description>Changes the name of the referenced following buffer.</description>
+		</method>
+		<method name="bar">
+			<arg name="buffer_name" type="symbol" />
+			<digest>Set bar buffer</digest>
+			<description>Changes the name of the referenced bar buffer.</description>
+		</method>
+
+		<method name="tracks">
+			<arg name="value" type="float" />
+			<digest>Set tracks parameter</digest>
+			<description>Sets the tracks numeric value.</description>
+		</method>
+		<method name="track">
+			<arg name="value" type="float" />
+			<digest>Set track parameter</digest>
+			<description>Sets the current track numeric value.</description>
+		</method>
+		<method name="gain1">
+			<arg name="value" type="float" />
+			<digest>Set gain1 parameter</digest>
+			<description>Sets the gain1 numeric value.</description>
+		</method>
+		<method name="gain2">
+			<arg name="value" type="float" />
+			<digest>Set gain2 parameter</digest>
+			<description>Sets the gain2 numeric value.</description>
+		</method>
+		<method name="gain">
+			<arg name="value" type="float" />
+			<digest>Set gain parameter</digest>
+			<description>Sets the master gain numeric value.</description>
+		</method>
+		<method name="offset">
+			<arg name="value" type="float" />
+			<digest>Set offset parameter</digest>
+			<description>Sets the offset numeric value.</description>
+		</method>
+		<method name="rt_exporting">
+			<arg name="value" type="float" />
+			<digest>Set rt_exporting parameter</digest>
+			<description>Sets the real-time exporting flag.</description>
+		</method>
+		<method name="ready">
+			<arg name="value" type="float" />
+			<digest>Set ready parameter</digest>
+			<description>Sets the ready flag.</description>
+		</method>
+		<method name="auditioning">
+			<arg name="value" type="float" />
+			<digest>Set auditioning parameter</digest>
+			<description>Sets the auditioning flag.</description>
+		</method>
+		<method name="lead">
+			<arg name="value" type="float" />
+			<digest>Set lead parameter</digest>
+			<description>Sets the lead numeric value.</description>
+		</method>
+		<method name="interpolation">
+			<arg name="value" type="float" />
+			<digest>Set interpolation parameter</digest>
+			<description>Sets the interpolation flag.</description>
+		</method>
+
+		<method name="leads">
+			<arg name="value" type="float" />
+			<digest>Set leads history</digest>
+			<description>Sets the leads history value.</description>
+		</method>
+		<method name="from">
+			<arg name="value" type="float" />
+			<digest>Set from history</digest>
+			<description>Sets the 'from' history value (loop start).</description>
+		</method>
+		<method name="to">
+			<arg name="value" type="float" />
+			<digest>Set to history</digest>
+			<description>Sets the 'to' history value (loop end).</description>
+		</method>
+		<method name="go">
+			<arg name="value" type="float" />
+			<digest>Set go history</digest>
+			<description>Sets the 'go' history value.</description>
+		</method>
+		<method name="extended_t">
+			<arg name="value" type="float" />
+			<digest>Set extended_t history</digest>
+			<description>Sets the extended_t history value.</description>
+		</method>
+		<method name="delayed_go">
+			<arg name="value" type="float" />
+			<digest>Set delayed_go history</digest>
+			<description>Sets the delayed_go history value.</description>
+		</method>
+		<method name="loops">
+			<arg name="value" type="float" />
+			<digest>Set loops history</digest>
+			<description>Sets the loops history value.</description>
+		</method>
+		<method name="zoom1">
+			<arg name="value" type="float" />
+			<digest>Set zoom1 history</digest>
+			<description>Sets the zoom1 history value.</description>
+		</method>
+		<method name="zoom2">
+			<arg name="value" type="float" />
+			<digest>Set zoom2 history</digest>
+			<description>Sets the zoom2 history value.</description>
+		</method>
+		<method name="t">
+			<arg name="value" type="float" />
+			<digest>Set t history</digest>
+			<description>Sets the t history value.</description>
+		</method>
+		<method name="debug">
+			<arg name="value" type="float" />
+			<digest>Set debug history</digest>
+			<description>Sets the debug history value.</description>
+		</method>
+		<method name="domain">
+			<arg name="value" type="float" />
+			<digest>Set domain history</digest>
+			<description>Sets the domain history value.</description>
+		</method>
+		<method name="restart">
+			<arg name="value" type="float" />
+			<digest>Set restart history</digest>
+			<description>Sets the restart history value.</description>
+		</method>
+	</methodlist>
+
+	<seealsolist>
+		<seealso name="weaver~" />
+		<seealso name="smartloop" />
+		<seealso name="crucible" />
+		<seealso name="rebar" />
+	</seealsolist>
+</c74object>
