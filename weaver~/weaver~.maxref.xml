@@ -27,8 +27,12 @@
 			<digest>Outlet 1: Track ID on Loop</digest>
 			<description>Whenever a track's individual ramp loops (including when the main ramp loops), it outputs an integer corresponding to that track ID.</description>
 		</outlet>
-		<outlet id="2" type="anything">
-			<digest>Outlet 2: Logging Outlet</digest>
+		<outlet id="2" type="bang">
+			<digest>Outlet 2: Consolidate Complete</digest>
+			<description>Sends a bang when the offline consolidation process has finished.</description>
+		</outlet>
+		<outlet id="3" type="anything">
+			<digest>Outlet 3: Logging Outlet</digest>
 			<description>Outputs diagnostic information when the log attribute is enabled.</description>
 		</outlet>
 	</outletlist>
@@ -53,7 +57,7 @@
 		</method>
 		<method name="consolidate">
 			<digest>Process all tracks offline</digest>
-			<description>Runs each track buffer in the referenced polybuffer~ through the same weaving process that would be done in real-time, but as quickly as possible using a simulated ramp from 0 to the end of the song. The total song length and individual track looping lengths are determined from the transcript dictionary. While consolidation is running, real-time attention to the input ramp is paused. Sends verbose logging messages to the second outlet.</description>
+			<description>Runs each track buffer in the referenced polybuffer~ through the same weaving process that would be done in real-time, but as quickly as possible using a simulated ramp from 0 to the end of the song. The total song length and individual track looping lengths are determined from the transcript dictionary. While consolidation is running, real-time attention to the input ramp is paused. Sends a bang to the second outlet when finished, and verbose logging messages to the third outlet.</description>
 		</method>
 		<method name="list">
 			<digest>Update individual track lengths</digest>

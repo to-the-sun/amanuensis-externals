@@ -120,6 +120,7 @@ typedef struct _weaver {
     long log;
     long visualize;
     void *log_outlet;
+    void *bang_outlet;
     void *loop_outlet;
     t_buffer_ref *bar_buffer_ref;
     t_buffer_ref *track1_ref;
@@ -635,6 +636,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         // 2. Create outlets (before any logging happens)
         x->log_outlet = outlet_new((t_object *)x, NULL);
+        x->bang_outlet = outlet_new((t_object *)x, NULL);
         x->loop_outlet = outlet_new((t_object *)x, NULL);
 
         // 3. Process Arguments
@@ -750,7 +752,8 @@ void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     } else { // ASSIST_OUTLET
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (int): Track ID on Loop"); break;
-            case 1: sprintf(s, "Outlet 2 (anything): Logging Outlet"); break;
+            case 1: sprintf(s, "Outlet 2 (bang): Consolidate Complete"); break;
+            case 2: sprintf(s, "Outlet 3 (anything): Logging Outlet"); break;
         }
     }
 }
@@ -1224,6 +1227,7 @@ void weaver_audio_qtask(t_weaver *x) {
             t_weaver_consolidate_job *job = (t_weaver_consolidate_job *)log_entry->job;
             if (job) {
                 sysmem_freeptr(job);
+                outlet_bang(x->bang_outlet);
             }
         }
         t_weaver_log_entry *next = log_entry->next;
