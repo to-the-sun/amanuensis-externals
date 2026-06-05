@@ -23,6 +23,7 @@ state = {
     "palettes": {},
     "bar_length": 125.0,
     "current_offset": 0.0,
+    "loop_start": 0.0,
 
     # Weaver State
     "data_points_by_track": {},
@@ -82,6 +83,9 @@ def process_packet(text):
                     is_building = True
                 if "current_offset" in pkt:
                     state["current_offset"] = float(pkt["current_offset"])
+                    is_building = True
+                if "loop_start" in pkt:
+                    state["loop_start"] = float(pkt["loop_start"])
                     is_building = True
                 if "building" in pkt and "palettes" not in pkt:
                     state["palettes"] = {"default": {"building": pkt["building"]}}
@@ -167,7 +171,7 @@ def handle_client(sock):
         except Exception: break
     sock.close()
 
-def draw_building(surface, palettes, bar_length, current_offset, fonts):
+def draw_building(surface, palettes, bar_length, current_offset, loop_start, fonts):
     w, h = surface.get_size()
     surface.fill((38, 38, 46)) # BACKGROUND_BUILDING
 
@@ -193,6 +197,10 @@ def draw_building(surface, palettes, bar_length, current_offset, fonts):
         # Palette Label
         p_label = fonts["building_large"].render(f"Palette: {p_name}", True, (255, 255, 255))
         surface.blit(p_label, (grid_left, p_top - 25))
+
+        # Display loop_start in the corner
+        ls_label = fonts["building_normal"].render(f"loop_start: {loop_start:.2f}", True, (150, 150, 150))
+        surface.blit(ls_label, (w - ls_label.get_width() - 10, p_top - 25))
 
         # draw working_memory timeline
         all_ts = [
@@ -236,8 +244,9 @@ def draw_building(surface, palettes, bar_length, current_offset, fonts):
                     if span_data:
                         try:
                             offset_val = float(track_id.split('-')[1])
-                            min_abs_span_ts = min(span_data) + offset_val
-                            max_abs_span_ts = max(span_data) + offset_val + bar_length
+                            # Subtract loop_start for visual position calculation only
+                            min_abs_span_ts = (min(span_data) - loop_start) + offset_val
+                            max_abs_span_ts = (max(span_data) - loop_start) + offset_val + bar_length
 
                             start_x = grid_left + grid_w * (min_abs_span_ts - min_ts) / span_ts
                             end_x = grid_left + grid_w * (max_abs_span_ts - min_ts) / span_ts
@@ -250,7 +259,8 @@ def draw_building(surface, palettes, bar_length, current_offset, fonts):
                             surface.blit(s, (start_x, bar_y - bar_height / 2))
 
                             for bar_relative_ts in span_data:
-                                bar_abs_start_ts = bar_relative_ts + offset_val
+                                # Subtract loop_start for visual position calculation only
+                                bar_abs_start_ts = (bar_relative_ts - loop_start) + offset_val
                                 bar_start_x = grid_left + grid_w * (bar_abs_start_ts - min_ts) / span_ts
                                 bar_width_pixels = (grid_w * bar_length) / span_ts
 
@@ -258,7 +268,8 @@ def draw_building(surface, palettes, bar_length, current_offset, fonts):
                                 s.fill((90, 90, 130, 128))
                                 surface.blit(s, (bar_start_x, bar_y - bar_height / 2))
 
-                                label_text = f"{bar_relative_ts:.0f}"
+                                # Display relative value modified by loop_start subtraction
+                                label_text = f"{(bar_relative_ts - loop_start):.0f}"
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
                                 surface.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
 
@@ -409,6 +420,7 @@ def run_gui():
             p_palettes = state["palettes"].copy()
             p_bar_len = state["bar_length"]
             p_offset = state["current_offset"]
+            p_loop_start = state["loop_start"]
             p_points = {tid: list(pts) for tid, pts in state["data_points_by_track"].items()}
             p_labels = {tid: list(lbs) for tid, lbs in state["labels_by_track"].items()}
             p_busy = state["busy_states"].copy()
@@ -417,7 +429,7 @@ def run_gui():
             p_ramp_dur = state["main_ramp_duration"]
 
         building_surf = screen.subsurface((0, 0, 1200, 400))
-        draw_building(building_surf, p_palettes, p_bar_len, p_offset, fonts)
+        draw_building(building_surf, p_palettes, p_bar_len, p_offset, p_loop_start, fonts)
 
         weaver_surf = screen.subsurface((0, 400, 1200, 600))
         view_width_ms = max(p_ramp_dur, p_max_ms)
