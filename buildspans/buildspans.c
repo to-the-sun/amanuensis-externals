@@ -445,7 +445,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
         sysmem_freeptr(unique_tracks);
     }
     long bar_length = buildspans_get_bar_length(x);
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld}", x->current_offset, bar_length);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
 
     visualize((t_object *)x, json_buffer);
 
