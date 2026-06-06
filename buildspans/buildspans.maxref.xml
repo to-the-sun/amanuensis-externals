@@ -3,13 +3,21 @@
 <c74object name="buildspans" module="max" category="Analysis">
 	<digest>Assembles spans of notes and offsets for a music transcript</digest>
 	<description>
-		The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
-		1. **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This also occurs if the global **offset** is updated to a value that creates a gap larger than one bar length beyond the performance's most recent activity. These checks happen after the deferred rating check.
-		2. **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a new bar is started. The object evaluates the previous bar against the span and will end the span before that previous bar if either of these two conditions are met:
-		a. Including the previous bar would have decreased the span's overall rating.
-		b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
-		The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
-		A bang to the first inlet will flush (end and output) all currently open spans for all tracks and palettes.
+		The `buildspans` object is an analysis engine designed to group discrete note events and timing offsets into contiguous "spans" of bars. It operates by maintaining an internal dictionary of "building" spans, organized hierarchically by Palette, Track (which includes an offset identifier), and Bar timestamp.
+
+		A span is defined as a contiguous sequence of bars within a single track. The object intelligently determines when to end a span and begin a new one based on two primary mechanisms:
+
+		1. **Discontinuity Detection:**
+		   - **Temporal Gaps:** A span ends if a newly received timestamp falls more than one bar length beyond the end of the most recent bar in that span.
+		   - **Offset Shifts:** If the global offset is updated (Inlet 2) to a value that would create a significant gap relative to the track's existing activity, the current span is finalized.
+
+		2. **Intelligent Rating-Based Pruning:**
+		   Whenever a new bar begins, the object performs a deferred rating check on the previous bar. It evaluates whether the span is "better" (higher rating) with or without that bar. The rating of a span is calculated as: `(Lowest Mean Score of any Bar in Span) * (Number of Bars in Span)`.
+		   A span is finalized and output early if:
+		   - Including the most recent bar would decrease the overall span rating.
+		   - The most recent bar's individual mean score is significantly higher than the combined rating of the span it would join.
+
+		When a span ends, its data is back-propagated to all constituent bars (ensuring they all share the same final rating and span list) and then output through the object's outlets.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -19,49 +27,69 @@
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="list/bang/clear">
-			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
+			<digest>Inlet 1 (Hot): Note Data, Flush, or Clear</digest>
 			<description>
-				Receives note data as a list of two floats (absolute timestamp and score) or three floats (synthesized timestamp, score, and original absolute timestamp). If three items are received, the first is used for bar calculation and the third is stored in the dictionary.
-				If the global offset has not been set yet, the first timestamp received in this inlet will be used to automatically initialize it.
-				A bang message triggers a flush of all currently open spans for all tracks and palettes.
-				A clear message resets the internal state.
-				The set_bar_buffer message sets the buffer to read bar length from.
+				The primary control inlet.
+				- **List [Timestamp, Score]:** Adds a note to the current span. If no offset has been set, the first timestamp received here initializes the global offset.
+				- **List [Synth_Timestamp, Score, Orig_Timestamp]:** Adds a note using the first value for bar calculation and the third for storage/output.
+				- **bang:** Triggers a global flush. All currently building spans across all palettes and tracks are finalized and output. Note that track, offset, and palette values **persist** after a bang, while the local bar length is reset.
+				- **clear:** Resets the entire internal state, including all dictionary data and resetting track (0), offset (0.0), loop_start (0.0), and palette ("") to defaults.
+				- **set_bar_buffer [name]:** Sets the buffer~ from which to read the bar length (defaults to "bar").
 			</description>
 		</inlet>
 		<inlet id="2" type="list/float">
-			<digest>Inlet 2: Global offset timestamp and loop start</digest>
-			<description>Receives either a single high-precision float representing a global offset in milliseconds, or a list of two floats [offset, loop_start]. The offset is used as a relative anchor for new bars, and the loop_start is added when calculating the absolute bar timestamp. Both are stored with full precision.</description>
+			<digest>Inlet 2 (Cold): Global Offset and Loop Start</digest>
+			<description>
+				Sets the temporal anchor for new spans.
+				- **float:** Sets the global offset in milliseconds.
+				- **list [offset, loop_start]:** Sets both the offset and a loop start point. The loop start is added to relative offsets during absolute bar timestamp calculation.
+				Changing these values may trigger span duplication or discontinuity checks for active tracks. Values persist after a `bang`.
+			</description>
 		</inlet>
 		<inlet id="3" type="int">
-			<digest>Inlet 3: Track number</digest>
-			<description>Receives an integer that sets the current track for incoming notes.</description>
+			<digest>Inlet 3 (Cold): Track Number</digest>
+			<description>Sets the integer ID for the current track (e.g., 1, 2, 3). This value determines which track incoming notes are assigned to and persists after a `bang`.</description>
 		</inlet>
 		<inlet id="4" type="symbol">
-			<digest>Inlet 4: Palette name</digest>
-			<description>Receives a symbol that sets the current palette.</description>
+			<digest>Inlet 4 (Cold): Palette Name</digest>
+			<description>Sets the current palette symbol. The object organizes spans separately for each unique palette. This value persists after a `bang`.</description>
 		</inlet>
 		<inlet id="5" type="float">
-			<digest>Inlet 5: Local Bar Length</digest>
-			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message or after a flush triggered by a 'bang'.</description>
+			<digest>Inlet 5 (Cold): Local Bar Length Override</digest>
+			<description>
+				Directly sets the bar length (in ms) used for grouping notes.
+				- If set to a positive value, this override is used instead of reading from a buffer.
+				- If set to 0 or less, the object falls back to reading the bar length from the designated `buffer~`.
+				**Crucially, this value is reset to 0 following a `bang` or `clear` message.**
+			</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="list">
-			<digest>Outlet 1: Span of bar timestamps</digest>
-			<description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+			<digest>Outlet 1: Span Bar List</digest>
+			<description>Outputs a list of integers representing the chronological bar timestamps (in ms) that constitute the finalized span. This is typically the primary output used for triggering playback or further analysis.</description>
 		</outlet>
 		<outlet id="2" type="int">
-			<digest>Outlet 2: Track number</digest>
-			<description>Outputs the track number associated with the completed span.</description>
+			<digest>Outlet 2: Track Association</digest>
+			<description>Outputs the track number (integer) associated with the span that was just output from Outlet 1.</description>
 		</outlet>
 		<outlet id="3" type="anything">
-			<digest>Outlet 3: Detailed bar data</digest>
-			<description>When a span completes, this outlet outputs detailed data for all bars in that span using selectors in the format track::bar::key.</description>
+			<digest>Outlet 3: Detailed Bar Manifest</digest>
+			<description>
+				When a span completes, this outlet outputs a sequence of messages for every bar in the span. Each message uses a hierarchical selector in the format: `[track_num]::[bar_timestamp]::[property]`.
+				Available properties include:
+				- **absolutes:** List of high-precision timestamps for all notes in the bar.
+				- **scores:** List of scores corresponding to the notes in `absolutes`.
+				- **mean:** The average score for this specific bar.
+				- **rating:** The final calculated rating for the entire span (shared by all bars).
+				- **offset:** The global offset used when this bar was created.
+				- **span:** The full list of timestamps for the parent span.
+			</description>
 		</outlet>
 		<outlet id="4" type="anything">
-			<digest>Outlet 4: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides status messages.</description>
+			<digest>Outlet 4: System Monitoring</digest>
+			<description>Provides verbose status updates, internal process logs (when the `@log` attribute is enabled), and JSON-formatted visualization data (when the `@visualize` attribute is enabled).</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -69,30 +97,46 @@
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="list">
-			<digest>Process a single note</digest>
-			<description>Receives a list containing either [timestamp, score] or [calc_timestamp, score, store_timestamp].</description>
+			<digest>Add a note to the current span</digest>
+			<description>
+				Processes a single note event and assigns it to a bar within the active span.
+				- **Format 1: [timestamp, score]** - The timestamp is used for both bar calculation and storage.
+				- **Format 2: [calc_timestamp, score, store_timestamp]** - The first value is used to calculate the bar assignment (allowing for quantizing or shifting), while the third value is the actual timestamp stored and output in the `absolutes` property.
+				If no global offset has been set, the first note received will automatically set the offset to its timestamp.
+			</description>
 		</method>
 		<method name="bang">
-			<digest>Flush all spans</digest>
-			<description>Immediately ends and outputs all currently open spans for all tracks.</description>
+			<digest>Flush all open spans</digest>
+			<description>
+				Triggers an immediate finalization of all building spans across all palettes and tracks.
+				Each span is validated, its final rating is calculated, and its data is output through all outlets.
+				**Side Effects:** Resets the local bar length (Inlet 5) to 0, but preserves track number, offset, and palette settings.
+			</description>
 		</method>
 		<method name="flush">
 			<arglist>
 				<arg name="track-number" type="int" optional="0" />
 			</arglist>
-			<digest>Flush specific track</digest>
-			<description>Immediately ends and outputs all currently open spans for the specified track across all palettes.</description>
+			<digest>Flush a specific track</digest>
+			<description>Immediately ends and outputs all currently building spans for the specified track ID across all palettes.</description>
 		</method>
 		<method name="clear">
-			<digest>Reset internal state</digest>
-			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults.</description>
+			<digest>Full state reset</digest>
+			<description>
+				Resets the object to its initial state:
+				- Deletes all internal dictionary data and pending spans.
+				- Resets Track Number to 0.
+				- Resets Global Offset and Loop Start to 0.0.
+				- Resets Palette to an empty symbol.
+				- Resets Local Bar Length to 0.
+			</description>
 		</method>
 		<method name="set_bar_buffer">
 			<arglist>
 				<arg name="buffer-name" type="symbol" optional="0" />
 			</arglist>
-			<digest>Set the buffer for bar length</digest>
-			<description>Sets the buffer~ object to read the bar length from (defaults to "bar").</description>
+			<digest>Configure the bar length source</digest>
+			<description>Specifies the name of the `buffer~` object to be used as the source for the bar length timing grid. The object reads the first sample value of this buffer as the bar length in milliseconds. Defaults to "bar".</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->

@@ -1711,27 +1711,27 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush All, (flush <int>) Flush Track, (clear) Clear. Supports @defer deferral.");
+                sprintf(s, "Inlet 1 (Hot): (list) [abs, score], (bang) Flush all (Track/Offset/Pal persist, Bar Length resets), (clear) Full Reset.");
                 break;
             case 1:
-                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
+                sprintf(s, "Inlet 2 (Cold): (float) Global Offset, (list) [Offset, Loop Start]. Persists after flush.");
                 break;
             case 2:
-                sprintf(s, "Inlet 3: (int) Track Number");
+                sprintf(s, "Inlet 3 (Cold): (int) Track Number. Persists after flush.");
                 break;
             case 3:
-                sprintf(s, "Inlet 4: (symbol) Palette");
+                sprintf(s, "Inlet 4 (Cold): (symbol) Palette Name. Persists after flush.");
                 break;
             case 4:
-                sprintf(s, "Inlet 5: (float) Local Bar Length");
+                sprintf(s, "Inlet 5 (Cold): (float) Local Bar Length Override. Resets to 0 after flush.");
                 break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (span list)"); break;
-            case 1: sprintf(s, "Outlet 2: Track Number (track int)"); break;
-            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
-            case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
+            case 0: sprintf(s, "Outlet 1: Completed Span (list of bar timestamps)"); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (int)"); break;
+            case 2: sprintf(s, "Outlet 3: Detailed Bar Data (track::bar::prop)"); break;
+            case 3: sprintf(s, "Outlet 4: Logging, JSON Visualization, and Status"); break;
         }
     }
 }
