@@ -445,6 +445,9 @@ void buildspans_visualize_memory(t_buildspans *x) {
         sysmem_freeptr(unique_tracks);
     }
     long bar_length = buildspans_get_bar_length(x);
+    if (x->current_offset == 0.0) {
+        buildspans_log(x, "buildspans_visualize_memory: conveying current_offset=0.0 to visualizer");
+    }
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
 
     visualize((t_object *)x, json_buffer);
@@ -511,6 +514,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
+        buildspans_log(x, "buildspans_new: initialized with current_offset=%.2f, offset_fixed=%ld, loop_start=%.2f", x->current_offset, x->offset_fixed, x->loop_start);
+
         // Hardcode the default buffer name to "bar".
         buildspans_set_bar_buffer(x, gensym("bar"));
 
@@ -563,7 +568,7 @@ void buildspans_clear(t_buildspans *x) {
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->offset_fixed = 0;
-    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
+    buildspans_log(x, "buildspans_clear: internal state reset. current_offset=%.2f, offset_fixed=%ld, loop_start=%.2f", x->current_offset, x->offset_fixed, x->loop_start);
     buildspans_visualize_memory(x);
 }
 
@@ -595,7 +600,8 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         x->current_offset = f;
         x->loop_start = loop_start;
         x->offset_fixed = 0;
-        buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
+        buildspans_log(x, "buildspans_do_offset: Entering auto-initialization mode (f=%.2f <= 0.0). offset_fixed=%ld", f, x->offset_fixed);
+        buildspans_visualize_memory(x);
         return;
     }
 
@@ -605,7 +611,8 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     if (x->offset_fixed && new_rounded_offset == old_rounded_offset) {
         x->current_offset = f;
         x->loop_start = loop_start;
-        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
+        buildspans_log(x, "buildspans_do_offset: Updated to %.2f (loop_start=%.2f). No duplication (rounded offset unchanged: %ld).", f, loop_start, new_rounded_offset);
+        buildspans_visualize_memory(x);
         return;
     }
 
@@ -848,7 +855,8 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
         // A standalone symbol is a message with argc=0
         if (argc == 0) {
             x->current_palette = s;
-            buildspans_log(x, "Palette set to: %s", s->s_name);
+            buildspans_log(x, "buildspans_do_anything: Palette set to %s. Triggering visualization.", s->s_name);
+            buildspans_visualize_memory(x);
         } else {
             // If it has arguments, it's a list starting with a symbol, which we don't handle here.
             object_error((t_object *)x, "Palette inlet expects a single symbol, but received a list.");
@@ -935,7 +943,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (!x->offset_fixed && x->current_offset <= 0.0) {
         double old_offset = x->current_offset;
         x->current_offset = calc_timestamp;
-        buildspans_log(x, "Offset not set (current_offset <= 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
+        buildspans_log(x, "buildspans_list: Automatically initializing current_offset to calc_timestamp (%.2f -> %.2f). offset_fixed=%ld", old_offset, x->current_offset, x->offset_fixed);
     }
 
     buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);
@@ -1036,10 +1044,14 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
                 // If it's the current global offset we're initializing, use high precision
                 if (target_track_sym == current_track_sym) {
                     actual_offset = x->current_offset;
+                    buildspans_log(x, "buildspans_list: Using high-precision global current_offset %.2f for target %s", actual_offset, target_track_sym->s_name);
                 } else {
                     actual_offset = (double)atol(offset_part + 1);
+                    buildspans_log(x, "buildspans_list: Using symbolic fallback offset %.2f for target %s", actual_offset, target_track_sym->s_name);
                 }
             }
+        } else {
+            buildspans_log(x, "buildspans_list: Using dictionary-found offset %.2f for target %s", actual_offset, target_track_sym->s_name);
         }
 
         buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
@@ -1189,7 +1201,7 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 }
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
-    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "buildspans_process_and_add_note: offset=%.2f, calc_timestamp=%.2f, bar_length=%ld", offset, calc_timestamp, bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
@@ -1197,7 +1209,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // Calculate bar timestamp
     double relative_timestamp = calc_timestamp - offset + x->loop_start;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset + loop_start): %.2f", relative_timestamp);
+    buildspans_log(x, "Relative timestamp (%.2f - %.2f + %.2f): %.2f", calc_timestamp, offset, x->loop_start, relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
@@ -1636,6 +1648,7 @@ void buildspans_bang(t_buildspans *x) {
 
     x->local_bar_length = 0;
     buildspans_log(x, "Bar length reset to zero after flush.");
+    buildspans_visualize_memory(x);
 }
 
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
@@ -1764,6 +1777,7 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
         buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
+    buildspans_visualize_memory(x);
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
