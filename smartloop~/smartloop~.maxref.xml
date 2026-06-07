@@ -13,7 +13,9 @@
 
 		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, provided that the signal is moving. If the ramp is stationary, both outlets will output 0.0.
 
-		Whenever a loop or jump is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state.
+		Whenever a loop or jump is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses an internal suppression mechanism: it sets a `suppress` flag immediately before firing its outlets and resets it only after all current Max events have finished via a `defer_low` call. Any recursive triggers that occur while the flag is set are ignored.
+
+		**Note:** All message outputs are fired directly from the high-priority audio thread. While this is generally considered unsafe in Max/MSP and can cause instability, it is implemented this way to ensure maximum temporal precision (minimum jitter) per specific user requirement.
 
 		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers a release of the loop boundaries.
 
@@ -39,7 +41,7 @@
 	<outletlist>
 		<outlet id="1" type="bang">
 			<digest>Outlet 1: Loop or Jump detected</digest>
-			<description>Emits a `bang` whenever the input ramp loops left or a jump is detected. This outlet fires even when the object is paused.</description>
+			<description>Emits a `bang` whenever the input ramp loops left or a jump is detected. This outlet fires even when the object is paused. Fired directly from the audio thread with defer_low suppression (unsafe but precise).</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>

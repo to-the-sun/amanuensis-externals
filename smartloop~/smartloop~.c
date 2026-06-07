@@ -27,18 +27,14 @@ typedef struct _smartloop {
     double current_start;
     double current_end;
     long cached_bar_length;
-    void *qelem;
     double last_val;
     long triggered_zero;
-    long output_zero;
     long first_sample;
     long output_enabled;
     double last_delta;
     double jump_threshold;
     void *out_bang;
-    long output_bang;
-    long in_qfn;
-    long suppress_next_bang;
+    long suppress;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -49,7 +45,7 @@ void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
-void smartloop_qfn(t_smartloop *x);
+void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
@@ -191,14 +187,10 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_val = -1.0;
         x->last_delta = 0.0;
         x->jump_threshold = 1.0;
-        x->output_bang = 0;
-        x->in_qfn = 0;
-        x->suppress_next_bang = 0;
         x->triggered_zero = 0;
-        x->output_zero = 0;
         x->first_sample = 1;
         x->output_enabled = 1;
-        x->qelem = qelem_new(x, (method)smartloop_qfn);
+        x->suppress = 0;
 
         x->clock = clock_new(x, (method)smartloop_tick);
         clock_delay(x->clock, x->interval);
@@ -209,7 +201,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 void smartloop_free(t_smartloop *x) {
     visualize_cleanup();
     dsp_free((t_pxobject *)x);
-    qelem_free(x->qelem);
     object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
@@ -223,30 +214,10 @@ void smartloop_int(t_smartloop *x, long n) {
     }
 }
 
-void smartloop_qfn(t_smartloop *x) {
-    x->in_qfn = 1;
-    long suppress = x->suppress_next_bang;
-    x->suppress_next_bang = 0;
 
-    // Standard Max right-to-left outlet firing order:
-    // Index 0 (bang) fires last.
-    if (x->output_zero) {
-        if (x->output_enabled) {
-            outlet_float(x->out_end, 0.0);
-            outlet_float(x->out_start, 0.0);
-        }
-        x->output_zero = 0;
-    } else if (x->output_bang) {
-        x->output_bang = 0;
-        if (x->output_enabled) {
-            outlet_float(x->out_end, x->current_end);
-            outlet_float(x->out_start, x->current_start);
-        }
-        if (!suppress) {
-            outlet_bang(x->out_bang);
-        }
-    }
-    x->in_qfn = 0;
+
+void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    x->suppress = 0;
 }
 
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -255,6 +226,8 @@ void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double sampl
 
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
+    long do_output_zero = 0;
+    long do_output_bang = 0;
 
     for (int i = 0; i < sampleframes; i++) {
         double val = in[i];
@@ -267,27 +240,43 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
 
         if (val == x->last_val) {
             if (!x->triggered_zero) {
-                x->output_zero = 1;
-                x->output_bang = 0;
-                qelem_set(x->qelem);
+                do_output_zero = 1;
                 x->triggered_zero = 1;
                 x->last_delta = 0.0;
             }
         } else {
             x->triggered_zero = 0;
-            x->output_zero = 0;
-
             double delta = val - x->last_val;
             int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
 
             if ((val < x->last_val || jump) && x->current_start >= 0.0 && x->current_end >= 0.0) {
-                x->output_bang = 1;
-                if (x->in_qfn) x->suppress_next_bang = 1;
-                qelem_set(x->qelem);
+                do_output_bang = 1;
             }
             x->last_delta = delta;
         }
         x->last_val = val;
+    }
+
+    // NOTE: Message outlets are fired directly from the audio thread here.
+    // This is generally considered unsafe in Max/MSP, but is implemented
+    // this way per explicit user request to solve jitter/timing issues.
+    if (!x->suppress) {
+        if (do_output_zero) {
+            x->suppress = 1;
+            if (x->output_enabled) {
+                outlet_float(x->out_end, 0.0);
+                outlet_float(x->out_start, 0.0);
+            }
+            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
+        } else if (do_output_bang) {
+            x->suppress = 1;
+            if (x->output_enabled) {
+                outlet_float(x->out_end, x->current_end);
+                outlet_float(x->out_start, x->current_start);
+            }
+            outlet_bang(x->out_bang);
+            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
+        }
     }
 }
 
@@ -387,7 +376,7 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump Detected");
+        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump Detected (immediate/unsafe w/ defer_low suppression)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms)");
         else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms)");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
