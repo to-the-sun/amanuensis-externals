@@ -26,7 +26,7 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
         if (type_out) *type_out = "crucible";
         return &crucible_viz;
-    } else if (classname == gensym("smartloop")) {
+    } else if (classname == gensym("smartloop~")) {
         if (type_out) *type_out = "smartloop";
         return &crucible_viz;
     } else if (classname == gensym("weaver~")) {
