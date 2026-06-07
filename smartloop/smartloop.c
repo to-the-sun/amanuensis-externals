@@ -33,6 +33,8 @@ typedef struct _smartloop {
     long output_zero;
     long first_sample;
     long output_enabled;
+    double last_delta;
+    double jump_threshold;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -138,6 +140,10 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Visualize Analysis");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "1");
 
+    CLASS_ATTR_DOUBLE(c, "jump_threshold", 0, t_smartloop, jump_threshold);
+    CLASS_ATTR_LABEL(c, "jump_threshold", 0, "Jump Threshold (ms)");
+    CLASS_ATTR_DEFAULT(c, "jump_threshold", 0, "1.0");
+
     class_dspinit(c);
     class_register(CLASS_BOX, c);
     smartloop_class = c;
@@ -178,6 +184,8 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_end = -1.0;
         x->cached_bar_length = 0;
         x->last_val = -1.0;
+        x->last_delta = 0.0;
+        x->jump_threshold = 1.0;
         x->triggered_zero = 0;
         x->output_zero = 0;
         x->first_sample = 1;
@@ -243,14 +251,19 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
                 x->output_zero = 1;
                 qelem_set(x->qelem);
                 x->triggered_zero = 1;
+                x->last_delta = 0.0;
             }
         } else {
             x->triggered_zero = 0;
             x->output_zero = 0;
 
-            if (val < x->last_val && x->current_start >= 0.0 && x->current_end >= 0.0) {
+            double delta = val - x->last_val;
+            int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
+
+            if ((val < x->last_val || jump) && x->current_start >= 0.0 && x->current_end >= 0.0) {
                 qelem_set(x->qelem);
             }
+            x->last_delta = delta;
         }
         x->last_val = val;
     }
@@ -350,7 +363,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: Start of longest below average interval (ms)");
         else if (a == 1) sprintf(s, "Outlet 2: End of longest below average interval (ms)");
