@@ -932,6 +932,8 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
+    // AUTO-INITIALIZATION: If no global offset has been fixed and the current offset is <= 0,
+    // we initialize x->current_offset to the timestamp of the very first note received.
     if (!x->offset_fixed && x->current_offset <= 0.0) {
         double old_offset = x->current_offset;
         x->current_offset = calc_timestamp;
@@ -995,11 +997,14 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     for (long i = 0; i < unique_tracks_count; i++) {
         t_symbol *target_track_sym = unique_track_syms[i];
 
-        // Retrieve the actual double offset from the dictionary for this track
+        // ACTUAL OFFSET RESOLUTION HIERARCHY:
+        // We need the high-precision double offset to correctly assign the note to a bar.
         double actual_offset = 0.0;
         int offset_found = 0;
 
-        // We can find the offset by looking at any bar's "offset" property for this track
+        // TIER 1: Dictionary Lookup
+        // We first try to find the high-precision offset stored in the building dictionary for this track/palette.
+        // This is the most reliable source for existing spans.
         for (long j = 0; j < num_keys; j++) {
             char *key_pal, *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
@@ -1029,14 +1034,19 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
         }
 
-        // Fallback to symbolic parsing if not found in dictionary (e.g. for newly identified current_track_sym)
+        // TIER 2 & 3: Fallback and Symbolic Parsing
         if (!offset_found) {
             const char *offset_part = strchr(target_track_sym->s_name, '-');
             if (offset_part) {
-                // If it's the current global offset we're initializing, use high precision
+                // TIER 2: Global Current Offset
+                // If the track symbol matches the current active global span, use x->current_offset.
+                // This ensures newly initialized spans have full double precision.
                 if (target_track_sym == current_track_sym) {
                     actual_offset = x->current_offset;
                 } else {
+                    // TIER 3: Symbolic Parsing (atol)
+                    // As a robust fallback for historical spans not in the active dictionary pass,
+                    // we parse the rounded integer offset from the track's symbol name.
                     actual_offset = (double)atol(offset_part + 1);
                 }
             }
