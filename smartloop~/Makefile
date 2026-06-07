@@ -3,8 +3,8 @@ CFLAGS = -I../max-sdk/source/max-sdk-base/c74support/max-includes -I../max-sdk/s
 LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-sdk/source/max-sdk-base/c74support/msp-includes/x64 -lMaxAPI -lMaxAudio
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
-smartloop.mxe64: smartloop.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o smartloop.mxe64 smartloop.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32
+smartloop~.mxe64: smartloop~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -o smartloop~.mxe64 smartloop~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32
 
 clean:
-	rm -f smartloop.mxe64
+	rm -f smartloop~.mxe64
