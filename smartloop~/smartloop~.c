@@ -37,6 +37,8 @@ typedef struct _smartloop {
     double jump_threshold;
     void *out_bang;
     long output_bang;
+    long in_qfn;
+    long suppress_next_bang;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -190,6 +192,8 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_delta = 0.0;
         x->jump_threshold = 1.0;
         x->output_bang = 0;
+        x->in_qfn = 0;
+        x->suppress_next_bang = 0;
         x->triggered_zero = 0;
         x->output_zero = 0;
         x->first_sample = 1;
@@ -220,6 +224,10 @@ void smartloop_int(t_smartloop *x, long n) {
 }
 
 void smartloop_qfn(t_smartloop *x) {
+    x->in_qfn = 1;
+    long suppress = x->suppress_next_bang;
+    x->suppress_next_bang = 0;
+
     // Standard Max right-to-left outlet firing order:
     // Index 0 (bang) fires last.
     if (x->output_zero) {
@@ -229,13 +237,16 @@ void smartloop_qfn(t_smartloop *x) {
         }
         x->output_zero = 0;
     } else if (x->output_bang) {
+        x->output_bang = 0;
         if (x->output_enabled) {
             outlet_float(x->out_end, x->current_end);
             outlet_float(x->out_start, x->current_start);
         }
-        outlet_bang(x->out_bang);
-        x->output_bang = 0;
+        if (!suppress) {
+            outlet_bang(x->out_bang);
+        }
     }
+    x->in_qfn = 0;
 }
 
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -271,6 +282,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
 
             if ((val < x->last_val || jump) && x->current_start >= 0.0 && x->current_end >= 0.0) {
                 x->output_bang = 1;
+                if (x->in_qfn) x->suppress_next_bang = 1;
                 qelem_set(x->qelem);
             }
             x->last_delta = delta;
