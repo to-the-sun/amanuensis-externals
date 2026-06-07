@@ -173,7 +173,6 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
-    long offset_fixed;
 } t_buildspans;
 
 // Function prototypes
@@ -506,7 +505,6 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
-        x->offset_fixed = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -562,7 +560,6 @@ void buildspans_clear(t_buildspans *x) {
     x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
-    x->offset_fixed = 0;
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
@@ -594,7 +591,6 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     if (f <= 0.0) {
         x->current_offset = f;
         x->loop_start = loop_start;
-        x->offset_fixed = 0;
         buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
         return;
     }
@@ -602,7 +598,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     long new_rounded_offset = (long)round(f);
     long old_rounded_offset = (long)round(x->current_offset);
 
-    if (x->offset_fixed && new_rounded_offset == old_rounded_offset) {
+    if (new_rounded_offset == old_rounded_offset) {
         x->current_offset = f;
         x->loop_start = loop_start;
         buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
@@ -613,7 +609,6 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     double old_offset = x->current_offset;
     x->current_offset = f;
     x->loop_start = loop_start;
-    x->offset_fixed = 1;
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
@@ -932,15 +927,13 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    // AUTO-INITIALIZATION: If no global offset has been fixed and the current offset is <= 0,
-    // we initialize x->current_offset to the timestamp of the very first note received.
-    if (!x->offset_fixed && x->current_offset <= 0.0) {
-        double old_offset = x->current_offset;
-        x->current_offset = calc_timestamp;
-        buildspans_log(x, "Offset not set (current_offset <= 0.0). Automatically initializing offset to calc_timestamp: %.2f (previously %.2f).", x->current_offset, old_offset);
-    }
+    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset <= 0),
+    // we use the current note's calc_timestamp as the effective offset for this processing cycle
+    // without persisting it to x->current_offset.
+    double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
 
-    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f", x->current_palette->s_name, calc_timestamp, score, store_timestamp);
+    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f",
+                    x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
     long num_keys;
@@ -979,7 +972,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     // 2. Also consider the global current offset as a potential new span
     char current_track_str[64];
-    snprintf(current_track_str, 64, "%ld-%ld", x->current_track, (long)round(x->current_offset));
+    snprintf(current_track_str, 64, "%ld-%ld", x->current_track, (long)round(effective_offset));
     t_symbol *current_track_sym = gensym(current_track_str);
     int global_offset_found = 0;
     for (long i = 0; i < unique_tracks_count; i++) {
@@ -993,7 +986,14 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     // 3. Add the note to each span (identified by its unique track symbol)
-    buildspans_log(x, "Adding note to %ld span(s) on track %ld (palette %s)", unique_tracks_count, x->current_track, x->current_palette->s_name);
+    char candidates_str[1024] = "";
+    for (long i = 0; i < unique_tracks_count; i++) {
+        strncat(candidates_str, unique_track_syms[i]->s_name, 1024 - strlen(candidates_str) - 1);
+        if (i < unique_tracks_count - 1) strncat(candidates_str, ", ", 1024 - strlen(candidates_str) - 1);
+    }
+    buildspans_log(x, "Adding note to %ld span(s) on track %ld (palette %s): %s",
+                    unique_tracks_count, x->current_track, x->current_palette->s_name, candidates_str);
+
     for (long i = 0; i < unique_tracks_count; i++) {
         t_symbol *target_track_sym = unique_track_syms[i];
 
@@ -1003,8 +1003,8 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         int offset_found = 0;
 
         // TIER 1: Dictionary Lookup
-        // We first try to find the high-precision offset stored in the building dictionary for this track/palette.
-        // This is the most reliable source for existing spans.
+        // We look at the first available bar from the target active span and use its high-precision offset.
+        // This is the authoritative source for spans that have already received data.
         for (long j = 0; j < num_keys; j++) {
             char *key_pal, *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
@@ -1034,22 +1034,12 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
         }
 
-        // TIER 2 & 3: Fallback and Symbolic Parsing
+        // TIER 2: Effective Global Offset
+        // If no offset was found in the dictionary, we use the effective_offset.
+        // This handles both the manual current_offset (high precision) and
+        // the ephemeral auto-initialization (calc_timestamp).
         if (!offset_found) {
-            const char *offset_part = strchr(target_track_sym->s_name, '-');
-            if (offset_part) {
-                // TIER 2: Global Current Offset
-                // If the track symbol matches the current active global span, use x->current_offset.
-                // This ensures newly initialized spans have full double precision.
-                if (target_track_sym == current_track_sym) {
-                    actual_offset = x->current_offset;
-                } else {
-                    // TIER 3: Symbolic Parsing (atol)
-                    // As a robust fallback for historical spans not in the active dictionary pass,
-                    // we parse the rounded integer offset from the track's symbol name.
-                    actual_offset = (double)atol(offset_part + 1);
-                }
-            }
+            actual_offset = effective_offset;
         }
 
         buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
