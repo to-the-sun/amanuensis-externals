@@ -173,6 +173,10 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
+    t_symbol *last_msg_type;
+    double last_note_calc;
+    double last_note_store;
+    double last_note_score;
 } t_buildspans;
 
 // Function prototypes
@@ -505,6 +509,10 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
+        x->last_msg_type = gensym("none");
+        x->last_note_calc = 0.0;
+        x->last_note_store = 0.0;
+        x->last_note_score = 0.0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -560,6 +568,7 @@ void buildspans_clear(t_buildspans *x) {
     x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
+    x->last_msg_type = gensym("clear");
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
@@ -591,6 +600,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     if (f <= 0.0) {
         x->current_offset = f;
         x->loop_start = loop_start;
+        x->last_msg_type = gensym("offset");
         buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
         return;
     }
@@ -609,6 +619,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     double old_offset = x->current_offset;
     x->current_offset = f;
     x->loop_start = loop_start;
+    x->last_msg_type = gensym("offset");
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
@@ -809,6 +820,7 @@ void buildspans_track(t_buildspans *x, long n) {
     }
 
     x->current_track = n;
+    x->last_msg_type = gensym("track");
     buildspans_log(x, "Track updated to: %ld", n);
 }
 
@@ -843,6 +855,7 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
         // A standalone symbol is a message with argc=0
         if (argc == 0) {
             x->current_palette = s;
+            x->last_msg_type = gensym("palette");
             buildspans_log(x, "Palette set to: %s", s->s_name);
         } else {
             // If it has arguments, it's a list starting with a symbol, which we don't handle here.
@@ -1040,6 +1053,15 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         // the ephemeral auto-initialization (calc_timestamp).
         if (!offset_found) {
             actual_offset = effective_offset;
+            if (actual_offset == 0.0) {
+                object_warn((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
+                buildspans_log(x, "*** Span initialization with offset 0.0 detected!");
+                buildspans_log(x, "*** This occurred during fallback to TIER 2 (Effective Global Offset) for span %s.", target_track_sym->s_name);
+                buildspans_log(x, "*** effective_offset calculation: (current_offset %.2f <= 0.0) ? calc_timestamp %.2f : current_offset %.2f", x->current_offset, calc_timestamp, x->current_offset);
+                buildspans_log(x, "*** Last message type received: %s", x->last_msg_type->s_name);
+                buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
+                buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
+            }
         }
 
         buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
@@ -1048,6 +1070,10 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (keys) sysmem_freeptr(keys);
     sysmem_freeptr(unique_track_syms);
 
+    x->last_note_calc = calc_timestamp;
+    x->last_note_store = store_timestamp;
+    x->last_note_score = score;
+    x->last_msg_type = gensym("list");
     buildspans_run_cleanup(x);
 }
 
@@ -1124,6 +1150,7 @@ void buildspans_flush_track(t_buildspans *x, long track_num) {
     sysmem_freeptr(palette_syms);
     sysmem_freeptr(keys);
 
+    x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
 }
 
@@ -1635,6 +1662,7 @@ void buildspans_bang(t_buildspans *x) {
     }
 
     x->local_bar_length = 0;
+    x->last_msg_type = gensym("bang");
     buildspans_log(x, "Bar length reset to zero after flush.");
 }
 
@@ -1703,6 +1731,7 @@ void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
     sysmem_freeptr(track_syms);
     sysmem_freeptr(keys);
 
+    x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
 }
 
