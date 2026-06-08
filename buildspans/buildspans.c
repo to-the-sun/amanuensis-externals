@@ -1211,11 +1211,61 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
         buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
+
+        double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
+        buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
+
         buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
         buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
         buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
         buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
         buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
+
+        // List active spans
+        long num_keys;
+        t_symbol **keys;
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            char active_spans_str[2048] = "";
+            long active_spans_count = 0;
+            for (long i = 0; i < num_keys; i++) {
+                char *pal_str, *track_str, *bar_str, *prop_str;
+                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
+                        if (active_spans_count > 0) strncat(active_spans_str, ", ", 2048 - strlen(active_spans_str) - 1);
+                        strncat(active_spans_str, track_str, 2048 - strlen(active_spans_str) - 1);
+                        active_spans_count++;
+                    }
+                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+                }
+            }
+            buildspans_log(x, "*** Active spans on palette %s: %s", x->current_palette->s_name, active_spans_str);
+            sysmem_freeptr(keys);
+        }
+
+        // Temporary Fix: Remove the entire span
+        char target_track_str[64];
+        snprintf(target_track_str, 64, "%ld-0", x->current_track);
+        t_symbol *target_track_sym = gensym(target_track_str);
+
+        object_error((t_object *)x, "TEMPORARY FIX: Removing invalid span %s from memory.", target_track_sym->s_name);
+        buildspans_log(x, "*** TEMPORARY FIX: Removing all dictionary entries for span %s on palette %s.", target_track_sym->s_name, x->current_palette->s_name);
+
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            for (long i = 0; i < num_keys; i++) {
+                char *pal_str, *track_str, *bar_str, *prop_str;
+                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, target_track_sym->s_name) == 0) {
+                        dictionary_deleteentry(x->building, keys[i]);
+                    }
+                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+                }
+            }
+            sysmem_freeptr(keys);
+        }
+        buildspans_visualize_memory(x);
+        return; // Abort processing for this note
     }
     buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
