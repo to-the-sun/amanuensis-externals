@@ -173,6 +173,10 @@ typedef struct _buildspans {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
+    t_symbol *last_msg_type;
+    double last_note_calc;
+    double last_note_store;
+    double last_note_score;
 } t_buildspans;
 
 // Function prototypes
@@ -505,6 +509,10 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
+        x->last_msg_type = gensym("none");
+        x->last_note_calc = 0.0;
+        x->last_note_store = 0.0;
+        x->last_note_score = 0.0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -560,6 +568,7 @@ void buildspans_clear(t_buildspans *x) {
     x->loop_start = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
+    x->last_msg_type = gensym("clear");
     buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
@@ -591,6 +600,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     if (f <= 0.0) {
         x->current_offset = f;
         x->loop_start = loop_start;
+        x->last_msg_type = gensym("offset");
         buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
         return;
     }
@@ -609,6 +619,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     double old_offset = x->current_offset;
     x->current_offset = f;
     x->loop_start = loop_start;
+    x->last_msg_type = gensym("offset");
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
@@ -809,6 +820,7 @@ void buildspans_track(t_buildspans *x, long n) {
     }
 
     x->current_track = n;
+    x->last_msg_type = gensym("track");
     buildspans_log(x, "Track updated to: %ld", n);
 }
 
@@ -843,6 +855,7 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
         // A standalone symbol is a message with argc=0
         if (argc == 0) {
             x->current_palette = s;
+            x->last_msg_type = gensym("palette");
             buildspans_log(x, "Palette set to: %s", s->s_name);
         } else {
             // If it has arguments, it's a list starting with a symbol, which we don't handle here.
@@ -1048,6 +1061,10 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (keys) sysmem_freeptr(keys);
     sysmem_freeptr(unique_track_syms);
 
+    x->last_note_calc = calc_timestamp;
+    x->last_note_store = store_timestamp;
+    x->last_note_score = score;
+    x->last_msg_type = gensym("list");
     buildspans_run_cleanup(x);
 }
 
@@ -1124,6 +1141,7 @@ void buildspans_flush_track(t_buildspans *x, long track_num) {
     sysmem_freeptr(palette_syms);
     sysmem_freeptr(keys);
 
+    x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
 }
 
@@ -1189,6 +1207,66 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 }
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+    if (offset == 0.0) {
+        object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
+        buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
+        buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
+
+        double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
+        buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
+
+        buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
+        buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
+        buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
+        buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
+        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
+
+        // List active spans
+        long num_keys;
+        t_symbol **keys;
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            char active_spans_str[2048] = "";
+            long active_spans_count = 0;
+            for (long i = 0; i < num_keys; i++) {
+                char *pal_str, *track_str, *bar_str, *prop_str;
+                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
+                        if (active_spans_count > 0) strncat(active_spans_str, ", ", 2048 - strlen(active_spans_str) - 1);
+                        strncat(active_spans_str, track_str, 2048 - strlen(active_spans_str) - 1);
+                        active_spans_count++;
+                    }
+                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+                }
+            }
+            buildspans_log(x, "*** Active spans on palette %s: %s", x->current_palette->s_name, active_spans_str);
+            sysmem_freeptr(keys);
+        }
+
+        // Temporary Fix: Remove the entire span
+        char target_track_str[64];
+        snprintf(target_track_str, 64, "%ld-0", x->current_track);
+        t_symbol *target_track_sym = gensym(target_track_str);
+
+        object_error((t_object *)x, "TEMPORARY FIX: Removing invalid span %s from memory.", target_track_sym->s_name);
+        buildspans_log(x, "*** TEMPORARY FIX: Removing all dictionary entries for span %s on palette %s.", target_track_sym->s_name, x->current_palette->s_name);
+
+        dictionary_getkeys(x->building, &num_keys, &keys);
+        if (keys) {
+            for (long i = 0; i < num_keys; i++) {
+                char *pal_str, *track_str, *bar_str, *prop_str;
+                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
+                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, target_track_sym->s_name) == 0) {
+                        dictionary_deleteentry(x->building, keys[i]);
+                    }
+                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+                }
+            }
+            sysmem_freeptr(keys);
+        }
+        buildspans_visualize_memory(x);
+        return; // Abort processing for this note
+    }
     buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
@@ -1635,6 +1713,7 @@ void buildspans_bang(t_buildspans *x) {
     }
 
     x->local_bar_length = 0;
+    x->last_msg_type = gensym("bang");
     buildspans_log(x, "Bar length reset to zero after flush.");
 }
 
@@ -1703,6 +1782,7 @@ void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
     sysmem_freeptr(track_syms);
     sysmem_freeptr(keys);
 
+    x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
 }
 
