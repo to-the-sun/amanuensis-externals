@@ -1053,15 +1053,6 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         // the ephemeral auto-initialization (calc_timestamp).
         if (!offset_found) {
             actual_offset = effective_offset;
-            if (actual_offset == 0.0) {
-                object_warn((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
-                buildspans_log(x, "*** Span initialization with offset 0.0 detected!");
-                buildspans_log(x, "*** This occurred during fallback to TIER 2 (Effective Global Offset) for span %s.", target_track_sym->s_name);
-                buildspans_log(x, "*** effective_offset calculation: (current_offset %.2f <= 0.0) ? calc_timestamp %.2f : current_offset %.2f", x->current_offset, calc_timestamp, x->current_offset);
-                buildspans_log(x, "*** Last message type received: %s", x->last_msg_type->s_name);
-                buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
-                buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
-            }
         }
 
         buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
@@ -1216,6 +1207,16 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 }
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+    if (offset == 0.0) {
+        object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
+        buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
+        buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
+        buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
+        buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
+        buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
+        buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
+        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
+    }
     buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
