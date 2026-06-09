@@ -22,7 +22,8 @@ typedef enum {
     MRT2_CMD_NONE,
     MRT2_CMD_PROMPT,
     MRT2_CMD_MIDI,
-    MRT2_CMD_MODEL
+    MRT2_CMD_MODEL,
+    MRT2_CMD_OPEN
 } t_mrt2_cmd_type;
 
 typedef struct _mrt2_cmd {
@@ -67,6 +68,7 @@ void mrt2_free(t_mrt2 *x);
 void mrt2_assist(t_mrt2 *x, void *b, long m, long a, char *s);
 void mrt2_connect(t_mrt2 *x);
 void mrt2_disconnect(t_mrt2 *x);
+void mrt2_open(t_mrt2 *x);
 void mrt2_prompt(t_mrt2 *x, t_symbol *s);
 void mrt2_list(t_mrt2 *x, t_symbol *s, long argc, t_atom *argv);
 void *mrt2_thread_proc(t_mrt2 *x);
@@ -92,6 +94,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)mrt2_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)mrt2_connect, "connect", 0);
     class_addmethod(c, (method)mrt2_disconnect, "disconnect", 0);
+    class_addmethod(c, (method)mrt2_open, "open", 0);
     class_addmethod(c, (method)mrt2_prompt, "prompt", A_SYM, 0);
     class_addmethod(c, (method)mrt2_list, "list", A_GIMME, 0);
 
@@ -137,10 +140,9 @@ void *mrt2_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
-        // Max outlets are created right-to-left
-        x->log_outlet = outlet_new((t_object *)x, NULL); // Index 2
-        outlet_new((t_object *)x, "signal"); // Index 1 (Right)
-        outlet_new((t_object *)x, "signal"); // Index 0 (Left)
+        x->log_outlet = outlet_new((t_object *)x, NULL);
+        outlet_new((t_object *)x, "signal");
+        outlet_new((t_object *)x, "signal");
 
         dsp_setup((t_pxobject *)x, 1);
 
@@ -219,6 +221,10 @@ void mrt2_disconnect(t_mrt2 *x) {
     mrt2_log(x, "disconnected");
 }
 
+void mrt2_open(t_mrt2 *x) {
+    mrt2_push_cmd(x, MRT2_CMD_OPEN, NULL);
+}
+
 void mrt2_prompt(t_mrt2 *x, t_symbol *s) {
     x->prompt = s;
     mrt2_push_cmd(x, MRT2_CMD_PROMPT, s->s_name);
@@ -235,24 +241,31 @@ void mrt2_list(t_mrt2 *x, t_symbol *s, long argc, t_atom *argv) {
 void *mrt2_thread_proc(t_mrt2 *x) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-        mrt2_log(x, "WSAStartup failed");
+        object_error((t_object *)x, "mrt2~: WSAStartup failed (Error %d)", WSAGetLastError());
         return NULL;
     }
 
     struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons((u_short)x->port);
-    inet_pton(AF_INET, x->address->s_name, &server_addr.sin_addr);
 
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET) {
-        mrt2_log(x, "socket creation failed");
+    if (inet_pton(AF_INET, x->address->s_name, &server_addr.sin_addr) <= 0) {
+        object_error((t_object *)x, "mrt2~: invalid address '%s'", x->address->s_name);
         WSACleanup();
         return NULL;
     }
 
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) {
+        object_error((t_object *)x, "mrt2~: socket creation failed (Error %d)", WSAGetLastError());
+        WSACleanup();
+        return NULL;
+    }
+
+    mrt2_log(x, "attempting to connect to %s:%ld...", x->address->s_name, x->port);
     if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
-        mrt2_log(x, "connection to %s:%ld failed", x->address->s_name, x->port);
+        object_error((t_object *)x, "mrt2~: connection to %s:%ld failed (Error %d)", x->address->s_name, x->port, WSAGetLastError());
         closesocket(s);
         WSACleanup();
         return NULL;
@@ -294,8 +307,14 @@ void *mrt2_thread_proc(t_mrt2 *x) {
                 snprintf(json, sizeof(json), "{\"event\":\"midi\",\"data\":[%s]}\n", cmd->data);
             } else if (cmd->type == MRT2_CMD_MODEL) {
                 snprintf(json, sizeof(json), "{\"event\":\"model\",\"name\":\"%s\"}\n", cmd->data);
+            } else if (cmd->type == MRT2_CMD_OPEN) {
+                snprintf(json, sizeof(json), "{\"event\":\"open_gui\"}\n");
             }
-            send(s, json, (int)strlen(json), 0);
+
+            if (send(s, json, (int)strlen(json), 0) == SOCKET_ERROR) {
+                mrt2_log(x, "failed to send command (Error %d)", WSAGetLastError());
+            }
+
             t_mrt2_cmd *next = cmd->next;
             sysmem_freeptr(cmd);
             cmd = next;
@@ -304,7 +323,11 @@ void *mrt2_thread_proc(t_mrt2 *x) {
         // 2. Receive data [int32 length][data...]
         int32_t len_prefix;
         int r = recv(s, (char *)&len_prefix, 4, 0);
-        if (r <= 0) break;
+        if (r <= 0) {
+            if (r == 0) mrt2_log(x, "server closed connection");
+            else mrt2_log(x, "receive error (Error %d)", WSAGetLastError());
+            break;
+        }
 
         if (len_prefix > 0) {
             // Audio data
@@ -340,7 +363,7 @@ void *mrt2_thread_proc(t_mrt2 *x) {
             }
             if (total_read == bytes_to_read) {
                 buf[total_read] = '\0';
-                mrt2_log(x, "status: %s", buf);
+                mrt2_log(x, "server status: %s", buf);
             }
             sysmem_freeptr(buf);
         }
