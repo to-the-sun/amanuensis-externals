@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="mrt2~" module="msp" category="Synthesis">
+	<digest>
+		Magenta RealTime 2 inference bridge
+	</digest>
+	<description>
+		A bridge object that takes MIDI input and outputs audio synthesized by Magenta RealTime 2 via a Python backend. It utilizes an asynchronous networking thread to communicate with a local Python server (<m>mrt2_server.py</m>), which runs the actual model inference.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Synthesis</metadata>
+		<metadata name="tag">ML</metadata>
+		<metadata name="tag">Neural</metadata>
+	</metadatalist>
+
+	<!-- INLETS -->
+	<inletlist>
+		<inlet id="0" type="signal/message">
+			<digest>MIDI messages and Control</digest>
+			<description>Accepts standard Max MIDI messages (list) for note-on/off, and control messages such as 'prompt', 'model', 'connect', and 'disconnect'.</description>
+		</inlet>
+	</inletlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Audio Output (Left)</digest>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>Audio Output (Right)</digest>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Logging and Status</digest>
+			<description>Outputs status messages from the bridge and logging information when the @log attribute is enabled.</description>
+		</outlet>
+	</outletlist>
+
+	<!-- ATTRIBUTES -->
+	<attrlist>
+		<attr name="address" type="symbol" get="1" set="1" package="1">
+			<digest>Server Address</digest>
+			<description>The IP address of the MRT2 Python bridge server (default: 127.0.0.1).</description>
+		</attr>
+		<attr name="port" type="long" get="1" set="1" package="1">
+			<digest>Server Port</digest>
+			<description>The TCP port of the MRT2 Python bridge server (default: 9998).</description>
+		</attr>
+		<attr name="model" type="symbol" get="1" set="1" package="1">
+			<digest>MRT2 Model</digest>
+			<description>The name of the MRT2 model to use (e.g., 'mrt2_small' or 'mrt2_base'). This is sent to the bridge upon connection.</description>
+		</attr>
+		<attr name="log" type="long" get="1" set="1" package="1">
+			<digest>Enable Logging</digest>
+			<description>Enables verbose logging to the third outlet (default: 0). Error messages are always posted to the Max console.</description>
+		</attr>
+	</attrlist>
+
+	<!-- MESSAGES -->
+	<methodlist>
+		<method name="connect">
+			<arglist />
+			<digest>Connect to bridge</digest>
+			<description>Initiates an asynchronous connection to the Python bridge server. Audio streaming begins as soon as the connection is established.</description>
+		</method>
+		<method name="disconnect">
+			<arglist />
+			<digest>Disconnect from bridge</digest>
+			<description>Closes the connection to the Python bridge server and stops the background networking thread.</description>
+		</method>
+		<method name="prompt">
+			<arglist>
+				<arg name="text" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set generation prompt</digest>
+			<description>Sets the text prompt for Magenta RealTime 2 (e.g., 'ambient pads with sub bass'). The prompt is sent to the bridge immediately if connected.</description>
+		</method>
+		<method name="list">
+			<arglist>
+				<arg name="midi" type="list" optional="0" />
+			</arglist>
+			<digest>MIDI message</digest>
+			<description>Processes standard MIDI note messages in the format [status, note, velocity]. These are forwarded to the MRT2 model to guide generation.</description>
+		</method>
+	</methodlist>
+
+	<!-- SEEALSO -->
+	<seealsolist>
+		<seealso name="weaver~" />
+		<seealso name="arrangement~" />
+		<seealso name="discordvoice~" />
+	</seealsolist>
+
+</c74object>
