@@ -10,7 +10,7 @@
 		}
 ,
 		"classnamespace" : "box",
-		"rect" : [ 100.0, 100.0, 640.0, 520.0 ],
+		"rect" : [ 100.0, 100.0, 786.0, 520.0 ],
 		"bglocked" : 0,
 		"openinpresentation" : 0,
 		"default_fontsize" : 12.0,
@@ -39,6 +39,19 @@
 		"subpatcher_template" : "",
 		"assistshowspatchername" : 0,
 		"boxes" : [ 			{
+				"box" : 				{
+					"fontsize" : 14.0,
+					"id" : "obj-20",
+					"linecount" : 6,
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 500.0, 100.0, 240.0, 100.0 ],
+					"text" : "USAGE INSTRUCTIONS:\n1. Open your terminal.\n2. Navigate to this directory.\n3. Run: python mrt2_server.py\n4. Once running, click 'connect' here.\n5. Click 'open' to see the bridge GUI."
+				}
+
+			}
+, 			{
 				"box" : 				{
 					"id" : "obj-17",
 					"maxclass" : "message",

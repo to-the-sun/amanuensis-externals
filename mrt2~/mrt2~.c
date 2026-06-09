@@ -332,17 +332,31 @@ void *mrt2_thread_proc(t_mrt2 *x) {
         if (len_prefix > 0) {
             // Audio data
             int bytes_to_read = len_prefix;
-            char *buf = (char *)sysmem_newptr(bytes_to_read);
+            // Cap at 1MB to avoid memory issues, but ensure we read EVERYTHING to maintain sync
+            int actual_read_cap = (bytes_to_read > 1048576) ? 1048576 : bytes_to_read;
+
+            char *buf = (char *)sysmem_newptr(actual_read_cap);
             int total_read = 0;
             while (total_read < bytes_to_read) {
-                int n = recv(s, buf + total_read, bytes_to_read - total_read, 0);
-                if (n <= 0) break;
-                total_read += n;
+                int to_recv = (bytes_to_read - total_read);
+                if (total_read < actual_read_cap) {
+                    if (to_recv > actual_read_cap - total_read) to_recv = actual_read_cap - total_read;
+                    int n = recv(s, buf + total_read, to_recv, 0);
+                    if (n <= 0) break;
+                    total_read += n;
+                } else {
+                    // Drain the rest to maintain protocol sync
+                    char drain[4096];
+                    if (to_recv > 4096) to_recv = 4096;
+                    int n = recv(s, drain, to_recv, 0);
+                    if (n <= 0) break;
+                    total_read += n;
+                }
             }
 
-            if (total_read == bytes_to_read) {
+            if (total_read == bytes_to_read && buf) {
                 float *audio = (float *)buf;
-                int samples = total_read / sizeof(float);
+                int samples = actual_read_cap / sizeof(float);
                 critical_enter(x->lock);
                 for (int i = 0; i < samples; i++) {
                     x->audio_buffer[x->buffer_head] = audio[i];
@@ -350,22 +364,35 @@ void *mrt2_thread_proc(t_mrt2 *x) {
                 }
                 critical_exit(x->lock);
             }
-            sysmem_freeptr(buf);
+            if (buf) sysmem_freeptr(buf);
         } else if (len_prefix < 0) {
             // JSON status
             int bytes_to_read = -len_prefix;
-            char *buf = (char *)sysmem_newptr(bytes_to_read + 1);
+            int actual_read_cap = (bytes_to_read > 8192) ? 8192 : bytes_to_read;
+
+            char *buf = (char *)sysmem_newptr(actual_read_cap + 1);
             int total_read = 0;
             while (total_read < bytes_to_read) {
-                int n = recv(s, buf + total_read, bytes_to_read - total_read, 0);
-                if (n <= 0) break;
-                total_read += n;
+                int n_expected = (bytes_to_read - total_read);
+                if (total_read < actual_read_cap) {
+                    int to_recv = actual_read_cap - total_read;
+                    if (to_recv > n_expected) to_recv = n_expected;
+                    int n = recv(s, buf + total_read, to_recv, 0);
+                    if (n <= 0) break;
+                    total_read += n;
+                } else {
+                    char drain[1024];
+                    int to_recv = (n_expected > 1024) ? 1024 : n_expected;
+                    int n = recv(s, drain, to_recv, 0);
+                    if (n <= 0) break;
+                    total_read += n;
+                }
             }
-            if (total_read == bytes_to_read) {
-                buf[total_read] = '\0';
+            if (total_read == bytes_to_read && buf) {
+                buf[actual_read_cap] = '\0';
                 mrt2_log(x, "server status: %s", buf);
             }
-            sysmem_freeptr(buf);
+            if (buf) sysmem_freeptr(buf);
         }
     }
 

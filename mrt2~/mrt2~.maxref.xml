@@ -7,6 +7,9 @@
 	</digest>
 	<description>
 		A bridge object that takes MIDI input and outputs audio synthesized by Magenta RealTime 2 via a Python backend. It utilizes an asynchronous networking thread to communicate with a local Python server (<m>mrt2_server.py</m>), which runs the actual model inference.
+		<br />
+		<br />
+		<b>IMPORTANT:</b> The Python server (<m>mrt2_server.py</m>) must be running in the background for this object to function. Start it from your terminal using: <m>python mrt2_server.py</m>.
 	</description>
 
 	<!-- METADATA -->
@@ -64,12 +67,17 @@
 		<method name="connect">
 			<arglist />
 			<digest>Connect to bridge</digest>
-			<description>Initiates an asynchronous connection to the Python bridge server. Audio streaming begins as soon as the connection is established.</description>
+			<description>Initiates an asynchronous connection to the Python bridge server. Audio streaming begins as soon as the connection is established. Ensure <m>mrt2_server.py</m> is running before calling this.</description>
 		</method>
 		<method name="disconnect">
 			<arglist />
 			<digest>Disconnect from bridge</digest>
 			<description>Closes the connection to the Python bridge server and stops the background networking thread.</description>
+		</method>
+		<method name="open">
+			<arglist />
+			<digest>Open bridge GUI</digest>
+			<description>Triggers the visualization window on the Python server side. Useful for monitoring MIDI activity and audio levels.</description>
 		</method>
 		<method name="prompt">
 			<arglist>
