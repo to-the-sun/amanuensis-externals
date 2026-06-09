@@ -217,6 +217,9 @@ void smartloop_int(t_smartloop *x, long n) {
 
 
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    if (x->suppress) {
+        smartloop_log(x, "Resetting suppression flag (suppress=0).");
+    }
     x->suppress = 0;
 }
 
@@ -228,6 +231,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long do_output_zero = 0;
     long do_output_bang = 0;
+    long jump_detected_but_invalid = 0;
 
     for (int i = 0; i < sampleframes; i++) {
         double val = in[i];
@@ -249,33 +253,50 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
             double delta = val - x->last_val;
             int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
 
-            if ((val < x->last_val || jump) && x->current_start >= 0.0 && x->current_end >= 0.0) {
-                do_output_bang = 1;
+            if (val < x->last_val || jump) {
+                if (x->current_start >= 0.0 && x->current_end >= 0.0) {
+                    do_output_bang = 1;
+                } else {
+                    jump_detected_but_invalid = 1;
+                }
             }
             x->last_delta = delta;
         }
         x->last_val = val;
     }
 
+    if (jump_detected_but_invalid && !do_output_bang) {
+        smartloop_log(x, "Loop/Jump detected but IGNORED because boundaries are invalid (start=%.2f, end=%.2f).",
+                     x->current_start, x->current_end);
+    }
+
     // NOTE: Message outlets are fired directly from the audio thread here.
     // This is generally considered unsafe in Max/MSP, but is implemented
     // this way per explicit user request to solve jitter/timing issues.
-    if (!x->suppress) {
-        if (do_output_zero) {
-            x->suppress = 1;
-            if (x->output_enabled) {
-                outlet_float(x->out_end, 0.0);
-                outlet_float(x->out_start, 0.0);
+    if (do_output_zero || do_output_bang) {
+        if (x->suppress) {
+            smartloop_log(x, "Event detected (%s) but IGNORED due to suppression flag.",
+                         do_output_zero ? "Zero/Stationary" : "Loop/Jump");
+        } else {
+            if (do_output_zero) {
+                x->suppress = 1;
+                smartloop_log(x, "Stationary ramp detected. Firing zero boundaries (suppress=1).");
+                if (x->output_enabled) {
+                    outlet_float(x->out_end, 0.0);
+                    outlet_float(x->out_start, 0.0);
+                }
+                defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
+            } else if (do_output_bang) {
+                x->suppress = 1;
+                smartloop_log(x, "Loop/Jump detected. Firing bang and boundaries [%.2f, %.2f] (suppress=1).",
+                             x->current_start, x->current_end);
+                if (x->output_enabled) {
+                    outlet_float(x->out_end, x->current_end);
+                    outlet_float(x->out_start, x->current_start);
+                }
+                outlet_bang(x->out_bang);
+                defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
             }
-            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
-        } else if (do_output_bang) {
-            x->suppress = 1;
-            if (x->output_enabled) {
-                outlet_float(x->out_end, x->current_end);
-                outlet_float(x->out_start, x->current_start);
-            }
-            outlet_bang(x->out_bang);
-            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
         }
     }
 }

@@ -89,7 +89,7 @@
 		</attribute>
 		<attribute name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Logging</digest>
-			<description>When enabled (1), outputs verbose diagnostic information to the third outlet, including minimum, maximum, and average ratings across all bars, the number of bars and spans analyzed, and details of the identified looping interval (start, end, and duration).</description>
+			<description>When enabled (1), outputs verbose diagnostic information to the third outlet, including minimum, maximum, and average ratings across all bars, the number of bars and spans analyzed, details of the identified looping interval (start, end, and duration), and real-time detection and suppression events for troubleshooting bang emission.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
