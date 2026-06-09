@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
 
-<c74object name="mrt2~" module="msp" category="Synthesis">
+<c74object name="magenta~" module="msp" category="Synthesis">
 	<digest>
 		Magenta RealTime 2 inference bridge
 	</digest>
 	<description>
-		A bridge object that takes MIDI input and outputs audio synthesized by Magenta RealTime 2 via a Python backend. It utilizes an asynchronous networking thread to communicate with a local Python server (<m>mrt2_server.py</m>), which runs the actual model inference.
+		A bridge object that takes MIDI input and outputs audio synthesized by Magenta RealTime 2 via a Python backend. It utilizes an asynchronous networking thread to communicate with a local Python server (<m>magenta_server.py</m>), which runs the actual model inference.
 		<br />
 		<br />
-		<b>IMPORTANT:</b> The Python server (<m>mrt2_server.py</m>) must be running in the background for this object to function. Start it from your terminal using: <m>python mrt2_server.py</m>.
+		<b>IMPORTANT:</b> The Python server (<m>magenta_server.py</m>) must be running in the background for this object to function. Start it from your terminal using: <m>python magenta_server.py</m>.
 	</description>
 
 	<!-- METADATA -->
@@ -46,11 +46,11 @@
 	<attrlist>
 		<attr name="address" type="symbol" get="1" set="1" package="1">
 			<digest>Server Address</digest>
-			<description>The IP address of the MRT2 Python bridge server (default: 127.0.0.1).</description>
+			<description>The IP address of the Magenta Python bridge server (default: 127.0.0.1).</description>
 		</attr>
 		<attr name="port" type="long" get="1" set="1" package="1">
 			<digest>Server Port</digest>
-			<description>The TCP port of the MRT2 Python bridge server (default: 9998).</description>
+			<description>The TCP port of the Magenta Python bridge server (default: 9998).</description>
 		</attr>
 		<attr name="model" type="symbol" get="1" set="1" package="1">
 			<digest>MRT2 Model</digest>
@@ -67,7 +67,7 @@
 		<method name="connect">
 			<arglist />
 			<digest>Connect to bridge</digest>
-			<description>Initiates an asynchronous connection to the Python bridge server. Audio streaming begins as soon as the connection is established. Ensure <m>mrt2_server.py</m> is running before calling this.</description>
+			<description>Initiates an asynchronous connection to the Python bridge server. Audio streaming begins as soon as the connection is established. Ensure <m>magenta_server.py</m> is running before calling this.</description>
 		</method>
 		<method name="disconnect">
 			<arglist />

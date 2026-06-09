@@ -3,8 +3,8 @@ CFLAGS = -I../max-sdk/source/max-sdk-base/c74support/max-includes -I../max-sdk/s
 LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-sdk/source/max-sdk-base/c74support/msp-includes/x64 -lMaxAPI -lMaxAudio -lws2_32
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
-mrt2~.mxe64: mrt2~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o mrt2~.mxe64 mrt2~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES) $(LDFLAGS)
+magenta~.mxe64: magenta~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -o magenta~.mxe64 magenta~.c ../shared/logging.c ../shared/visualize.c $(COMMON_SOURCES) $(LDFLAGS)
 
 clean:
-	rm -f mrt2~.mxe64
+	rm -f magenta~.mxe64

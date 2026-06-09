@@ -47,7 +47,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 0,
 					"patching_rect" : [ 500.0, 100.0, 240.0, 100.0 ],
-					"text" : "USAGE INSTRUCTIONS:\n1. Open your terminal.\n2. Navigate to this directory.\n3. Run: python mrt2_server.py\n4. Once running, click 'connect' here.\n5. Click 'open' to see the bridge GUI."
+					"text" : "USAGE INSTRUCTIONS:\n1. Open your terminal.\n2. Navigate to this directory.\n3. Run: python magenta_server.py\n4. Once running, click 'connect' here.\n5. Click 'open' to see the bridge GUI."
 				}
 
 			}
@@ -161,8 +161,8 @@
 					"numinlets" : 1,
 					"numoutlets" : 3,
 					"outlettype" : [ "signal", "signal", "" ],
-					"patching_rect" : [ 50.0, 280.0, 100.0, 22.0 ],
-					"text" : "mrt2~ @log 1"
+					"patching_rect" : [ 50.0, 280.0, 120.0, 22.0 ],
+					"text" : "magenta~ @log 1"
 				}
 
 			}

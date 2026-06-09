@@ -11,28 +11,28 @@
 #include <stdio.h>
 
 /**
- * @file mrt2~.c
- * @brief Max external for MRT2 (Magenta RealTime 2) synthesis bridge.
+ * @file magenta~.c
+ * @brief Max external for Magenta RealTime 2 synthesis bridge.
  */
 
-#define MRT2_RING_BUFFER_SIZE 384000 // ~4 seconds of stereo at 48kHz (float32)
-#define MRT2_MAX_CMD_LEN 1024
+#define MAGENTA_RING_BUFFER_SIZE 384000 // ~4 seconds of stereo at 48kHz (float32)
+#define MAGENTA_MAX_CMD_LEN 1024
 
 typedef enum {
-    MRT2_CMD_NONE,
-    MRT2_CMD_PROMPT,
-    MRT2_CMD_MIDI,
-    MRT2_CMD_MODEL,
-    MRT2_CMD_OPEN
-} t_mrt2_cmd_type;
+    MAGENTA_CMD_NONE,
+    MAGENTA_CMD_PROMPT,
+    MAGENTA_CMD_MIDI,
+    MAGENTA_CMD_MODEL,
+    MAGENTA_CMD_OPEN
+} t_magenta_cmd_type;
 
-typedef struct _mrt2_cmd {
-    t_mrt2_cmd_type type;
-    char data[MRT2_MAX_CMD_LEN];
-    struct _mrt2_cmd *next;
-} t_mrt2_cmd;
+typedef struct _magenta_cmd {
+    t_magenta_cmd_type type;
+    char data[MAGENTA_MAX_CMD_LEN];
+    struct _magenta_cmd *next;
+} t_magenta_cmd;
 
-typedef struct _mrt2 {
+typedef struct _magenta {
     t_pxobject m_obj;
     t_systhread thread;
     t_critical lock;
@@ -57,67 +57,67 @@ typedef struct _mrt2 {
     long buffer_size;
 
     // Command Queue
-    t_mrt2_cmd *cmd_head;
-    t_mrt2_cmd *cmd_tail;
+    t_magenta_cmd *cmd_head;
+    t_magenta_cmd *cmd_tail;
 
     double sr;
-} t_mrt2;
+} t_magenta;
 
-void *mrt2_new(t_symbol *s, long argc, t_atom *argv);
-void mrt2_free(t_mrt2 *x);
-void mrt2_assist(t_mrt2 *x, void *b, long m, long a, char *s);
-void mrt2_connect(t_mrt2 *x);
-void mrt2_disconnect(t_mrt2 *x);
-void mrt2_open(t_mrt2 *x);
-void mrt2_prompt(t_mrt2 *x, t_symbol *s);
-void mrt2_list(t_mrt2 *x, t_symbol *s, long argc, t_atom *argv);
-void *mrt2_thread_proc(t_mrt2 *x);
-void mrt2_dsp64(t_mrt2 *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
-void mrt2_perform64(t_mrt2 *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
-void mrt2_log(t_mrt2 *x, const char *fmt, ...);
-void mrt2_push_cmd(t_mrt2 *x, t_mrt2_cmd_type type, const char *data);
+void *magenta_new(t_symbol *s, long argc, t_atom *argv);
+void magenta_free(t_magenta *x);
+void magenta_assist(t_magenta *x, void *b, long m, long a, char *s);
+void magenta_connect(t_magenta *x);
+void magenta_disconnect(t_magenta *x);
+void magenta_open(t_magenta *x);
+void magenta_prompt(t_magenta *x, t_symbol *s);
+void magenta_list(t_magenta *x, t_symbol *s, long argc, t_atom *argv);
+void *magenta_thread_proc(t_magenta *x);
+void magenta_dsp64(t_magenta *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
+void magenta_perform64(t_magenta *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
+void magenta_log(t_magenta *x, const char *fmt, ...);
+void magenta_push_cmd(t_magenta *x, t_magenta_cmd_type type, const char *data);
 
-static t_class *mrt2_class;
+static t_class *magenta_class;
 
-void mrt2_log(t_mrt2 *x, const char *fmt, ...) {
+void magenta_log(t_magenta *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vcommon_log(x->log_outlet, x->log, "mrt2~", fmt, args);
+    vcommon_log(x->log_outlet, x->log, "magenta~", fmt, args);
     va_end(args);
 }
 
 void ext_main(void *r) {
     common_symbols_init();
-    t_class *c = class_new("mrt2~", (method)mrt2_new, (method)mrt2_free, sizeof(t_mrt2), 0L, A_GIMME, 0);
+    t_class *c = class_new("magenta~", (method)magenta_new, (method)magenta_free, sizeof(t_magenta), 0L, A_GIMME, 0);
 
-    class_addmethod(c, (method)mrt2_dsp64, "dsp64", A_CANT, 0);
-    class_addmethod(c, (method)mrt2_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)mrt2_connect, "connect", 0);
-    class_addmethod(c, (method)mrt2_disconnect, "disconnect", 0);
-    class_addmethod(c, (method)mrt2_open, "open", 0);
-    class_addmethod(c, (method)mrt2_prompt, "prompt", A_SYM, 0);
-    class_addmethod(c, (method)mrt2_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)magenta_dsp64, "dsp64", A_CANT, 0);
+    class_addmethod(c, (method)magenta_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)magenta_connect, "connect", 0);
+    class_addmethod(c, (method)magenta_disconnect, "disconnect", 0);
+    class_addmethod(c, (method)magenta_open, "open", 0);
+    class_addmethod(c, (method)magenta_prompt, "prompt", A_SYM, 0);
+    class_addmethod(c, (method)magenta_list, "list", A_GIMME, 0);
 
-    CLASS_ATTR_SYM(c, "address", 0, t_mrt2, address);
+    CLASS_ATTR_SYM(c, "address", 0, t_magenta, address);
     CLASS_ATTR_DEFAULT(c, "address", 0, "127.0.0.1");
 
-    CLASS_ATTR_LONG(c, "port", 0, t_mrt2, port);
+    CLASS_ATTR_LONG(c, "port", 0, t_magenta, port);
     CLASS_ATTR_DEFAULT_SAVE(c, "port", 0, "9998");
 
-    CLASS_ATTR_SYM(c, "model", 0, t_mrt2, model);
+    CLASS_ATTR_SYM(c, "model", 0, t_magenta, model);
     CLASS_ATTR_DEFAULT(c, "model", 0, "mrt2_small");
 
-    CLASS_ATTR_LONG(c, "log", 0, t_mrt2, log);
+    CLASS_ATTR_LONG(c, "log", 0, t_magenta, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
-    mrt2_class = c;
+    magenta_class = c;
 }
 
-void *mrt2_new(t_symbol *s, long argc, t_atom *argv) {
-    t_mrt2 *x = (t_mrt2 *)object_alloc(mrt2_class);
+void *magenta_new(t_symbol *s, long argc, t_atom *argv) {
+    t_magenta *x = (t_magenta *)object_alloc(magenta_class);
 
     if (x) {
         x->log = 0;
@@ -130,7 +130,7 @@ void *mrt2_new(t_symbol *s, long argc, t_atom *argv) {
         x->model = gensym("mrt2_small");
         x->prompt = _sym_nothing;
 
-        x->buffer_size = MRT2_RING_BUFFER_SIZE;
+        x->buffer_size = MAGENTA_RING_BUFFER_SIZE;
         x->audio_buffer = (float *)sysmem_newptr(x->buffer_size * sizeof(float));
         x->buffer_head = 0;
         x->buffer_tail = 0;
@@ -147,21 +147,21 @@ void *mrt2_new(t_symbol *s, long argc, t_atom *argv) {
         dsp_setup((t_pxobject *)x, 1);
 
         critical_new(&x->lock);
-        mrt2_log(x, "initialized");
+        magenta_log(x, "initialized");
     }
     return x;
 }
 
-void mrt2_free(t_mrt2 *x) {
+void magenta_free(t_magenta *x) {
     dsp_free((t_pxobject *)x);
-    mrt2_disconnect(x);
+    magenta_disconnect(x);
 
     if (x->audio_buffer) sysmem_freeptr(x->audio_buffer);
 
     critical_enter(x->lock);
-    t_mrt2_cmd *cmd = x->cmd_head;
+    t_magenta_cmd *cmd = x->cmd_head;
     while (cmd) {
-        t_mrt2_cmd *next = cmd->next;
+        t_magenta_cmd *next = cmd->next;
         sysmem_freeptr(cmd);
         cmd = next;
     }
@@ -170,13 +170,13 @@ void mrt2_free(t_mrt2 *x) {
     critical_free(x->lock);
 }
 
-void mrt2_push_cmd(t_mrt2 *x, t_mrt2_cmd_type type, const char *data) {
-    t_mrt2_cmd *cmd = (t_mrt2_cmd *)sysmem_newptr(sizeof(t_mrt2_cmd));
+void magenta_push_cmd(t_magenta *x, t_magenta_cmd_type type, const char *data) {
+    t_magenta_cmd *cmd = (t_magenta_cmd *)sysmem_newptr(sizeof(t_magenta_cmd));
     if (cmd) {
         cmd->type = type;
         if (data) {
-            strncpy(cmd->data, data, MRT2_MAX_CMD_LEN - 1);
-            cmd->data[MRT2_MAX_CMD_LEN - 1] = '\0';
+            strncpy(cmd->data, data, MAGENTA_MAX_CMD_LEN - 1);
+            cmd->data[MAGENTA_MAX_CMD_LEN - 1] = '\0';
         } else {
             cmd->data[0] = '\0';
         }
@@ -194,16 +194,16 @@ void mrt2_push_cmd(t_mrt2 *x, t_mrt2_cmd_type type, const char *data) {
     }
 }
 
-void mrt2_connect(t_mrt2 *x) {
+void magenta_connect(t_magenta *x) {
     if (x->thread) {
         object_warn((t_object *)x, "already connected or connecting");
         return;
     }
     x->terminate = 0;
-    systhread_create((method)mrt2_thread_proc, x, 0, 0, 0, &x->thread);
+    systhread_create((method)magenta_thread_proc, x, 0, 0, 0, &x->thread);
 }
 
-void mrt2_disconnect(t_mrt2 *x) {
+void magenta_disconnect(t_magenta *x) {
     critical_enter(x->lock);
     x->terminate = 1;
     if (x->sock != INVALID_SOCKET) {
@@ -218,30 +218,30 @@ void mrt2_disconnect(t_mrt2 *x) {
         x->thread = NULL;
     }
     x->connected = 0;
-    mrt2_log(x, "disconnected");
+    magenta_log(x, "disconnected");
 }
 
-void mrt2_open(t_mrt2 *x) {
-    mrt2_push_cmd(x, MRT2_CMD_OPEN, NULL);
+void magenta_open(t_magenta *x) {
+    magenta_push_cmd(x, MAGENTA_CMD_OPEN, NULL);
 }
 
-void mrt2_prompt(t_mrt2 *x, t_symbol *s) {
+void magenta_prompt(t_magenta *x, t_symbol *s) {
     x->prompt = s;
-    mrt2_push_cmd(x, MRT2_CMD_PROMPT, s->s_name);
+    magenta_push_cmd(x, MAGENTA_CMD_PROMPT, s->s_name);
 }
 
-void mrt2_list(t_mrt2 *x, t_symbol *s, long argc, t_atom *argv) {
+void magenta_list(t_magenta *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc >= 2) {
         char buf[64];
         snprintf(buf, 64, "%ld,%ld,%ld", atom_getlong(argv), atom_getlong(argv+1), argc > 2 ? atom_getlong(argv+2) : 0);
-        mrt2_push_cmd(x, MRT2_CMD_MIDI, buf);
+        magenta_push_cmd(x, MAGENTA_CMD_MIDI, buf);
     }
 }
 
-void *mrt2_thread_proc(t_mrt2 *x) {
+void *magenta_thread_proc(t_magenta *x) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-        object_error((t_object *)x, "mrt2~: WSAStartup failed (Error %d)", WSAGetLastError());
+        object_error((t_object *)x, "magenta~: WSAStartup failed (Error %d)", WSAGetLastError());
         return NULL;
     }
 
@@ -251,21 +251,21 @@ void *mrt2_thread_proc(t_mrt2 *x) {
     server_addr.sin_port = htons((u_short)x->port);
 
     if (inet_pton(AF_INET, x->address->s_name, &server_addr.sin_addr) <= 0) {
-        object_error((t_object *)x, "mrt2~: invalid address '%s'", x->address->s_name);
+        object_error((t_object *)x, "magenta~: invalid address '%s'", x->address->s_name);
         WSACleanup();
         return NULL;
     }
 
     SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) {
-        object_error((t_object *)x, "mrt2~: socket creation failed (Error %d)", WSAGetLastError());
+        object_error((t_object *)x, "magenta~: socket creation failed (Error %d)", WSAGetLastError());
         WSACleanup();
         return NULL;
     }
 
-    mrt2_log(x, "attempting to connect to %s:%ld...", x->address->s_name, x->port);
+    magenta_log(x, "attempting to connect to %s:%ld...", x->address->s_name, x->port);
     if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
-        object_error((t_object *)x, "mrt2~: connection to %s:%ld failed (Error %d)", x->address->s_name, x->port, WSAGetLastError());
+        object_error((t_object *)x, "magenta~: connection to %s:%ld failed (Error %d)", x->address->s_name, x->port, WSAGetLastError());
         closesocket(s);
         WSACleanup();
         return NULL;
@@ -278,44 +278,44 @@ void *mrt2_thread_proc(t_mrt2 *x) {
     x->buffer_tail = 0;
     critical_exit(x->lock);
 
-    mrt2_log(x, "connected to bridge at %s:%ld", x->address->s_name, x->port);
+    magenta_log(x, "connected to bridge at %s:%ld", x->address->s_name, x->port);
 
     // Send initial model and prompt
-    char init_model[MRT2_MAX_CMD_LEN];
-    snprintf(init_model, MRT2_MAX_CMD_LEN, "{\"event\":\"model\",\"name\":\"%s\"}\n", x->model->s_name);
+    char init_model[MAGENTA_MAX_CMD_LEN];
+    snprintf(init_model, MAGENTA_MAX_CMD_LEN, "{\"event\":\"model\",\"name\":\"%s\"}\n", x->model->s_name);
     send(s, init_model, (int)strlen(init_model), 0);
 
     if (x->prompt != _sym_nothing) {
-        char init_prompt[MRT2_MAX_CMD_LEN];
-        snprintf(init_prompt, MRT2_MAX_CMD_LEN, "{\"event\":\"prompt\",\"text\":\"%s\"}\n", x->prompt->s_name);
+        char init_prompt[MAGENTA_MAX_CMD_LEN];
+        snprintf(init_prompt, MAGENTA_MAX_CMD_LEN, "{\"event\":\"prompt\",\"text\":\"%s\"}\n", x->prompt->s_name);
         send(s, init_prompt, (int)strlen(init_prompt), 0);
     }
 
     while (!x->terminate) {
         // 1. Send pending commands
         critical_enter(x->lock);
-        t_mrt2_cmd *cmd = x->cmd_head;
+        t_magenta_cmd *cmd = x->cmd_head;
         x->cmd_head = NULL;
         x->cmd_tail = NULL;
         critical_exit(x->lock);
 
         while (cmd) {
-            char json[MRT2_MAX_CMD_LEN + 128];
-            if (cmd->type == MRT2_CMD_PROMPT) {
+            char json[MAGENTA_MAX_CMD_LEN + 128];
+            if (cmd->type == MAGENTA_CMD_PROMPT) {
                 snprintf(json, sizeof(json), "{\"event\":\"prompt\",\"text\":\"%s\"}\n", cmd->data);
-            } else if (cmd->type == MRT2_CMD_MIDI) {
+            } else if (cmd->type == MAGENTA_CMD_MIDI) {
                 snprintf(json, sizeof(json), "{\"event\":\"midi\",\"data\":[%s]}\n", cmd->data);
-            } else if (cmd->type == MRT2_CMD_MODEL) {
+            } else if (cmd->type == MAGENTA_CMD_MODEL) {
                 snprintf(json, sizeof(json), "{\"event\":\"model\",\"name\":\"%s\"}\n", cmd->data);
-            } else if (cmd->type == MRT2_CMD_OPEN) {
+            } else if (cmd->type == MAGENTA_CMD_OPEN) {
                 snprintf(json, sizeof(json), "{\"event\":\"open_gui\"}\n");
             }
 
             if (send(s, json, (int)strlen(json), 0) == SOCKET_ERROR) {
-                mrt2_log(x, "failed to send command (Error %d)", WSAGetLastError());
+                magenta_log(x, "failed to send command (Error %d)", WSAGetLastError());
             }
 
-            t_mrt2_cmd *next = cmd->next;
+            t_magenta_cmd *next = cmd->next;
             sysmem_freeptr(cmd);
             cmd = next;
         }
@@ -324,15 +324,14 @@ void *mrt2_thread_proc(t_mrt2 *x) {
         int32_t len_prefix;
         int r = recv(s, (char *)&len_prefix, 4, 0);
         if (r <= 0) {
-            if (r == 0) mrt2_log(x, "server closed connection");
-            else mrt2_log(x, "receive error (Error %d)", WSAGetLastError());
+            if (r == 0) magenta_log(x, "server closed connection");
+            else magenta_log(x, "receive error (Error %d)", WSAGetLastError());
             break;
         }
 
         if (len_prefix > 0) {
             // Audio data
             int bytes_to_read = len_prefix;
-            // Cap at 1MB to avoid memory issues, but ensure we read EVERYTHING to maintain sync
             int actual_read_cap = (bytes_to_read > 1048576) ? 1048576 : bytes_to_read;
 
             char *buf = (char *)sysmem_newptr(actual_read_cap);
@@ -345,7 +344,6 @@ void *mrt2_thread_proc(t_mrt2 *x) {
                     if (n <= 0) break;
                     total_read += n;
                 } else {
-                    // Drain the rest to maintain protocol sync
                     char drain[4096];
                     if (to_recv > 4096) to_recv = 4096;
                     int n = recv(s, drain, to_recv, 0);
@@ -390,7 +388,7 @@ void *mrt2_thread_proc(t_mrt2 *x) {
             }
             if (total_read == bytes_to_read && buf) {
                 buf[actual_read_cap] = '\0';
-                mrt2_log(x, "server status: %s", buf);
+                magenta_log(x, "server status: %s", buf);
             }
             if (buf) sysmem_freeptr(buf);
         }
@@ -405,7 +403,7 @@ void *mrt2_thread_proc(t_mrt2 *x) {
     return NULL;
 }
 
-void mrt2_assist(t_mrt2 *x, void *b, long m, long a, char *s) {
+void magenta_assist(t_magenta *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "MIDI messages and Control");
     } else {
@@ -417,12 +415,12 @@ void mrt2_assist(t_mrt2 *x, void *b, long m, long a, char *s) {
     }
 }
 
-void mrt2_dsp64(t_mrt2 *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
+void magenta_dsp64(t_magenta *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
     x->sr = samplerate;
-    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)mrt2_perform64, 0, NULL);
+    dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)magenta_perform64, 0, NULL);
 }
 
-void mrt2_perform64(t_mrt2 *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+void magenta_perform64(t_magenta *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *out_l = outs[0];
     double *out_r = outs[1];
 
