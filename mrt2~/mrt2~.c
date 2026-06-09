@@ -137,8 +137,12 @@ void *mrt2_new(t_symbol *s, long argc, t_atom *argv) {
 
         attr_args_process(x, argc, argv);
 
+        // Max outlets are created right-to-left
+        x->log_outlet = outlet_new((t_object *)x, NULL); // Index 2
+        outlet_new((t_object *)x, "signal"); // Index 1 (Right)
+        outlet_new((t_object *)x, "signal"); // Index 0 (Left)
+
         dsp_setup((t_pxobject *)x, 1);
-        x->log_outlet = outlet_new((t_object *)x, NULL);
 
         critical_new(&x->lock);
         mrt2_log(x, "initialized");
@@ -168,8 +172,12 @@ void mrt2_push_cmd(t_mrt2 *x, t_mrt2_cmd_type type, const char *data) {
     t_mrt2_cmd *cmd = (t_mrt2_cmd *)sysmem_newptr(sizeof(t_mrt2_cmd));
     if (cmd) {
         cmd->type = type;
-        if (data) strncpy(cmd->data, data, MRT2_MAX_CMD_LEN);
-        else cmd->data[0] = '\0';
+        if (data) {
+            strncpy(cmd->data, data, MRT2_MAX_CMD_LEN - 1);
+            cmd->data[MRT2_MAX_CMD_LEN - 1] = '\0';
+        } else {
+            cmd->data[0] = '\0';
+        }
         cmd->next = NULL;
 
         critical_enter(x->lock);
