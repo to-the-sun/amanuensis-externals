@@ -248,13 +248,13 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
                 x->last_delta = 0.0;
             }
         } else {
-            x->triggered_zero = 0;
             double delta = val - x->last_val;
             int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
 
-            if (val < x->last_val || jump) {
+            if (val < x->last_val || jump || x->triggered_zero) {
                 do_output_bang = 1;
             }
+            x->triggered_zero = 0;
             x->last_delta = delta;
         }
         x->last_val = val;
@@ -278,7 +278,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
                 defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
             } else if (do_output_bang) {
                 x->suppress = 1;
-                smartloop_log(x, "Loop/Jump detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
+                smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
                              x->current_start, x->current_end);
                 if (x->output_enabled) {
                     if (x->current_start >= 0.0 && x->current_end >= 0.0) {
