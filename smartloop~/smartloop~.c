@@ -557,8 +557,6 @@ void smartloop_tick(t_smartloop *x) {
         }
     }
 
-    smartloop_log(x, "Avoiding %ld unique above-average points.", unique_above_avg_count);
-
     // Phase 4: Longest clean interval
     double max_dist = -1.0;
     double best_S = 0.0;
