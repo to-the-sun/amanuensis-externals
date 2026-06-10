@@ -231,6 +231,8 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long do_output_zero = 0;
     long do_output_bang = 0;
+    double zero_val = 0.0;
+    double zero_last_val = 0.0;
 
     for (int i = 0; i < sampleframes; i++) {
         double val = in[i];
@@ -244,6 +246,8 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
         if (val == x->last_val) {
             if (!x->triggered_zero) {
                 do_output_zero = 1;
+                zero_val = val;
+                zero_last_val = x->last_val;
                 x->triggered_zero = 1;
                 x->last_delta = 0.0;
             }
@@ -264,7 +268,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     // This is generally considered unsafe in Max/MSP, but is implemented
     // this way per explicit user request to solve jitter/timing issues.
     if (do_output_zero) {
-        smartloop_log(x, "Stationary ramp detected. Firing zero boundaries.");
+        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", zero_val, zero_last_val);
         if (x->output_enabled) {
             outlet_float(x->out_end, 0.0);
             outlet_float(x->out_start, 0.0);
