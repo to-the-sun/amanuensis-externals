@@ -266,7 +266,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     if (do_output_zero || do_output_bang) {
         if (x->suppress) {
             smartloop_log(x, "Event detected (%s) but IGNORED due to suppression flag.",
-                         do_output_zero ? "Zero/Stationary" : "Loop/Jump");
+                         do_output_zero ? "Zero/Stationary" : "Loop/Jump/Start");
         } else {
             if (do_output_zero) {
                 x->suppress = 1;
