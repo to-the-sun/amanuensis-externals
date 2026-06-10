@@ -231,7 +231,6 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long do_output_zero = 0;
     long do_output_bang = 0;
-    long jump_detected_but_invalid = 0;
 
     for (int i = 0; i < sampleframes; i++) {
         double val = in[i];
@@ -254,20 +253,11 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
             int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
 
             if (val < x->last_val || jump) {
-                if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                    do_output_bang = 1;
-                } else {
-                    jump_detected_but_invalid = 1;
-                }
+                do_output_bang = 1;
             }
             x->last_delta = delta;
         }
         x->last_val = val;
-    }
-
-    if (jump_detected_but_invalid && !do_output_bang) {
-        smartloop_log(x, "Loop/Jump detected but IGNORED because boundaries are invalid (start=%.2f, end=%.2f).",
-                     x->current_start, x->current_end);
     }
 
     // NOTE: Message outlets are fired directly from the audio thread here.
@@ -288,11 +278,13 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
                 defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
             } else if (do_output_bang) {
                 x->suppress = 1;
-                smartloop_log(x, "Loop/Jump detected. Firing bang and boundaries [%.2f, %.2f] (suppress=1).",
+                smartloop_log(x, "Loop/Jump detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
                              x->current_start, x->current_end);
                 if (x->output_enabled) {
-                    outlet_float(x->out_end, x->current_end);
-                    outlet_float(x->out_start, x->current_start);
+                    if (x->current_start >= 0.0 && x->current_end >= 0.0) {
+                        outlet_float(x->out_end, x->current_end);
+                        outlet_float(x->out_start, x->current_start);
+                    }
                 }
                 outlet_bang(x->out_bang);
                 defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
