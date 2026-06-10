@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name="python">
+	<digest>
+		Bridge Max to a Python script.
+	</digest>
+	<description>
+		The <o>python</o> object allows you to load and execute functions from a Python script. It spawns a background Python process that hosts the script and communicates with Max via a local TCP socket.
+	</description>
+
+	<!-- METADATA -->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Python</metadata>
+		<metadata name="tag">Bridge</metadata>
+	</metadatalist>
+
+	<!-- ARGUMENTS -->
+	<objarglist>
+		<objarg name="script-path" optional="0" type="symbol">
+			<digest>
+				Path to the Python script to load.
+			</digest>
+			<description>
+				The first argument is the path to the <at>.py</at> script you want to use. This can be an absolute path or a path relative to the Max search path.
+			</description>
+		</objarg>
+	</objarglist>
+
+	<!-- MESSAGES -->
+	<methodlist>
+		<method name="anything">
+			<arglist>
+				<arg name="args" optional="1" type="list" />
+			</arglist>
+			<digest>
+				Call a function in the Python script.
+			</digest>
+			<description>
+				The selector of the message is used as the name of the function to call in the Python script. Any subsequent arguments in the list are passed to the Python function.
+			</description>
+		</method>
+	</methodlist>
+
+	<!-- OUTLETS -->
+	<outletlist>
+		<outlet id="0" type="anything">
+			<digest>
+				Return value(s) from the Python function.
+			</digest>
+			<description>
+				The result returned by the Python function is output here. If the function returns a list or tuple, it is output as a Max list.
+			</description>
+		</outlet>
+	</outletlist>
+
+	<!-- SEE ALSO -->
+	<seealsolist>
+		<seealso name="magenta~" />
+	</seealsolist>
+</c74object>
