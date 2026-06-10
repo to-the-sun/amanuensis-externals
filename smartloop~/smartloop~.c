@@ -231,40 +231,59 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long do_output_zero = 0;
     long do_output_bang = 0;
+    double zero_val = 0.0;
+    double zero_last_val = 0.0;
 
+    // Check if entire vector is stationary relative to last_val.
+    // Note: This vector-wide check is a bit arbitrary and it should technically
+    // be possible to detect sample by sample, but to improve practical tolerance
+    // against false positives, we only consider it stationary if the entire
+    // vector is unchanged.
+    int all_equal = 1;
     for (int i = 0; i < sampleframes; i++) {
-        double val = in[i];
+        if (in[i] != x->last_val) {
+            all_equal = 0;
+            break;
+        }
+    }
 
-        if (x->first_sample) {
+    if (all_equal && !x->first_sample) {
+        if (!x->triggered_zero) {
+            do_output_zero = 1;
+            zero_val = in[0];
+            zero_last_val = x->last_val;
+            x->triggered_zero = 1;
+            x->last_delta = 0.0;
+        }
+    } else {
+        for (int i = 0; i < sampleframes; i++) {
+            double val = in[i];
+
+            if (x->first_sample) {
+                x->last_val = val;
+                x->first_sample = 0;
+                continue;
+            }
+
+            if (val != x->last_val) {
+                double delta = val - x->last_val;
+                int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
+
+                if (val < x->last_val || jump || x->triggered_zero) {
+                    do_output_bang = 1;
+                }
+                x->triggered_zero = 0;
+                x->last_delta = delta;
+            }
             x->last_val = val;
-            x->first_sample = 0;
-            continue;
         }
-
-        if (val == x->last_val) {
-            if (!x->triggered_zero) {
-                do_output_zero = 1;
-                x->triggered_zero = 1;
-                x->last_delta = 0.0;
-            }
-        } else {
-            double delta = val - x->last_val;
-            int jump = (x->last_delta != 0.0 && fabs(delta - x->last_delta) > x->jump_threshold);
-
-            if (val < x->last_val || jump || x->triggered_zero) {
-                do_output_bang = 1;
-            }
-            x->triggered_zero = 0;
-            x->last_delta = delta;
-        }
-        x->last_val = val;
     }
 
     // NOTE: Message outlets are fired directly from the audio thread here.
     // This is generally considered unsafe in Max/MSP, but is implemented
     // this way per explicit user request to solve jitter/timing issues.
     if (do_output_zero) {
-        smartloop_log(x, "Stationary ramp detected. Firing zero boundaries.");
+        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", zero_val, zero_last_val);
         if (x->output_enabled) {
             outlet_float(x->out_end, 0.0);
             outlet_float(x->out_start, 0.0);
