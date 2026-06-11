@@ -3,7 +3,7 @@
 <c74object name="smartloop~" module="max" category="Analysis">
 	<digest>Finds the longest interval of below average bars in a music transcript</digest>
 	<description>
-		The `smartloop~` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "below average" bars.
+		The `smartloop~` object binds to an external dictionary containing a music transcript. It scans the dictionary to identify the longest continuous time span composed of "below average" bars right before they are needed whenever a loop, jump, or start is detected in the ramp.
 
 		Classification is based on the `rating` key found in each bar, averaged across all tracks for each unique timestamp:
 		1. The object calculates an averaged rating for each unique bar timestamp across all tracks.
@@ -15,7 +15,7 @@
 
 		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses an internal suppression mechanism for these events: it sets a `suppress` flag immediately before firing its outlets and resets it only after all current Max events have finished via a `defer_low` call. Any recursive triggers that occur while the flag is set are ignored. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang and does NOT engage the suppression mechanism.
 
-		**Note:** All message outputs are fired directly from the high-priority audio thread. While this is generally considered unsafe in Max/MSP and can cause instability, it is implemented this way to ensure maximum temporal precision (minimum jitter) per specific user requirement.
+		**Note:** All message outputs and analysis are deferred to the main thread from the audio thread. While this introduces a small amount of jitter, it is necessary to ensure thread-safe dictionary access and calculation.
 
 		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers a release of the loop boundaries.
 
@@ -41,7 +41,7 @@
 	<outletlist>
 		<outlet id="1" type="bang">
 			<digest>Outlet 1: Loop, Jump, or Start detected</digest>
-			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Fired directly from the audio thread with defer_low suppression (unsafe but precise).</description>
+			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Fired from the main thread via defer with defer_low suppression.</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>

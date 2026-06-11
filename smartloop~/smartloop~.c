@@ -18,8 +18,6 @@ typedef struct _smartloop {
     void *out_start;
     void *out_end;
     void *log_outlet;
-    t_clock *clock;
-    long interval;
     t_buffer_ref *buffer_ref;
     long bar_warn_sent;
     long log;
@@ -42,7 +40,8 @@ t_class *smartloop_class;
 // Prototypes
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
-void smartloop_tick(t_smartloop *x);
+void smartloop_calculate(t_smartloop *x);
+void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
@@ -177,7 +176,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->out_start = outlet_new(x, NULL);  // Index 1
         x->out_bang = outlet_new(x, NULL);   // Index 0
 
-        x->interval = 999;
         x->bar_warn_sent = 0;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
 
@@ -191,9 +189,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->first_sample = 1;
         x->output_enabled = 1;
         x->suppress = 0;
-
-        x->clock = clock_new(x, (method)smartloop_tick);
-        clock_delay(x->clock, x->interval);
     }
     return x;
 }
@@ -201,7 +196,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
 void smartloop_free(t_smartloop *x) {
     visualize_cleanup();
     dsp_free((t_pxobject *)x);
-    object_free(x->clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
 
@@ -235,10 +229,6 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double zero_last_val = 0.0;
 
     // Check if entire vector is stationary relative to last_val.
-    // Note: This vector-wide check is a bit arbitrary and it should technically
-    // be possible to detect sample by sample, but to improve practical tolerance
-    // against false positives, we only consider it stationary if the entire
-    // vector is unchanged.
     int all_equal = 1;
     for (int i = 0; i < sampleframes; i++) {
         if (in[i] != x->last_val) {
@@ -279,31 +269,24 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
         }
     }
 
-    // NOTE: Message outlets are fired directly from the audio thread here.
-    // This is generally considered unsafe in Max/MSP, but is implemented
-    // this way per explicit user request to solve jitter/timing issues.
     if (do_output_zero) {
-        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", zero_val, zero_last_val);
-        if (x->output_enabled) {
-            outlet_float(x->out_end, 0.0);
-            outlet_float(x->out_start, 0.0);
-        }
+        t_atom av[3];
+        atom_setlong(av, 0);
+        atom_setfloat(av + 1, zero_val);
+        atom_setfloat(av + 2, zero_last_val);
+        defer(x, (method)smartloop_do_output, NULL, 3, av);
     }
 
     if (do_output_bang) {
         if (x->suppress) {
-            smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
+            t_atom av[1];
+            atom_setlong(av, 2);
+            defer(x, (method)smartloop_do_output, NULL, 1, av);
         } else {
             x->suppress = 1;
-            smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
-                         x->current_start, x->current_end);
-            if (x->output_enabled) {
-                if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                    outlet_float(x->out_end, x->current_end);
-                    outlet_float(x->out_start, x->current_start);
-                }
-            }
-            outlet_bang(x->out_bang);
+            t_atom av[1];
+            atom_setlong(av, 1);
+            defer(x, (method)smartloop_do_output, NULL, 1, av);
             defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
         }
     }
@@ -401,11 +384,39 @@ void smartloop_debug(t_smartloop *x) {
     dictobj_release(d);
 }
 
+void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc < 1) return;
+    int type = atom_getlong(argv);
+
+    if (type == 0) { // Stationary
+        double val = (argc > 1) ? atom_getfloat(argv + 1) : 0.0;
+        double last_val = (argc > 2) ? atom_getfloat(argv + 2) : 0.0;
+        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", val, last_val);
+        if (x->output_enabled) {
+            outlet_float(x->out_end, 0.0);
+            outlet_float(x->out_start, 0.0);
+        }
+    } else if (type == 1) { // Loop/Jump/Start
+        smartloop_calculate(x);
+        smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
+                     x->current_start, x->current_end);
+        if (x->output_enabled) {
+            if (x->current_start >= 0.0 && x->current_end >= 0.0) {
+                outlet_float(x->out_end, x->current_end);
+                outlet_float(x->out_start, x->current_start);
+            }
+        }
+        outlet_bang(x->out_bang);
+    } else if (type == 2) { // Ignored
+        smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
+    }
+}
+
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (immediate/unsafe w/ defer_low suppression)");
+        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred w/ defer_low suppression)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
@@ -426,15 +437,13 @@ int compare_bars(const void *a, const void *b) {
     return 0;
 }
 
-void smartloop_tick(t_smartloop *x) {
+void smartloop_calculate(t_smartloop *x) {
     if (x->dict_name == _sym_nothing) {
-        clock_delay(x->clock, x->interval);
         return;
     }
 
     t_dictionary *d = dictobj_findregistered_retain(x->dict_name);
     if (!d) {
-        clock_delay(x->clock, x->interval);
         return;
     }
 
@@ -445,7 +454,6 @@ void smartloop_tick(t_smartloop *x) {
     if (num_tracks == 0) {
         if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(d);
-        clock_delay(x->clock, x->interval);
         return;
     }
 
@@ -454,7 +462,6 @@ void smartloop_tick(t_smartloop *x) {
     if (bar_length <= 0) {
         if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(d);
-        clock_delay(x->clock, x->interval);
         return;
     }
 
@@ -497,7 +504,6 @@ void smartloop_tick(t_smartloop *x) {
         if (all_bars) sysmem_freeptr(all_bars);
         if (track_keys) sysmem_freeptr(track_keys);
         dictobj_release(d);
-        clock_delay(x->clock, x->interval);
         return;
     }
 
@@ -629,6 +635,4 @@ void smartloop_tick(t_smartloop *x) {
     sysmem_freeptr(song_bars);
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(d);
-
-    clock_delay(x->clock, x->interval);
 }
