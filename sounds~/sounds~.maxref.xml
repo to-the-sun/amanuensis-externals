@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+<c74object name="sounds~" module="msp">
+	<digest>Dynamic polyphonic sound module host</digest>
+	<description>
+		<inline>sounds~</inline> is a polyphonic MIDI-to-audio instrument that dynamically loads sound synthesis modules from the <inline>modules/</inline> directory. It renders audio on-the-fly using a Just-In-Time rendering strategy to handle complex synthesis designs while maintaining polyphony and correct release phases.
+	</description>
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">MSP</metadata>
+		<metadata name="tag">Synthesis</metadata>
+		<metadata name="tag">MIDI</metadata>
+	</metadatalist>
+	<methodlist>
+		<method name="list">
+			<arglist>
+				<arg name="note" optional="0" type="int" />
+				<arg name="velocity" optional="0" type="int" />
+			</arglist>
+			<digest>Process MIDI Note-On and Note-Off messages</digest>
+			<description>
+				A list of two integers is treated as a MIDI note. The first integer is the note number (0-127), and the second is the velocity (0-127). A velocity greater than 0 triggers a note-on event; a velocity of 0 triggers a note-off event.
+			</description>
+		</method>
+		<method name="preset">
+			<arglist>
+				<arg name="index" optional="0" type="int" />
+			</arglist>
+			<digest>Switch to a specific sound module</digest>
+			<description>
+				Sets the active sound module to the one at the specified index. Indices are assigned based on the alphabetical order of the DLL files in the <inline>modules/</inline> directory.
+			</description>
+		</method>
+		<method name="random">
+			<digest>Switch to a random sound module</digest>
+			<description>
+				Randomly selects one of the available sound modules as the active preset.
+			</description>
+		</method>
+	</methodlist>
+	<seealsolist>
+		<seealso name="smartloop~" />
+		<seealso name="weaver~" />
+		<seealso name="arrangement~" />
+	</seealsolist>
+</c74object>
