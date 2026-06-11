@@ -45,7 +45,7 @@ void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
-void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
+void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
@@ -214,13 +214,34 @@ void smartloop_int(t_smartloop *x, long n) {
     }
 }
 
+void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    if (argc < 1) return;
+    long type = atom_getlong(argv);
 
-
-void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
-    if (x->suppress) {
+    if (type == 0) { // Stationary
+        double val = (argc > 1) ? atom_getfloat(argv + 1) : 0.0;
+        double last = (argc > 2) ? atom_getfloat(argv + 2) : 0.0;
+        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", val, last);
+        if (x->output_enabled) {
+            outlet_float(x->out_end, 0.0);
+            outlet_float(x->out_start, 0.0);
+        }
+    } else if (type == 1) { // Loop/Jump/Start
+        double start = (argc > 1) ? atom_getfloat(argv + 1) : -1.0;
+        double end = (argc > 2) ? atom_getfloat(argv + 2) : -1.0;
+        smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]", start, end);
+        if (x->output_enabled) {
+            if (start >= 0.0 && end >= 0.0) {
+                outlet_float(x->out_end, end);
+                outlet_float(x->out_start, start);
+            }
+        }
+        outlet_bang(x->out_bang);
+        x->suppress = 0;
         smartloop_log(x, "Resetting suppression flag (suppress=0).");
+    } else if (type == 2) { // Ignored
+        smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
     }
-    x->suppress = 0;
 }
 
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
@@ -279,32 +300,27 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
         }
     }
 
-    // NOTE: Message outlets are fired directly from the audio thread here.
-    // This is generally considered unsafe in Max/MSP, but is implemented
-    // this way per explicit user request to solve jitter/timing issues.
+    // NOTE: Message outlets are now deferred to the main thread for stability.
     if (do_output_zero) {
-        smartloop_log(x, "Stationary ramp detected (val: %.15f, last: %.15f). Firing zero boundaries.", zero_val, zero_last_val);
-        if (x->output_enabled) {
-            outlet_float(x->out_end, 0.0);
-            outlet_float(x->out_start, 0.0);
-        }
+        t_atom atoms[3];
+        atom_setlong(atoms, 0); // Type 0: Stationary
+        atom_setfloat(atoms + 1, zero_val);
+        atom_setfloat(atoms + 2, zero_last_val);
+        defer_low(x, (method)smartloop_do_output, NULL, 3, atoms);
     }
 
     if (do_output_bang) {
         if (x->suppress) {
-            smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
+            t_atom atoms[1];
+            atom_setlong(atoms, 2); // Type 2: Ignored
+            defer_low(x, (method)smartloop_do_output, NULL, 1, atoms);
         } else {
             x->suppress = 1;
-            smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
-                         x->current_start, x->current_end);
-            if (x->output_enabled) {
-                if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                    outlet_float(x->out_end, x->current_end);
-                    outlet_float(x->out_start, x->current_start);
-                }
-            }
-            outlet_bang(x->out_bang);
-            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
+            t_atom atoms[3];
+            atom_setlong(atoms, 1); // Type 1: Loop/Jump/Start
+            atom_setfloat(atoms + 1, x->current_start);
+            atom_setfloat(atoms + 2, x->current_end);
+            defer_low(x, (method)smartloop_do_output, NULL, 3, atoms);
         }
     }
 }
@@ -405,7 +421,7 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (immediate/unsafe w/ defer_low suppression)");
+        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred to main thread for stability)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
