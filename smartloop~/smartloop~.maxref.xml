@@ -13,9 +13,9 @@
 
 		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, OR when the ramp starts again after being stationary. If the ramp is stationary, both outlets will output 0.0.
 
-		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses an internal suppression mechanism for these events: it sets a `suppress` flag in the audio thread immediately upon detection and resets it only after the deferred output has been processed in the main thread. Any recursive triggers that occur while the flag is set are ignored. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang but is also deferred to the main thread for stability.
+		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses an internal suppression mechanism for these events: it sets a `suppress` flag in the audio thread immediately upon detection and resets it only after all current Max events have finished via a `defer_low` call. Any recursive triggers that occur while the flag is set are ignored. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang but is also deferred to the main thread for stability.
 
-		**Note:** All message outputs are deferred to the main thread via `defer_low`. This ensures stability and avoids crashes associated with calling outlets directly from the high-priority audio thread, while maintaining immediate recursion suppression in the audio thread to prevent re-triggering.
+		**Note:** All message outputs are deferred to the main thread via `defer`. This ensures stability and avoids crashes associated with calling outlets directly from the high-priority audio thread, while maintaining immediate recursion suppression in the audio thread to prevent re-triggering. Suppression is reset with lower priority (`defer_low`) to ensure it covers the entire event.
 
 		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers a release of the loop boundaries.
 
@@ -41,7 +41,7 @@
 	<outletlist>
 		<outlet id="1" type="bang">
 			<digest>Outlet 1: Loop, Jump, or Start detected</digest>
-			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Fired from the main thread via `defer_low` for stability, with immediate audio-thread suppression.</description>
+			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Fired from the main thread via `defer` for stability, with immediate audio-thread suppression and `defer_low` reset.</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>

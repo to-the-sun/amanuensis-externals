@@ -45,6 +45,7 @@ void smartloop_free(t_smartloop *x);
 void smartloop_tick(t_smartloop *x);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
+void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
@@ -214,6 +215,13 @@ void smartloop_int(t_smartloop *x, long n) {
     }
 }
 
+void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    if (x->suppress) {
+        smartloop_log(x, "Resetting suppression flag (suppress=0).");
+    }
+    x->suppress = 0;
+}
+
 void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
     if (argc < 1) return;
     long type = atom_getlong(argv);
@@ -237,8 +245,6 @@ void smartloop_do_output(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) 
             }
         }
         outlet_bang(x->out_bang);
-        x->suppress = 0;
-        smartloop_log(x, "Resetting suppression flag (suppress=0).");
     } else if (type == 2) { // Ignored
         smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
     }
@@ -301,26 +307,28 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     }
 
     // NOTE: Message outlets are now deferred to the main thread for stability.
+    // Higher-priority 'defer' is used for outputs, while 'defer_low' handles suppression reset.
     if (do_output_zero) {
         t_atom atoms[3];
         atom_setlong(atoms, 0); // Type 0: Stationary
         atom_setfloat(atoms + 1, zero_val);
         atom_setfloat(atoms + 2, zero_last_val);
-        defer_low(x, (method)smartloop_do_output, NULL, 3, atoms);
+        defer(x, (method)smartloop_do_output, NULL, 3, atoms);
     }
 
     if (do_output_bang) {
         if (x->suppress) {
             t_atom atoms[1];
             atom_setlong(atoms, 2); // Type 2: Ignored
-            defer_low(x, (method)smartloop_do_output, NULL, 1, atoms);
+            defer(x, (method)smartloop_do_output, NULL, 1, atoms);
         } else {
             x->suppress = 1;
             t_atom atoms[3];
             atom_setlong(atoms, 1); // Type 1: Loop/Jump/Start
             atom_setfloat(atoms + 1, x->current_start);
             atom_setfloat(atoms + 2, x->current_end);
-            defer_low(x, (method)smartloop_do_output, NULL, 3, atoms);
+            defer(x, (method)smartloop_do_output, NULL, 3, atoms);
+            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
         }
     }
 }
@@ -421,7 +429,7 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred to main thread for stability)");
+        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred to main thread w/ defer_low suppression)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
