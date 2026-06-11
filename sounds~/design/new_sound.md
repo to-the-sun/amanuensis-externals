@@ -1,6 +1,6 @@
 # Instructions for Designing a New Sound
 
-When asked to "design a new sound by following the instructions in the `new_sound.md` file," follow this process to ensure the new sound is perceptually distinct and correctly integrated into the library. Work entirely within the `sounds~/design/` directory. Everything you need can be found within it.
+When asked to "design a new sound by following the instructions in the `new_sound.md` file," follow this process to ensure the new sound is perceptually distinct and correctly integrated into the library. While designing a new sound, work entirely within the `sounds~/design/` directory. Everything you need can be found within it.
 
 ## Goal
 The primary objective is to design a sound that is **as perceptually different as possible** from all existing sounds in the `sounds/` library. Focus on "human-perceptible" differences in timbre, dynamics, and texture.
@@ -35,7 +35,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Run `./migrate_analysis` to re-analyze the entire library. This ensures every sound's `analysis.json` contains a complete `distances` dictionary reflecting its relationship to all other versions, including the one you just created.
 
 ### 6. Create a New `sounds~` Plugin 
-- When finished with the above steps, the only thing that needs to be done outside of the `design/` folder is to create a new `.dll` in the `modules/` folder for the new sound that can be run as expected from the `sounds~` object. 
+- When finished with the above steps, the only things that need to be done outside of the `design/` folder are to create a new `.dll` in the `modules/` folder for the new sound that can be run as expected from the `sounds~` object, then recompile the `sounds~.mxe64` file itself to incorporate the sound into the object. 
 
 ## Technical Constraints & Format
 - **Language:** C (C99 or later).
