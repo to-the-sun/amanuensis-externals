@@ -3,7 +3,7 @@
 <c74object name="smartloop~" module="max" category="Analysis">
 	<digest>Finds the longest interval of below average bars in a music transcript</digest>
 	<description>
-		The `smartloop~` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "below average" bars.
+		The `smartloop~` object binds to an external dictionary containing a music transcript. Every 999 milliseconds, it scans the dictionary to identify the longest continuous time span composed of "below average" bars. This periodic polling ensures that the loop boundaries are pre-calculated and can be released with minimum latency when a ramp event is detected.
 
 		Classification is based on the `rating` key found in each bar, averaged across all tracks for each unique timestamp:
 		1. The object calculates an averaged rating for each unique bar timestamp across all tracks.
@@ -11,13 +11,11 @@
 		3. Timestamps with an averaged rating &gt; global average are considered **above average**.
 		4. Timestamps with an averaged rating &lt;= global average are considered **below average**.
 
-		The object stores the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These stored values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, OR when the ramp starts again after being stationary. If the ramp is stationary, both outlets will output 0.0.
+		The object identifies the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These pre-calculated values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, OR when the ramp starts again after being stationary. If the ramp is stationary, both outlets will output 0.0 immediately.
 
-		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses an internal suppression mechanism for these events: it sets a `suppress` flag immediately before firing its outlets and resets it only after all current Max events have finished via a `defer_low` call. Any recursive triggers that occur while the flag is set are ignored. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang and does NOT engage the suppression mechanism.
+		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses a dual suppression mechanism. First, it uses a standard `suppress` flag to gate the immediate detection while output is being deferred to the main thread. Second, after firing the outlets, the object enters a state where it will explicitly suppress exactly the next detection that happens. This is intended to catch the "echo" jump typically caused by the patch's response to the new loop points. If no such second bang occurs within 99 milliseconds, the object forgets the suppression and returns to normal operation. This 99ms value is arbitrary but works in practice. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang and does NOT engage the suppression mechanism.
 
-		**Note:** All message outputs are fired directly from the high-priority audio thread. While this is generally considered unsafe in Max/MSP and can cause instability, it is implemented this way to ensure maximum temporal precision (minimum jitter) per specific user requirement.
-
-		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers a release of the loop boundaries.
+		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers the release of the loop boundaries.
 
 		**Note:** Valid start or end points for a loop that are exactly 0.0 are output as 1.0. This ensures that 0.0 is reserved exclusively for when the time ramp is stationary.
 
@@ -41,7 +39,7 @@
 	<outletlist>
 		<outlet id="1" type="bang">
 			<digest>Outlet 1: Loop, Jump, or Start detected</digest>
-			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Fired directly from the audio thread with defer_low suppression (unsafe but precise).</description>
+			<description>Emits a `bang` whenever the input ramp loops left, a jump is detected, or the ramp starts again after being stationary. This outlet fires even when the object is paused. Output is deferred to the main thread for safety and suppression timing.</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>

@@ -35,6 +35,8 @@ typedef struct _smartloop {
     double jump_threshold;
     void *out_bang;
     long suppress;
+    long suppress_next;
+    t_clock *suppress_clock;
 } t_smartloop;
 
 t_class *smartloop_class;
@@ -42,10 +44,12 @@ t_class *smartloop_class;
 // Prototypes
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
-void smartloop_tick(t_smartloop *x);
+void smartloop_calculate(t_smartloop *x);
+void smartloop_output_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
+void smartloop_suppress_tick(t_smartloop *x);
+void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
-void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
@@ -191,8 +195,10 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->first_sample = 1;
         x->output_enabled = 1;
         x->suppress = 0;
+        x->suppress_next = 0;
 
-        x->clock = clock_new(x, (method)smartloop_tick);
+        x->suppress_clock = clock_new(x, (method)smartloop_suppress_tick);
+        x->clock = clock_new(x, (method)smartloop_calculate);
         clock_delay(x->clock, x->interval);
     }
     return x;
@@ -202,6 +208,7 @@ void smartloop_free(t_smartloop *x) {
     visualize_cleanup();
     dsp_free((t_pxobject *)x);
     object_free(x->clock);
+    object_free(x->suppress_clock);
     if (x->buffer_ref) object_free(x->buffer_ref);
 }
 
@@ -215,6 +222,33 @@ void smartloop_int(t_smartloop *x, long n) {
 }
 
 
+
+void smartloop_suppress_tick(t_smartloop *x) {
+    if (x->suppress_next) {
+        smartloop_log(x, "Suppression window timed out (99ms). Forgeting next bang.");
+    }
+    x->suppress_next = 0;
+}
+
+void smartloop_output_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
+    smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
+                 x->current_start, x->current_end);
+    if (x->output_enabled) {
+        if (x->current_start >= 0.0 && x->current_end >= 0.0) {
+            outlet_float(x->out_end, x->current_end);
+            outlet_float(x->out_start, x->current_start);
+        }
+    }
+    outlet_bang(x->out_bang);
+
+    // After firing outlets, we set suppress_next to 1 to catch the expected
+    // "echo" jump caused by the patch's response. If no second bang happens
+    // within 99ms, the window closes. 99ms is arbitrary but works in practice.
+    x->suppress_next = 1;
+    clock_delay(x->suppress_clock, 99);
+
+    x->suppress = 0;
+}
 
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
     if (x->suppress) {
@@ -291,20 +325,17 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     }
 
     if (do_output_bang) {
-        if (x->suppress) {
+        if (x->suppress_next) {
+            x->suppress_next = 0;
+            // The clock is a main-thread object, so we shouldn't manipulate it directly here.
+            // However, setting the flag to 0 is enough to break the link.
+            smartloop_log(x, "Loop/Jump/Start detected: SUPPRESSING next bang per request.");
+        } else if (x->suppress) {
             smartloop_log(x, "Loop/Jump/Start detected but IGNORED due to suppression flag.");
         } else {
             x->suppress = 1;
-            smartloop_log(x, "Loop/Jump/Start detected. Firing bang (suppress=1). Boundaries: [%.2f, %.2f]",
-                         x->current_start, x->current_end);
-            if (x->output_enabled) {
-                if (x->current_start >= 0.0 && x->current_end >= 0.0) {
-                    outlet_float(x->out_end, x->current_end);
-                    outlet_float(x->out_start, x->current_start);
-                }
-            }
-            outlet_bang(x->out_bang);
-            defer_low(x, (method)smartloop_reset_suppress, NULL, 0, NULL);
+            smartloop_log(x, "Loop/Jump/Start detected. Triggering deferred output.");
+            defer(x, (method)smartloop_output_deferred, NULL, 0, NULL);
         }
     }
 }
@@ -405,7 +436,7 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
     } else {
-        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (immediate/unsafe w/ defer_low suppression)");
+        if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred/safe output)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms) / 0.0 if stationary");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
@@ -426,7 +457,9 @@ int compare_bars(const void *a, const void *b) {
     return 0;
 }
 
-void smartloop_tick(t_smartloop *x) {
+void smartloop_calculate(t_smartloop *x) {
+    // Periodic polling ensures loop points are pre-calculated so they
+    // can be released with minimum latency upon event detection.
     if (x->dict_name == _sym_nothing) {
         clock_delay(x->clock, x->interval);
         return;
