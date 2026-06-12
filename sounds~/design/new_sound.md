@@ -45,7 +45,9 @@ The primary objective is to design a sound that is **as perceptually different a
 - Run `./migrate_analysis` to re-analyze the entire library. This ensures every sound's `analysis.json` contains a complete `distances` dictionary reflecting its relationship to all other versions, including the one you just created.
 
 ### 7. Create a New `sounds~` Plugin 
-- When finished with the above steps, the only things that need to be done outside of the `design/` folder are to create a new `.dll` in the `modules/` folder for the new sound that can be run as expected from the `sounds~` object, then recompile the `sounds~.mxe64` file itself to incorporate the sound into the object. 
+- When finished with the above steps, the only things that need to be done outside of the `design/` folder are:
+    1. Create a new `.dll` in the `modules/` folder for the new sound that can be run as expected from the `sounds~` object.
+    2. Then recompile the `sounds~.mxe64` file itself to incorporate the sound into the object. 
 
 ## Technical Constraints & Format
 - **Language:** C (C99 or later).
