@@ -48,7 +48,7 @@ static void render_note(double* output, int num_samples, int note_num, double st
         double t = (double)i / sample_rate + start_time;
         double wave = 0;
         for (int h = 0; h < 4; h++) wave += harmonics[h][1] * sin(2.0 * M_PI * freq * harmonics[h][0] * t);
-        output[start_idx + i] += wave * env[i] * (velocity / 127.0) * 0.2;
+        output[start_idx + i] += wave * env[i] * (velocity / 127.0) * 0.546062;
     }
     free(env);
 }
@@ -69,6 +69,5 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
         }
     }
     for (int i = 0; i < 128; i++) if (active_notes[i].active) render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
-    for (int i = 0; i < num_samples; i++) { if (output[i] > 1.0) output[i] = 1.0; else if (output[i] < -1.0) output[i] = -1.0; }
     return output;
 }

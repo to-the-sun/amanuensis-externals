@@ -89,7 +89,7 @@ static void render_note(double* output, int num_samples, int note_num, double st
         if (ptr >= L) ptr = 0;
 
         // Simple output gain and velocity scaling
-        output[start_idx + i] += filtered * (velocity / 127.0) * 0.4;
+        output[start_idx + i] += filtered * (velocity / 127.0) * 1.01485;
     }
 
     free(delay_line);
@@ -123,11 +123,6 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
         if (active_notes[i].active) {
             render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
         }
-    }
-
-    // Final soft clipping to prevent harsh digital distortion
-    for (int i = 0; i < num_samples; i++) {
-        output[i] = tanh(output[i]);
     }
 
     return output;

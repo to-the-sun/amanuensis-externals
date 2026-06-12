@@ -37,6 +37,11 @@ int main(int argc, char** argv) {
 
     struct json_object* results = analyze_audio(audio, num_samples, sr);
 
+    struct json_object* peak_amp_obj;
+    if (json_object_object_get_ex(results, "peak_amplitude", &peak_amp_obj)) {
+        printf("Peak amplitude: %f\n", json_object_get_double(peak_amp_obj));
+    }
+
     struct json_object* distances = json_object_new_object();
     DIR *dir;
     struct dirent *ent;
