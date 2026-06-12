@@ -51,11 +51,11 @@ static void render_note(double* output, int num_samples, int note_num, double st
         double cutoff = base_cutoff + env_amount * filt_env[i];
         if (cutoff > sample_rate * 0.45) cutoff = sample_rate * 0.45;
         double q = 1.0; double g = tan(M_PI * cutoff / sample_rate); double k = 1.0 / q;
-        double a1 = 1.0 / (1.0 + g * (g + k)), a2 = g * a1, a3 = g * a2;
+        double a1 = 1.0 / (1.0 + g * (g + k));
         double v2 = (saw - v1 * (g + k) - v0) * a1;
         double v1_next = v1 + g * v2; double v0_next = v0 + g * v1_next;
         double lowpass = v0_next; v1 = v1_next; v0 = v0_next;
-        output[start_idx + i] += lowpass * amp_env[i] * (velocity / 127.0) * 0.15;
+        output[start_idx + i] += lowpass * amp_env[i] * (velocity / 127.0) * 1.04515;
     }
     free(amp_env); free(filt_env);
 }
@@ -76,6 +76,5 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
         }
     }
     for (int i = 0; i < 128; i++) if (active_notes[i].active) render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
-    for (int i = 0; i < num_samples; i++) output[i] = tanh(output[i]);
     return output;
 }

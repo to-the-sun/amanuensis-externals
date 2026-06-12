@@ -124,7 +124,7 @@ static void render_note(double* output, int num_samples, int note_num, double st
             out += process_biquad(&filters[j], saw) * formant_amps[j];
         }
 
-        output[start_idx + i] += out * amp_env[i] * (velocity / 127.0) * 0.25;
+        output[start_idx + i] += out * amp_env[i] * (velocity / 127.0) * 2.10974;
     }
 
     free(amp_env);
@@ -158,11 +158,6 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
         if (active_notes[i].active) {
             render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
         }
-    }
-
-    // Final soft clipping to prevent harsh digital distortion
-    for (int i = 0; i < num_samples; i++) {
-        output[i] = tanh(output[i]);
     }
 
     return output;

@@ -45,7 +45,7 @@ static void render_note(double* output, int num_samples, int note_num, double st
         double modulator = mod_index * sin(2.0 * M_PI * freq * mod_ratio * t);
         double wave = sin(2.0 * M_PI * freq * t + modulator);
         double noise = ((double)rand() / RAND_MAX * 2.0 - 1.0) * 0.05;
-        output[start_idx + i] += (wave + noise) * env[i] * (velocity / 127.0) * 0.15;
+        output[start_idx + i] += (wave + noise) * env[i] * (velocity / 127.0) * 0.7375497;
     }
     free(env);
 }
@@ -66,6 +66,5 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
         }
     }
     for (int i = 0; i < 128; i++) if (active_notes[i].active) render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
-    for (int i = 0; i < num_samples; i++) output[i] = tanh(output[i]);
     return output;
 }

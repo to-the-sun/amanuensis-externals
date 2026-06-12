@@ -7,13 +7,13 @@
 #include "analysis_utils.h"
 
 MidiMessage DEFAULT_MIDI_SEQUENCE[] = {
-    {"note_on", 60, 100, 0.0},
+    {"note_on", 60, 127, 0.0},
     {"note_off", 60, 0,   0.5},
-    {"note_on", 64, 100, 0.5},
+    {"note_on", 64, 127, 0.5},
     {"note_off", 64, 0,   1.0},
-    {"note_on", 67, 100, 1.0},
+    {"note_on", 67, 127, 1.0},
     {"note_off", 67, 0,   1.5},
-    {"note_on", 72, 120, 1.5},
+    {"note_on", 72, 127, 1.5},
     {"note_off", 72, 0,   3.0},
 };
 int DEFAULT_MIDI_SEQUENCE_LEN = 8;
@@ -83,7 +83,12 @@ struct json_object* analyze_audio(double* audio, int num_samples, int sr) {
     struct json_object *zcr_arr = json_object_new_array();
     struct json_object *mfccs_temporal = json_object_new_array();
 
-    double total_rms = 0, peak_rms = 0;
+    double total_rms = 0, peak_rms = 0, peak_amp = 0;
+    for (int i = 0; i < num_samples; i++) {
+        double abs_val = fabs(audio[i]);
+        if (abs_val > peak_amp) peak_amp = abs_val;
+    }
+
     double total_centroid = 0, total_bandwidth = 0, total_flatness = 0, total_zcr = 0;
     double mfcc_means[13] = {0};
     int num_frames = 0;
@@ -136,6 +141,7 @@ struct json_object* analyze_audio(double* audio, int num_samples, int sr) {
 
     json_object_object_add(results, "average_rms", json_object_new_double(total_rms / num_frames));
     json_object_object_add(results, "peak_rms", json_object_new_double(peak_rms));
+    json_object_object_add(results, "peak_amplitude", json_object_new_double(peak_amp));
     json_object_object_add(results, "average_spectral_centroid", json_object_new_double(total_centroid / num_frames));
     json_object_object_add(results, "average_spectral_bandwidth", json_object_new_double(total_bandwidth / num_frames));
     json_object_object_add(results, "average_spectral_flatness", json_object_new_double(total_flatness / num_frames));
