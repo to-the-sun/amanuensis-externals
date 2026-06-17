@@ -52,6 +52,7 @@ void notify_qwork(t_notify *x);
 void notify_do_bang(t_notify *x);
 void notify_do_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
+void notify_log_msg(t_notify *x, long n);
 int note_compare(const void *a, const void *b);
 int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
@@ -64,6 +65,7 @@ void ext_main(void *r) {
     c = class_new("notify", (method)notify_new, (method)notify_free, sizeof(t_notify), 0L, A_GIMME, 0);
     class_addmethod(c, (method)notify_bang, "bang", 0);
     class_addmethod(c, (method)notify_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)notify_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)notify_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
@@ -575,9 +577,14 @@ void notify_do_bang(t_notify *x) {
     object_release((t_object *)dict);
 }
 
+void notify_log_msg(t_notify *x, long n) {
+    x->log = n;
+    notify_log(x, "log attribute set to %ld", x->log);
+}
+
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @defer deferral.");
+        sprintf(s, "Inlet 1: (bang) dump, (int) fill, (log) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;

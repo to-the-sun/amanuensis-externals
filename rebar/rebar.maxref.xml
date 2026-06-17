@@ -64,6 +64,27 @@
 			<digest>Trigger coordinated isolated processing pipeline</digest>
 			<description>Initiates the sequence: Copy User -> Temp -> Coordinated Processing -> Commit back to User.</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), enables verbose logging for all internal sub-modules.</description>
+		</method>
+		<method name="consume">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the consume attribute</digest>
+			<description>Sets the `consume` attribute in real time. When enabled (1), enables the 'deep delete' logic in the internal `crucible` module.</description>
+		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled (1), enables the visualization output for the internal modules.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

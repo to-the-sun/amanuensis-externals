@@ -67,6 +67,13 @@
 			<digest>Set target</digest>
 			<description>Sets the target buffer name or polybuffer prefix.</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

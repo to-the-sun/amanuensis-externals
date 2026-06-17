@@ -19,6 +19,9 @@ void crossfade_free(t_crossfade *x);
 void crossfade_dsp64(t_crossfade *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void crossfade_assist(t_crossfade *x, void *b, long m, long a, char *s);
+void crossfade_low_msg(t_crossfade *x, double f);
+void crossfade_high_msg(t_crossfade *x, double f);
+void crossfade_log_msg(t_crossfade *x, long n);
 
 static t_class *crossfade_class;
 
@@ -35,6 +38,9 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)crossfade_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)crossfade_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)crossfade_low_msg, "low", A_FLOAT, 0);
+    class_addmethod(c, (method)crossfade_high_msg, "high", A_FLOAT, 0);
+    class_addmethod(c, (method)crossfade_log_msg, "log", A_LONG, 0);
 
     CLASS_ATTR_DOUBLE(c, "low", 0, t_crossfade, low_ms);
     CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
@@ -118,10 +124,25 @@ void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long num
     }
 }
 
+void crossfade_low_msg(t_crossfade *x, double f) {
+    x->low_ms = f;
+    crossfade_log(x, "low attribute set to %.2f", x->low_ms);
+}
+
+void crossfade_high_msg(t_crossfade *x, double f) {
+    x->high_ms = f;
+    crossfade_log(x, "high attribute set to %.2f", x->high_ms);
+}
+
+void crossfade_log_msg(t_crossfade *x, long n) {
+    x->log = n;
+    crossfade_log(x, "log attribute set to %ld", x->log);
+}
+
 void crossfade_assist(t_crossfade *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal) Control"); break;
+            case 0: sprintf(s, "(signal/messages) Control, low, high, log"); break;
             case 1: sprintf(s, "(signal) Source 1"); break;
             case 2: sprintf(s, "(signal) Source 2"); break;
         }

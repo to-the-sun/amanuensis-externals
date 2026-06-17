@@ -14,6 +14,8 @@ typedef struct _stemversion {
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
 void stemversion_bang(t_stemversion *x);
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s);
+void stemversion_log_msg(t_stemversion *x, long n);
+void stemversion_format_msg(t_stemversion *x, t_symbol *s);
 void stemversion_log(t_stemversion *x, const char *fmt, ...);
 
 t_class *stemversion_class;
@@ -26,6 +28,8 @@ void ext_main(void *r) {
     c = class_new("stemversion", (method)stemversion_new, (method)NULL, sizeof(t_stemversion), 0L, A_GIMME, 0);
     class_addmethod(c, (method)stemversion_bang, "bang", 0);
     class_addmethod(c, (method)stemversion_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)stemversion_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)stemversion_format_msg, "format", A_SYM, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_stemversion, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
@@ -53,6 +57,16 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
         x->outlet = outlet_new((t_object *)x, "symbol");
     }
     return (x);
+}
+
+void stemversion_log_msg(t_stemversion *x, long n) {
+    x->log = n;
+    stemversion_log(x, "log attribute set to %ld", x->log);
+}
+
+void stemversion_format_msg(t_stemversion *x, t_symbol *s) {
+    x->format = s;
+    stemversion_log(x, "format attribute set to %s", x->format->s_name);
 }
 
 void stemversion_log(t_stemversion *x, const char *fmt, ...) {
@@ -93,7 +107,7 @@ void stemversion_bang(t_stemversion *x) {
 
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) Output Current Timestamp");
+        sprintf(s, "Control (bang, log, format)");
     } else { // ASSIST_OUTLET
         switch (a) {
             case 0:

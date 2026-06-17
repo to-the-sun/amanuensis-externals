@@ -102,6 +102,27 @@
 				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. If the key in the selector is 'rating' and the @visualize attribute is enabled, this message sends a packet to the visualizer to update the specified bar's rating in its local database. This is used for real-time visualization updates and local smartloop analysis within the visualizer.
 			</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), status messages regarding comparisons, dictionary operations, and reach updates are sent to the fourth outlet.</description>
+		</method>
+		<method name="consume">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the consume attribute</digest>
+			<description>Sets the `consume` attribute in real time. When enabled (1), a winning challenger span will trigger a 'deep delete' of the incumbent bars it replaces.</description>
+		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled (1), the current state of the transcript and any new span entries are sent to the external visualization script.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

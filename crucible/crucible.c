@@ -43,6 +43,9 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict);
 void crucible_local_bar_length(t_crucible *x, double f);
+void crucible_log_msg(t_crucible *x, long n);
+void crucible_consume_msg(t_crucible *x, long n);
+void crucible_visualize_msg(t_crucible *x, long n);
 t_atom_long crucible_get_bar_length(t_crucible *x);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
 int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
@@ -140,6 +143,9 @@ void ext_main(void *r) {
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, sizeof(t_crucible), 0L, A_GIMME, 0);
     class_addmethod(c, (method)crucible_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)crucible_local_bar_length, "ft1", A_FLOAT, 0);
+    class_addmethod(c, (method)crucible_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)crucible_consume_msg, "consume", A_LONG, 0);
+    class_addmethod(c, (method)crucible_visualize_msg, "visualize", A_LONG, 0);
     class_addmethod(c, (method)crucible_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_crucible, log);
@@ -702,6 +708,22 @@ void crucible_local_bar_length(t_crucible *x, double f) {
     }
 }
 
+void crucible_log_msg(t_crucible *x, long n) {
+    x->log = n;
+    crucible_log(x, "log attribute set to %ld", x->log);
+}
+
+void crucible_consume_msg(t_crucible *x, long n) {
+    x->consume = n;
+    crucible_log(x, "consume attribute set to %ld", x->consume);
+}
+
+void crucible_visualize_msg(t_crucible *x, long n) {
+    t_atom a;
+    atom_setlong(&a, n);
+    crucible_attr_set_visualize(x, NULL, 1, &a);
+}
+
 t_dictionary *dictionary_deep_copy(t_dictionary *src) {
    if (!src) return NULL;
 
@@ -1024,8 +1046,8 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: Primary message stream. Supports 'clear', 'track [id]', 'span [list]', 'reaches', 'replace [selector] [value]', and hierarchical selectors '[track]::[bar]::[key] [data]'. Also sets the incumbent dictionary name via symbol."); break;
-            case 1: sprintf(s, "Inlet 2: Local Bar Length (float). Sets or overrides the bar length used for reach calculations (normally retrieved from the 'bar' buffer)."); break;
+            case 0: sprintf(s, "Inlet 1: Primary messages (clear, track, span, reaches, replace, log, consume, visualize). Also sets incumbent dictionary name."); break;
+            case 1: sprintf(s, "Inlet 2: Local Bar Length (float)."); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {

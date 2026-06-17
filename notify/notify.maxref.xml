@@ -72,6 +72,13 @@
 			<digest>Execute a synthesized 'fill' dump</digest>
 			<description>Triggers a fill operation to a specific target reach (provided as an integer). Synchronizes track lengths by repeating notes until they match the target reach, then outputs the result sorted by time, followed by a completion bang from the first outlet.</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), outputs verbose diagnostic information to the logging outlet.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

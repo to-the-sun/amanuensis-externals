@@ -50,6 +50,9 @@ void smartloop_suppress_tick(t_smartloop *x);
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
+void smartloop_log_msg(t_smartloop *x, long n);
+void smartloop_visualize_msg(t_smartloop *x, long n);
+void smartloop_jump_threshold_msg(t_smartloop *x, double f);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
@@ -133,6 +136,9 @@ void ext_main(void *r) {
     t_class *c = class_new("smartloop~", (method)smartloop_new, (method)smartloop_free, sizeof(t_smartloop), 0L, A_GIMME, 0);
     class_addmethod(c, (method)smartloop_debug, "debug", 0);
     class_addmethod(c, (method)smartloop_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)smartloop_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)smartloop_visualize_msg, "visualize", A_LONG, 0);
+    class_addmethod(c, (method)smartloop_jump_threshold_msg, "jump_threshold", A_FLOAT, 0);
     class_addmethod(c, (method)smartloop_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)smartloop_assist, "assist", A_CANT, 0);
 
@@ -219,6 +225,21 @@ void smartloop_int(t_smartloop *x, long n) {
     } else {
         smartloop_log(x, "Output paused.");
     }
+}
+
+void smartloop_log_msg(t_smartloop *x, long n) {
+    x->log = n;
+    smartloop_log(x, "log attribute set to %ld", x->log);
+}
+
+void smartloop_visualize_msg(t_smartloop *x, long n) {
+    x->visualize = n;
+    smartloop_log(x, "visualize attribute set to %ld", x->visualize);
+}
+
+void smartloop_jump_threshold_msg(t_smartloop *x, double f) {
+    x->jump_threshold = f;
+    smartloop_log(x, "jump_threshold attribute set to %.2f", x->jump_threshold);
 }
 
 
@@ -434,7 +455,7 @@ void smartloop_debug(t_smartloop *x) {
 
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug");
+        sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug, visualize, jump_threshold, log");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred/safe output)");
         else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if stationary");

@@ -97,6 +97,20 @@
 				The filename is determined by looking up the destination buffer name in a <o>dict</o> object named 'stems'. The retrieved filename is modified by inserting " (doubles) " before the timestamp and updating the timestamp to the current time in [YYYY-MM-DD HHMMSS] format.
 			</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. Enable or disable detailed diagnostic logging to the third outlet.</description>
+		</method>
+		<method name="targetbias">
+			<arglist>
+				<arg name="bias" type="float" optional="0" />
+			</arglist>
+			<digest>Set the targetbias attribute</digest>
+			<description>Sets the `targetbias` attribute in real time, which controls the strength of the "gravity" pulling the alignment towards the ideal DTW position.</description>
+		</method>
 	</methodlist>
 
 	<!-- ATTRIBUTES -->

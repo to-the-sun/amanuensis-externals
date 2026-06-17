@@ -236,6 +236,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define notify_do_bang rebar_notify_do_bang
 #define notify_do_fill rebar_notify_do_fill
 #define notify_assist rebar_notify_assist
+#define notify_log_msg rebar_notify_log_msg
 #define notify_log rebar_notify_log
 
 #define buildspans_class rebar_buildspans_class
@@ -254,6 +255,8 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define buildspans_do_anything rebar_buildspans_do_anything
 #define buildspans_anything_deferred rebar_buildspans_anything_deferred
 #define buildspans_assist rebar_buildspans_assist
+#define buildspans_log_msg rebar_buildspans_log_msg
+#define buildspans_visualize_msg rebar_buildspans_visualize_msg
 #define buildspans_bang module_buildspans_bang
 #define buildspans_flush rebar_buildspans_flush
 #define buildspans_end_track_span rebar_buildspans_end_track_span
@@ -293,6 +296,9 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define dictionary_deep_copy rebar_dictionary_deep_copy
 #define crucible_output_bar_data rebar_crucible_output_bar_data
 #define crucible_local_bar_length rebar_crucible_local_bar_length
+#define crucible_log_msg rebar_crucible_log_msg
+#define crucible_consume_msg rebar_crucible_consume_msg
+#define crucible_visualize_msg rebar_crucible_visualize_msg
 #define crucible_get_bar_length rebar_crucible_get_bar_length
 #define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
 #define crucible_span_has_loser rebar_crucible_span_has_loser
@@ -438,6 +444,9 @@ void rebar_intercept_outlet_bang(void *o) {
 void *rebar_new(t_symbol *s, long argc, t_atom *argv);
 void rebar_free(t_rebar *x);
 void rebar_int(t_rebar *x, long n);
+void rebar_log_msg(t_rebar *x, long n);
+void rebar_consume_msg(t_rebar *x, long n);
+void rebar_visualize_msg(t_rebar *x, long n);
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s);
 
 t_max_err rebar_attr_set_log(t_rebar *x, void *attr, long ac, t_atom *av) {
@@ -508,6 +517,9 @@ void ext_main(void *r) {
     #define class_new rebar_intercept_class_new
 
     class_addmethod(c, (method)rebar_int, "int", A_LONG, 0);
+    class_addmethod(c, (method)rebar_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)rebar_consume_msg, "consume", A_LONG, 0);
+    class_addmethod(c, (method)rebar_visualize_msg, "visualize", A_LONG, 0);
     class_addmethod(c, (method)rebar_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_rebar, log);
@@ -625,6 +637,24 @@ void rebar_do_copy_back(t_rebar *x) {
     sdk_outlet_int(x->out_busy, 0);
 }
 
+void rebar_log_msg(t_rebar *x, long n) {
+    t_atom a;
+    atom_setlong(&a, n);
+    rebar_attr_set_log(x, NULL, 1, &a);
+}
+
+void rebar_consume_msg(t_rebar *x, long n) {
+    t_atom a;
+    atom_setlong(&a, n);
+    rebar_attr_set_consume(x, NULL, 1, &a);
+}
+
+void rebar_visualize_msg(t_rebar *x, long n) {
+    t_atom a;
+    atom_setlong(&a, n);
+    rebar_attr_set_visualize(x, NULL, 1, &a);
+}
+
 void rebar_int(t_rebar *x, long n) {
     sdk_outlet_int(x->out_busy, 1);
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
@@ -652,7 +682,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
+    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, visualize) and Trigger (int)");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;

@@ -51,6 +51,7 @@ void cropsilence_free(t_cropsilence *x);
 void cropsilence_int(t_cropsilence *x, t_atom_long n);
 void cropsilence_float(t_cropsilence *x, double f);
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s);
+void cropsilence_log_msg(t_cropsilence *x, long n);
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...);
 void cropsilence_error(t_cropsilence *x, const char *fmt, ...);
@@ -70,6 +71,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)cropsilence_int, "int", A_LONG, 0);
     class_addmethod(c, (method)cropsilence_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)cropsilence_bind, "bind", A_SYM, 0);
+    class_addmethod(c, (method)cropsilence_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)cropsilence_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_cropsilence, log);
@@ -78,6 +80,11 @@ void ext_main(void *r) {
 
     class_register(CLASS_BOX, c);
     cropsilence_class = c;
+}
+
+void cropsilence_log_msg(t_cropsilence *x, long n) {
+    x->log = n;
+    cropsilence_log(x, "log attribute set to %ld", x->log);
 }
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...) {
@@ -483,7 +490,7 @@ void cropsilence_qfn(t_cropsilence *x) {
 
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (float/int/symbol): Trigger cropping with bar length (ms) or Bind to polybuffer~");
+        sprintf(s, "Inlet 1: (float/int/symbol) Bar length or Bind, (log) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (bang): Bang when asynchronous cropping is complete"); break;

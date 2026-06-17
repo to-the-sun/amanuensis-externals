@@ -50,6 +50,7 @@ void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv);
 void stoplight_free(t_stoplight *x);
 t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av);
+void stoplight_log_msg(t_stoplight *x, long n);
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s);
 
 void stoplight_queue_bundle(t_stoplight *x, t_msg_type type, t_symbol *s, long argc, t_atom *argv);
@@ -75,6 +76,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stoplight_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)stoplight_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)stoplight_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)stoplight_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_stoplight, log);
@@ -91,6 +93,12 @@ void stoplight_log(t_stoplight *x, const char *fmt, ...) {
     va_start(args, fmt);
     vcommon_log(x->out_log, x->log, "stoplight", fmt, args);
     va_end(args);
+}
+
+void stoplight_log_msg(t_stoplight *x, long n) {
+    t_atom a;
+    atom_setlong(&a, n);
+    stoplight_attr_set_log(x, NULL, 1, &a);
 }
 
 t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av) {
@@ -480,7 +488,7 @@ void stoplight_anything(t_stoplight *x, t_symbol *s, long argc, t_atom *argv) {
 void stoplight_assist(t_stoplight *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet 1 (Hot): Data to be passed or queued.");
+            sprintf(s, "Control (log) and Data (Hot)");
         } else if (a == x->num_pairs) {
             sprintf(s, "Inlet %ld (Control): Control Signal (0=pass, non-zero=queue).", a + 1);
         } else {

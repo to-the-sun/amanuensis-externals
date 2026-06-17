@@ -74,6 +74,8 @@ typedef struct _doubles {
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
 void doubles_free(t_doubles *x);
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s);
+void doubles_log_msg(t_doubles *x, long n);
+void doubles_targetbias_msg(t_doubles *x, double f);
 void doubles_reference(t_doubles *x, t_symbol *s);
 void doubles_subject(t_doubles *x, t_symbol *s);
 void doubles_destination(t_doubles *x, t_symbol *s);
@@ -97,6 +99,8 @@ void ext_main(void *r) {
     class_addmethod(c, (method)doubles_undo, "undo", 0);
     class_addmethod(c, (method)doubles_export, "export", A_GIMME, 0);
     class_addmethod(c, (method)doubles_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)doubles_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)doubles_targetbias_msg, "targetbias", A_FLOAT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_doubles, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
@@ -1146,9 +1150,19 @@ void doubles_qfn(t_doubles *x) {
     }
 }
 
+void doubles_log_msg(t_doubles *x, long n) {
+    x->log = n;
+    common_log(x->log_outlet, x->log, "doubles~", "log attribute set to %ld", x->log);
+}
+
+void doubles_targetbias_msg(t_doubles *x, double f) {
+    x->targetbias = f;
+    common_log(x->log_outlet, x->log, "doubles~", "targetbias attribute set to %.4f", x->targetbias);
+}
+
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (anything): 'subject [buf]', 'reference [buf]', 'destination [buf]', 'align ([start_ms]) ([end_ms])', 'undo', or 'export [path]'");
+        sprintf(s, "Inlet 1: Control (reference, subject, destination, align, undo, export, log, targetbias)");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (float/bang): Progress (0.0-1.0), then 'finished [dest]' message and bang"); break;

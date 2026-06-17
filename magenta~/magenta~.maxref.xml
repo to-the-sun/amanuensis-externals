@@ -93,6 +93,20 @@
 			<digest>MIDI message</digest>
 			<description>Processes standard MIDI note messages in the format [status, note, velocity]. These are forwarded to the MRT2 model to guide generation.</description>
 		</method>
+		<method name="model">
+			<arglist>
+				<arg name="name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the model attribute</digest>
+			<description>Sets the `model` attribute in real time and notifies the Python bridge server to switch models.</description>
+		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), status messages and connection events are sent to the third outlet.</description>
+		</method>
 	</methodlist>
 
 	<!-- SEEALSO -->

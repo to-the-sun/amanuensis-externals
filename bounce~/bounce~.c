@@ -48,6 +48,11 @@ typedef struct _bounce {
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
 void bounce_free(t_bounce *x);
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s);
+void bounce_log_msg(t_bounce *x, long n);
+void bounce_normalize_msg(t_bounce *x, double f);
+void bounce_low_msg(t_bounce *x, double f);
+void bounce_high_msg(t_bounce *x, double f);
+void bounce_async_msg(t_bounce *x, long n);
 void bounce_bang(t_bounce *x);
 void *bounce_worker(t_bounce *x);
 void bounce_qfn(t_bounce *x);
@@ -63,6 +68,11 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)bounce_bang, "bang", 0);
     class_addmethod(c, (method)bounce_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)bounce_log_msg, "log", A_LONG, 0);
+    class_addmethod(c, (method)bounce_normalize_msg, "normalize", A_FLOAT, 0);
+    class_addmethod(c, (method)bounce_low_msg, "low", A_FLOAT, 0);
+    class_addmethod(c, (method)bounce_high_msg, "high", A_FLOAT, 0);
+    class_addmethod(c, (method)bounce_async_msg, "async", A_LONG, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_bounce, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
@@ -86,6 +96,31 @@ void ext_main(void *r) {
 
     class_register(CLASS_BOX, c);
     bounce_class = c;
+}
+
+void bounce_log_msg(t_bounce *x, long n) {
+    x->log = n;
+    bounce_log(x, "log attribute set to %ld", x->log);
+}
+
+void bounce_normalize_msg(t_bounce *x, double f) {
+    x->normalize_to = f;
+    bounce_log(x, "normalize attribute set to %.2f", x->normalize_to);
+}
+
+void bounce_low_msg(t_bounce *x, double f) {
+    x->low_ms = f;
+    bounce_log(x, "low attribute set to %.2f", x->low_ms);
+}
+
+void bounce_high_msg(t_bounce *x, double f) {
+    x->high_ms = f;
+    bounce_log(x, "high attribute set to %.2f", x->high_ms);
+}
+
+void bounce_async_msg(t_bounce *x, long n) {
+    x->async_attr = n;
+    bounce_log(x, "async attribute set to %ld", x->async_attr);
 }
 
 void bounce_log(t_bounce *x, const char *fmt, ...) {
@@ -266,7 +301,7 @@ void bounce_free(t_bounce *x) {
 
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) start bounce, (low/high) set fade limits");
+        sprintf(s, "Inlet 1 (anything): bang to start, log, normalize, low, high, async");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: (bang) finished"); break;

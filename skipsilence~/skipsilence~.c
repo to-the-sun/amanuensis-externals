@@ -55,6 +55,7 @@ void skipsilence_dsp64(t_skipsilence *x, t_object *dsp64, short *count, double s
 void skipsilence_perform64(t_skipsilence *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s);
+void skipsilence_log_msg(t_skipsilence *x, long n);
 
 void skipsilence_log(t_skipsilence *x, const char *fmt, ...);
 void *skipsilence_scanner_thread(t_skipsilence *x);
@@ -70,6 +71,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)skipsilence_int, "int", A_LONG, 0);
     class_addmethod(c, (method)skipsilence_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)skipsilence_notify, "notify", A_CANT, 0);
+    class_addmethod(c, (method)skipsilence_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)skipsilence_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_skipsilence, log);
@@ -152,10 +154,15 @@ t_max_err skipsilence_notify(t_skipsilence *x, t_symbol *s, t_symbol *msg, void 
     return MAX_ERR_NONE;
 }
 
+void skipsilence_log_msg(t_skipsilence *x, long n) {
+    x->log = n;
+    skipsilence_log(x, "log attribute set to %ld", x->log);
+}
+
 void skipsilence_assist(t_skipsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (messages/signal): play [buffer_name] or Sync Ramp Signal"); break;
+            case 0: sprintf(s, "Control (play, log) and Sync Ramp Signal"); break;
             case 1: sprintf(s, "Inlet 2 (int): Play Mode (0: once, 1: repeat, 2: stop)"); break;
         }
     } else {

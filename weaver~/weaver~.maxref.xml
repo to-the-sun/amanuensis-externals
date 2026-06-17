@@ -66,6 +66,41 @@
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled, sends real-time crossfade ramp positions to the visualization script.</description>
+		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), enables verbose logging to the third outlet.</description>
+		</method>
+		<method name="low">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the low attribute</digest>
+			<description>Sets the `low` attribute in real time, defining the minimum ramp time for crossfades.</description>
+		</method>
+		<method name="high">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the high attribute</digest>
+			<description>Sets the `high` attribute in real time, defining the maximum ramp time for crossfades.</description>
+		</method>
+		<method name="tracks">
+			<arglist>
+				<arg name="num-tracks" type="int" optional="0" />
+			</arglist>
+			<digest>Set the tracks attribute</digest>
+			<description>Sets the `tracks` attribute in real time. (Note: This is already implemented as a method but is listed here for completeness with the other attributes).</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

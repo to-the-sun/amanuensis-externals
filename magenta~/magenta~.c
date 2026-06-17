@@ -76,6 +76,8 @@ void magenta_dsp64(t_magenta *x, t_object *dsp64, short *count, double samplerat
 void magenta_perform64(t_magenta *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void magenta_log(t_magenta *x, const char *fmt, ...);
 void magenta_push_cmd(t_magenta *x, t_magenta_cmd_type type, const char *data);
+t_max_err magenta_attr_set_model(t_magenta *x, void *attr, long ac, t_atom *av);
+void magenta_log_msg(t_magenta *x, long n);
 
 static t_class *magenta_class;
 
@@ -97,6 +99,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)magenta_open, "open", 0);
     class_addmethod(c, (method)magenta_prompt, "prompt", A_SYM, 0);
     class_addmethod(c, (method)magenta_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)magenta_log_msg, "log", A_LONG, 0);
 
     CLASS_ATTR_SYM(c, "address", 0, t_magenta, address);
     CLASS_ATTR_DEFAULT(c, "address", 0, "127.0.0.1");
@@ -106,6 +109,7 @@ void ext_main(void *r) {
 
     CLASS_ATTR_SYM(c, "model", 0, t_magenta, model);
     CLASS_ATTR_DEFAULT(c, "model", 0, "mrt2_small");
+    CLASS_ATTR_ACCESSORS(c, "model", NULL, (method)magenta_attr_set_model);
 
     CLASS_ATTR_LONG(c, "log", 0, t_magenta, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
@@ -236,6 +240,20 @@ void magenta_list(t_magenta *x, t_symbol *s, long argc, t_atom *argv) {
         snprintf(buf, 64, "%ld,%ld,%ld", atom_getlong(argv), atom_getlong(argv+1), argc > 2 ? atom_getlong(argv+2) : 0);
         magenta_push_cmd(x, MAGENTA_CMD_MIDI, buf);
     }
+}
+
+void magenta_log_msg(t_magenta *x, long n) {
+    x->log = n;
+    magenta_log(x, "log attribute set to %ld", x->log);
+}
+
+t_max_err magenta_attr_set_model(t_magenta *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->model = atom_getsym(av);
+        magenta_log(x, "model attribute set to %s", x->model->s_name);
+        magenta_push_cmd(x, MAGENTA_CMD_MODEL, x->model->s_name);
+    }
+    return MAX_ERR_NONE;
 }
 
 void *magenta_thread_proc(t_magenta *x) {
@@ -405,7 +423,7 @@ void *magenta_thread_proc(t_magenta *x) {
 
 void magenta_assist(t_magenta *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "MIDI messages and Control");
+        sprintf(s, "Control (connect, disconnect, open, prompt, list, model, log)");
     } else {
         switch (a) {
             case 0: sprintf(s, "Audio Output (L)"); break;
