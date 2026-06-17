@@ -94,6 +94,20 @@
 			<digest>Set the buffer for bar length</digest>
 			<description>Sets the buffer~ object to read the bar length from (defaults to "bar").</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled (1), the object sends JSON data to the connected visualization script.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

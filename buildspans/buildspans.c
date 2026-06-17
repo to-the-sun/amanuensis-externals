@@ -214,6 +214,8 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
+t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
+t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
 
 
 // Helper function to send verbose log messages
@@ -478,10 +480,12 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)buildspans_attr_set_log);
 
     CLASS_ATTR_LONG(c, "visualize", 0, t_buildspans, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)buildspans_attr_set_visualize);
 
     CLASS_ATTR_LONG(c, "defer", 0, t_buildspans, defer);
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
@@ -1791,7 +1795,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) 2 items (abs, score) or 3 items (synth_abs, score, orig_abs), (bang) Flush All, (flush <int>) Flush Track, (clear) Clear. Supports @defer deferral.");
+                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize) attributes.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
@@ -1844,6 +1848,22 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
         buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
+}
+
+t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        buildspans_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->visualize = atom_getlong(av);
+        buildspans_log(x, "visualize attribute set to %ld", x->visualize);
+    }
+    return MAX_ERR_NONE;
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {

@@ -64,6 +64,13 @@
 				Begins playing the named buffer from the beginning, skipping any silent bars.
 			</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), status messages and playback progress are sent to the third outlet.</description>
+		</method>
 	</methodlist>
 
 	<!--ATTRIBUTES-->

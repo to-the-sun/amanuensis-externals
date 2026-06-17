@@ -41,6 +41,7 @@ void growbuffer_set(t_growbuffer *x, t_symbol *s);
 void growbuffer_symbol(t_growbuffer *x, t_symbol *s);
 void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv);
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s);
+t_max_err growbuffer_attr_set_log(t_growbuffer *x, void *attr, long ac, t_atom *av);
 
 static t_class *growbuffer_class;
 
@@ -60,6 +61,7 @@ void ext_main(void *r) {
 	CLASS_ATTR_LONG(c, "log", 0, t_growbuffer, log);
 	CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
 	CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+	CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)growbuffer_attr_set_log);
 
 	class_register(CLASS_BOX, c);
 	growbuffer_class = c;
@@ -284,11 +286,19 @@ void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
 	}
 }
 
+t_max_err growbuffer_attr_set_log(t_growbuffer *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        growbuffer_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {
 	if (m == ASSIST_INLET) {
 		switch (a) {
 			case 0:
-				sprintf(s, "Inlet 1: (bang) report length, (number) resize, (set) set buffer name");
+				sprintf(s, "Inlet 1: Control (bang, float, set, log)");
 				break;
 			case 1:
 				sprintf(s, "Inlet 2: (symbol) set buffer name");

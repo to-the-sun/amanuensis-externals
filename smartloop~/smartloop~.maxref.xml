@@ -71,6 +71,27 @@
 			<digest>Pause or resume output</digest>
 			<description>Sending a 0 to the first inlet pauses the output of loop boundaries from the second and third outlets. Sending a non-zero integer resumes output. Note that the first outlet's `bang` still fires on loop/jump even when output is paused. Internal analysis and logging continue regardless of this state.</description>
 		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled (1, default), the object allows sending debug information to the visualizer.py script.</description>
+		</method>
+		<method name="jump_threshold">
+			<arglist>
+				<arg name="threshold" type="float" optional="0" />
+			</arglist>
+			<digest>Set the jump_threshold attribute</digest>
+			<description>Sets the `jump_threshold` attribute in real time, which determines the sensitivity for jump detection.</description>
+		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), outputs verbose diagnostic information to the logging outlet.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

@@ -70,6 +70,13 @@
 			<digest>Query current connection status</digest>
 			<description>Triggers an immediate output of the connection status integer from the first outlet.</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), status messages are sent to the second outlet.</description>
+		</method>
 	</methodlist>
 
 	<!--ATTRIBUTES-->

@@ -19,6 +19,9 @@ void crossfade_free(t_crossfade *x);
 void crossfade_dsp64(t_crossfade *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void crossfade_assist(t_crossfade *x, void *b, long m, long a, char *s);
+t_max_err crossfade_attr_set_low(t_crossfade *x, void *attr, long ac, t_atom *av);
+t_max_err crossfade_attr_set_high(t_crossfade *x, void *attr, long ac, t_atom *av);
+t_max_err crossfade_attr_set_log(t_crossfade *x, void *attr, long ac, t_atom *av);
 
 static t_class *crossfade_class;
 
@@ -39,14 +42,17 @@ void ext_main(void *r) {
     CLASS_ATTR_DOUBLE(c, "low", 0, t_crossfade, low_ms);
     CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "low", 0, "22.653"); // Approx 999 samples at 44.1kHz
+    CLASS_ATTR_ACCESSORS(c, "low", NULL, (method)crossfade_attr_set_low);
 
     CLASS_ATTR_DOUBLE(c, "high", 0, t_crossfade, high_ms);
     CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
+    CLASS_ATTR_ACCESSORS(c, "high", NULL, (method)crossfade_attr_set_high);
 
     CLASS_ATTR_LONG(c, "log", 0, t_crossfade, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)crossfade_attr_set_log);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -118,10 +124,34 @@ void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long num
     }
 }
 
+t_max_err crossfade_attr_set_low(t_crossfade *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->low_ms = atom_getfloat(av);
+        crossfade_log(x, "low attribute set to %.2f", x->low_ms);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err crossfade_attr_set_high(t_crossfade *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->high_ms = atom_getfloat(av);
+        crossfade_log(x, "high attribute set to %.2f", x->high_ms);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err crossfade_attr_set_log(t_crossfade *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        crossfade_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
 void crossfade_assist(t_crossfade *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal) Control"); break;
+            case 0: sprintf(s, "(signal/messages) Control, low, high, log"); break;
             case 1: sprintf(s, "(signal) Source 1"); break;
             case 2: sprintf(s, "(signal) Source 2"); break;
         }

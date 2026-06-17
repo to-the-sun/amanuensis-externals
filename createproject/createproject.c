@@ -12,6 +12,7 @@ typedef struct _createproject {
 void *createproject_new(t_symbol *s, long argc, t_atom *argv);
 void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
+t_max_err createproject_attr_set_log(t_createproject *x, void *attr, long ac, t_atom *av);
 void createproject_log(t_createproject *x, const char *fmt, ...);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
 
@@ -29,9 +30,18 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_createproject, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)createproject_attr_set_log);
 
     class_register(CLASS_BOX, c);
     createproject_class = c;
+}
+
+t_max_err createproject_attr_set_log(t_createproject *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        createproject_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void createproject_log(t_createproject *x, const char *fmt, ...) {
@@ -120,7 +130,7 @@ void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
 
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (create <path>) Create Project from Template");
+        sprintf(s, "Inlet 1: (symbol) project path, (create) start, (log) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;

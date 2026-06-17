@@ -33,6 +33,20 @@
 		<method name="bang">
 			<digest>Generate version string</digest>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+		</method>
+		<method name="format">
+			<arglist>
+				<arg name="format-style" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the format attribute</digest>
+			<description>Sets the `format` attribute in real time, determining the style of the output timestamp.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

@@ -168,6 +168,10 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_tracks(t_weaver *x, long n);
+t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_low(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_high(t_weaver *x, void *attr, long ac, t_atom *av);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
@@ -576,6 +580,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "visualize", 0, t_weaver, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)weaver_attr_set_visualize);
 
     CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
@@ -584,14 +589,17 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_weaver, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)weaver_attr_set_log);
 
     CLASS_ATTR_DOUBLE(c, "low", 0, t_weaver, low_ms);
     CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "low", 0, "22.653");
+    CLASS_ATTR_ACCESSORS(c, "low", NULL, (method)weaver_attr_set_low);
 
     CLASS_ATTR_DOUBLE(c, "high", 0, t_weaver, high_ms);
     CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
+    CLASS_ATTR_ACCESSORS(c, "high", NULL, (method)weaver_attr_set_high);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -746,8 +754,8 @@ t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, v
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal/message): Main time ramp (signal), tracks (int), clear, consolidate"); break;
-            case 1: sprintf(s, "Inlet 2 (list): [track_id, length] updates track length"); break;
+            case 0: sprintf(s, "Control (clear, consolidate, visualize, log, low, high) and Sync Ramp"); break;
+            case 1: sprintf(s, "Inlet 2 (list): [track_id, length]"); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
@@ -943,6 +951,38 @@ void weaver_tracks(t_weaver *x, long n) {
     if (proxy_getinlet((t_object *)x) != 0) return;
     x->max_tracks = n;
     weaver_update_track_cache(x);
+}
+
+t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->visualize = atom_getlong(av);
+        weaver_log(x, "visualize attribute set to %ld", x->visualize);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        weaver_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err weaver_attr_set_low(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->low_ms = atom_getfloat(av);
+        weaver_log(x, "low attribute set to %.2f", x->low_ms);
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err weaver_attr_set_high(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->high_ms = atom_getfloat(av);
+        weaver_log(x, "high attribute set to %.2f", x->high_ms);
+    }
+    return MAX_ERR_NONE;
 }
 
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {

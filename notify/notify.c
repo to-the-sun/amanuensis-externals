@@ -52,6 +52,7 @@ void notify_qwork(t_notify *x);
 void notify_do_bang(t_notify *x);
 void notify_do_fill(t_notify *x);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
+t_max_err notify_attr_set_log(t_notify *x, void *attr, long ac, t_atom *av);
 int note_compare(const void *a, const void *b);
 int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
@@ -69,6 +70,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_notify, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)notify_attr_set_log);
 
     CLASS_ATTR_LONG(c, "defer", 0, t_notify, defer);
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
@@ -575,9 +577,17 @@ void notify_do_bang(t_notify *x) {
     object_release((t_object *)dict);
 }
 
+t_max_err notify_attr_set_log(t_notify *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        notify_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) aggregate and sort notes, (int) synthesized fill to reach and sort. Supports @defer deferral.");
+        sprintf(s, "Inlet 1: (bang) dump, (int) fill, (log) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;

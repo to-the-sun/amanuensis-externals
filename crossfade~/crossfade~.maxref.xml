@@ -47,7 +47,29 @@
 	<!--ARGUMENTS-->
 	<objarglist />
 	<!--MESSAGES-->
-	<methodlist />
+	<methodlist>
+		<method name="low">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the low attribute</digest>
+			<description>Sets the `low` attribute in real time. The minimum length of the crossfade ramp in milliseconds.</description>
+		</method>
+		<method name="high">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the high attribute</digest>
+			<description>Sets the `high` attribute in real time. The maximum length of the crossfade ramp in milliseconds.</description>
+		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+		</method>
+	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="low" get="1" set="1" type="double" size="1">

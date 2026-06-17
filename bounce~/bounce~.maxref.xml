@@ -50,6 +50,41 @@
 			<digest>Start the bounce process</digest>
 			<description>Triggers normalization of stem buffers and summing into the destination buffer with dynamic fades, using the `stats` buffer to define the processing limit.</description>
 		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. Enables verbose logging of normalization events, buffer attachments, and process milestones.</description>
+		</method>
+		<method name="normalize">
+			<arglist>
+				<arg name="amplitude" type="float" optional="0" />
+			</arglist>
+			<digest>Set the normalize attribute</digest>
+			<description>Sets the `normalize` attribute in real time. If set to a non-zero value, the object will normalize the final product buffer to this peak absolute amplitude.</description>
+		</method>
+		<method name="low">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the low attribute</digest>
+			<description>Sets the `low` attribute in real time. The minimum ramp time for the dynamic crossfade module (default: 22.653 ms).</description>
+		</method>
+		<method name="high">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the high attribute</digest>
+			<description>Sets the `high` attribute in real time. The maximum ramp time for the dynamic crossfade module (default: 4999.0 ms).</description>
+		</method>
+		<method name="async">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the async attribute</digest>
+			<description>Sets the `async` attribute in real time. When enabled (1), the bounce process runs in a background thread.</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
@@ -71,6 +106,13 @@
 		<attribute name="high" type="double" get="1" set="1" opaque="0">
 			<digest>High Limit (ms)</digest>
 			<description>The maximum ramp time for the dynamic crossfade module (default: 4999.0 ms). This also determines how many milliseconds before the end of the audio (defined by the `stats` buffer) the fade-out begins.</description>
+		</attribute>
+		<attribute name="async" type="long" get="1" set="1" opaque="0">
+			<digest>Asynchronous Execution</digest>
+			<description>When enabled (1), the bounce process runs in a background thread to avoid stalling the Main thread.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
 		</attribute>
 	</attributelist>
 	<!--SEEALSO-->

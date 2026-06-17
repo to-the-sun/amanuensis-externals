@@ -51,6 +51,7 @@ void cropsilence_free(t_cropsilence *x);
 void cropsilence_int(t_cropsilence *x, t_atom_long n);
 void cropsilence_float(t_cropsilence *x, double f);
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s);
+t_max_err cropsilence_attr_set_log(t_cropsilence *x, void *attr, long ac, t_atom *av);
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...);
 void cropsilence_error(t_cropsilence *x, const char *fmt, ...);
@@ -75,9 +76,18 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_cropsilence, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)cropsilence_attr_set_log);
 
     class_register(CLASS_BOX, c);
     cropsilence_class = c;
+}
+
+t_max_err cropsilence_attr_set_log(t_cropsilence *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        cropsilence_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...) {
@@ -483,7 +493,7 @@ void cropsilence_qfn(t_cropsilence *x) {
 
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1 (float/int/symbol): Trigger cropping with bar length (ms) or Bind to polybuffer~");
+        sprintf(s, "Inlet 1: (float/int/symbol) Bar length or Bind, (log) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1 (bang): Bang when asynchronous cropping is complete"); break;

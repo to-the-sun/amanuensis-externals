@@ -236,6 +236,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define notify_do_bang rebar_notify_do_bang
 #define notify_do_fill rebar_notify_do_fill
 #define notify_assist rebar_notify_assist
+#define notify_attr_set_log rebar_notify_attr_set_log
 #define notify_log rebar_notify_log
 
 #define buildspans_class rebar_buildspans_class
@@ -254,6 +255,8 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define buildspans_do_anything rebar_buildspans_do_anything
 #define buildspans_anything_deferred rebar_buildspans_anything_deferred
 #define buildspans_assist rebar_buildspans_assist
+#define buildspans_attr_set_log rebar_buildspans_attr_set_log
+#define buildspans_attr_set_visualize rebar_buildspans_attr_set_visualize
 #define buildspans_bang module_buildspans_bang
 #define buildspans_flush rebar_buildspans_flush
 #define buildspans_end_track_span rebar_buildspans_end_track_span
@@ -293,6 +296,8 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define dictionary_deep_copy rebar_dictionary_deep_copy
 #define crucible_output_bar_data rebar_crucible_output_bar_data
 #define crucible_local_bar_length rebar_crucible_local_bar_length
+#define crucible_attr_set_log rebar_crucible_attr_set_log
+#define crucible_attr_set_consume rebar_crucible_attr_set_consume
 #define crucible_get_bar_length rebar_crucible_get_bar_length
 #define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
 #define crucible_span_has_loser rebar_crucible_span_has_loser
@@ -443,9 +448,9 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s);
 t_max_err rebar_attr_set_log(t_rebar *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->log = atom_getlong(av);
-        if (x->notify_inst) x->notify_inst->log = x->log;
-        if (x->buildspans_inst) x->buildspans_inst->log = x->log;
-        if (x->crucible_inst) x->crucible_inst->log = x->log;
+        if (x->notify_inst) notify_attr_set_log(x->notify_inst, NULL, ac, av);
+        if (x->buildspans_inst) buildspans_attr_set_log(x->buildspans_inst, NULL, ac, av);
+        if (x->crucible_inst) crucible_attr_set_log(x->crucible_inst, NULL, ac, av);
     }
     return MAX_ERR_NONE;
 }
@@ -463,7 +468,7 @@ t_max_err rebar_attr_set_defer(t_rebar *x, void *attr, long ac, t_atom *av) {
 t_max_err rebar_attr_set_consume(t_rebar *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->consume = atom_getlong(av);
-        if (x->crucible_inst) x->crucible_inst->consume = x->consume;
+        if (x->crucible_inst) crucible_attr_set_consume(x->crucible_inst, NULL, ac, av);
     }
     return MAX_ERR_NONE;
 }
@@ -471,8 +476,8 @@ t_max_err rebar_attr_set_consume(t_rebar *x, void *attr, long ac, t_atom *av) {
 t_max_err rebar_attr_set_visualize(t_rebar *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->visualize = atom_getlong(av);
-        if (x->buildspans_inst) x->buildspans_inst->visualize = x->visualize;
-        if (x->crucible_inst) rebar_crucible_attr_set_visualize(x->crucible_inst, NULL, ac, av);
+        if (x->buildspans_inst) buildspans_attr_set_visualize(x->buildspans_inst, NULL, ac, av);
+        if (x->crucible_inst) crucible_attr_set_visualize(x->crucible_inst, NULL, ac, av);
     }
     return MAX_ERR_NONE;
 }
@@ -652,7 +657,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Inlet 1: (int) Trigger isolated coordinated dump with specified bar length.");
+    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, visualize) and Trigger (int)");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;

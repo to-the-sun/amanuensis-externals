@@ -99,6 +99,7 @@ void *discordvoice_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void discordvoice_perform64(t_discordvoice *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void discordvoice_log(t_discordvoice *x, const char *fmt, ...);
+t_max_err discordvoice_attr_set_log(t_discordvoice *x, void *attr, long ac, t_atom *av);
 
 static t_class *discordvoice_class;
 
@@ -130,6 +131,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_discordvoice, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)discordvoice_attr_set_log);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -773,11 +775,19 @@ cleanup:
     return NULL;
 }
 
+t_max_err discordvoice_attr_set_log(t_discordvoice *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        discordvoice_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
 void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1 (signal): Left audio input / messages"); break;
-            case 1: sprintf(s, "Inlet 2 (signal): Right audio input"); break;
+            case 0: sprintf(s, "Left audio input / Control (connect, bang, log)"); break;
+            case 1: sprintf(s, "Right audio input"); break;
         }
     } else {
         switch (a) {
