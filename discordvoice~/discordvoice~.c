@@ -99,7 +99,7 @@ void *discordvoice_thread_proc(t_discordvoice *x);
 void discordvoice_dsp64(t_discordvoice *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void discordvoice_perform64(t_discordvoice *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void discordvoice_log(t_discordvoice *x, const char *fmt, ...);
-void discordvoice_log_msg(t_discordvoice *x, long n);
+t_max_err discordvoice_attr_set_log(t_discordvoice *x, void *attr, long ac, t_atom *av);
 
 static t_class *discordvoice_class;
 
@@ -127,11 +127,11 @@ void ext_main(void *r) {
     class_addmethod(c, (method)discordvoice_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)discordvoice_bang, "bang", 0);
     class_addmethod(c, (method)discordvoice_connect, "connect", A_GIMME, 0);
-    class_addmethod(c, (method)discordvoice_log_msg, "log", A_LONG, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_discordvoice, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)discordvoice_attr_set_log);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -775,9 +775,12 @@ cleanup:
     return NULL;
 }
 
-void discordvoice_log_msg(t_discordvoice *x, long n) {
-    x->log = n;
-    discordvoice_log(x, "log attribute set to %ld", x->log);
+t_max_err discordvoice_attr_set_log(t_discordvoice *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        discordvoice_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void discordvoice_assist(t_discordvoice *x, void *b, long m, long a, char *s) {

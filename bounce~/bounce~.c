@@ -48,11 +48,11 @@ typedef struct _bounce {
 void *bounce_new(t_symbol *s, long argc, t_atom *argv);
 void bounce_free(t_bounce *x);
 void bounce_assist(t_bounce *x, void *b, long m, long a, char *s);
-void bounce_log_msg(t_bounce *x, long n);
-void bounce_normalize_msg(t_bounce *x, double f);
-void bounce_low_msg(t_bounce *x, double f);
-void bounce_high_msg(t_bounce *x, double f);
-void bounce_async_msg(t_bounce *x, long n);
+t_max_err bounce_attr_set_log(t_bounce *x, void *attr, long ac, t_atom *av);
+t_max_err bounce_attr_set_normalize(t_bounce *x, void *attr, long ac, t_atom *av);
+t_max_err bounce_attr_set_low(t_bounce *x, void *attr, long ac, t_atom *av);
+t_max_err bounce_attr_set_high(t_bounce *x, void *attr, long ac, t_atom *av);
+t_max_err bounce_attr_set_async(t_bounce *x, void *attr, long ac, t_atom *av);
 void bounce_bang(t_bounce *x);
 void *bounce_worker(t_bounce *x);
 void bounce_qfn(t_bounce *x);
@@ -68,29 +68,29 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)bounce_bang, "bang", 0);
     class_addmethod(c, (method)bounce_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)bounce_log_msg, "log", A_LONG, 0);
-    class_addmethod(c, (method)bounce_normalize_msg, "normalize", A_FLOAT, 0);
-    class_addmethod(c, (method)bounce_low_msg, "low", A_FLOAT, 0);
-    class_addmethod(c, (method)bounce_high_msg, "high", A_FLOAT, 0);
-    class_addmethod(c, (method)bounce_async_msg, "async", A_LONG, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_bounce, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)bounce_attr_set_log);
 
     CLASS_ATTR_DOUBLE(c, "normalize", 0, t_bounce, normalize_to);
     CLASS_ATTR_LABEL(c, "normalize", 0, "Normalization Target Amplitude");
     CLASS_ATTR_DEFAULT(c, "normalize", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "normalize", NULL, (method)bounce_attr_set_normalize);
 
     CLASS_ATTR_DOUBLE(c, "low", 0, t_bounce, low_ms);
     CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "low", 0, "22.653");
+    CLASS_ATTR_ACCESSORS(c, "low", NULL, (method)bounce_attr_set_low);
 
     CLASS_ATTR_DOUBLE(c, "high", 0, t_bounce, high_ms);
     CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
+    CLASS_ATTR_ACCESSORS(c, "high", NULL, (method)bounce_attr_set_high);
 
     CLASS_ATTR_LONG(c, "async", 0, t_bounce, async_attr);
+    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)bounce_attr_set_async);
     CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
     CLASS_ATTR_DEFAULT(c, "async", 0, "0");
 
@@ -98,29 +98,44 @@ void ext_main(void *r) {
     bounce_class = c;
 }
 
-void bounce_log_msg(t_bounce *x, long n) {
-    x->log = n;
-    bounce_log(x, "log attribute set to %ld", x->log);
+t_max_err bounce_attr_set_log(t_bounce *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        bounce_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
-void bounce_normalize_msg(t_bounce *x, double f) {
-    x->normalize_to = f;
-    bounce_log(x, "normalize attribute set to %.2f", x->normalize_to);
+t_max_err bounce_attr_set_normalize(t_bounce *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->normalize_to = atom_getfloat(av);
+        bounce_log(x, "normalize attribute set to %.2f", x->normalize_to);
+    }
+    return MAX_ERR_NONE;
 }
 
-void bounce_low_msg(t_bounce *x, double f) {
-    x->low_ms = f;
-    bounce_log(x, "low attribute set to %.2f", x->low_ms);
+t_max_err bounce_attr_set_low(t_bounce *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->low_ms = atom_getfloat(av);
+        bounce_log(x, "low attribute set to %.2f", x->low_ms);
+    }
+    return MAX_ERR_NONE;
 }
 
-void bounce_high_msg(t_bounce *x, double f) {
-    x->high_ms = f;
-    bounce_log(x, "high attribute set to %.2f", x->high_ms);
+t_max_err bounce_attr_set_high(t_bounce *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->high_ms = atom_getfloat(av);
+        bounce_log(x, "high attribute set to %.2f", x->high_ms);
+    }
+    return MAX_ERR_NONE;
 }
 
-void bounce_async_msg(t_bounce *x, long n) {
-    x->async_attr = n;
-    bounce_log(x, "async attribute set to %ld", x->async_attr);
+t_max_err bounce_attr_set_async(t_bounce *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->async_attr = atom_getlong(av);
+        bounce_log(x, "async attribute set to %ld", x->async_attr);
+    }
+    return MAX_ERR_NONE;
 }
 
 void bounce_log(t_bounce *x, const char *fmt, ...) {

@@ -41,7 +41,7 @@ void growbuffer_set(t_growbuffer *x, t_symbol *s);
 void growbuffer_symbol(t_growbuffer *x, t_symbol *s);
 void growbuffer_anything(t_growbuffer *x, t_symbol *s, long argc, t_atom *argv);
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s);
-void growbuffer_log_msg(t_growbuffer *x, long n);
+t_max_err growbuffer_attr_set_log(t_growbuffer *x, void *attr, long ac, t_atom *av);
 
 static t_class *growbuffer_class;
 
@@ -56,12 +56,12 @@ void ext_main(void *r) {
 	class_addmethod(c, (method)growbuffer_set, "set", A_SYM, 0);
 	class_addmethod(c, (method)growbuffer_symbol, "symbol", A_SYM, 0);
 	class_addmethod(c, (method)growbuffer_anything, "anything", A_GIMME, 0);
-	class_addmethod(c, (method)growbuffer_log_msg, "log", A_LONG, 0);
 	class_addmethod(c, (method)growbuffer_assist, "assist", A_CANT, 0);
 
 	CLASS_ATTR_LONG(c, "log", 0, t_growbuffer, log);
 	CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
 	CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+	CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)growbuffer_attr_set_log);
 
 	class_register(CLASS_BOX, c);
 	growbuffer_class = c;
@@ -286,9 +286,12 @@ void growbuffer_execute(t_growbuffer *x, double ms, int is_resize) {
 	}
 }
 
-void growbuffer_log_msg(t_growbuffer *x, long n) {
-    x->log = n;
-    growbuffer_log(x, "log attribute set to %ld", x->log);
+t_max_err growbuffer_attr_set_log(t_growbuffer *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        growbuffer_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void growbuffer_assist(t_growbuffer *x, void *b, long m, long a, char *s) {

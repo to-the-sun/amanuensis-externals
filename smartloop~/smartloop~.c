@@ -50,9 +50,9 @@ void smartloop_suppress_tick(t_smartloop *x);
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_debug(t_smartloop *x);
 void smartloop_int(t_smartloop *x, long n);
-void smartloop_log_msg(t_smartloop *x, long n);
-void smartloop_visualize_msg(t_smartloop *x, long n);
-void smartloop_jump_threshold_msg(t_smartloop *x, double f);
+t_max_err smartloop_attr_set_log(t_smartloop *x, void *attr, long ac, t_atom *av);
+t_max_err smartloop_attr_set_visualize(t_smartloop *x, void *attr, long ac, t_atom *av);
+t_max_err smartloop_attr_set_jump_threshold(t_smartloop *x, void *attr, long ac, t_atom *av);
 void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s);
@@ -136,23 +136,23 @@ void ext_main(void *r) {
     t_class *c = class_new("smartloop~", (method)smartloop_new, (method)smartloop_free, sizeof(t_smartloop), 0L, A_GIMME, 0);
     class_addmethod(c, (method)smartloop_debug, "debug", 0);
     class_addmethod(c, (method)smartloop_int, "int", A_LONG, 0);
-    class_addmethod(c, (method)smartloop_log_msg, "log", A_LONG, 0);
-    class_addmethod(c, (method)smartloop_visualize_msg, "visualize", A_LONG, 0);
-    class_addmethod(c, (method)smartloop_jump_threshold_msg, "jump_threshold", A_FLOAT, 0);
     class_addmethod(c, (method)smartloop_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)smartloop_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_smartloop, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)smartloop_attr_set_log);
 
     CLASS_ATTR_LONG(c, "visualize", 0, t_smartloop, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Visualize Analysis");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "1");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)smartloop_attr_set_visualize);
 
     CLASS_ATTR_DOUBLE(c, "jump_threshold", 0, t_smartloop, jump_threshold);
     CLASS_ATTR_LABEL(c, "jump_threshold", 0, "Jump Threshold (ms)");
     CLASS_ATTR_DEFAULT(c, "jump_threshold", 0, "1.0");
+    CLASS_ATTR_ACCESSORS(c, "jump_threshold", NULL, (method)smartloop_attr_set_jump_threshold);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -227,19 +227,28 @@ void smartloop_int(t_smartloop *x, long n) {
     }
 }
 
-void smartloop_log_msg(t_smartloop *x, long n) {
-    x->log = n;
-    smartloop_log(x, "log attribute set to %ld", x->log);
+t_max_err smartloop_attr_set_log(t_smartloop *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        smartloop_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
-void smartloop_visualize_msg(t_smartloop *x, long n) {
-    x->visualize = n;
-    smartloop_log(x, "visualize attribute set to %ld", x->visualize);
+t_max_err smartloop_attr_set_visualize(t_smartloop *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->visualize = atom_getlong(av);
+        smartloop_log(x, "visualize attribute set to %ld", x->visualize);
+    }
+    return MAX_ERR_NONE;
 }
 
-void smartloop_jump_threshold_msg(t_smartloop *x, double f) {
-    x->jump_threshold = f;
-    smartloop_log(x, "jump_threshold attribute set to %.2f", x->jump_threshold);
+t_max_err smartloop_attr_set_jump_threshold(t_smartloop *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->jump_threshold = atom_getfloat(av);
+        smartloop_log(x, "jump_threshold attribute set to %.2f", x->jump_threshold);
+    }
+    return MAX_ERR_NONE;
 }
 
 

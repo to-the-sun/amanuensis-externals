@@ -51,7 +51,7 @@ void cropsilence_free(t_cropsilence *x);
 void cropsilence_int(t_cropsilence *x, t_atom_long n);
 void cropsilence_float(t_cropsilence *x, double f);
 void cropsilence_assist(t_cropsilence *x, void *b, long m, long a, char *s);
-void cropsilence_log_msg(t_cropsilence *x, long n);
+t_max_err cropsilence_attr_set_log(t_cropsilence *x, void *attr, long ac, t_atom *av);
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...);
 void cropsilence_error(t_cropsilence *x, const char *fmt, ...);
@@ -71,20 +71,23 @@ void ext_main(void *r) {
     class_addmethod(c, (method)cropsilence_int, "int", A_LONG, 0);
     class_addmethod(c, (method)cropsilence_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)cropsilence_bind, "bind", A_SYM, 0);
-    class_addmethod(c, (method)cropsilence_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)cropsilence_assist, "assist", A_CANT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_cropsilence, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)cropsilence_attr_set_log);
 
     class_register(CLASS_BOX, c);
     cropsilence_class = c;
 }
 
-void cropsilence_log_msg(t_cropsilence *x, long n) {
-    x->log = n;
-    cropsilence_log(x, "log attribute set to %ld", x->log);
+t_max_err cropsilence_attr_set_log(t_cropsilence *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        cropsilence_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
 void cropsilence_log(t_cropsilence *x, const char *fmt, ...) {

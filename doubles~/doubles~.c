@@ -74,8 +74,8 @@ typedef struct _doubles {
 void *doubles_new(t_symbol *s, long argc, t_atom *argv);
 void doubles_free(t_doubles *x);
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s);
-void doubles_log_msg(t_doubles *x, long n);
-void doubles_targetbias_msg(t_doubles *x, double f);
+t_max_err doubles_attr_set_log(t_doubles *x, void *attr, long ac, t_atom *av);
+t_max_err doubles_attr_set_targetbias(t_doubles *x, void *attr, long ac, t_atom *av);
 void doubles_reference(t_doubles *x, t_symbol *s);
 void doubles_subject(t_doubles *x, t_symbol *s);
 void doubles_destination(t_doubles *x, t_symbol *s);
@@ -99,18 +99,18 @@ void ext_main(void *r) {
     class_addmethod(c, (method)doubles_undo, "undo", 0);
     class_addmethod(c, (method)doubles_export, "export", A_GIMME, 0);
     class_addmethod(c, (method)doubles_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)doubles_log_msg, "log", A_LONG, 0);
-    class_addmethod(c, (method)doubles_targetbias_msg, "targetbias", A_FLOAT, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_doubles, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
     CLASS_ATTR_SAVE(c, "log", 0);
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)doubles_attr_set_log);
 
     CLASS_ATTR_DOUBLE(c, "targetbias", 0, t_doubles, targetbias);
     CLASS_ATTR_LABEL(c, "targetbias", 0, "Target Bias");
     CLASS_ATTR_DEFAULT(c, "targetbias", 0, "0.01");
     CLASS_ATTR_SAVE(c, "targetbias", 0);
+    CLASS_ATTR_ACCESSORS(c, "targetbias", NULL, (method)doubles_attr_set_targetbias);
 
     class_register(CLASS_BOX, c);
     doubles_class = c;
@@ -1150,14 +1150,20 @@ void doubles_qfn(t_doubles *x) {
     }
 }
 
-void doubles_log_msg(t_doubles *x, long n) {
-    x->log = n;
-    common_log(x->log_outlet, x->log, "doubles~", "log attribute set to %ld", x->log);
+t_max_err doubles_attr_set_log(t_doubles *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        common_log(x->log_outlet, x->log, "doubles~", "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
-void doubles_targetbias_msg(t_doubles *x, double f) {
-    x->targetbias = f;
-    common_log(x->log_outlet, x->log, "doubles~", "targetbias attribute set to %.4f", x->targetbias);
+t_max_err doubles_attr_set_targetbias(t_doubles *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->targetbias = atom_getfloat(av);
+        common_log(x->log_outlet, x->log, "doubles~", "targetbias attribute set to %.4f", x->targetbias);
+    }
+    return MAX_ERR_NONE;
 }
 
 void doubles_assist(t_doubles *x, void *b, long m, long a, char *s) {

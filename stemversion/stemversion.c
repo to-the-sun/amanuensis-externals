@@ -14,8 +14,8 @@ typedef struct _stemversion {
 void *stemversion_new(t_symbol *s, long argc, t_atom *argv);
 void stemversion_bang(t_stemversion *x);
 void stemversion_assist(t_stemversion *x, void *b, long m, long a, char *s);
-void stemversion_log_msg(t_stemversion *x, long n);
-void stemversion_format_msg(t_stemversion *x, t_symbol *s);
+t_max_err stemversion_attr_set_log(t_stemversion *x, void *attr, long ac, t_atom *av);
+t_max_err stemversion_attr_set_format(t_stemversion *x, void *attr, long ac, t_atom *av);
 void stemversion_log(t_stemversion *x, const char *fmt, ...);
 
 t_class *stemversion_class;
@@ -28,17 +28,17 @@ void ext_main(void *r) {
     c = class_new("stemversion", (method)stemversion_new, (method)NULL, sizeof(t_stemversion), 0L, A_GIMME, 0);
     class_addmethod(c, (method)stemversion_bang, "bang", 0);
     class_addmethod(c, (method)stemversion_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)stemversion_log_msg, "log", A_LONG, 0);
-    class_addmethod(c, (method)stemversion_format_msg, "format", A_SYM, 0);
 
     CLASS_ATTR_LONG(c, "log", 0, t_stemversion, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)stemversion_attr_set_log);
 
     CLASS_ATTR_SYM(c, "format", 0, t_stemversion, format);
     CLASS_ATTR_ENUM(c, "format", 0, "default live");
     CLASS_ATTR_LABEL(c, "format", 0, "Timestamp Format");
     CLASS_ATTR_DEFAULT(c, "format", 0, "default");
+    CLASS_ATTR_ACCESSORS(c, "format", NULL, (method)stemversion_attr_set_format);
 
     class_register(CLASS_BOX, c);
     stemversion_class = c;
@@ -59,14 +59,20 @@ void *stemversion_new(t_symbol *s, long argc, t_atom *argv) {
     return (x);
 }
 
-void stemversion_log_msg(t_stemversion *x, long n) {
-    x->log = n;
-    stemversion_log(x, "log attribute set to %ld", x->log);
+t_max_err stemversion_attr_set_log(t_stemversion *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        stemversion_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
-void stemversion_format_msg(t_stemversion *x, t_symbol *s) {
-    x->format = s;
-    stemversion_log(x, "format attribute set to %s", x->format->s_name);
+t_max_err stemversion_attr_set_format(t_stemversion *x, void *attr, long ac, t_atom *av) {
+    if (ac && av && atom_gettype(av) == A_SYM) {
+        x->format = atom_getsym(av);
+        stemversion_log(x, "format attribute set to %s", x->format->s_name);
+    }
+    return MAX_ERR_NONE;
 }
 
 void stemversion_log(t_stemversion *x, const char *fmt, ...) {

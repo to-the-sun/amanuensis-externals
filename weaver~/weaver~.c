@@ -168,10 +168,10 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_tracks(t_weaver *x, long n);
-void weaver_visualize_msg(t_weaver *x, long n);
-void weaver_log_msg(t_weaver *x, long n);
-void weaver_low_msg(t_weaver *x, double f);
-void weaver_high_msg(t_weaver *x, double f);
+t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_low(t_weaver *x, void *attr, long ac, t_atom *av);
+t_max_err weaver_attr_set_high(t_weaver *x, void *attr, long ac, t_atom *av);
 t_max_err weaver_notify(t_weaver *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s);
 void weaver_log(t_weaver *x, const char *fmt, ...);
@@ -573,10 +573,6 @@ void ext_main(void *r) {
     class_addmethod(c, (method)weaver_clear, "clear", 0);
     class_addmethod(c, (method)weaver_consolidate, "consolidate", 0);
     class_addmethod(c, (method)weaver_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)weaver_visualize_msg, "visualize", A_LONG, 0);
-    class_addmethod(c, (method)weaver_log_msg, "log", A_LONG, 0);
-    class_addmethod(c, (method)weaver_low_msg, "low", A_FLOAT, 0);
-    class_addmethod(c, (method)weaver_high_msg, "high", A_FLOAT, 0);
     class_addmethod(c, (method)weaver_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)weaver_assist, "assist", A_CANT, 0);
@@ -584,6 +580,7 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "visualize", 0, t_weaver, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)weaver_attr_set_visualize);
 
     CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
@@ -592,14 +589,17 @@ void ext_main(void *r) {
     CLASS_ATTR_LONG(c, "log", 0, t_weaver, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)weaver_attr_set_log);
 
     CLASS_ATTR_DOUBLE(c, "low", 0, t_weaver, low_ms);
     CLASS_ATTR_LABEL(c, "low", 0, "Low Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "low", 0, "22.653");
+    CLASS_ATTR_ACCESSORS(c, "low", NULL, (method)weaver_attr_set_low);
 
     CLASS_ATTR_DOUBLE(c, "high", 0, t_weaver, high_ms);
     CLASS_ATTR_LABEL(c, "high", 0, "High Limit (ms)");
     CLASS_ATTR_DEFAULT(c, "high", 0, "4999.0");
+    CLASS_ATTR_ACCESSORS(c, "high", NULL, (method)weaver_attr_set_high);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -953,24 +953,36 @@ void weaver_tracks(t_weaver *x, long n) {
     weaver_update_track_cache(x);
 }
 
-void weaver_visualize_msg(t_weaver *x, long n) {
-    x->visualize = n;
-    weaver_log(x, "visualize attribute set to %ld", x->visualize);
+t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->visualize = atom_getlong(av);
+        weaver_log(x, "visualize attribute set to %ld", x->visualize);
+    }
+    return MAX_ERR_NONE;
 }
 
-void weaver_log_msg(t_weaver *x, long n) {
-    x->log = n;
-    weaver_log(x, "log attribute set to %ld", x->log);
+t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->log = atom_getlong(av);
+        weaver_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
 }
 
-void weaver_low_msg(t_weaver *x, double f) {
-    x->low_ms = f;
-    weaver_log(x, "low attribute set to %.2f", x->low_ms);
+t_max_err weaver_attr_set_low(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->low_ms = atom_getfloat(av);
+        weaver_log(x, "low attribute set to %.2f", x->low_ms);
+    }
+    return MAX_ERR_NONE;
 }
 
-void weaver_high_msg(t_weaver *x, double f) {
-    x->high_ms = f;
-    weaver_log(x, "high attribute set to %.2f", x->high_ms);
+t_max_err weaver_attr_set_high(t_weaver *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->high_ms = atom_getfloat(av);
+        weaver_log(x, "high attribute set to %.2f", x->high_ms);
+    }
+    return MAX_ERR_NONE;
 }
 
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
