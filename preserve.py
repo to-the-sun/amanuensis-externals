@@ -3,6 +3,7 @@ import re
 import sys
 import shutil
 import wave
+import aifc
 from datetime import datetime
 
 def get_next_prefix(directory):
@@ -20,23 +21,32 @@ def get_next_prefix(directory):
                 max_prefix = val
     return f"{max_prefix + 1:02d}"
 
-def silence_wave_file(filepath):
+def silence_audio_file(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == '.wav':
+        audio_module = wave
+    elif ext in ['.aif', '.aiff']:
+        audio_module = aifc
+    else:
+        # Fallback to wave but it might fail
+        audio_module = wave
+
     try:
-        with wave.open(filepath, 'rb') as wav_in:
-            params = wav_in.getparams()
-            n_frames = wav_in.getnframes()
+        with audio_module.open(filepath, 'rb') as audio_in:
+            params = audio_in.getparams()
+            n_frames = audio_in.getnframes()
             sampwidth = params.sampwidth
             nchannels = params.nchannels
 
-        with wave.open(filepath, 'wb') as wav_out:
-            wav_out.setparams(params)
-            if sampwidth == 1:
+        with audio_module.open(filepath, 'wb') as audio_out:
+            audio_out.setparams(params)
+            if audio_module == wave and sampwidth == 1:
                 # 8-bit unsigned PCM: 128 (0x80) is silence
                 silence_data = b'\x80' * (n_frames * nchannels)
             else:
-                # 16, 24, 32-bit signed PCM: 0 is silence
+                # 16, 24, 32-bit signed PCM or AIFF 8-bit: 0 is silence
                 silence_data = b'\x00' * (n_frames * nchannels * sampwidth)
-            wav_out.writeframes(silence_data)
+            audio_out.writeframes(silence_data)
         return True
     except Exception as e:
         print(f"Error silencing {filepath}: {e}")
@@ -81,7 +91,7 @@ def process_file(filepath):
     if match:
         original_num = int(match.group(1))
         if original_num <= 4:
-            if silence_wave_file(abs_filepath):
+            if silence_audio_file(abs_filepath):
                 print(f"Silenced: {filename}")
 
                 # Update timestamp on original file name
