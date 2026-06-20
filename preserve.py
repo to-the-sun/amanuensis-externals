@@ -22,37 +22,54 @@ def get_next_prefix(directory):
     return f"{max_prefix + 1:02d}"
 
 def silence_audio_file(filepath):
+    print(f"--- Silencing process for: {filepath}")
     ext = os.path.splitext(filepath)[1].lower()
     if ext == '.wav':
         audio_module = wave
+        print("Detected format: WAV")
     elif ext in ['.aif', '.aiff']:
         audio_module = aifc
+        print("Detected format: AIFF")
     else:
-        # Fallback to wave but it might fail
         audio_module = wave
+        print(f"Unknown extension {ext}, falling back to wave module")
 
     try:
         with audio_module.open(filepath, 'rb') as audio_in:
-            params = audio_in.getparams()
             n_frames = audio_in.getnframes()
-            sampwidth = params.sampwidth
-            nchannels = params.nchannels
+            sampwidth = audio_in.getsampwidth()
+            nchannels = audio_in.getnchannels()
+            framerate = audio_in.getframerate()
+            print(f"Audio params: {nchannels} channels, {sampwidth} bytes/sample, {n_frames} frames, {framerate}Hz")
 
+        print(f"Opening {filepath} for writing silence...")
         with audio_module.open(filepath, 'wb') as audio_out:
-            audio_out.setparams(params)
+            audio_out.setnchannels(nchannels)
+            audio_out.setsampwidth(sampwidth)
+            audio_out.setframerate(framerate)
+            if audio_module == aifc:
+                audio_out.setcomptype(b'NONE', b'not compressed')
+
             if audio_module == wave and sampwidth == 1:
                 # 8-bit unsigned PCM: 128 (0x80) is silence
+                print("Using 0x80 (128) for 8-bit WAV silence")
                 silence_data = b'\x80' * (n_frames * nchannels)
             else:
                 # 16, 24, 32-bit signed PCM or AIFF 8-bit: 0 is silence
+                print("Using 0x00 (0) for silence")
                 silence_data = b'\x00' * (n_frames * nchannels * sampwidth)
+
             audio_out.writeframes(silence_data)
+        print("Silencing complete.")
         return True
     except Exception as e:
         print(f"Error silencing {filepath}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def process_file(filepath):
+    print(f"\nProcessing: {filepath}")
     if not os.path.exists(filepath):
         print(f"File not found: {filepath}")
         return
@@ -87,10 +104,13 @@ def process_file(filepath):
     print(f"Copied: {filename} -> {copy_name + ext}")
 
     # 3. Silencing and renaming original
+    print(f"Checking if original file {filename} should be silenced...")
     match = re.match(r'^(\d{1,2})(?!\d)', filename)
     if match:
         original_num = int(match.group(1))
+        print(f"Found prefix: {original_num}")
         if original_num <= 4:
+            print(f"Prefix {original_num} <= 4, proceeding to silence original.")
             if silence_audio_file(abs_filepath):
                 print(f"Silenced: {filename}")
 
@@ -112,6 +132,9 @@ def main():
 
     for arg in sys.argv[1:]:
         process_file(arg)
+
+    print("\nProcessing complete.")
+    input("Press Enter to close...")
 
 if __name__ == "__main__":
     main()
