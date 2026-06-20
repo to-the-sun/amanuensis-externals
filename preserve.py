@@ -6,7 +6,7 @@ import soundfile as sf
 import numpy as np
 
 def get_next_prefix(directory):
-    max_prefix = -1
+    max_prefix = 0
     try:
         filenames = os.listdir(directory)
     except OSError:
