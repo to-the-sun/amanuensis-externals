@@ -41,7 +41,35 @@ def process_file(filepath):
         timestamp_str = now.strftime("%Y-%m-%d %H%M%S")
         ts_pattern = r'\[\d{4}-\d{1,2}-\d{1,2}(?: \d{6}|-\d{1,2}-\d{1,2}-\d{1,2})\]'
 
-        # 1. Create the preserved copy (contains audio)
+        # 1. Handle original (record-keeping silenced version)
+        match = re.match(r'^(\d{1,2})(?!\d)', filename)
+        should_silence = False
+        if match:
+            original_num = int(match.group(1))
+            print(f"Found prefix: {original_num}")
+            if original_num <= 4:
+                print(f"Prefix {original_num} <= 4, will create silenced record.")
+                should_silence = True
+        else:
+            print("No numbered prefix found. Treating as prefix <= 4, will create silenced record.")
+            should_silence = True
+
+        if should_silence:
+            # Update timestamp on record name
+            if re.search(ts_pattern, name):
+                record_name = re.sub(ts_pattern, f"[{timestamp_str}]", name)
+            else:
+                record_name = f"{name} [{timestamp_str}]"
+
+            record_path = os.path.join(directory, record_name + ".wav")
+
+            # Create silent data
+            silent_data = np.zeros_like(data)
+
+            print(f"Writing silenced record: {record_name}.wav")
+            sf.write(record_path, silent_data, samplerate, subtype=info.subtype)
+
+        # 2. Create the preserved copy (contains audio)
         next_prefix = get_next_prefix(directory)
         print(f"Calculated next prefix: {next_prefix}")
 
@@ -59,28 +87,6 @@ def process_file(filepath):
 
         print(f"Writing preserved copy (with audio): {copy_name}.wav")
         sf.write(new_filepath, data, samplerate, subtype=info.subtype)
-
-        # 2. Handle original (record-keeping silenced version)
-        match = re.match(r'^(\d{1,2})(?!\d)', filename)
-        if match:
-            original_num = int(match.group(1))
-            print(f"Found prefix: {original_num}")
-            if original_num <= 4:
-                print(f"Prefix {original_num} <= 4, creating silenced record.")
-
-                # Update timestamp on record name
-                if re.search(ts_pattern, name):
-                    record_name = re.sub(ts_pattern, f"[{timestamp_str}]", name)
-                else:
-                    record_name = f"{name} [{timestamp_str}]"
-
-                record_path = os.path.join(directory, record_name + ".wav")
-
-                # Create silent data
-                silent_data = np.zeros_like(data)
-
-                print(f"Writing silenced record: {record_name}.wav")
-                sf.write(record_path, silent_data, samplerate, subtype=info.subtype)
 
         # 3. Cleanup original
         os.remove(abs_filepath)
