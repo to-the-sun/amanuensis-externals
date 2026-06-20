@@ -51,8 +51,7 @@ def process_file(filepath):
                 print(f"Prefix {original_num} <= 4, will create silenced record.")
                 should_silence = True
         else:
-            print("No numbered prefix found. Treating as prefix <= 4, will create silenced record.")
-            should_silence = True
+            print("No numbered prefix found. Skipping silenced record creation.")
 
         if should_silence:
             # Update timestamp on record name
