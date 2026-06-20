@@ -4,6 +4,7 @@ import sys
 import shutil
 import wave
 import aifc
+import struct
 from datetime import datetime
 
 def get_next_prefix(directory):
@@ -21,21 +22,98 @@ def get_next_prefix(directory):
                 max_prefix = val
     return f"{max_prefix + 1:02d}"
 
+def convert_to_wav(filepath):
+    print(f"--- Converting to WAV: {filepath}")
+    name, ext = os.path.splitext(filepath)
+    if ext.lower() not in ['.aif', '.aiff']:
+        print(f"Skipping conversion: {ext} is not AIFF")
+        return filepath
+
+    wav_filepath = name + ".wav"
+    try:
+        with aifc.open(filepath, 'rb') as aif_in:
+            nchannels = aif_in.getnchannels()
+            sampwidth = aif_in.getsampwidth()
+            framerate = aif_in.getframerate()
+            nframes = aif_in.getnframes()
+
+            print(f"AIFF params: {nchannels} channels, {sampwidth} bytes/sample, {nframes} frames, {framerate}Hz")
+
+            with wave.open(wav_filepath, 'wb') as wav_out:
+                wav_out.setnchannels(nchannels)
+                wav_out.setsampwidth(sampwidth)
+                wav_out.setframerate(framerate)
+
+                # Copy audio data in chunks and handle endianness/signing
+                frames_left = nframes
+                chunk_size = 1000 # smaller chunk for easier processing
+
+                # Format string for struct
+                if sampwidth == 1:
+                    fmt_in = 'b' # signed char
+                    fmt_out = 'B' # unsigned char
+                elif sampwidth == 2:
+                    fmt_in = '>h' # big-endian short
+                    fmt_out = '<h' # little-endian short
+                elif sampwidth == 3:
+                    # 3-byte is tricky, we'll handle manually
+                    fmt_in = None
+                    fmt_out = None
+                elif sampwidth == 4:
+                    fmt_in = '>i' # big-endian int
+                    fmt_out = '<i' # little-endian int
+                else:
+                    raise ValueError(f"Unsupported sample width: {sampwidth}")
+
+                while frames_left > 0:
+                    n = min(chunk_size, frames_left)
+                    data = aif_in.readframes(n)
+
+                    if sampwidth == 1:
+                        # signed to unsigned (add 128)
+                        values = struct.unpack(str(n * nchannels) + fmt_in, data)
+                        converted_values = [v + 128 for v in values]
+                        out_data = struct.pack(str(n * nchannels) + fmt_out, *converted_values)
+                    elif sampwidth == 3:
+                        # Handle 24-bit (3-byte) manually
+                        out_data_list = []
+                        for i in range(0, len(data), 3):
+                            chunk = data[i:i+3]
+                            # AIFF is Big Endian, WAV is Little Endian
+                            out_data_list.append(chunk[::-1])
+                        out_data = b''.join(out_data_list)
+                    elif fmt_in and fmt_out:
+                        # swap endianness
+                        count = n * nchannels
+                        values = struct.unpack(fmt_in[0] + fmt_in[1] * count, data)
+                        out_data = struct.pack(fmt_out[0] + fmt_out[1] * count, *values)
+                    else:
+                        out_data = data # Fallback
+
+                    wav_out.writeframes(out_data)
+                    frames_left -= n
+
+        print(f"Conversion successful: {wav_filepath}")
+        os.remove(filepath)
+        print(f"Original AIFF removed: {filepath}")
+        return wav_filepath
+    except Exception as e:
+        print(f"Error converting {filepath} to WAV: {e}")
+        import traceback
+        traceback.print_exc()
+        # If conversion failed, don't return the wav_filepath as it might be corrupted or incomplete
+        if os.path.exists(wav_filepath):
+            os.remove(wav_filepath)
+        return filepath
+
 def silence_audio_file(filepath):
     print(f"--- Silencing process for: {filepath}")
     ext = os.path.splitext(filepath)[1].lower()
-    if ext == '.wav':
-        audio_module = wave
-        print("Detected format: WAV")
-    elif ext in ['.aif', '.aiff']:
-        audio_module = aifc
-        print("Detected format: AIFF")
-    else:
-        audio_module = wave
-        print(f"Unknown extension {ext}, falling back to wave module")
+    if ext != '.wav':
+        print(f"Warning: {ext} is not WAV. Silencing might fail if not PCM.")
 
     try:
-        with audio_module.open(filepath, 'rb') as audio_in:
+        with wave.open(filepath, 'rb') as audio_in:
             n_frames = audio_in.getnframes()
             sampwidth = audio_in.getsampwidth()
             nchannels = audio_in.getnchannels()
@@ -43,19 +121,17 @@ def silence_audio_file(filepath):
             print(f"Audio params: {nchannels} channels, {sampwidth} bytes/sample, {n_frames} frames, {framerate}Hz")
 
         print(f"Opening {filepath} for writing silence...")
-        with audio_module.open(filepath, 'wb') as audio_out:
+        with wave.open(filepath, 'wb') as audio_out:
             audio_out.setnchannels(nchannels)
             audio_out.setsampwidth(sampwidth)
             audio_out.setframerate(framerate)
-            if audio_module == aifc:
-                audio_out.setcomptype(b'NONE', b'not compressed')
 
-            if audio_module == wave and sampwidth == 1:
-                # 8-bit unsigned PCM: 128 (0x80) is silence
+            if sampwidth == 1:
+                # 8-bit unsigned PCM in WAV: 128 (0x80) is silence
                 print("Using 0x80 (128) for 8-bit WAV silence")
                 silence_data = b'\x80' * (n_frames * nchannels)
             else:
-                # 16, 24, 32-bit signed PCM or AIFF 8-bit: 0 is silence
+                # 16, 24, 32-bit signed PCM in WAV: 0 is silence
                 print("Using 0x00 (0) for silence")
                 silence_data = b'\x00' * (n_frames * nchannels * sampwidth)
 
@@ -74,6 +150,9 @@ def process_file(filepath):
         print(f"File not found: {filepath}")
         return
 
+    # Convert to WAV if it's AIFF
+    filepath = convert_to_wav(filepath)
+
     abs_filepath = os.path.abspath(filepath)
     directory = os.path.dirname(abs_filepath)
     filename = os.path.basename(abs_filepath)
@@ -85,6 +164,7 @@ def process_file(filepath):
 
     # 1. Prefix for the copy
     next_prefix = get_next_prefix(directory)
+    print(f"Calculated next prefix: {next_prefix}")
 
     copy_name = name
     if re.match(r'^\d{2}(?!\d)', name):
