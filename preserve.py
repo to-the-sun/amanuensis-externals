@@ -106,8 +106,5 @@ def main():
     for arg in sys.argv[1:]:
         process_file(arg)
 
-    print("\nProcessing complete.")
-    input("Press Enter to close...")
-
 if __name__ == "__main__":
     main()
