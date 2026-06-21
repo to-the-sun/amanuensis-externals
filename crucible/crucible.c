@@ -1,8 +1,4 @@
-#include "ext.h"
-#include "ext_obex.h"
-#include "ext_dictionary.h"
-#include "ext_dictobj.h"
-#include "ext_buffer.h"
+#include "crucible.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
@@ -10,32 +6,9 @@
 #include <string.h>
 #include <ctype.h>
 
-typedef struct _crucible {
-    t_object s_obj;
-    t_dictionary *challenger_dict;
-    t_symbol *last_track_id;
-    t_symbol *incumbent_dict_name;
-    void *outlet_data;
-    void *outlet_fill;
-    void *outlet_reach_int;
-    void *log_outlet;
-    t_buffer_ref *buffer_ref;
-    long log;
-    long consume;
-    long defer;
-    long visualize;
-    t_atom_long song_reach;
-    t_dictionary *track_reaches_dict;
-    double local_bar_length;
-    long instance_id;
-    long bar_warn_sent;
-} t_crucible;
-
 // Function prototypes
 void *crucible_new(t_symbol *s, long argc, t_atom *argv);
 void crucible_free(t_crucible *x);
-void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
-void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s);
 void crucible_log(t_crucible *x, const char *fmt, ...);
 char *crucible_atoms_to_string(long argc, t_atom *argv);
@@ -136,7 +109,7 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
     return 1;
 }
 
-void ext_main(void *r) {
+static void crucible_main_hidden(void *r) {
     common_symbols_init();
     t_class *c;
     c = class_new("crucible", (method)crucible_new, (method)crucible_free, sizeof(t_crucible), 0L, A_GIMME, 0);
@@ -166,6 +139,12 @@ void ext_main(void *r) {
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
+
+#ifndef NO_EXT_MAIN
+void ext_main(void *r) {
+    crucible_main_hidden(r);
+}
+#endif
 
 void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     t_crucible *x = (t_crucible *)object_alloc(crucible_class);

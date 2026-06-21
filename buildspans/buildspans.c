@@ -1,8 +1,6 @@
-#include "ext.h"
-#include "ext_obex.h"
-#include "ext_dictobj.h"
+#include "buildspans.h"
+#include "../crucible/crucible.h"
 #include "ext_proto.h"
-#include "ext_buffer.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/visualize.h"
@@ -153,32 +151,6 @@ int compare_manifest_items(const void *a, const void *b) {
 }
 
 
-typedef struct _buildspans {
-    t_object s_obj;
-    t_dictionary *building;
-    t_dictionary *tracks_ended_in_current_event;
-    long current_track;
-    double current_offset;
-    double loop_start;
-    t_buffer_ref *buffer_ref;
-    t_symbol *s_buffer_name;
-    t_symbol *current_palette;
-    void *span_outlet;
-    void *track_outlet;
-    void *out_bar_data;
-    void *log_outlet;
-    long log;
-    long visualize;
-    long defer;
-    double local_bar_length;
-    long instance_id;
-    long bar_warn_sent;
-    t_symbol *last_msg_type;
-    double last_note_calc;
-    double last_note_store;
-    double last_note_score;
-} t_buildspans;
-
 // Function prototypes
 void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
@@ -214,8 +186,11 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
+void buildspans_bind_resolve(t_buildspans *x);
+void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
+t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
 
 
 // Helper function to send verbose log messages
@@ -476,7 +451,12 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_bang, "bang", 0);
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
     class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_notify, "notify", A_CANT, 0);
     
+    CLASS_ATTR_SYM(c, "bind", 0, t_buildspans, bind_name);
+    CLASS_ATTR_LABEL(c, "bind", 0, "Bind to Crucible Name");
+    CLASS_ATTR_ACCESSORS(c, "bind", NULL, (method)buildspans_attr_set_bind);
+
     CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
     CLASS_ATTR_DEFAULT(c, "log", 0, "0");
@@ -517,6 +497,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_note_calc = 0.0;
         x->last_note_store = 0.0;
         x->last_note_score = 0.0;
+        x->bind_name = _sym_nothing;
+        x->bound_crucible = NULL;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -542,6 +524,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 
 void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
+    if (x->bound_crucible) {
+        object_detach_byptr(x, x->bound_crucible);
+    }
     if (x->building) {
         object_free(x->building);
     }
@@ -1602,10 +1587,18 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             // Outlet 2: Track number
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
-            outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+            if (x->bound_crucible) {
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
+            } else {
+                outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+            }
 
             // Outlet 1: Span list
-            outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+            if (x->bound_crucible) {
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
+            } else {
+                outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+            }
         }
 
         if (local_span_created || (span_found_robustly && span_to_output != span_aa)) {
@@ -1795,7 +1788,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize) attributes.");
+                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind) attributes.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
@@ -1812,9 +1805,9 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (span list)"); break;
-            case 1: sprintf(s, "Outlet 2: Track Number (track int)"); break;
-            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
+            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active."); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (track int). Bypassed if @bind is active."); break;
+            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything). Bypassed if @bind is active."); break;
             case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
         }
     }
@@ -1846,6 +1839,9 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
     }
     if ((long)x->local_bar_length != old_bar_length) {
         buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
+        if (x->bound_crucible) {
+            crucible_local_bar_length((t_crucible *)x->bound_crucible, f);
+        }
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
@@ -1854,6 +1850,67 @@ t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *
     if (ac && av) {
         x->log = atom_getlong(av);
         buildspans_log(x, "log attribute set to %ld", x->log);
+    }
+    return MAX_ERR_NONE;
+}
+
+void buildspans_bind_resolve(t_buildspans *x) {
+    t_object *patcher = NULL;
+    t_object *box = NULL;
+    t_object *obj = NULL;
+    t_symbol *varname = NULL;
+
+    if (x->bind_name == _sym_nothing) {
+        if (x->bound_crucible) {
+            object_detach_byptr(x, x->bound_crucible);
+            x->bound_crucible = NULL;
+        }
+        return;
+    }
+
+    object_obex_lookup(x, gensym("#P"), &patcher);
+    if (!patcher) return;
+
+    for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
+        obj = jbox_get_object(box);
+        if (obj) {
+            varname = NULL;
+            varname = (t_symbol *)object_attr_getsym(box, gensym("varname"));
+            if (varname == x->bind_name) {
+                if (object_classname_compare(obj, gensym("crucible")) ||
+                    object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
+
+                    if (x->bound_crucible && x->bound_crucible != obj) {
+                        object_detach_byptr(x, x->bound_crucible);
+                    }
+
+                    x->bound_crucible = obj;
+                    object_attach_byptr(x, x->bound_crucible);
+                    buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
+                    return;
+                }
+            }
+        }
+    }
+
+    if (x->bound_crucible) {
+        object_detach_byptr(x, x->bound_crucible);
+    }
+    x->bound_crucible = NULL;
+}
+
+void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
+    if (msg == gensym("free") && sender == x->bound_crucible) {
+        x->bound_crucible = NULL;
+        buildspans_log(x, "Bound crucible freed, unbinding.");
+    }
+}
+
+t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->bind_name = atom_getsym(av);
+        buildspans_log(x, "bind attribute set to %s", x->bind_name->s_name);
+        buildspans_bind_resolve(x);
     }
     return MAX_ERR_NONE;
 }
@@ -2387,7 +2444,11 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                 char output_key_str[256];
                 snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
                 t_symbol *output_key_sym = gensym(output_key_str);
-                outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
+                if (x->bound_crucible) {
+                    crucible_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
+                } else {
+                    outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
+                }
             }
         }
     }

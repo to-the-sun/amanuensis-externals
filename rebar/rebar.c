@@ -11,10 +11,94 @@
 #include <string.h>
 #include <stdarg.h>
 
+// --- Symbol Renaming ---
+
+#define notify_class rebar_notify_class
+#define note_compare rebar_note_compare
+#define bar_key_compare rebar_bar_key_compare
+#define notify_new rebar_notify_new
+#define notify_new_with_dict rebar_notify_new_with_dict
+#define notify_free rebar_notify_free
+#define notify_bang rebar_notify_bang
+#define notify_int rebar_notify_int
+#define notify_qwork rebar_notify_qwork
+#define notify_do_bang rebar_notify_do_bang
+#define notify_do_fill rebar_notify_do_fill
+#define notify_assist rebar_notify_assist
+#define notify_attr_set_log rebar_notify_attr_set_log
+#define notify_log rebar_notify_log
+
+#define buildspans_class rebar_buildspans_class
+#define compare_longs rebar_compare_longs
+#define compare_notepairs rebar_compare_notepairs
+#define compare_manifest_items rebar_compare_manifest_items
+#define buildspans_new rebar_buildspans_new
+#define buildspans_free rebar_buildspans_free
+#define buildspans_clear rebar_buildspans_clear
+#define buildspans_list rebar_buildspans_list
+#define buildspans_offset rebar_buildspans_offset
+#define buildspans_track rebar_buildspans_track
+#define buildspans_track_deferred rebar_buildspans_track_deferred
+#define buildspans_offset_deferred rebar_buildspans_offset_deferred
+#define buildspans_anything rebar_buildspans_anything
+#define buildspans_do_anything rebar_buildspans_do_anything
+#define buildspans_anything_deferred rebar_buildspans_anything_deferred
+#define buildspans_assist rebar_buildspans_assist
+#define buildspans_attr_set_log rebar_buildspans_attr_set_log
+#define buildspans_attr_set_visualize rebar_buildspans_attr_set_visualize
+#define buildspans_bang module_buildspans_bang
+#define buildspans_flush rebar_buildspans_flush
+#define buildspans_end_track_span rebar_buildspans_end_track_span
+#define buildspans_prune_span rebar_buildspans_prune_span
+#define buildspans_visualize_memory rebar_buildspans_visualize_memory
+#define buildspans_log rebar_buildspans_log
+#define buildspans_reset_bar_to_standalone rebar_buildspans_reset_bar_to_standalone
+#define buildspans_finalize_and_log_span rebar_buildspans_finalize_and_log_span
+#define buildspans_deferred_rating_check rebar_buildspans_deferred_rating_check
+#define buildspans_check_discontiguity rebar_buildspans_check_discontiguity
+#define buildspans_process_and_add_note rebar_buildspans_process_and_add_note
+#define buildspans_cleanup_track_offset_if_needed rebar_buildspans_cleanup_track_offset_if_needed
+#define find_next_offset rebar_find_next_offset
+#define buildspans_validate_span_before_output rebar_buildspans_validate_span_before_output
+#define buildspans_output_span_data rebar_buildspans_output_span_data
+#define buildspans_get_bar_length rebar_buildspans_get_bar_length
+#define buildspans_set_bar_buffer rebar_buildspans_set_bar_buffer
+#define buildspans_local_bar_length rebar_buildspans_local_bar_length
+#define atomarray_to_string rebar_atomarray_to_string
+#define atomarray_deep_copy rebar_atomarray_deep_copy
+#define parse_hierarchical_key rebar_parse_hierarchical_key
+#define generate_hierarchical_key rebar_generate_hierarchical_key
+#define crucible_visualize_state rebar_crucible_visualize_state
+#define crucible_attr_set_visualize rebar_crucible_attr_set_visualize
+#define compare_doubles rebar_compare_doubles
+#define buildspans_bind_resolve rebar_buildspans_bind_resolve
+#define buildspans_notify rebar_buildspans_notify
+#define buildspans_attr_set_bind rebar_buildspans_attr_set_bind
+
+#define crucible_class rebar_crucible_class
+#define crucible_new rebar_crucible_new
+#define crucible_free rebar_crucible_free
+#define crucible_anything rebar_crucible_anything
+#define crucible_process_span rebar_crucible_process_span
+#define crucible_assist rebar_crucible_assist
+#define crucible_visualize_dump_all_spans rebar_crucible_visualize_dump_all_spans
+#define crucible_log rebar_crucible_log
+#define crucible_atoms_to_string rebar_crucible_atoms_to_string
+#define parse_selector rebar_parse_selector
+#define dictionary_deep_copy rebar_dictionary_deep_copy
+#define crucible_output_bar_data rebar_crucible_output_bar_data
+#define crucible_local_bar_length rebar_crucible_local_bar_length
+#define crucible_attr_set_log rebar_crucible_attr_set_log
+#define crucible_attr_set_consume rebar_crucible_attr_set_consume
+#define crucible_get_bar_length rebar_crucible_get_bar_length
+#define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
+#define crucible_span_has_loser rebar_crucible_span_has_loser
+
 // Forward declarations of the modules' structs
 struct _notify;
-struct _buildspans;
-struct _crucible;
+
+#include "../crucible/crucible.h"
+#include "../buildspans/buildspans.h"
 
 typedef struct _rebar {
     t_object s_obj;
@@ -223,84 +307,6 @@ void rebar_request_copy_back(t_rebar *x);
 void rebar_do_copy_back(t_rebar *x);
 void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 
-// --- Symbol Renaming ---
-
-#define notify_class rebar_notify_class
-#define note_compare rebar_note_compare
-#define bar_key_compare rebar_bar_key_compare
-#define notify_new rebar_notify_new
-#define notify_free rebar_notify_free
-#define notify_bang rebar_notify_bang
-#define notify_int rebar_notify_int
-#define notify_qwork rebar_notify_qwork
-#define notify_do_bang rebar_notify_do_bang
-#define notify_do_fill rebar_notify_do_fill
-#define notify_assist rebar_notify_assist
-#define notify_attr_set_log rebar_notify_attr_set_log
-#define notify_log rebar_notify_log
-
-#define buildspans_class rebar_buildspans_class
-#define compare_longs rebar_compare_longs
-#define compare_notepairs rebar_compare_notepairs
-#define compare_manifest_items rebar_compare_manifest_items
-#define buildspans_new rebar_buildspans_new
-#define buildspans_free rebar_buildspans_free
-#define buildspans_clear rebar_buildspans_clear
-#define buildspans_list rebar_buildspans_list
-#define buildspans_offset rebar_buildspans_offset
-#define buildspans_track rebar_buildspans_track
-#define buildspans_track_deferred rebar_buildspans_track_deferred
-#define buildspans_offset_deferred rebar_buildspans_offset_deferred
-#define buildspans_anything rebar_buildspans_anything
-#define buildspans_do_anything rebar_buildspans_do_anything
-#define buildspans_anything_deferred rebar_buildspans_anything_deferred
-#define buildspans_assist rebar_buildspans_assist
-#define buildspans_attr_set_log rebar_buildspans_attr_set_log
-#define buildspans_attr_set_visualize rebar_buildspans_attr_set_visualize
-#define buildspans_bang module_buildspans_bang
-#define buildspans_flush rebar_buildspans_flush
-#define buildspans_end_track_span rebar_buildspans_end_track_span
-#define buildspans_prune_span rebar_buildspans_prune_span
-#define buildspans_visualize_memory rebar_buildspans_visualize_memory
-#define buildspans_log rebar_buildspans_log
-#define buildspans_reset_bar_to_standalone rebar_buildspans_reset_bar_to_standalone
-#define buildspans_finalize_and_log_span rebar_buildspans_finalize_and_log_span
-#define buildspans_deferred_rating_check rebar_buildspans_deferred_rating_check
-#define buildspans_check_discontiguity rebar_buildspans_check_discontiguity
-#define buildspans_process_and_add_note rebar_buildspans_process_and_add_note
-#define buildspans_cleanup_track_offset_if_needed rebar_buildspans_cleanup_track_offset_if_needed
-#define find_next_offset rebar_find_next_offset
-#define buildspans_validate_span_before_output rebar_buildspans_validate_span_before_output
-#define buildspans_output_span_data rebar_buildspans_output_span_data
-#define buildspans_get_bar_length rebar_buildspans_get_bar_length
-#define buildspans_set_bar_buffer rebar_buildspans_set_bar_buffer
-#define buildspans_local_bar_length rebar_buildspans_local_bar_length
-#define atomarray_to_string rebar_atomarray_to_string
-#define atomarray_deep_copy rebar_atomarray_deep_copy
-#define parse_hierarchical_key rebar_parse_hierarchical_key
-#define generate_hierarchical_key rebar_generate_hierarchical_key
-#define crucible_visualize_state rebar_crucible_visualize_state
-#define crucible_attr_set_visualize rebar_crucible_attr_set_visualize
-#define compare_doubles rebar_compare_doubles
-
-#define crucible_class rebar_crucible_class
-#define crucible_new rebar_crucible_new
-#define crucible_free rebar_crucible_free
-#define crucible_anything rebar_crucible_anything
-#define crucible_process_span rebar_crucible_process_span
-#define crucible_assist rebar_crucible_assist
-#define crucible_visualize_dump_all_spans rebar_crucible_visualize_dump_all_spans
-#define crucible_log rebar_crucible_log
-#define crucible_atoms_to_string rebar_crucible_atoms_to_string
-#define parse_selector rebar_parse_selector
-#define dictionary_deep_copy rebar_dictionary_deep_copy
-#define crucible_output_bar_data rebar_crucible_output_bar_data
-#define crucible_local_bar_length rebar_crucible_local_bar_length
-#define crucible_attr_set_log rebar_crucible_attr_set_log
-#define crucible_attr_set_consume rebar_crucible_attr_set_consume
-#define crucible_get_bar_length rebar_crucible_get_bar_length
-#define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
-#define crucible_span_has_loser rebar_crucible_span_has_loser
 
 // --- Redefine Max API ---
 
@@ -585,6 +591,10 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         g_current_mod_hint = (int)MOD_CRUCIBLE;
         x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
         register_module(x->crucible_inst, x);
+
+        // Bind the internal buildspans instance to the internal crucible instance
+        x->buildspans_inst->bound_crucible = (void *)x->crucible_inst;
+        object_attach_byptr(x->buildspans_inst, x->crucible_inst);
 
         g_instantiating_rebar = NULL;
         critical_exit(g_rebar_crit);
