@@ -111,6 +111,12 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="bind" get="1" set="1" type="symbol" size="1">
+			<digest>Bind to Crucible Object</digest>
+			<description>
+				Specifies the scripting name (varname) of a `crucible` object to bind to. When bound, `buildspans` will call `crucible` functions directly for data output and coordination, bypassing the outlet system for maximum efficiency. It uses `object_attach` for lifecycle management.
+			</description>
+		</attribute>
 		<attribute name="log" get="1" set="1" type="long" size="1">
 			<digest>Enable Logging</digest>
 			<description>When enabled (1), creates an additional outlet for status information.</description>

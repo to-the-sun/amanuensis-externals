@@ -1788,7 +1788,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize) attributes.");
+                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind) attributes.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
@@ -1805,9 +1805,9 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (span list)"); break;
-            case 1: sprintf(s, "Outlet 2: Track Number (track int)"); break;
-            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything)"); break;
+            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active."); break;
+            case 1: sprintf(s, "Outlet 2: Track Number (track int). Bypassed if @bind is active."); break;
+            case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything). Bypassed if @bind is active."); break;
             case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
         }
     }

@@ -15,7 +15,7 @@
 		1. Synchronously copies the contents of the user-specified dictionary to an internal temporary dictionary.
 		2. Sets the local bar length for its internal modules.
 		3. Triggers a dump of the temporary dictionary (via the internal `notify` module).
-		4. Routes the resulting note stream through `buildspans` and `crucible` using the temporary dictionary as the source and destination.
+		4. Routes the resulting note stream through `buildspans` and `crucible` using the temporary dictionary as the source and destination. For maximum efficiency, the internal `buildspans` and `crucible` instances are bound directly together, bypassing virtual outlets.
 		5. Once the pipeline has finished, synchronously copies the updated contents of the temporary dictionary back to the user dictionary, overwriting its previous state.
 	</description>
 	<!--METADATA-->
