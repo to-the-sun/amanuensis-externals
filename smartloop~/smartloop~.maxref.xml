@@ -11,9 +11,9 @@
 		3. Timestamps with an averaged rating &gt; global average are considered **above average**.
 		4. Timestamps with an averaged rating &lt;= global average are considered **below average**.
 
-		The object identifies the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These pre-calculated values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, OR when the ramp starts again after being stationary. If the ramp is stationary, both outlets will output 0.0 immediately.
+		The object identifies the start and end of a time span (in milliseconds) that represents the greatest distance between the beginning of any below average interval and the end of any below average interval, provided there are no above average bars within that interval. Note that spans in the transcript are ignored; each bar is judged individually. These pre-calculated values are output from the second and third outlets whenever the audio signal ramp in the first inlet loops left (i.e., its current value is less than its previous value) OR when a significant "jump" in the ramp is detected, OR when the ramp starts again after being exactly 0.0.
 
-		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses a dual suppression mechanism. First, it uses a standard `suppress` flag to gate the immediate detection while output is being deferred to the main thread. Second, after firing the outlets, the object enters a state where it will explicitly suppress exactly the next detection that happens. This is intended to catch the "echo" jump typically caused by the patch's response to the new loop points. If no such second bang occurs within 99 milliseconds, the object forgets the suppression and returns to normal operation. This 99ms value is arbitrary but works in practice. Note that stationary detection (outputting 0.0 boundaries) does NOT produce a bang and does NOT engage the suppression mechanism.
+		Whenever a loop, jump, or start is detected, a `bang` is also emitted from the first (leftmost) outlet. This `bang` is sent even if the object's output is paused (via an integer 0 in the first inlet), whereas the loop boundaries are gated by the pause state. To prevent feedback loops, the object uses a dual suppression mechanism. First, it uses a standard `suppress` flag to gate the immediate detection while output is being deferred to the main thread. Second, after firing the outlets, the object enters a state where it will explicitly suppress exactly the next detection that happens. This is intended to catch the "echo" jump typically caused by the patch's response to the new loop points. If no such second bang occurs within 99 milliseconds, the object forgets the suppression and returns to normal operation. This 99ms value is arbitrary but works in practice.
 
 		Jump detection works by monitoring the rate of change (delta) of the input ramp. If the difference between the current delta and the previous delta exceeds the `jump_threshold`, the object identifies this as a discontinuity and triggers the release of the loop boundaries.
 
@@ -32,7 +32,7 @@
 	<inletlist>
 		<inlet id="1" type="signal/anything">
 			<digest>Inlet 1: (signal) Time Ramp / (int) Pause/Resume / (messages) debug</digest>
-			<description>Accepts an audio signal time ramp. When this ramp loops left (i.e., its current value is less than its previous value), makes a sudden jump (see `jump_threshold`), or starts again after being stationary, the object outputs the current loop boundaries and a bang. If the ramp is stationary, the object outputs 0.0 from each loop point outlet without a bang or suppression. Also accepts an integer (0 to pause output from the first two outlets, non-zero to resume) and the 'debug' message.</description>
+			<description>Accepts an audio signal time ramp. When this ramp loops left (i.e., its current value is less than its previous value), makes a sudden jump (see `jump_threshold`), or starts again after being exactly 0.0, the object outputs the current loop boundaries and a bang. Also accepts an integer (0 to pause output from the first two outlets, non-zero to resume) and the 'debug' message.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
@@ -43,11 +43,11 @@
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>
-			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars. If the valid start point is 0.0, it is output as 1.0 to distinguish it from the stationary ramp state (0.0).</description>
+			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars. If the valid start point is 0.0, it is output as 1.0 to distinguish it from the internal 0.0 state.</description>
 		</outlet>
 		<outlet id="3" type="float">
 			<digest>Outlet 3: End of longest below average interval (ms)</digest>
-			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars. If the valid end point is 0.0, it is output as 1.0 to distinguish it from the stationary ramp state (0.0).</description>
+			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars. If the valid end point is 0.0, it is output as 1.0 to distinguish it from the internal 0.0 state.</description>
 		</outlet>
 		<outlet id="4" type="anything">
 			<digest>Outlet 4: Logging (Optional)</digest>
