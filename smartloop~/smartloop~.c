@@ -46,7 +46,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv);
 void smartloop_free(t_smartloop *x);
 void smartloop_calculate(t_smartloop *x);
 void smartloop_output_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
-void smartloop_output_zero_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_suppress_tick(t_smartloop *x);
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv);
 void smartloop_debug(t_smartloop *x);
@@ -281,13 +280,6 @@ void smartloop_output_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *
     x->suppress = 0;
 }
 
-void smartloop_output_zero_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
-    smartloop_log(x, "Stationary ramp (exactly 0.0) detected. Firing zero boundaries (deferred).");
-    if (x->output_enabled) {
-        outlet_float(x->out_end, 0.0);
-        outlet_float(x->out_start, 0.0);
-    }
-}
 
 void smartloop_reset_suppress(t_smartloop *x, t_symbol *s, short argc, t_atom *argv) {
     if (x->suppress) {
@@ -302,10 +294,7 @@ void smartloop_dsp64(t_smartloop *x, t_object *dsp64, short *count, double sampl
 
 void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     double *in = ins[0];
-    long do_output_zero = 0;
     long do_output_bang = 0;
-    double zero_val = 0.0;
-    double zero_last_val = 0.0;
 
     // Check if entire vector is stationary relative to last_val.
     // Note: This vector-wide check is a bit arbitrary and it should technically
@@ -322,12 +311,6 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
 
     if (all_equal && !x->first_sample) {
         if (!x->triggered_zero) {
-            // Only trigger the 0.0-specific logic if the ramp is exactly 0.0
-            if (in[0] == 0.0) {
-                do_output_zero = 1;
-            }
-            zero_val = in[0];
-            zero_last_val = x->last_val;
             x->triggered_zero = 1;
             x->last_delta = 0.0;
         }
@@ -355,10 +338,6 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
         }
     }
 
-    if (do_output_zero) {
-        // Temporarily disabled: do not output 0.0 when stationary. May be re-implemented in the future.
-        // defer(x, (method)smartloop_output_zero_deferred, NULL, 0, NULL);
-    }
 
     if (do_output_bang) {
         if (x->suppress_next) {
@@ -473,8 +452,8 @@ void smartloop_assist(t_smartloop *x, void *b, long m, long a, char *s) {
         sprintf(s, "Inlet 1: (signal) Time Ramp (w/ Jump/Start Detection) / (int) Pause/Resume Output (0=pause, 1=resume) / (messages) debug, visualize, jump_threshold, log");
     } else {
         if (a == 0) sprintf(s, "Outlet 1: (bang) Loop/Jump/Start Detected (deferred/safe output)");
-        else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms) / 0.0 if ramp stops at 0.0 (disabled)");
-        else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms) / 0.0 if ramp stops at 0.0 (disabled)");
+        else if (a == 1) sprintf(s, "Outlet 2: (float) Start of longest below average interval (ms)");
+        else if (a == 2) sprintf(s, "Outlet 3: (float) End of longest below average interval (ms)");
         else if (a == 3) sprintf(s, "Outlet 4: (anything) Logging Outlet");
     }
 }

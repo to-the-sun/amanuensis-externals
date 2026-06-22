@@ -43,11 +43,11 @@
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Outlet 2: Start of longest below average interval (ms)</digest>
-			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars. If the valid start point is 0.0, it is output as 1.0 to distinguish it from the internal 0.0 state.</description>
+			<description>Outputs the beginning timestamp of the longest continuous interval consisting only of below average bars. If the valid start point is 0.0, it is output as 1.0.</description>
 		</outlet>
 		<outlet id="3" type="float">
 			<digest>Outlet 3: End of longest below average interval (ms)</digest>
-			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars. If the valid end point is 0.0, it is output as 1.0 to distinguish it from the internal 0.0 state.</description>
+			<description>Outputs the ending timestamp of the longest continuous interval consisting only of below average bars. If the valid end point is 0.0, it is output as 1.0.</description>
 		</outlet>
 		<outlet id="4" type="anything">
 			<digest>Outlet 4: Logging (Optional)</digest>
