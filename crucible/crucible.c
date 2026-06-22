@@ -273,7 +273,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->outlet_data, gensym("-"), 3, reach_list);
                 } else {
-                    defer_low(x, (method)crucible_defer_output, gensym("-"), 3, reach_list);
+                    defer(x, (method)crucible_defer_output, gensym("-"), 3, reach_list);
                 }
             }
         }
@@ -329,7 +329,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
         if (!x->async || systhread_ismainthread()) {
             outlet_list(x->outlet_data, NULL, 4, list);
         } else {
-            defer_low(x, (method)crucible_defer_output, gensym("data_list"), 4, list);
+            defer(x, (method)crucible_defer_output, gensym("data_list"), 4, list);
         }
     }
 }
@@ -625,7 +625,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                     if (!x->async || systhread_ismainthread()) {
                         outlet_anything(x->outlet_reach_int, gensym("song"), 1, &reach_atom);
                     } else {
-                        defer_low(x, (method)crucible_defer_output, gensym("reach_song"), 1, &reach_atom);
+                        defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &reach_atom);
                     }
                 }
                 if (track_grew) {
@@ -635,7 +635,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                     if (!x->async || systhread_ismainthread()) {
                         outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
                     } else {
-                        defer_low(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
                     }
                 }
             }
@@ -643,7 +643,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
                 } else {
-                    defer_low(x, (method)crucible_defer_output, gensym("fill"), 0, NULL);
+                    defer(x, (method)crucible_defer_output, gensym("fill"), 0, NULL);
                 }
             }
         }
@@ -944,7 +944,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)crucible_anything, s, argc, argv);
+        defer(x, (method)crucible_anything, s, argc, argv);
         return;
     }
 
@@ -996,7 +996,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             if (!x->async || systhread_ismainthread()) {
                 outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
             } else {
-                defer_low(x, (method)crucible_defer_output, gensym("reach_song"), 1, &song_reach_atom);
+                defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &song_reach_atom);
             }
 
             if (x->track_reaches_dict) {
@@ -1013,7 +1013,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     if (!x->async || systhread_ismainthread()) {
                         outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
                     } else {
-                        defer_low(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
                     }
                 }
                 if (keys) sysmem_freeptr(keys);

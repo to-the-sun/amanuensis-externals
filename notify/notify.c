@@ -420,25 +420,25 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
         } else {
             t_atom a;
             atom_setsym(&a, all_notes[i].palette);
-            defer_low(x, (method)notify_defer_output, gensym("palette"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("palette"), 1, &a);
 
             atom_setlong(&a, (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name));
-            defer_low(x, (method)notify_defer_output, gensym("track"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("track"), 1, &a);
 
             atom_setfloat(&a, all_notes[i].offset);
-            defer_low(x, (method)notify_defer_output, gensym("offset"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("offset"), 1, &a);
 
             t_atom list_atoms[3];
             atom_setfloat(&list_atoms[0], all_notes[i].absolute);
             atom_setfloat(&list_atoms[1], all_notes[i].score);
             atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
-            defer_low(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
+            defer(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
     }
     if (!x->async || systhread_ismainthread()) {
         outlet_bang(x->out_abs_score);
     } else {
-        defer_low(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
+        defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
     }
 
     if (all_notes) sysmem_freeptr(all_notes);
@@ -643,25 +643,25 @@ void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
         } else {
             t_atom a;
             atom_setsym(&a, all_notes[i].palette);
-            defer_low(x, (method)notify_defer_output, gensym("palette"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("palette"), 1, &a);
 
             atom_setlong(&a, (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name));
-            defer_low(x, (method)notify_defer_output, gensym("track"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("track"), 1, &a);
 
             atom_setfloat(&a, all_notes[i].offset);
-            defer_low(x, (method)notify_defer_output, gensym("offset"), 1, &a);
+            defer(x, (method)notify_defer_output, gensym("offset"), 1, &a);
 
             t_atom list_atoms[3];
             atom_setfloat(&list_atoms[0], all_notes[i].absolute);
             atom_setfloat(&list_atoms[1], all_notes[i].score);
             atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
-            defer_low(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
+            defer(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
     }
     if (!x->async || systhread_ismainthread()) {
         outlet_bang(x->out_abs_score);
     } else {
-        defer_low(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
+        defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
     }
 
     if (all_notes) sysmem_freeptr(all_notes);

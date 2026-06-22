@@ -572,7 +572,7 @@ void buildspans_clear(t_buildspans *x) {
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_do_clear, NULL, 0, NULL);
+        defer(x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }
 
@@ -627,7 +627,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         t_atom a[2];
         atom_setfloat(&a[0], f);
         atom_setfloat(&a[1], loop_start);
-        defer_low(x, (method)buildspans_offset_deferred, NULL, 2, a);
+        defer(x, (method)buildspans_offset_deferred, NULL, 2, a);
         return;
     }
 
@@ -860,7 +860,7 @@ void buildspans_track(t_buildspans *x, long n) {
     if (x->defer && !systhread_ismainthread()) {
         t_atom a;
         atom_setlong(&a, n);
-        defer_low(x, (method)buildspans_track_deferred, NULL, 1, &a);
+        defer(x, (method)buildspans_track_deferred, NULL, 1, &a);
         return;
     }
 
@@ -889,7 +889,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
             for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
-            defer_low(x, (method)buildspans_anything_deferred, s, (short)(argc + 1), new_argv);
+            defer(x, (method)buildspans_anything_deferred, s, (short)(argc + 1), new_argv);
             sysmem_freeptr(new_argv);
         }
         return;
@@ -978,7 +978,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_do_list, s, argc, argv);
+        defer(x, (method)buildspans_do_list, s, argc, argv);
         return;
     }
 
@@ -1673,7 +1673,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
                 } else {
-                    defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+                    defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
                 }
             }
 
@@ -1684,7 +1684,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
                 } else {
-                    defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+                    defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
                 }
             }
         }
@@ -1756,7 +1756,7 @@ void buildspans_bang(t_buildspans *x) {
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_do_bang, NULL, 0, NULL);
+        defer(x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
 
@@ -2126,14 +2126,14 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             if (!x->async || systhread_ismainthread()) {
                 outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
             } else {
-                defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+                defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
             }
 
             // Outlet 1: Span list
             if (!x->async || systhread_ismainthread()) {
                 outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
             } else {
-                defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+                defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
             }
         }
         object_free(ended_span_array);
@@ -2605,7 +2605,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                         if (new_argv) {
                             atom_setsym(new_argv, output_key_sym);
                             for (int k = 0; k < ac; k++) new_argv[k+1] = av[k];
-                            defer_low(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
+                            defer(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
                             sysmem_freeptr(new_argv);
                         }
                     }

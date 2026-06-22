@@ -710,7 +710,7 @@ void rebar_free(t_rebar *x) {
 }
 
 void rebar_request_copy_back(t_rebar *x) {
-    if (x->defer) defer_low(x, (method)rebar_do_copy_back, NULL, 0, NULL);
+    if (x->defer) defer(x, (method)rebar_do_copy_back, NULL, 0, NULL);
     else rebar_do_copy_back(x);
 }
 
@@ -734,7 +734,7 @@ void rebar_do_copy_back(t_rebar *x) {
     } else {
         t_atom a;
         atom_setlong(&a, 0);
-        defer_low(x, (method)rebar_defer_output, gensym("busy"), 1, &a);
+        defer(x, (method)rebar_defer_output, gensym("busy"), 1, &a);
     }
 }
 
