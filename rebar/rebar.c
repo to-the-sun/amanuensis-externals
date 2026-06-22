@@ -729,7 +729,7 @@ void rebar_do_copy_back(t_rebar *x) {
     }
     if (user_dict) object_release((t_object *)user_dict);
 
-    if (systhread_ismainthread()) {
+    if (!x->async || systhread_ismainthread()) {
         sdk_outlet_int(x->out_busy, 0);
     } else {
         t_atom a;

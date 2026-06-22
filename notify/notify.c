@@ -404,7 +404,7 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     for (long i = 0; i < total_notes; i++) {
-        if (systhread_ismainthread()) {
+        if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
             if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
                 outlet_int(x->out_track, 0);
@@ -435,7 +435,7 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
             defer_low(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
     }
-    if (systhread_ismainthread()) {
+    if (!x->async || systhread_ismainthread()) {
         outlet_bang(x->out_abs_score);
     } else {
         defer_low(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
@@ -627,7 +627,7 @@ void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
 
     // Output sorted notes
     for (long i = 0; i < total_notes; i++) {
-        if (systhread_ismainthread()) {
+        if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
             if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
                 outlet_int(x->out_track, 0);
@@ -658,7 +658,7 @@ void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
             defer_low(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
     }
-    if (systhread_ismainthread()) {
+    if (!x->async || systhread_ismainthread()) {
         outlet_bang(x->out_abs_score);
     } else {
         defer_low(x, (method)notify_defer_output, gensym("bang"), 0, NULL);

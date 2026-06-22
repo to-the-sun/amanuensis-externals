@@ -1670,7 +1670,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             if (x->bound_crucible) {
                 crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
-                if (systhread_ismainthread()) {
+                if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
                 } else {
                     defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
@@ -1681,7 +1681,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             if (x->bound_crucible) {
                 crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
-                if (systhread_ismainthread()) {
+                if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
                 } else {
                     defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
@@ -2123,14 +2123,14 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             // Outlet 2: Track number
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
-            if (systhread_ismainthread()) {
+            if (!x->async || systhread_ismainthread()) {
                 outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
             } else {
                 defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
             }
 
             // Outlet 1: Span list
-            if (systhread_ismainthread()) {
+            if (!x->async || systhread_ismainthread()) {
                 outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
             } else {
                 defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
@@ -2598,7 +2598,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                 if (x->bound_crucible) {
                     crucible_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
                 } else {
-                    if (systhread_ismainthread()) {
+                    if (!x->async || systhread_ismainthread()) {
                         outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
                     } else {
                         t_atom *new_argv = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom));
