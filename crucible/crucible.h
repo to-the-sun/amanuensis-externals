@@ -6,6 +6,7 @@
 #include "ext_dictionary.h"
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
+#include "../shared/async_worker.h"
 
 typedef struct _crucible {
     t_object s_obj;
@@ -20,6 +21,8 @@ typedef struct _crucible {
     long log;
     long consume;
     long defer;
+    long async;
+    t_async_worker *worker;
     long visualize;
     t_atom_long song_reach;
     t_dictionary *track_reaches_dict;
@@ -29,7 +32,9 @@ typedef struct _crucible {
 } t_crucible;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
+void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_local_bar_length(t_crucible *x, double f);
+void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray);
 
 #endif // CRUCIBLE_H

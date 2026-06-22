@@ -5,6 +5,7 @@
 #include "ext_obex.h"
 #include "ext_dictobj.h"
 #include "ext_buffer.h"
+#include "../shared/async_worker.h"
 
 typedef struct _buildspans {
     t_object s_obj;
@@ -23,6 +24,8 @@ typedef struct _buildspans {
     long log;
     long visualize;
     long defer;
+    long async;
+    t_async_worker *worker;
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;

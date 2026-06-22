@@ -100,6 +100,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="async" get="1" set="1" type="long" size="1">
+			<digest>Asynchronous Execution</digest>
+			<description>
+				When enabled (1), all dictionary operations and sequencing tasks are performed on a dedicated background worker thread. This allows for concurrent processing without stalling the Max scheduler or main thread.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

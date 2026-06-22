@@ -4,6 +4,7 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/visualize.h"
+#include "../shared/async_worker.h"
 #include "../shared/logging.h"
 #include <math.h>
 #include <stdlib.h> // For qsort
@@ -155,7 +156,9 @@ int compare_manifest_items(const void *a, const void *b) {
 void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
+void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
@@ -167,6 +170,7 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
+void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
 void buildspans_flush_track(t_buildspans *x, long track_num);
 void buildspans_run_cleanup(t_buildspans *x);
@@ -186,14 +190,28 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
 long buildspans_get_bar_length(t_buildspans *x);
 void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
+void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_bind_resolve(t_buildspans *x);
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
+t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
 
 
 // Helper function to send verbose log messages
+void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (s == gensym("track")) {
+        outlet_anything(x->track_outlet, s, argc, argv);
+    } else if (s == gensym("span")) {
+        outlet_anything(x->span_outlet, s, argc, argv);
+    } else if (s == gensym("bar_data")) {
+        // Here argv[0] was the selector
+        t_symbol *sel = atom_getsym(argv);
+        outlet_anything(x->out_bar_data, sel, (short)(argc - 1), argv + 1);
+    }
+}
+
 void buildspans_log(t_buildspans *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -471,6 +489,11 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
     CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_buildspans, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)buildspans_attr_set_async);
+
     class_register(CLASS_BOX, c);
     buildspans_class = c;
 }
@@ -488,6 +511,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->visualize = 0;
         x->defer = 0;
+        x->async = 0;
+        x->worker = NULL;
         x->buffer_ref = NULL;
         x->s_buffer_name = NULL;
         x->local_bar_length = 0;
@@ -524,6 +549,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 
 void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
+    if (x->worker) {
+        async_worker_release(x->worker);
+    }
     if (x->bound_crucible) {
         object_detach_byptr(x, x->bound_crucible);
     }
@@ -539,11 +567,19 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
+        return;
+    }
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_clear, NULL, 0, NULL);
+        defer_low(x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }
 
+    buildspans_do_clear(x, NULL, 0, NULL);
+}
+
+void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->building) {
         object_free(x->building);
     }
@@ -569,10 +605,24 @@ void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
+    if (x->async && x->worker) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a);
+        return;
+    }
     buildspans_do_offset(x, f, 0.0);
 }
 
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom a[2];
+        atom_setfloat(&a[0], f);
+        atom_setfloat(&a[1], loop_start);
+        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 2, a);
+        return;
+    }
+
     if (x->defer && !systhread_ismainthread()) {
         t_atom a[2];
         atom_setfloat(&a[0], f);
@@ -801,6 +851,12 @@ void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom 
 }
 
 void buildspans_track(t_buildspans *x, long n) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom a;
+        atom_setlong(&a, n);
+        async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a);
+        return;
+    }
     if (x->defer && !systhread_ismainthread()) {
         t_atom a;
         atom_setlong(&a, n);
@@ -816,6 +872,17 @@ void buildspans_track(t_buildspans *x, long n) {
 // Handler for various messages, including palette symbol
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
+
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
+        if (new_argv) {
+            atom_setlong(new_argv, inlet_num);
+            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
+            async_worker_enqueue(x->worker, x, (method)buildspans_anything_deferred, s, argc + 1, new_argv);
+            sysmem_freeptr(new_argv);
+        }
+        return;
+    }
 
     if (x->defer && !systhread_ismainthread()) {
         t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
@@ -884,6 +951,15 @@ void buildspans_float(t_buildspans *x, double f) {
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
+    if (x->async && x->worker && systhread_ismainthread()) {
+        if (inlet_num == 1) {
+            async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv);
+        } else {
+            async_worker_enqueue(x->worker, x, (method)buildspans_do_list, s, argc, argv);
+        }
+        return;
+    }
+
     if (inlet_num == 1) {
         int valid = 0;
         if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
@@ -902,10 +978,14 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_list, s, argc, argv);
+        defer_low(x, (method)buildspans_do_list, s, argc, argv);
         return;
     }
 
+    buildspans_do_list(x, s, argc, argv);
+}
+
+void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
     if (bar_length <= 0) {
@@ -1590,14 +1670,22 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             if (x->bound_crucible) {
                 crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
-                outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+                if (systhread_ismainthread()) {
+                    outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+                } else {
+                    defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+                }
             }
 
             // Outlet 1: Span list
             if (x->bound_crucible) {
                 crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
-                outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+                if (systhread_ismainthread()) {
+                    outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+                } else {
+                    defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+                }
             }
         }
 
@@ -1663,11 +1751,19 @@ void buildspans_run_cleanup(t_buildspans *x) {
 
 
 void buildspans_bang(t_buildspans *x) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL);
+        return;
+    }
     if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)buildspans_bang, NULL, 0, NULL);
+        defer_low(x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
 
+    buildspans_do_bang(x, NULL, 0, NULL);
+}
+
+void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
 
@@ -1788,7 +1884,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
             case 0:
-                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind) attributes.");
+                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind/async) attributes.");
                 break;
             case 1:
                 sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
@@ -1831,6 +1927,19 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
+        return;
+    }
+    t_atom a;
+    atom_setfloat(&a, f);
+    buildspans_do_local_bar_length(x, NULL, 1, &a);
+}
+
+void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    double f = atom_getfloat(argv);
     long old_bar_length = (long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
@@ -1844,6 +1953,29 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
         }
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
+}
+
+t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->async = atom_getlong(av);
+        if (x->async) {
+            if (!x->worker) x->worker = async_worker_create();
+            // If already bound to an async crucible, sync worker
+            if (x->bound_crucible) {
+                t_crucible *c = (t_crucible *)x->bound_crucible;
+                if (c->async && c->worker && c->worker != x->worker) {
+                    async_worker_release(x->worker);
+                    x->worker = c->worker;
+                    async_worker_retain(x->worker);
+                    buildspans_log(x, "Synced background worker with already bound crucible.");
+                }
+            }
+        } else if (x->worker) {
+            async_worker_release(x->worker);
+            x->worker = NULL;
+        }
+    }
+    return MAX_ERR_NONE;
 }
 
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) {
@@ -1887,6 +2019,17 @@ void buildspans_bind_resolve(t_buildspans *x) {
                     x->bound_crucible = obj;
                     object_attach_byptr(x, x->bound_crucible);
                     buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
+
+                    // Sync worker if both are async
+                    if (x->async) {
+                        t_crucible *c = (t_crucible *)obj;
+                        if (c->async && c->worker) {
+                            if (x->worker) async_worker_release(x->worker);
+                            x->worker = c->worker;
+                            async_worker_retain(x->worker);
+                            buildspans_log(x, "Synced background worker with bound crucible.");
+                        }
+                    }
                     return;
                 }
             }
@@ -1980,10 +2123,18 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             // Outlet 2: Track number
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
-            outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+            if (systhread_ismainthread()) {
+                outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+            } else {
+                defer_low(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+            }
 
             // Outlet 1: Span list
-            outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+            if (systhread_ismainthread()) {
+                outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+            } else {
+                defer_low(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+            }
         }
         object_free(ended_span_array);
     }
@@ -2447,7 +2598,17 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                 if (x->bound_crucible) {
                     crucible_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
                 } else {
-                    outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
+                    if (systhread_ismainthread()) {
+                        outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
+                    } else {
+                        t_atom *new_argv = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom));
+                        if (new_argv) {
+                            atom_setsym(new_argv, output_key_sym);
+                            for (int k = 0; k < ac; k++) new_argv[k+1] = av[k];
+                            defer_low(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
+                            sysmem_freeptr(new_argv);
+                        }
+                    }
                 }
             }
         }

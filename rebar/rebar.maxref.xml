@@ -124,6 +124,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="async" get="1" set="1" type="long" size="1">
+			<digest>Asynchronous Execution</digest>
+			<description>
+				When enabled (1), the entire processing pipeline (notify, buildspans, crucible) is conducted on a single dedicated background worker thread. This allows for non-blocking operation while maintaining strict ordering of operations. The busy status output and initial dictionary copy remain synchronous.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

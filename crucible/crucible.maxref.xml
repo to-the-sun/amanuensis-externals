@@ -135,6 +135,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="async" get="1" set="1" type="long" size="1">
+			<digest>Asynchronous Execution</digest>
+			<description>
+				When enabled (1), all message parsing, dictionary operations, and span comparisons are conducted on a dedicated background worker thread. This ensures high performance and non-blocking operation relative to the Max scheduler and main thread.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 		<attribute name="consume" get="1" set="1" type="long" size="1">
 			<digest>Enable Deep Delete</digest>
 			<description>
