@@ -308,6 +308,7 @@ void rebar_intercept_outlet_float(void *o, double f);
 void rebar_intercept_outlet_bang(void *o);
 
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...);
+void rebar_intercept_class_register(t_symbol *name_space, t_class *c);
 
 // --- Coordination Prototypes ---
 void rebar_request_copy_back(t_rebar *x);
@@ -330,6 +331,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define outlet_bang(o) rebar_intercept_outlet_bang(o)
 
 #define class_new rebar_intercept_class_new
+#define class_register(r, c) rebar_intercept_class_register(r, c)
 
 #include "../shared/logging.c"
 
@@ -368,10 +370,30 @@ void *rebar_intercept_listout(void *x) { return rebar_intercept_outlet_new(x, NU
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...) {
     char private_name[256];
     snprintf(private_name, 256, "rebar_%s_internal", name);
+
+    va_list args;
+    va_start(args, type);
+
     #undef class_new
-    t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, type, 0);
+    // For our modules, we know they use A_GIMME, 0
+    t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
+#define class_register(r, c) rebar_intercept_class_register(r, c)
+
+    va_end(args);
+
     return c;
+}
+
+void rebar_intercept_class_register(t_symbol *name_space, t_class *c) {
+    critical_enter(g_rebar_crit);
+    t_rebar *rebar = g_instantiating_rebar;
+    critical_exit(g_rebar_crit);
+
+    #undef class_register
+    if (!rebar) class_register(name_space, c);
+    else class_register(CLASS_NOBOX, c);
+    #define class_register(r, c) rebar_intercept_class_register(r, c)
 }
 
 // Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
@@ -575,8 +597,10 @@ void ext_main(void *r) {
     sdk_outlet_bang = (t_outlet_bang_fn)(outlet_bang);
 
     #undef class_new
+    #undef class_register
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
+    #define class_register(r, c) rebar_intercept_class_register(r, c)
 
     class_addmethod(c, (method)rebar_int, "int", A_LONG, 0);
     class_addmethod(c, (method)rebar_assist, "assist", A_CANT, 0);
