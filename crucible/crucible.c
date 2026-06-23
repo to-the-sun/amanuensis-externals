@@ -3,6 +3,7 @@
 #include "ext_systhread.h"
 #include "../shared/logging.h"
 #include "../shared/visualize.h"
+#include "../shared/async_worker.h"
 #include <string.h>
 #include <ctype.h>
 
@@ -16,7 +17,9 @@ int parse_selector(const char *selector_str, char **track, char **bar, char **ke
 t_dictionary *dictionary_deep_copy(t_dictionary *src);
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict);
 void crucible_local_bar_length(t_crucible *x, double f);
+void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 t_max_err crucible_attr_set_log(t_crucible *x, void *attr, long ac, t_atom *av);
+t_max_err crucible_attr_set_async(t_crucible *x, void *attr, long ac, t_atom *av);
 t_max_err crucible_attr_set_consume(t_crucible *x, void *attr, long ac, t_atom *av);
 t_atom_long crucible_get_bar_length(t_crucible *x);
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict);
@@ -28,6 +31,20 @@ t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom
 
 
 t_class *crucible_class;
+
+void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
+    if (s == gensym("-")) {
+        outlet_anything(x->outlet_data, s, argc, argv);
+    } else if (s == gensym("data_list")) {
+        outlet_list(x->outlet_data, NULL, argc, argv);
+    } else if (s == gensym("reach_song")) {
+        outlet_anything(x->outlet_reach_int, gensym("song"), argc, argv);
+    } else if (s == gensym("reach_list")) {
+        outlet_list(x->outlet_reach_int, NULL, argc, argv);
+    } else if (s == gensym("fill")) {
+        outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+    }
+}
 
 void crucible_log(t_crucible *x, const char *fmt, ...) {
     va_list args;
@@ -131,6 +148,11 @@ static void crucible_main_hidden(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
     CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_crucible, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)crucible_attr_set_async);
+
     CLASS_ATTR_LONG(c, "visualize", 0, t_crucible, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
@@ -160,6 +182,8 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->log = 0;
         x->consume = 0;
         x->defer = 0;
+        x->async = 0;
+        x->worker = NULL;
         x->visualize = 0;
         x->song_reach = 0;
         x->track_reaches_dict = dictionary_new();
@@ -188,6 +212,9 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
 void crucible_free(t_crucible *x) {
     visualize_cleanup();
+    if (x->worker) {
+        async_worker_release(x->worker);
+    }
     if (x->challenger_dict) {
         object_release((t_object *)x->challenger_dict);
     }
@@ -243,7 +270,11 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
             atom_setfloat(reach_list + 2, -999999.0);
 
             if (x->outlet_data) {
-                outlet_anything(x->outlet_data, gensym("-"), 3, reach_list);
+                if (!x->async || systhread_ismainthread()) {
+                    outlet_anything(x->outlet_data, gensym("-"), 3, reach_list);
+                } else {
+                    defer(x, (method)crucible_defer_output, gensym("-"), 3, reach_list);
+                }
             }
         }
     }
@@ -295,7 +326,11 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     atom_setfloat(list + 3, offset_val);
 
     if (x->outlet_data) {
-        outlet_list(x->outlet_data, NULL, 4, list);
+        if (!x->async || systhread_ismainthread()) {
+            outlet_list(x->outlet_data, NULL, 4, list);
+        } else {
+            defer(x, (method)crucible_defer_output, gensym("data_list"), 4, list);
+        }
     }
 }
 
@@ -587,17 +622,29 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (song_grew) {
                     t_atom reach_atom;
                     atom_setlong(&reach_atom, (t_atom_long)x->song_reach);
-                    outlet_anything(x->outlet_reach_int, gensym("song"), 1, &reach_atom);
+                    if (!x->async || systhread_ismainthread()) {
+                        outlet_anything(x->outlet_reach_int, gensym("song"), 1, &reach_atom);
+                    } else {
+                        defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &reach_atom);
+                    }
                 }
                 if (track_grew) {
                     t_atom reach_list[2];
                     atom_setlong(reach_list, (t_atom_long)atol(track_sym->s_name));
                     atom_setlong(reach_list + 1, max_reach);
-                    outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                    if (!x->async || systhread_ismainthread()) {
+                        outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                    } else {
+                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                    }
                 }
             }
             if (song_grew && x->outlet_fill) {
-                outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+                if (!x->async || systhread_ismainthread()) {
+                    outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+                } else {
+                    defer(x, (method)crucible_defer_output, gensym("fill"), 0, NULL);
+                }
             }
         }
 
@@ -669,6 +716,19 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        async_worker_enqueue(x->worker, x, (method)crucible_do_local_bar_length, NULL, 1, &a);
+        return;
+    }
+    t_atom a;
+    atom_setfloat(&a, f);
+    crucible_do_local_bar_length(x, NULL, 1, &a);
+}
+
+void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    double f = atom_getfloat(argv);
     long long old_bar_length = (long long)x->local_bar_length;
     if (f <= 0) {
         x->local_bar_length = 0;
@@ -683,6 +743,19 @@ void crucible_local_bar_length(t_crucible *x, double f) {
             visualize((t_object *)x, msg);
         }
     }
+}
+
+t_max_err crucible_attr_set_async(t_crucible *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->async = atom_getlong(av);
+        if (x->async && !x->worker) {
+            x->worker = async_worker_create();
+        } else if (!x->async && x->worker) {
+            async_worker_release(x->worker);
+            x->worker = NULL;
+        }
+    }
+    return MAX_ERR_NONE;
 }
 
 t_max_err crucible_attr_set_log(t_crucible *x, void *attr, long ac, t_atom *av) {
@@ -865,11 +938,20 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->defer && !systhread_ismainthread()) {
-        defer_low(x, (method)crucible_anything, s, argc, argv);
+    if (x->async && x->worker && systhread_ismainthread()) {
+        async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
         return;
     }
 
+    if (x->defer && !systhread_ismainthread()) {
+        defer(x, (method)crucible_anything, s, argc, argv);
+        return;
+    }
+
+    crucible_do_anything(x, s, argc, argv);
+}
+
+void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->log) {
         char *val_str = crucible_atoms_to_string(argc, argv);
         crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
@@ -911,7 +993,11 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         if (x->outlet_reach_int) {
             t_atom song_reach_atom;
             atom_setlong(&song_reach_atom, x->song_reach);
-            outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
+            if (!x->async || systhread_ismainthread()) {
+                outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
+            } else {
+                defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &song_reach_atom);
+            }
 
             if (x->track_reaches_dict) {
                 t_symbol **keys = NULL;
@@ -924,7 +1010,11 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     t_atom reach_list[2];
                     atom_setlong(reach_list, (t_atom_long)atol(track_id_sym->s_name));
                     atom_setlong(reach_list + 1, reach);
-                    outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                    if (!x->async || systhread_ismainthread()) {
+                        outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                    } else {
+                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                    }
                 }
                 if (keys) sysmem_freeptr(keys);
             }
@@ -1023,7 +1113,7 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: Primary messages (clear, track, span, reaches, replace, log, consume, visualize). Also sets incumbent dictionary name."); break;
+            case 0: sprintf(s, "Inlet 1: Primary messages (clear, track, span, reaches, replace, log, consume, visualize, async). Also sets incumbent dictionary name."); break;
             case 1: sprintf(s, "Inlet 2: Local Bar Length (float)."); break;
         }
     } else { // ASSIST_OUTLET

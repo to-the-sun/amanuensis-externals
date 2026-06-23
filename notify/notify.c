@@ -7,6 +7,7 @@
 #include "ext_critical.h"
 #include "ext_systhread.h"
 #include "../shared/logging.h"
+#include "../shared/async_worker.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -34,6 +35,8 @@ typedef struct _notify {
     void *q_work;
     long busy;
     long defer;
+    long async;
+    t_async_worker *worker;
     int job; // 1 = bang, 2 = fill
     double fill_max_bar_all;
     t_buffer_ref *bar_ref;
@@ -49,10 +52,11 @@ void notify_free(t_notify *x);
 void notify_bang(t_notify *x);
 void notify_int(t_notify *x, long n);
 void notify_qwork(t_notify *x);
-void notify_do_bang(t_notify *x);
-void notify_do_fill(t_notify *x);
+void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv);
+void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv);
 void notify_assist(t_notify *x, void *b, long m, long a, char *s);
 t_max_err notify_attr_set_log(t_notify *x, void *attr, long ac, t_atom *av);
+t_max_err notify_attr_set_async(t_notify *x, void *attr, long ac, t_atom *av);
 int note_compare(const void *a, const void *b);
 int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
@@ -76,8 +80,31 @@ void ext_main(void *r) {
     CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
     CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
 
+    CLASS_ATTR_LONG(c, "async", 0, t_notify, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)notify_attr_set_async);
+
     class_register(CLASS_BOX, c);
     notify_class = c;
+}
+
+void notify_defer_output(t_notify *x, t_symbol *s, short argc, t_atom *argv) {
+    if (s == gensym("palette")) {
+        outlet_anything(x->out_palette, atom_getsym(argv), 0, NULL);
+    } else if (s == gensym("track")) {
+        outlet_int(x->out_track, atom_getlong(argv));
+    } else if (s == gensym("offset")) {
+        outlet_float(x->out_offset, atom_getfloat(argv));
+    } else if (s == gensym("abs_score")) {
+        outlet_list(x->out_abs_score, NULL, argc, argv);
+    } else if (s == gensym("bang")) {
+        outlet_bang(x->out_abs_score);
+    } else if (s == gensym("log")) {
+        // vcommon_log already handles safety via its own mechanisms if needed,
+        // but for consistency we could defer it too.
+        // For now, let's just use it as is since it's likely safe.
+    }
 }
 
 void notify_log(t_notify *x, const char *fmt, ...) {
@@ -93,6 +120,8 @@ void *notify_new(t_symbol *s, long argc, t_atom *argv) {
         x->dict_name = gensym("");
         x->log = 0;
         x->defer = 0;
+        x->async = 0;
+        x->worker = NULL;
         x->out_log = NULL;
         x->instance_id = 1000 + (rand() % 9000);
         x->q_work = qelem_new(x, (method)notify_qwork);
@@ -130,6 +159,9 @@ void notify_free(t_notify *x) {
     if (x->q_work) {
         qelem_free(x->q_work);
     }
+    if (x->worker) {
+        async_worker_release(x->worker);
+    }
     object_free(x->bar_ref);
 }
 
@@ -156,6 +188,13 @@ int bar_key_compare(const void *a, const void *b) {
 }
 
 void notify_int(t_notify *x, long n) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        t_atom a;
+        atom_setlong(&a, n);
+        async_worker_enqueue(x->worker, x, (method)notify_do_fill, NULL, 1, &a);
+        return;
+    }
+
     x->fill_max_bar_all = (double)n;
     if (x->defer) {
         if (x->busy) {
@@ -167,11 +206,14 @@ void notify_int(t_notify *x, long n) {
         qelem_set(x->q_work);
         notify_log(x, "Deferred fill (reach %.2f) to Main thread.", x->fill_max_bar_all);
     } else {
-        notify_do_fill(x);
+        notify_do_fill(x, NULL, 0, NULL);
     }
 }
 
-void notify_do_fill(t_notify *x) {
+void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc > 0 && argv) {
+        x->fill_max_bar_all = (double)atom_getlong(argv);
+    }
     t_dictionary *dict = dictobj_findregistered_retain(x->dict_name);
     if (!dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
@@ -362,26 +404,53 @@ void notify_do_fill(t_notify *x) {
     }
 
     for (long i = 0; i < total_notes; i++) {
-        outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
-        if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
-            outlet_int(x->out_track, 0);
+        if (!x->async || systhread_ismainthread()) {
+            outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
+            if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
+                outlet_int(x->out_track, 0);
+            } else {
+                outlet_int(x->out_track, atol(all_notes[i].track->s_name));
+            }
+            outlet_float(x->out_offset, all_notes[i].offset);
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            outlet_list(x->out_abs_score, NULL, 3, list_atoms);
         } else {
-            outlet_int(x->out_track, atol(all_notes[i].track->s_name));
+            t_atom a;
+            atom_setsym(&a, all_notes[i].palette);
+            defer(x, (method)notify_defer_output, gensym("palette"), 1, &a);
+
+            atom_setlong(&a, (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name));
+            defer(x, (method)notify_defer_output, gensym("track"), 1, &a);
+
+            atom_setfloat(&a, all_notes[i].offset);
+            defer(x, (method)notify_defer_output, gensym("offset"), 1, &a);
+
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            defer(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
-        outlet_float(x->out_offset, all_notes[i].offset);
-        t_atom list_atoms[3];
-        atom_setfloat(&list_atoms[0], all_notes[i].absolute);
-        atom_setfloat(&list_atoms[1], all_notes[i].score);
-        atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
-        outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
-    outlet_bang(x->out_abs_score);
+    if (!x->async || systhread_ismainthread()) {
+        outlet_bang(x->out_abs_score);
+    } else {
+        defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
+    }
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
 }
 
 void notify_bang(t_notify *x) {
+    if (x->async && x->worker && systhread_ismainthread()) {
+        async_worker_enqueue(x->worker, x, (method)notify_do_bang, NULL, 0, NULL);
+        return;
+    }
+
     if (x->defer) {
         if (x->busy) {
             notify_log(x, "notify is busy, ignoring bang");
@@ -392,21 +461,21 @@ void notify_bang(t_notify *x) {
         qelem_set(x->q_work);
         notify_log(x, "Deferred bang to Main thread.");
     } else {
-        notify_do_bang(x);
+        notify_do_bang(x, NULL, 0, NULL);
     }
 }
 
 void notify_qwork(t_notify *x) {
     if (x->job == 1) {
-        notify_do_bang(x);
+        notify_do_bang(x, NULL, 0, NULL);
     } else if (x->job == 2) {
-        notify_do_fill(x);
+        notify_do_fill(x, NULL, 0, NULL);
     }
     x->busy = 0;
     x->job = 0;
 }
 
-void notify_do_bang(t_notify *x) {
+void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
     t_dictionary *dict = dictobj_findregistered_retain(x->dict_name);
     if (!dict) {
         object_error((t_object *)x, "could not find dictionary named %s", x->dict_name->s_name);
@@ -558,23 +627,58 @@ void notify_do_bang(t_notify *x) {
 
     // Output sorted notes
     for (long i = 0; i < total_notes; i++) {
-        outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
-        if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
-            outlet_int(x->out_track, 0);
+        if (!x->async || systhread_ismainthread()) {
+            outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
+            if (all_notes[i].track == NULL || all_notes[i].track == gensym("")) {
+                outlet_int(x->out_track, 0);
+            } else {
+                outlet_int(x->out_track, atol(all_notes[i].track->s_name));
+            }
+            outlet_float(x->out_offset, all_notes[i].offset);
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            outlet_list(x->out_abs_score, NULL, 3, list_atoms);
         } else {
-            outlet_int(x->out_track, atol(all_notes[i].track->s_name));
+            t_atom a;
+            atom_setsym(&a, all_notes[i].palette);
+            defer(x, (method)notify_defer_output, gensym("palette"), 1, &a);
+
+            atom_setlong(&a, (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name));
+            defer(x, (method)notify_defer_output, gensym("track"), 1, &a);
+
+            atom_setfloat(&a, all_notes[i].offset);
+            defer(x, (method)notify_defer_output, gensym("offset"), 1, &a);
+
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            defer(x, (method)notify_defer_output, gensym("abs_score"), 3, list_atoms);
         }
-        outlet_float(x->out_offset, all_notes[i].offset);
-        t_atom list_atoms[3];
-        atom_setfloat(&list_atoms[0], all_notes[i].absolute);
-        atom_setfloat(&list_atoms[1], all_notes[i].score);
-        atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
-        outlet_list(x->out_abs_score, NULL, 3, list_atoms);
     }
-    outlet_bang(x->out_abs_score);
+    if (!x->async || systhread_ismainthread()) {
+        outlet_bang(x->out_abs_score);
+    } else {
+        defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
+    }
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
+}
+
+t_max_err notify_attr_set_async(t_notify *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->async = atom_getlong(av);
+        if (x->async && !x->worker) {
+            x->worker = async_worker_create();
+        } else if (!x->async && x->worker) {
+            async_worker_release(x->worker);
+            x->worker = NULL;
+        }
+    }
+    return MAX_ERR_NONE;
 }
 
 t_max_err notify_attr_set_log(t_notify *x, void *attr, long ac, t_atom *av) {
@@ -587,7 +691,7 @@ t_max_err notify_attr_set_log(t_notify *x, void *attr, long ac, t_atom *av) {
 
 void notify_assist(t_notify *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (bang) dump, (int) fill, (log) attribute");
+        sprintf(s, "Inlet 1: (bang) dump, (int) fill, (log/async) attribute");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: [synth_abs, score, orig_abs] (list). Sorted chronologically. Sends bang when finished."); break;

@@ -7,6 +7,7 @@
 #include "ext_systhread.h"
 #include "../shared/logging.h"
 #include "../shared/visualize.h"
+#include "../shared/async_worker.h"
 
 #include <string.h>
 #include <stdarg.h>
@@ -94,6 +95,10 @@
 #define crucible_get_span_as_atomarray rebar_crucible_get_span_as_atomarray
 #define crucible_span_has_loser rebar_crucible_span_has_loser
 
+#define notify_attr_set_async rebar_notify_attr_set_async
+#define buildspans_attr_set_async rebar_buildspans_attr_set_async
+#define crucible_attr_set_async rebar_crucible_attr_set_async
+
 // Forward declarations of the modules' structs
 struct _notify;
 
@@ -112,6 +117,8 @@ typedef struct _rebar {
 
     long log;
     long defer;
+    long async;
+    t_async_worker *worker;
     long consume;
     long visualize;
 
@@ -301,6 +308,7 @@ void rebar_intercept_outlet_float(void *o, double f);
 void rebar_intercept_outlet_bang(void *o);
 
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...);
+void rebar_intercept_class_register(t_symbol *name_space, t_class *c);
 
 // --- Coordination Prototypes ---
 void rebar_request_copy_back(t_rebar *x);
@@ -323,6 +331,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 #define outlet_bang(o) rebar_intercept_outlet_bang(o)
 
 #define class_new rebar_intercept_class_new
+#define class_register(r, c) rebar_intercept_class_register(r, c)
 
 #include "../shared/logging.c"
 
@@ -361,18 +370,42 @@ void *rebar_intercept_listout(void *x) { return rebar_intercept_outlet_new(x, NU
 void *rebar_intercept_class_new(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...) {
     char private_name[256];
     snprintf(private_name, 256, "rebar_%s_internal", name);
+
+    va_list args;
+    va_start(args, type);
+
     #undef class_new
-    t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, type, 0);
+    // For our modules, we know they use A_GIMME, 0
+    t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
+#define class_register(r, c) rebar_intercept_class_register(r, c)
+
+    va_end(args);
+
     return c;
+}
+
+void rebar_intercept_class_register(t_symbol *name_space, t_class *c) {
+    critical_enter(g_rebar_crit);
+    t_rebar *rebar = g_instantiating_rebar;
+    critical_exit(g_rebar_crit);
+
+    #undef class_register
+    if (!rebar) class_register(name_space, c);
+    else class_register(CLASS_NOBOX, c);
+    #define class_register(r, c) rebar_intercept_class_register(r, c)
 }
 
 // Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
 void rebar_buildspans_bang(t_buildspans *x) {
     module_buildspans_bang(x);
-    if (systhread_ismainthread()) {
-        t_rebar *rebar = get_rebar(x);
-        if (rebar) rebar_request_copy_back(rebar);
+    t_rebar *rebar = get_rebar(x);
+    if (rebar) {
+        if (rebar->async && rebar->worker && !systhread_ismainthread()) {
+            rebar_do_copy_back(rebar);
+        } else if (systhread_ismainthread()) {
+            rebar_request_copy_back(rebar);
+        }
     }
 }
 
@@ -450,6 +483,55 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv);
 void rebar_free(t_rebar *x);
 void rebar_int(t_rebar *x, long n);
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s);
+void rebar_defer_output(t_rebar *x, t_symbol *s, short argc, t_atom *argv);
+void rebar_do_int(t_rebar *x, t_symbol *s, long argc, t_atom *argv);
+
+t_max_err rebar_attr_set_async(t_rebar *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->async = atom_getlong(av);
+        if (x->async && !x->worker) {
+            x->worker = async_worker_create();
+        } else if (!x->async && x->worker) {
+            async_worker_release(x->worker);
+            x->worker = NULL;
+        }
+
+        if (x->notify_inst) {
+            x->notify_inst->async = x->async;
+            if (x->async) {
+                if (x->notify_inst->worker) async_worker_release(x->notify_inst->worker);
+                x->notify_inst->worker = x->worker;
+                if (x->worker) async_worker_retain(x->worker);
+            } else {
+                if (x->notify_inst->worker) async_worker_release(x->notify_inst->worker);
+                x->notify_inst->worker = NULL;
+            }
+        }
+        if (x->buildspans_inst) {
+            x->buildspans_inst->async = x->async;
+            if (x->async) {
+                if (x->buildspans_inst->worker) async_worker_release(x->buildspans_inst->worker);
+                x->buildspans_inst->worker = x->worker;
+                if (x->worker) async_worker_retain(x->worker);
+            } else {
+                if (x->buildspans_inst->worker) async_worker_release(x->buildspans_inst->worker);
+                x->buildspans_inst->worker = NULL;
+            }
+        }
+        if (x->crucible_inst) {
+            x->crucible_inst->async = x->async;
+            if (x->async) {
+                if (x->crucible_inst->worker) async_worker_release(x->crucible_inst->worker);
+                x->crucible_inst->worker = x->worker;
+                if (x->worker) async_worker_retain(x->worker);
+            } else {
+                if (x->crucible_inst->worker) async_worker_release(x->crucible_inst->worker);
+                x->crucible_inst->worker = NULL;
+            }
+        }
+    }
+    return MAX_ERR_NONE;
+}
 
 t_max_err rebar_attr_set_log(t_rebar *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
@@ -515,8 +597,10 @@ void ext_main(void *r) {
     sdk_outlet_bang = (t_outlet_bang_fn)(outlet_bang);
 
     #undef class_new
+    #undef class_register
     t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
+    #define class_register(r, c) rebar_intercept_class_register(r, c)
 
     class_addmethod(c, (method)rebar_int, "int", A_LONG, 0);
     class_addmethod(c, (method)rebar_assist, "assist", A_CANT, 0);
@@ -541,6 +625,11 @@ void ext_main(void *r) {
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
     CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)rebar_attr_set_visualize);
 
+    CLASS_ATTR_LONG(c, "async", 0, t_rebar, async);
+    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
+    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)rebar_attr_set_async);
+
     class_register(CLASS_BOX, c);
     rebar_class = c;
 
@@ -554,6 +643,8 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->log = 0;
         x->defer = 0;
+        x->async = 0;
+        x->worker = NULL;
         x->consume = 0;
         x->visualize = 0;
         x->user_dict_name = gensym("");
@@ -609,11 +700,29 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->crucible_inst->log = x->log;
         x->crucible_inst->defer = x->defer;
         x->crucible_inst->consume = x->consume;
+
+        // Ensure workers are synced if async was set via arguments
+        if (x->async && x->worker) {
+            x->notify_inst->async = 1;
+            x->notify_inst->worker = x->worker;
+            async_worker_retain(x->worker);
+
+            x->buildspans_inst->async = 1;
+            x->buildspans_inst->worker = x->worker;
+            async_worker_retain(x->worker);
+
+            x->crucible_inst->async = 1;
+            x->crucible_inst->worker = x->worker;
+            async_worker_retain(x->worker);
+        }
     }
     return x;
 }
 
 void rebar_free(t_rebar *x) {
+    if (x->worker) {
+        async_worker_release(x->worker);
+    }
     if (x->notify_inst) { unregister_module(x->notify_inst); unregister_outlets(x->notify_inst); rebar_notify_free(x->notify_inst); }
     if (x->buildspans_inst) { unregister_module(x->buildspans_inst); unregister_outlets(x->buildspans_inst); rebar_buildspans_free(x->buildspans_inst); }
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
@@ -625,8 +734,14 @@ void rebar_free(t_rebar *x) {
 }
 
 void rebar_request_copy_back(t_rebar *x) {
-    if (x->defer) defer_low(x, (method)rebar_do_copy_back, NULL, 0, NULL);
+    if (x->defer) defer(x, (method)rebar_do_copy_back, NULL, 0, NULL);
     else rebar_do_copy_back(x);
+}
+
+void rebar_defer_output(t_rebar *x, t_symbol *s, short argc, t_atom *argv) {
+    if (s == gensym("busy")) {
+        sdk_outlet_int(x->out_busy, atom_getlong(argv));
+    }
 }
 
 void rebar_do_copy_back(t_rebar *x) {
@@ -637,11 +752,30 @@ void rebar_do_copy_back(t_rebar *x) {
         rebar_copy_dictionary(tmp_dict, user_dict);
     }
     if (user_dict) object_release((t_object *)user_dict);
-    sdk_outlet_int(x->out_busy, 0);
+
+    if (!x->async || systhread_ismainthread()) {
+        sdk_outlet_int(x->out_busy, 0);
+    } else {
+        t_atom a;
+        atom_setlong(&a, 0);
+        defer(x, (method)rebar_defer_output, gensym("busy"), 1, &a);
+    }
 }
 
 void rebar_int(t_rebar *x, long n) {
     sdk_outlet_int(x->out_busy, 1);
+
+    t_atom a;
+    atom_setlong(&a, n);
+    if (x->async && x->worker) {
+        async_worker_enqueue(x->worker, x, (method)rebar_do_int, NULL, 1, &a);
+    } else {
+        rebar_do_int(x, NULL, 1, &a);
+    }
+}
+
+void rebar_do_int(t_rebar *x, t_symbol *s, long argc, t_atom *argv) {
+    long n = atom_getlong(argv);
     t_dictionary *user_dict = dictobj_findregistered_retain(x->user_dict_name);
     t_dictionary *tmp_dict = x->tmp_dict_ptr;
     if (user_dict && tmp_dict) {
@@ -667,7 +801,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, visualize) and Trigger (int)");
+    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, visualize, async) and Trigger (int)");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;
