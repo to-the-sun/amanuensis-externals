@@ -192,6 +192,7 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
 void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_bind_resolve(t_buildspans *x);
+void buildspans_bind_clock_cb(t_buildspans *x);
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
@@ -524,6 +525,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_note_score = 0.0;
         x->bind_name = _sym_nothing;
         x->bound_crucible = NULL;
+        x->bind_clock = clock_new(x, (method)buildspans_bind_clock_cb);
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -551,6 +553,9 @@ void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
     if (x->worker) {
         async_worker_release(x->worker);
+    }
+    if (x->bind_clock) {
+        object_free(x->bind_clock);
     }
     if (x->bound_crucible) {
         object_detach_byptr(x, x->bound_crucible);
@@ -1996,7 +2001,7 @@ void buildspans_bind_resolve(t_buildspans *x) {
     t_object *obj = NULL;
     t_symbol *varname = NULL;
 
-    if (x->bind_name == _sym_nothing) {
+    if (x->bind_name == _sym_nothing || x->bind_name == gensym("")) {
         if (x->bound_crucible) {
             object_detach_byptr(x, x->bound_crucible);
             x->bound_crucible = NULL;
@@ -2005,7 +2010,11 @@ void buildspans_bind_resolve(t_buildspans *x) {
     }
 
     object_obex_lookup(x, gensym("#P"), &patcher);
-    if (!patcher) return;
+    if (!patcher) {
+        // If we can't find the patcher yet, retry in a bit
+        if (x->bind_clock) clock_delay(x->bind_clock, 100);
+        return;
+    }
 
     for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
         obj = jbox_get_object(box);
@@ -2044,6 +2053,15 @@ void buildspans_bind_resolve(t_buildspans *x) {
         object_detach_byptr(x, x->bound_crucible);
     }
     x->bound_crucible = NULL;
+
+    // If we have a bind name but didn't find the object, retry periodically
+    if (x->bind_clock) clock_delay(x->bind_clock, 1000);
+}
+
+void buildspans_bind_clock_cb(t_buildspans *x) {
+    if (x->bind_name != _sym_nothing && x->bind_name != gensym("") && !x->bound_crucible) {
+        buildspans_bind_resolve(x);
+    }
 }
 
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
