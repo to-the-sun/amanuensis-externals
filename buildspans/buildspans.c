@@ -2030,6 +2030,13 @@ void buildspans_bind_resolve(t_buildspans *x) {
                 if (object_classname_compare(obj, gensym("crucible")) ||
                     object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
 
+                    // Ensure the class is actually registered before attaching,
+                    // to avoid the Max SDK console error "object_attach_byptr: ... is not registered"
+                    t_symbol *clsname = object_classname(obj);
+                    if (!class_findbyname(CLASS_BOX, clsname) && !class_findbyname(CLASS_NOBOX, clsname)) {
+                        continue; // Skip this object for now, it will be retried
+                    }
+
                     if (x->bound_crucible && x->bound_crucible != obj) {
                         object_detach_byptr(x, x->bound_crucible);
                     }
@@ -2038,7 +2045,9 @@ void buildspans_bind_resolve(t_buildspans *x) {
                     object_attach_byptr(x, x->bound_crucible);
 
                     if (x->bind_attempt_count > 1) {
-                        object_warn((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
+                        object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
+                    } else {
+                        object_post((t_object *)x, "Bind to crucible '%s': SUCCESS", x->bind_name->s_name);
                     }
                     buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
 
