@@ -139,6 +139,7 @@ static t_class *rebar_class;
 // --- Global Context for Thread-Safe Instantiation ---
 static t_critical g_rebar_crit;
 static t_rebar *g_instantiating_rebar = NULL;
+static int g_is_internal_reg = 0;
 static int g_current_mod_hint = 0; // 0=notify, 1=buildspans, 2=crucible
 
 // Capture real Max SDK functions
@@ -154,6 +155,9 @@ typedef void *(*t_outlet_int_fn)(t_outlet *o, t_atom_long n);
 typedef void *(*t_outlet_float_fn)(t_outlet *o, double f);
 typedef void *(*t_outlet_bang_fn)(t_outlet *o);
 
+typedef t_class *(*t_class_new_fn)(const char *name, method newmethod, method freemethod, size_t size, method menu_open_method, unsigned int type, ...);
+typedef t_max_err (*t_class_register_fn)(t_symbol *name_space, t_class *c);
+
 static t_outlet_new_fn sdk_outlet_new = NULL;
 static t_bangout_fn sdk_bangout = NULL;
 static t_intout_fn sdk_intout = NULL;
@@ -165,6 +169,9 @@ static t_outlet_list_fn sdk_outlet_list = NULL;
 static t_outlet_int_fn sdk_outlet_int = NULL;
 static t_outlet_float_fn sdk_outlet_float = NULL;
 static t_outlet_bang_fn sdk_outlet_bang = NULL;
+
+static t_class_new_fn sdk_class_new = NULL;
+static t_class_register_fn sdk_class_register = NULL;
 
 // --- Virtual Outlet Management ---
 
@@ -379,18 +386,12 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
     char private_name[256];
     snprintf(private_name, 256, "rebar_%s_internal", name);
 
-    va_list args;
-    va_start(args, type);
-
-    #undef class_new
-    // For our modules, we know they use A_GIMME, 0
-    t_class *c = class_new(private_name, newmethod, freemethod, size, menu_open_method, A_GIMME, 0);
-    #define class_new rebar_intercept_class_new
-#define class_register(r, c) rebar_intercept_class_register(r, c)
-
-    va_end(args);
-
-    return c;
+    // For our internal modules, we know they use A_GIMME, 0.
+    // We use the captured sdk_class_new to avoid macro recursion.
+    if (sdk_class_new) {
+        return sdk_class_new(private_name, newmethod, freemethod, size, menu_open_method, A_GIMME, 0);
+    }
+    return NULL;
 }
 
 void rebar_intercept_class_register(t_symbol *name_space, t_class *c) {
@@ -398,10 +399,10 @@ void rebar_intercept_class_register(t_symbol *name_space, t_class *c) {
     t_rebar *rebar = g_instantiating_rebar;
     critical_exit(g_rebar_crit);
 
-    #undef class_register
-    if (!rebar) class_register(name_space, c);
-    else class_register(CLASS_NOBOX, c);
-    #define class_register(r, c) rebar_intercept_class_register(r, c)
+    if (sdk_class_register) {
+        if (rebar || g_is_internal_reg) sdk_class_register(CLASS_NOBOX, c);
+        else sdk_class_register(name_space, c);
+    }
 }
 
 // Wrapper for buildspans_bang (which we renamed to module_buildspans_bang)
@@ -604,9 +605,12 @@ void ext_main(void *r) {
 #undef outlet_bang
     sdk_outlet_bang = (t_outlet_bang_fn)(outlet_bang);
 
-    #undef class_new
-    #undef class_register
-    t_class *c = class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
+#undef class_new
+    sdk_class_new = (t_class_new_fn)(class_new);
+#undef class_register
+    sdk_class_register = (t_class_register_fn)(class_register);
+
+    t_class *c = sdk_class_new("rebar", (method)rebar_new, (method)rebar_free, sizeof(t_rebar), 0L, A_GIMME, 0);
     #define class_new rebar_intercept_class_new
     #define class_register(r, c) rebar_intercept_class_register(r, c)
 
@@ -641,9 +645,11 @@ void ext_main(void *r) {
     class_register(CLASS_BOX, c);
     rebar_class = c;
 
+    g_is_internal_reg = 1;
     notify_main(NULL);
     buildspans_main(NULL);
     crucible_main(NULL);
+    g_is_internal_reg = 0;
 }
 
 void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
@@ -681,22 +687,27 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         atom_setsym(args, x->tmp_dict_name);
         g_current_mod_hint = (int)MOD_NOTIFY;
         x->notify_inst = (struct _notify *)rebar_notify_new(gensym("notify"), 1, args);
-        register_module(x->notify_inst, x);
+        if (x->notify_inst) register_module(x->notify_inst, x);
 
         g_current_mod_hint = (int)MOD_BUILDSPANS;
         x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 0, NULL);
-        register_module(x->buildspans_inst, x);
+        if (x->buildspans_inst) register_module(x->buildspans_inst, x);
 
         // Bind notify to buildspans
-        x->notify_inst->bound_buildspans = (void *)x->buildspans_inst;
+        if (x->notify_inst && x->buildspans_inst) {
+            x->notify_inst->bound_buildspans = (void *)x->buildspans_inst;
+        }
 
         g_current_mod_hint = (int)MOD_CRUCIBLE;
         x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
-        register_module(x->crucible_inst, x);
+        if (x->crucible_inst) register_module(x->crucible_inst, x);
 
         // Bind the internal buildspans instance to the internal crucible instance
-        x->buildspans_inst->bound_crucible = (void *)x->crucible_inst;
-        object_attach_byptr(x->buildspans_inst, x->crucible_inst);
+        if (x->buildspans_inst && x->crucible_inst) {
+            x->buildspans_inst->bound_crucible = (void *)x->crucible_inst;
+            // Note: We skip object_attach_byptr for internal modules as rebar manages their lifetime
+            // and it avoids registration-related warnings for CLASS_NOBOX classes.
+        }
 
         g_instantiating_rebar = NULL;
         critical_exit(g_rebar_crit);
@@ -735,7 +746,12 @@ void rebar_free(t_rebar *x) {
         async_worker_release(x->worker);
     }
     if (x->notify_inst) { unregister_module(x->notify_inst); unregister_outlets(x->notify_inst); rebar_notify_free(x->notify_inst); }
-    if (x->buildspans_inst) { unregister_module(x->buildspans_inst); unregister_outlets(x->buildspans_inst); rebar_buildspans_free(x->buildspans_inst); }
+    if (x->buildspans_inst) {
+        x->buildspans_inst->bound_crucible = NULL; // Avoid detach for internal binding
+        unregister_module(x->buildspans_inst);
+        unregister_outlets(x->buildspans_inst);
+        rebar_buildspans_free(x->buildspans_inst);
+    }
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
 
     if (x->tmp_dict_ptr) {
