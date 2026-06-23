@@ -847,7 +847,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc > 0) buildspans_track(x, atom_getlong(argv));
+    if (argc > 0) buildspans_do_track(x, atom_getlong(argv));
 }
 
 void buildspans_track(t_buildspans *x, long n) {
@@ -864,6 +864,10 @@ void buildspans_track(t_buildspans *x, long n) {
         return;
     }
 
+    buildspans_do_track(x, n);
+}
+
+void buildspans_do_track(t_buildspans *x, long n) {
     x->current_track = n;
     x->last_msg_type = gensym("track");
     buildspans_log(x, "Track updated to: %ld", n);
@@ -1668,7 +1672,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
             if (x->bound_crucible) {
-                crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
+                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
@@ -1679,7 +1683,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
             // Outlet 1: Span list
             if (x->bound_crucible) {
-                crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
+                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
@@ -1949,7 +1953,7 @@ void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_a
     if ((long)x->local_bar_length != old_bar_length) {
         buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
         if (x->bound_crucible) {
-            crucible_local_bar_length((t_crucible *)x->bound_crucible, f);
+            crucible_do_local_bar_length((t_crucible *)x->bound_crucible, NULL, 1, argv);
         }
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
@@ -2123,17 +2127,25 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             // Outlet 2: Track number
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
-            if (!x->async || systhread_ismainthread()) {
-                outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+            if (x->bound_crucible) {
+                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
-                defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+                if (!x->async || systhread_ismainthread()) {
+                    outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
+                } else {
+                    defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
+                }
             }
 
             // Outlet 1: Span list
-            if (!x->async || systhread_ismainthread()) {
-                outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+            if (x->bound_crucible) {
+                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
-                defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+                if (!x->async || systhread_ismainthread()) {
+                    outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
+                } else {
+                    defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
+                }
             }
         }
         object_free(ended_span_array);
@@ -2596,7 +2608,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                 snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
                 t_symbol *output_key_sym = gensym(output_key_str);
                 if (x->bound_crucible) {
-                    crucible_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
+                    crucible_do_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
                 } else {
                     if (!x->async || systhread_ismainthread()) {
                         outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);

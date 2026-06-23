@@ -48,6 +48,11 @@
 #define buildspans_attr_set_log rebar_buildspans_attr_set_log
 #define buildspans_attr_set_visualize rebar_buildspans_attr_set_visualize
 #define buildspans_bang module_buildspans_bang
+#define buildspans_do_bang rebar_buildspans_do_bang
+#define buildspans_do_list rebar_buildspans_do_list
+#define buildspans_do_track rebar_buildspans_do_track
+#define buildspans_do_offset rebar_buildspans_do_offset
+#define buildspans_do_local_bar_length rebar_buildspans_do_local_bar_length
 #define buildspans_flush rebar_buildspans_flush
 #define buildspans_end_track_span rebar_buildspans_end_track_span
 #define buildspans_prune_span rebar_buildspans_prune_span
@@ -80,6 +85,8 @@
 #define crucible_new rebar_crucible_new
 #define crucible_free rebar_crucible_free
 #define crucible_anything rebar_crucible_anything
+#define crucible_do_anything rebar_crucible_do_anything
+#define crucible_do_local_bar_length rebar_crucible_do_local_bar_length
 #define crucible_process_span rebar_crucible_process_span
 #define crucible_assist rebar_crucible_assist
 #define crucible_visualize_dump_all_spans rebar_crucible_visualize_dump_all_spans
@@ -337,6 +344,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst);
 
 // --- Include Modules ---
 
+#define REBAR_INTERNAL_BINDING
 #define ext_main notify_main
 #include "../notify/notify.c"
 #undef ext_main
@@ -679,6 +687,9 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->buildspans_inst = (struct _buildspans *)rebar_buildspans_new(gensym("buildspans"), 0, NULL);
         register_module(x->buildspans_inst, x);
 
+        // Bind notify to buildspans
+        x->notify_inst->bound_buildspans = (void *)x->buildspans_inst;
+
         g_current_mod_hint = (int)MOD_CRUCIBLE;
         x->crucible_inst = (struct _crucible *)rebar_crucible_new(gensym("crucible"), 1, args);
         register_module(x->crucible_inst, x);
@@ -787,6 +798,7 @@ void rebar_do_int(t_rebar *x, t_symbol *s, long argc, t_atom *argv) {
     rebar_buildspans_local_bar_length(x->buildspans_inst, (double)n);
     rebar_crucible_local_bar_length(x->crucible_inst, (double)n);
     rebar_notify_bang(x->notify_inst);
+    rebar_request_copy_back(x);
 }
 
 void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {

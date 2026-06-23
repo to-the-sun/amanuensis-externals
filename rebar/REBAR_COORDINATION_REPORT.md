@@ -15,22 +15,15 @@ The `rebar` object is a composite object that encapsulates three internal module
 
 `rebar` employs three primary methods to coordinate these modules:
 
-### A. Outlet Interception (The "Virtual Wire")
-`rebar` redefines the standard Max SDK outlet functions (`outlet_new`, `outlet_anything`, `outlet_int`, `outlet_float`, `outlet_bang`) for the internal modules. When a module "outputs" data, it is actually calling a `rebar` interceptor.
+### A. Direct Binding (Full Pipeline)
+All internal modules of the `rebar` object are bound to each other by default. This is the primary and most efficient communication method.
+- **`notify` -> `buildspans`**: `notify` holds a pointer to the `buildspans` instance and calls its `do_` functions (e.g., `buildspans_do_list`) directly.
+- **`buildspans` -> `crucible`**: `buildspans` holds a pointer to the `crucible` instance and calls its `do_` functions (e.g., `crucible_do_anything`) directly.
 
-- **Routing Table (Simplified):**
-    - `notify` -> `buildspans`: Notes, Tracks, and Offsets are intercepted and passed directly to the corresponding `buildspans` C functions (e.g., `buildspans_list`).
-    - `buildspans` -> `crucible`: Completed spans are intercepted and passed to `crucible_anything`.
-    - `crucible` -> `rebar` Outlets: Reach and status data are intercepted and passed to the real `rebar` outlets.
-    - All modules -> `rebar` Log: Log messages are consolidated into a single `rebar` log outlet.
+This binding exists whether or not `@async` is enabled, ensuring that data flows through the entire processing pipeline without ever leaving the current thread (Main Thread in sync mode, Worker Thread in async mode).
 
-### B. Direct Binding
-In addition to outlet interception, `rebar` explicitly binds `buildspans` to `crucible` at instantiation:
-```c
-x->buildspans_inst->bound_crucible = (void *)x->crucible_inst;
-object_attach_byptr(x->buildspans_inst, x->crucible_inst);
-```
-This allows `buildspans` to call `crucible_anything` directly, bypassing the intercepted outlet system for certain core operations.
+### B. Outlet Interception (Legacy/Fallback)
+`rebar` redefines the standard Max SDK outlet functions for the internal modules. While direct binding is now the primary path, the interception system remains to handle any messages not covered by direct calls and to consolidate logging into the `rebar` log outlet.
 
 ### C. Shared Asynchronous Worker
 When `@async 1` is enabled, `rebar` creates a single `t_async_worker` (background thread) and shares it among all three internal modules. This ensures that all heavy dictionary processing happens on a single background thread, maintaining thread safety for shared dictionary access.
@@ -42,45 +35,39 @@ When `@async 1` is enabled, `rebar` creates a single `t_async_worker` (backgroun
 When a trigger (e.g., an `int` message) hits `rebar`:
 
 1.  **Main Thread:** `rebar` receives the message and calls `notify_bang`.
-2.  **Main Thread:** `notify` iterates the dictionary and outputs notes via `outlet_list`.
-3.  **Main Thread:** `rebar` intercepts the `outlet_list` call and immediately calls `buildspans_list`.
-4.  **Main Thread:** `buildspans` processes the note. If a span is completed, it calls `crucible_anything` (either via intercepted outlet or direct binding).
-5.  **Main Thread:** `crucible` performs the comparison and updates the incumbent dictionary. It then outputs reach data via `outlet_anything`.
-6.  **Main Thread:** `rebar` intercepts this and sends it to the real external outlet.
+2.  **Main Thread:** `notify` iterates the dictionary and calls `buildspans_do_list` directly for each note.
+3.  **Main Thread:** `buildspans` processes the notes. Upon span completion, it calls `crucible_do_anything` directly.
+4.  **Main Thread:** `crucible` performs the comparison and updates the incumbent dictionary. It then **defers** its final reach output to the end of the event.
+5.  **Main Thread:** The final outputs are sent to the real external outlets.
 
-In this mode, the entire pipeline is linear and occurs entirely on the Main Thread.
+The entire pipeline is linear and occurs entirely on the Main Thread.
 
 ---
 
 ## 4. Asynchronous Coordination Flow (`@async 1`)
 
-The asynchronous mode introduces a "ping-pong" effect between the background worker thread and the main thread due to the interplay of `async_worker_enqueue` and `defer`.
+With full direct binding, the "ping-pong" effect has been eliminated. The data stays on the background worker thread until the very end of the pipeline.
 
-### The "Ping-Pong" Execution Trace:
+### The Optimized Execution Trace:
 
 1.  **Main Thread:** `rebar` receives a trigger and **enqueues** the task to the shared worker.
 2.  **Worker Thread:** The worker picks up the task and starts `notify_do_bang`.
-3.  **Worker Thread:** `notify` processes a note. Because it is in "async" mode and *not* on the main thread, it **defers** its output:
-    `defer(x, (method)notify_defer_output, gensym("abs_score"), ...)`
-4.  **Main Thread:** The deferred `notify_defer_output` fires. It calls `outlet_list`.
-5.  **Main Thread:** `rebar` intercepts the `outlet_list` call and calls `buildspans_list`.
-6.  **Main Thread:** `buildspans_list` sees that it is on the Main Thread but `async` is enabled. To stay off the main thread for processing, it **enqueues** the note BACK to the worker:
-    `async_worker_enqueue(x->worker, x, (method)buildspans_do_list, ...)`
-7.  **Worker Thread:** The worker picks up the note and starts `buildspans_do_list`.
-8.  **Worker Thread:** `buildspans` processes the note. If a span completes, it calls `crucible_anything` directly.
-9.  **Worker Thread:** `crucible_do_anything` processes the span. Because it is in "async" mode and *not* on the main thread, it **defers** its reach output:
-    `defer(x, (method)crucible_defer_output, ...)`
-10. **Main Thread:** The deferred `crucible_defer_output` fires and finally sends the data to the real Max outlets.
+3.  **Worker Thread:** `notify` processes notes and calls `buildspans_do_list` **directly** on the same worker thread.
+4.  **Worker Thread:** `buildspans` processes the notes. Upon span completion, it calls `crucible_do_anything` **directly** on the same worker thread.
+5.  **Worker Thread:** `crucible` performs comparisons and dictionary updates.
+6.  **Worker Thread:** Once the entire pipeline is complete, the final status update and dictionary synchronization are triggered. Any external outlet output (reaches, status) is **deferred** back to the Main Thread.
+7.  **Main Thread:** The deferred outputs fire and send data to the real Max outlets.
 
-### Why the Ping-Pong?
-This happens because `notify` was originally designed as a standalone object that only communicates via outlets. `rebar` leverages these outlets to "wire" it to `buildspans`. However, since `buildspans` also implements its own async logic (enqueuing anything it receives on the main thread), the data must return to the main thread briefly to be intercepted before being sent back to the worker for the next stage of processing.
+### Efficiency Gains:
+By binding the modules and using direct C calls, we avoid the overhead of multiple `defer` and `enqueue` cycles. The data moves from `notify` to `crucible` at C-function-call speed, entirely within the background worker thread, maximizing throughput and minimizing Main Thread jitter.
 
 ## 5. Summary Table
 
 | Feature | Synchronous (`@async 0`) | Asynchronous (`@async 1`) |
 | :--- | :--- | :--- |
-| **Execution Thread** | 100% Main Thread | Hybrid (Worker <-> Main) |
-| **`notify` -> `buildspans`** | Direct C Call (Intercepted) | Deferred -> Main -> Enqueued -> Worker |
+| **Execution Thread** | 100% Main Thread | Hybrid (Trigger on Main, Process on Worker) |
+| **`notify` -> `buildspans`** | Direct C Call | Direct C Call (Same Worker Thread) |
 | **`buildspans` -> `crucible`** | Direct C Call | Direct C Call (Same Worker Thread) |
+| **Main Thread Interactions** | During Trigger & Output | During Trigger & Final Output ONLY |
 | **Data Output** | Immediate | Deferred to Main Thread |
 | **Dictionary Safety** | Single-threaded | Protected by shared worker queue |
