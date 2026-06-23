@@ -7,6 +7,9 @@
 #include "ext_buffer.h"
 #include "../shared/async_worker.h"
 
+// Forward declaration
+struct _buildspans;
+
 typedef struct _buildspans {
     t_object s_obj;
     t_dictionary *building;
@@ -37,5 +40,13 @@ typedef struct _buildspans {
     t_symbol *bind_name;
     void *bound_crucible;
 } t_buildspans;
+
+// Function prototypes for direct module-to-module coordination
+void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_do_track(t_buildspans *x, long n);
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
+void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
+void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 
 #endif // BUILDSPANS_H

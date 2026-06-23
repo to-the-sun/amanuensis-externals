@@ -8,6 +8,7 @@
 #include "ext_systhread.h"
 #include "../shared/logging.h"
 #include "../shared/async_worker.h"
+#include "../buildspans/buildspans.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -37,6 +38,7 @@ typedef struct _notify {
     long defer;
     long async;
     t_async_worker *worker;
+    void *bound_buildspans;
     int job; // 1 = bang, 2 = fill
     double fill_max_bar_all;
     t_buffer_ref *bar_ref;
@@ -403,6 +405,22 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
         }
     }
 
+#ifdef REBAR_INTERNAL_BINDING
+    if (x->bound_buildspans) {
+        for (long i = 0; i < total_notes; i++) {
+            buildspans_do_anything((t_buildspans *)x->bound_buildspans, all_notes[i].palette, 0, NULL, 3);
+            long track_id = (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name);
+            buildspans_do_track((t_buildspans *)x->bound_buildspans, track_id);
+            buildspans_do_offset((t_buildspans *)x->bound_buildspans, all_notes[i].offset, 0.0);
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            buildspans_do_list((t_buildspans *)x->bound_buildspans, NULL, 3, list_atoms);
+        }
+        buildspans_do_bang((t_buildspans *)x->bound_buildspans, NULL, 0, NULL);
+    } else {
+#endif
     for (long i = 0; i < total_notes; i++) {
         if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
@@ -440,6 +458,9 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
     } else {
         defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
     }
+#ifdef REBAR_INTERNAL_BINDING
+    }
+#endif
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
@@ -626,6 +647,22 @@ void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
     notify_log(x, "Dictionary cleared.");
 
     // Output sorted notes
+#ifdef REBAR_INTERNAL_BINDING
+    if (x->bound_buildspans) {
+        for (long i = 0; i < total_notes; i++) {
+            buildspans_do_anything((t_buildspans *)x->bound_buildspans, all_notes[i].palette, 0, NULL, 3);
+            long track_id = (all_notes[i].track == NULL || all_notes[i].track == gensym("")) ? 0 : atol(all_notes[i].track->s_name);
+            buildspans_do_track((t_buildspans *)x->bound_buildspans, track_id);
+            buildspans_do_offset((t_buildspans *)x->bound_buildspans, all_notes[i].offset, 0.0);
+            t_atom list_atoms[3];
+            atom_setfloat(&list_atoms[0], all_notes[i].absolute);
+            atom_setfloat(&list_atoms[1], all_notes[i].score);
+            atom_setfloat(&list_atoms[2], all_notes[i].original_absolute);
+            buildspans_do_list((t_buildspans *)x->bound_buildspans, NULL, 3, list_atoms);
+        }
+        buildspans_do_bang((t_buildspans *)x->bound_buildspans, NULL, 0, NULL);
+    } else {
+#endif
     for (long i = 0; i < total_notes; i++) {
         if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->out_palette, all_notes[i].palette, 0, NULL);
@@ -663,6 +700,9 @@ void notify_do_bang(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
     } else {
         defer(x, (method)notify_defer_output, gensym("bang"), 0, NULL);
     }
+#ifdef REBAR_INTERNAL_BINDING
+    }
+#endif
 
     if (all_notes) sysmem_freeptr(all_notes);
     object_release((t_object *)dict);
