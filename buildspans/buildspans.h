@@ -39,6 +39,8 @@ typedef struct _buildspans {
 
     t_symbol *bind_name;
     void *bound_crucible;
+    void *bind_clock;
+    long bind_attempt_count;
 } t_buildspans;
 
 // Function prototypes for direct module-to-module coordination

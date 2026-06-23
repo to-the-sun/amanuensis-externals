@@ -192,6 +192,7 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
 void buildspans_local_bar_length(t_buildspans *x, double f);
 void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_bind_resolve(t_buildspans *x);
+void buildspans_bind_clock_cb(t_buildspans *x);
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
@@ -524,6 +525,8 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->last_note_score = 0.0;
         x->bind_name = _sym_nothing;
         x->bound_crucible = NULL;
+        x->bind_clock = clock_new(x, (method)buildspans_bind_clock_cb);
+        x->bind_attempt_count = 0;
 
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
@@ -551,6 +554,9 @@ void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
     if (x->worker) {
         async_worker_release(x->worker);
+    }
+    if (x->bind_clock) {
+        object_free(x->bind_clock);
     }
     if (x->bound_crucible) {
         object_detach_byptr(x, x->bound_crucible);
@@ -1995,17 +2001,25 @@ void buildspans_bind_resolve(t_buildspans *x) {
     t_object *box = NULL;
     t_object *obj = NULL;
     t_symbol *varname = NULL;
+    int found = 0;
 
-    if (x->bind_name == _sym_nothing) {
+    if (x->bind_name == _sym_nothing || x->bind_name == gensym("")) {
         if (x->bound_crucible) {
             object_detach_byptr(x, x->bound_crucible);
             x->bound_crucible = NULL;
         }
+        x->bind_attempt_count = 0;
         return;
     }
 
     object_obex_lookup(x, gensym("#P"), &patcher);
-    if (!patcher) return;
+    if (!patcher) {
+        // If we can't find the patcher yet, retry in a bit
+        if (x->bind_clock) clock_delay(x->bind_clock, 100);
+        return;
+    }
+
+    x->bind_attempt_count++;
 
     for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
         obj = jbox_get_object(box);
@@ -2016,12 +2030,25 @@ void buildspans_bind_resolve(t_buildspans *x) {
                 if (object_classname_compare(obj, gensym("crucible")) ||
                     object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
 
+                    // Ensure the class is actually registered before attaching, 
+                    // to avoid the Max SDK console error "object_attach_byptr: ... is not registered"
+                    t_symbol *clsname = object_classname(obj);
+                    if (!class_findbyname(CLASS_BOX, clsname) && !class_findbyname(CLASS_NOBOX, clsname)) {
+                        continue; // Skip this object for now, it will be retried
+                    }
+
                     if (x->bound_crucible && x->bound_crucible != obj) {
                         object_detach_byptr(x, x->bound_crucible);
                     }
 
                     x->bound_crucible = obj;
                     object_attach_byptr(x, x->bound_crucible);
+                    
+                    if (x->bind_attempt_count > 1) {
+                        object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
+                    } else {
+                        object_post((t_object *)x, "Bind to crucible '%s': SUCCESS", x->bind_name->s_name);
+                    }
                     buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
 
                     // Sync worker if both are async
@@ -2034,16 +2061,38 @@ void buildspans_bind_resolve(t_buildspans *x) {
                             buildspans_log(x, "Synced background worker with bound crucible.");
                         }
                     }
-                    return;
+                    found = 1;
+                    break;
                 }
             }
         }
     }
 
+    if (found) {
+        x->bind_attempt_count = 0;
+        return;
+    }
+
+    // Not found
     if (x->bound_crucible) {
         object_detach_byptr(x, x->bound_crucible);
     }
     x->bound_crucible = NULL;
+
+    if (x->bind_attempt_count == 1) {
+        object_error((t_object *)x, "Bind to crucible '%s' FAILED immediately. Retrying...", x->bind_name->s_name);
+    } else {
+        object_warn((t_object *)x, "Re-attempting bind to crucible '%s': STILL FAILED (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
+    }
+    
+    // If we have a bind name but didn't find the object, retry periodically
+    if (x->bind_clock) clock_delay(x->bind_clock, 1000);
+}
+
+void buildspans_bind_clock_cb(t_buildspans *x) {
+    if (x->bind_name != _sym_nothing && x->bind_name != gensym("") && !x->bound_crucible) {
+        buildspans_bind_resolve(x);
+    }
 }
 
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
@@ -2056,6 +2105,7 @@ void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender
 t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->bind_name = atom_getsym(av);
+        x->bind_attempt_count = 0; // Reset for new name
         buildspans_log(x, "bind attribute set to %s", x->bind_name->s_name);
         buildspans_bind_resolve(x);
     }

@@ -386,7 +386,7 @@ void *rebar_intercept_class_new(const char *name, method newmethod, method freem
     char private_name[256];
     snprintf(private_name, 256, "rebar_%s_internal", name);
 
-    // For our internal modules, we know they use A_GIMME, 0.
+    // For our internal modules, we know they use A_GIMME, 0. 
     // We use the captured sdk_class_new to avoid macro recursion.
     if (sdk_class_new) {
         return sdk_class_new(private_name, newmethod, freemethod, size, menu_open_method, A_GIMME, 0);
@@ -746,11 +746,11 @@ void rebar_free(t_rebar *x) {
         async_worker_release(x->worker);
     }
     if (x->notify_inst) { unregister_module(x->notify_inst); unregister_outlets(x->notify_inst); rebar_notify_free(x->notify_inst); }
-    if (x->buildspans_inst) {
+    if (x->buildspans_inst) { 
         x->buildspans_inst->bound_crucible = NULL; // Avoid detach for internal binding
-        unregister_module(x->buildspans_inst);
-        unregister_outlets(x->buildspans_inst);
-        rebar_buildspans_free(x->buildspans_inst);
+        unregister_module(x->buildspans_inst); 
+        unregister_outlets(x->buildspans_inst); 
+        rebar_buildspans_free(x->buildspans_inst); 
     }
     if (x->crucible_inst) { unregister_module(x->crucible_inst); unregister_outlets(x->crucible_inst); rebar_crucible_free(x->crucible_inst); }
 
