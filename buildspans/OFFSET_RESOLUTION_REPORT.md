@@ -22,6 +22,23 @@ When a manual offset is sent to Inlet 2:
 
 ---
 
+## 1.5. Manual Offset and Loop Start (Inlet 2)
+
+Inlet 2 (the "Offset" inlet) accepts both single floats and two-part lists. The format of the input determines how the temporal "phase" of the performance is initialized:
+
+*   **Single Float:** Sets `x->current_offset` to the value. The `x->loop_start` parameter is automatically defaulted to **`0.0`**.
+*   **Two-Part List `[offset, loop_start]`:** Sets `x->current_offset` to the first value and `x->loop_start` to the second value.
+
+### Downstream Effects of `loop_start`
+The `loop_start` parameter acts as a phase shift. It is essential for mapping absolute timestamps to the correct relative position within a bar when a performance resumes or jumps into the middle of a loop.
+
+*   **Relative Timestamp:** `relative_timestamp = calc_timestamp - actual_offset + loop_start`
+*   **Bar Quantization:** `bar_timestamp = floor(relative_timestamp / bar_length) * bar_length`
+
+An incorrect or defaulted `loop_start` during a mid-bar jump can lead to incorrect bar bucket assignment and trigger false "discontiguous gap" detections.
+
+---
+
 ## 2. Span Identification (The "Versions")
 
 When a note arrives for a specific Track ID (Inlet 3), the object identifies **all active versions** of that track for the current palette.
