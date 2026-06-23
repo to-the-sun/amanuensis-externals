@@ -18,7 +18,7 @@ When a loop is detected, several things happen:
 
 ## 2. Busy State Lifecycle
 
-The `busy` state of a track is controlled by two primary flags: `tr->busy` and `tr->waiting_for_dict`.
+The `busy` state of a track is a compound state controlled by two primary flags: `tr->busy` (indicating a transition or pending action) and `tr->waiting_for_dict` (indicating the track is blocked waiting for metadata from the main thread).
 
 ### Lifecycle Stages:
 1.  **Idle (`busy=0`, `waiting_for_dict=0`):** The track is either silent or playing a stable source in one of its slots.
@@ -26,7 +26,21 @@ The `busy` state of a track is controlled by two primary flags: `tr->busy` and `
 3.  **Metadata Handover:** Once the main thread finds the dictionary data, it sets `tr->has_pending_data` and clears `tr->waiting_for_dict`.
 4.  **Transitioning:** The DSP thread detects `has_pending_data`, determines if a crossfade is needed, and updates the "other" slot.
 5.  **Fading:** The `ramp_process` function (from `shared/crossfade.c`) gradually moves the volume of the old slot to 0.0 and the new slot to 1.0.
-6.  **Resolution:** The track remains `busy` until **both** ramps have reached their targets (0.0 or 1.0) AND `waiting_for_dict` is 0. Only then is `tr->busy` set back to 0.
+6.  **Resolution:** The track remains `busy` until the following three conditions are simultaneously met:
+    - **Ramp 1 is Done:** Target amplitude (0.0 or 1.0) reached.
+    - **Ramp 2 is Done:** Target amplitude (0.0 or 1.0) reached.
+    - **Metadata Processed:** `tr->waiting_for_dict` is 0.
+    Only when all three are true is `tr->busy` set back to 0.
+
+### The Loop Override
+The condition `(!tr->busy || main_looped)` in the bar detection logic is critical.
+*   **Normal Playback:** If the track is `busy` (e.g., still fading from the previous bar), it will ignore new bar hits to prevent "machine-gunning" of triggers.
+*   **The Global Loop Exception:** If `main_looped` is true (the global song ramp reset), the `busy` check is bypassed. This forces the track to immediately look for the first bar of the loop (time 0.0), even if it was in the middle of a fade-out at the end of the previous cycle.
+
+### Search Range Quantization
+When a loop occurs (`main_looped` or `track_looped`), the search `start` for a bar hit is forced to `0`. 
+`long long start = (track_looped || main_looped) ? 0 : r_last + 1;`
+This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger occurs. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the hit is guaranteed to be detected and the track immediately enters the `busy=1, waiting_for_dict=1` state for the new cycle.
 
 ## 3. Dual-Slot Crossfade Mechanism
 
