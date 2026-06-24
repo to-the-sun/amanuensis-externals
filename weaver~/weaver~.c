@@ -1095,8 +1095,40 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     tr->busy = 0;
                     tr->waiting_for_dict = 0;
                     tr->has_pending_data = 0;
+
+                    // Snap ramps to done
                     tr->xf.ramp1.go = (double)tr->xf.elapsed - tr->xf.ramp1.length;
                     tr->xf.ramp2.go = (double)tr->xf.elapsed - tr->xf.ramp2.length;
+
+                    // Reset slots to force a hard jump on re-trigger
+                    tr->palette[0] = _sym_dash;
+                    tr->palette[1] = _sym_dash;
+                    tr->offset[0] = -1.0;
+                    tr->offset[1] = -1.0;
+                    tr->dict_offset[0] = -1.0;
+                    tr->dict_offset[1] = -1.0;
+                    tr->control = 0.0;
+                    tr->xf.last_control = 0.0;
+
+                    // Enqueue TYPE_LOOP before resetting last_track_scan
+                    int nt_loop = (x->fifo_tail + 1) % 4096;
+                    if (nt_loop != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
+                        x->hit_bars[x->fifo_tail].track_id = t + 1;
+                        x->hit_bars[x->fifo_tail].song_loop = 1;
+                        x->fifo_tail = nt_loop;
+                    }
+
+                    // Force re-entry into initial bar trigger logic
+                    tr->last_track_scan = -1.0;
+
+                    // Sync internal timer with the loop destination
+                    double sr = tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr();
+                    tr->xf.elapsed = (long long)round(current_scan * sr / 1000.0);
+
+                    // Clear visualization flags
+                    tr->viz_trigger_dirty = 0;
+                    tr->viz_dirty = 0;
                 }
             }
         }

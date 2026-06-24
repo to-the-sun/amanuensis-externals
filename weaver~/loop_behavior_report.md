@@ -99,3 +99,25 @@ When the input ramp loops:
 3.  **FIFO:** A `TYPE_LOOP` event is queued.
 4.  **Bar Retrigger:** Because a loop is essentially a large jump, the "Initial Bar Trigger" logic (or the `main_looped` check in the continuous detection) fires a new bar hit for the beginning of the loop.
 5.  **Handover:** The dictionary lookup is performed again for the start of the song/loop, potentially triggering a crossfade if the palette or offset at the start differs from what was playing at the end.
+
+## 6. Implementation of Clean Slate Completeness
+
+The Clean Slate logic has been enhanced to ensure a truly seamless "reset-to-zero" experience by explicitly resetting historical state and synchronizing internal timers during a `main_looped` event.
+
+### Eliminating Stale Audio Crossfades
+To prevent musically irrelevant crossfades from previous transport positions after a loop:
+
+*   **Slot Reset:** Both `palette` and `offset` slots are reset to silent/initial values (`_sym_dash` and `-1.0`).
+*   **Control History:** Both `tr->control` and `tr->xf.last_control` are reset to `0.0`.
+This forces the next detected bar hit to perform a "hard jump" (direction 0) rather than a crossfade, ensuring the first sound at the loop destination is purely from the new source.
+
+### Temporal State Synchronization
+To ensure consistent bar detection at the loop destination:
+
+*   **`last_track_scan` Reset:** This variable is reset to `-1.0`. This forces the track to re-enter the "Initial Bar Trigger" logic on the very next sample, ensuring the bar at the new transport position is correctly identified regardless of the previous cycle's state.
+*   **`elapsed` Synchronization:** The `tr->xf.elapsed` timer is synchronized to the destination sample position (`f_curr`). This provides a perfectly aligned temporal baseline for any subsequent crossfade ramps in the new cycle.
+
+### Visualization State Reset
+To prevent visual artifacts:
+
+*   **Flag Reset:** The `viz_trigger_dirty` and `viz_dirty` flags are cleared. This prevents the delivery of "stale" visual updates from the previous song cycle immediately after the UI has been cleared by the `{"clear": 1}` command.
