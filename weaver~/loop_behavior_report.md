@@ -32,22 +32,21 @@ The `busy` state of a track is a compound state controlled by two primary flags:
     - **Metadata Processed:** `tr->waiting_for_dict` is 0.
     Only when all three are true is `tr->busy` set back to 0.
 
-### The Loop Override Proposal (Strictly for `main_looped`)
-Currently, the condition `(!tr->busy || main_looped)` in the bar detection logic allows a bypass of the busy check specifically to find Bar 0. However, for arbitrary loop points that may not land on Bar 0, a more robust solution is proposed for global song resets.
+### The Refined Loop Override Proposal (Strictly for `main_looped`)
+A more robust solution is proposed for global song resets to ensure arbitrary loop points trigger correctly and stale metadata is elegantly discarded.
 
-**Proposal:** Upon `main_looped` (global transport jump), rather than simply bypassing a check, the system should force the reset of the `busy` state by satisfying all three resolution conditions:
-1.  **Force Ramp 1 to Done:** Set the ramp state to its current target.
-2.  **Force Ramp 2 to Done:** Set the ramp state to its current target.
-3.  **Clear `waiting_for_dict`:** Set `tr->waiting_for_dict = 0`.
-
-This would instantly reset `tr->busy` to 0 within the same sample as the global loop detection. **Note: This behavior is intended only for `main_looped`. `track_looped` (local track resets) is functioning correctly as-is and does not require this state reset.**
+**Refined Proposal:** Upon `main_looped` (global transport jump), the system should perform an atomic "Clean Slate" reset of the entire state pipeline:
+1.  **Force Ramps to Done:** Snap both crossfade ramps to their current targets.
+2.  **Clear Track Pipeline Flags:** Set `tr->waiting_for_dict = 0`, `tr->has_pending_data = 0`, and `tr->busy = 0`.
+3.  **Drain the FIFO:** Set `x->fifo_head = x->fifo_tail`. This effectively "kills" any metadata lookup requests that have been queued in the DSP thread but not yet processed by the main thread.
 
 #### Speculation and Critique of the Proposal
-*   **Arbitrary Loop Compatibility:** This is the primary advantage. By clearing the "busy" state immediately upon a global transport reset, the track is ready to detect and trigger *any* bar key that corresponds to the new transport position, not just bar 0. This is essential for modern DAWs or sequencers that support arbitrary loop regions.
-*   **Atomic State Reset:** Snapping the ramps to their targets avoids "ghost transitions" from the previous cycle interfering with the new cycle's first trigger. The dual-slot system is designed for one transition at a time; this reset ensures a clean slate for the global transport start.
-*   **Audio Discontinuity:** While "snapping" a ramp might normally cause a click, in this context it happens exactly at a Transport Loop/Jump. The audio is already guaranteed to be discontinuous at this sample. The reset would be sonically transparent compared to the global jump itself.
-*   **Main Thread Coordination:** Clearing `waiting_for_dict` in the DSP thread while the main thread might still be processing a now-stale metadata lookup from a pre-loop bar hit is a potential race. However, since the DSP thread will immediately (within the same vector) detect a new bar hit and set `waiting_for_dict` back to 1, the main thread will eventually overwrite the state with the *correct* new metadata anyway.
-*   **Conclusion:** This is a superior approach for handling global transport resets. It moves the responsibility of cycle synchronization from the bar detection logic to the state management logic, making the system much more resilient to complex transport behaviors without affecting the correct local loop behavior of individual tracks.
+*   **Elegance of FIFO Draining:** This is a highly elegant way to handle stale lookups. Since the FIFO is the only communication channel from the DSP thread to the main thread's dictionary lookup logic, clearing it instantly invalidates any "in-flight" requests from the previous transport cycle. The main thread will find an empty queue and perform no further stale lookups.
+*   **Atomic "Clean Slate":** By clearing `has_pending_data` along with the FIFO, we ensure that even if the main thread *just* finished a lookup and set the flag, the DSP thread will ignore it. The track becomes truly idle at the exact sample of the transport jump.
+*   **Arbitrary Loop Compatibility:** This reset allows the track to immediately (in the same DSP vector) detect and trigger the *correct* bar key for the new transport position.
+*   **Race Condition Mitigation:** Because `main_looped` is a global event detected by the DSP thread, and the FIFO is managed with a simple head/tail index, draining it is thread-safe as long as the indices are updated atomically. This completely removes the concern about the main thread overwriting new state with stale metadata.
+*   **Sonics:** Snapping ramps at a transport jump is sonically safe as the jump itself is a massive discontinuity.
+*   **Conclusion:** This refined approach provides a total synchronization reset. It ensures that the very first bar detected after a loop/jump is processed by a completely idle track with no "memory" of the previous cycle.
 
 #### Lifecycle of `main_looped`
 The `main_looped` flag is a local boolean within the DSP loop. It is set to `true` for **exactly one sample**—the sample where the incoming ramp value is detected to be less than the previous sample. As soon as the ramp resumes its upward movement on the next sample, the comparison `current_scan < last_scan` becomes false, and `main_looped` returns to `false`.
