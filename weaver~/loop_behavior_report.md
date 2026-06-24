@@ -32,47 +32,32 @@ The `busy` state of a track is a compound state controlled by two primary flags:
     - **Metadata Processed:** `tr->waiting_for_dict` is 0.
     Only when all three are true is `tr->busy` set back to 0.
 
-### The Loop Override
-The condition `(!tr->busy || main_looped)` in the bar detection logic is critical.
-*   **Normal Playback:** If the track is `busy` (e.g., still fading from the previous bar), it will ignore new bar hits to prevent "machine-gunning" of triggers.
-*   **The Global Loop Exception:** If `main_looped` is true (the global song ramp reset), the `busy` check is bypassed. This forces the track to immediately look for the first bar of the loop (time 0.0), even if it was in the middle of a fade-out at the end of the previous cycle.
+### The Loop Override Proposal (Strictly for `main_looped`)
+Currently, the condition `(!tr->busy || main_looped)` in the bar detection logic allows a bypass of the busy check specifically to find Bar 0. However, for arbitrary loop points that may not land on Bar 0, a more robust solution is proposed for global song resets.
+
+**Proposal:** Upon `main_looped` (global transport jump), rather than simply bypassing a check, the system should force the reset of the `busy` state by satisfying all three resolution conditions:
+1.  **Force Ramp 1 to Done:** Set the ramp state to its current target.
+2.  **Force Ramp 2 to Done:** Set the ramp state to its current target.
+3.  **Clear `waiting_for_dict`:** Set `tr->waiting_for_dict = 0`.
+
+This would instantly reset `tr->busy` to 0 within the same sample as the global loop detection. **Note: This behavior is intended only for `main_looped`. `track_looped` (local track resets) is functioning correctly as-is and does not require this state reset.**
+
+#### Speculation and Critique of the Proposal
+*   **Arbitrary Loop Compatibility:** This is the primary advantage. By clearing the "busy" state immediately upon a global transport reset, the track is ready to detect and trigger *any* bar key that corresponds to the new transport position, not just bar 0. This is essential for modern DAWs or sequencers that support arbitrary loop regions.
+*   **Atomic State Reset:** Snapping the ramps to their targets avoids "ghost transitions" from the previous cycle interfering with the new cycle's first trigger. The dual-slot system is designed for one transition at a time; this reset ensures a clean slate for the global transport start.
+*   **Audio Discontinuity:** While "snapping" a ramp might normally cause a click, in this context it happens exactly at a Transport Loop/Jump. The audio is already guaranteed to be discontinuous at this sample. The reset would be sonically transparent compared to the global jump itself.
+*   **Main Thread Coordination:** Clearing `waiting_for_dict` in the DSP thread while the main thread might still be processing a now-stale metadata lookup from a pre-loop bar hit is a potential race. However, since the DSP thread will immediately (within the same vector) detect a new bar hit and set `waiting_for_dict` back to 1, the main thread will eventually overwrite the state with the *correct* new metadata anyway.
+*   **Conclusion:** This is a superior approach for handling global transport resets. It moves the responsibility of cycle synchronization from the bar detection logic to the state management logic, making the system much more resilient to complex transport behaviors without affecting the correct local loop behavior of individual tracks.
 
 #### Lifecycle of `main_looped`
 The `main_looped` flag is a local boolean within the DSP loop. It is set to `true` for **exactly one sample**—the sample where the incoming ramp value is detected to be less than the previous sample. As soon as the ramp resumes its upward movement on the next sample, the comparison `current_scan < last_scan` becomes false, and `main_looped` returns to `false`.
 
-#### Potential for Missed Bar 0
-In the current implementation, there is a technical possibility that a reset to bar 0.0 could be missed if the loop jump lands in a very specific way:
+#### Potential for Missed Bar Triggers
+In the current implementation, there is a technical possibility that a reset could be missed if the loop jump lands in a very specific way:
 1.  **Millisecond Quantization:** The logic currently requires `r_scan != r_last` (a change in the integer millisecond value) to trigger a bar check. If a loop jump occurs but the destination time `current_scan` falls within the same integer millisecond as the source time `last_scan` (e.g., jumping from 1000.9ms to 1000.1ms), the `r_scan != r_last` check will fail and the trigger will be skipped.
-2.  **Local vs Global Loops:** While `main_looped` (global) bypasses the `busy` check, `track_looped` (local to a track's length) currently does not. This means if a track loops while it is still "busy" from a previous transition, it will not re-trigger bar 0 until it becomes idle, potentially causing a gap or misalignment at the start of its next cycle.
+2.  **Global Reset vs. Local Loop:** Currently, `main_looped` (global) provides a `busy` bypass to ensure re-triggering, while `track_looped` (local) does not. This is intentional as `track_looped` events are part of the steady-state performance of a track and do not signify a fundamental transport shift that requires a state reset.
 
-#### Current Safeguard: Search Range Quantization
-Despite the potential millisecond-quantization issue, the logic does implement one safeguard for loops:
-When a loop occurs (`main_looped` or `track_looped`), the search `start` for a bar hit is forced to `0`:
-`long long start = (track_looped || main_looped) ? 0 : r_last + 1;`
-
-This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0 by trying to search from `r_last + 1`. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger is attempted. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the condition `latest_j >= start` is met.
-
-## 3. The Role of `loop_start` in Temporal Alignment
-
-While `weaver~` is agnostic to the internal value of the `loop_start` parameter, this parameter (defined during the transcript generation phase in `buildspans`) is the primary factor in determining the relationship between the ramp and the musical content.
-
-### Temporal Phase Shifting
-`loop_start` acts as a temporal phase shift. In `buildspans`, it is used to calculate the note positions relative to the start of the span:
-`relative_timestamp = calc_timestamp - offset + loop_start`
-
-Because the bar keys in the dictionary (e.g., "0", "4000", "8000") are derived from this `relative_timestamp`, the `loop_start` value effectively shifts which musical slice is assigned to "Bar 0".
-
-### Interaction with the Loop Override
-When a loop occurs in `weaver~`, the **Loop Override** forces the object to look for the bar keyed to `0.0` (or the nearest boundary after 0.0).
-- If `loop_start` was `0.0`, Bar 0 corresponds exactly to the `offset` point in the audio.
-- If `loop_start` was `500ms`, Bar 0 corresponds to a point in the audio `500ms` **before** the offset.
-
-Because the **Loop Override** and **Search Range Quantization** safeguards ensure that `weaver~` always hits the `0.0` key immediately upon reset, the musical alignment established by `loop_start` is preserved across transport loops. `weaver~` doesn't need to know the value of `loop_start`; it simply trusts that the "0" key in the dictionary represents the intended musical start of the loop cycle.
-
-### Safeguard Synchronization
-The `loop_start` value is critical for the **Initial Bar Trigger** logic. When `weaver~` starts or resets, it calculates `initial_bar = floor(tr_scan / bar_len) * bar_len`. If the transcript was generated with a `loop_start` that wasn't a multiple of `bar_len`, this initial trigger would still point to the correct bar key because the quantization logic is identical in both objects. The `weaver~` safeguards (forcing the search range to start at 0) ensure that the first "shifted" bar is never skipped by a transport jump.
-
-## 4. Dual-Slot Crossfade Mechanism
+## 3. Dual-Slot Crossfade Mechanism
 
 `weaver~` uses a dual-slot architecture to allow seamless transitions between different audio sources (palettes) or different temporal offsets within the same source.
 
@@ -93,7 +78,7 @@ In the DSP loop, `ramp_process` is called for both slots:
 
 The `ramp_process` is "smart": it uses a sliding amplitude follower (`x->last_amp`) and a target length (`high_ms`) to ensure that crossfades are fast during silence but smooth during active audio, preventing clicks.
 
-## 5. Palette and Offset Temporal Anchoring
+## 4. Palette and Offset Temporal Anchoring
 
 A critical aspect of the "weaving" process is how source audio is mapped to the destination.
 
@@ -109,7 +94,7 @@ By storing the *difference*, the DSP thread can calculate the correct source sam
 
 This "anchoring" ensures that even if the ramp jumps or fluctuates, the audio source stays perfectly locked to the intended rhythmic position.
 
-## 6. Summary of Loop Interaction
+## 5. Summary of Loop Interaction
 
 When the input ramp loops:
 1.  **DSP Detects:** `main_looped = true`.
