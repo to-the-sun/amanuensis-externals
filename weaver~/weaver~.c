@@ -1110,6 +1110,15 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     tr->control = 0.0;
                     tr->xf.last_control = 0.0;
 
+                    // Enqueue TYPE_LOOP before resetting last_track_scan
+                    int nt_loop = (x->fifo_tail + 1) % 4096;
+                    if (nt_loop != x->fifo_head) {
+                        x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
+                        x->hit_bars[x->fifo_tail].track_id = t + 1;
+                        x->hit_bars[x->fifo_tail].song_loop = 1;
+                        x->fifo_tail = nt_loop;
+                    }
+
                     // Force re-entry into initial bar trigger logic
                     tr->last_track_scan = -1.0;
 
