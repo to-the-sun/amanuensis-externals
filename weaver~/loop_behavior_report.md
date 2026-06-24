@@ -37,10 +37,20 @@ The condition `(!tr->busy || main_looped)` in the bar detection logic is critica
 *   **Normal Playback:** If the track is `busy` (e.g., still fading from the previous bar), it will ignore new bar hits to prevent "machine-gunning" of triggers.
 *   **The Global Loop Exception:** If `main_looped` is true (the global song ramp reset), the `busy` check is bypassed. This forces the track to immediately look for the first bar of the loop (time 0.0), even if it was in the middle of a fade-out at the end of the previous cycle.
 
-### Search Range Quantization
-When a loop occurs (`main_looped` or `track_looped`), the search `start` for a bar hit is forced to `0`. 
+#### Lifecycle of `main_looped`
+The `main_looped` flag is a local boolean within the DSP loop. It is set to `true` for **exactly one sample**—the sample where the incoming ramp value is detected to be less than the previous sample. As soon as the ramp resumes its upward movement on the next sample, the comparison `current_scan < last_scan` becomes false, and `main_looped` returns to `false`.
+
+#### Potential for Missed Bar 0
+In the current implementation, there is a technical possibility that a reset to bar 0.0 could be missed if the loop jump lands in a very specific way:
+1.  **Millisecond Quantization:** The logic currently requires `r_scan != r_last` (a change in the integer millisecond value) to trigger a bar check. If a loop jump occurs but the destination time `current_scan` falls within the same integer millisecond as the source time `last_scan` (e.g., jumping from 1000.9ms to 1000.1ms), the `r_scan != r_last` check will fail and the trigger will be skipped.
+2.  **Local vs Global Loops:** While `main_looped` (global) bypasses the `busy` check, `track_looped` (local to a track's length) currently does not. This means if a track loops while it is still "busy" from a previous transition, it will not re-trigger bar 0 until it becomes idle, potentially causing a gap or misalignment at the start of its next cycle.
+
+#### Current Safeguard: Search Range Quantization
+Despite the potential millisecond-quantization issue, the logic does implement one safeguard for loops:
+When a loop occurs (`main_looped` or `track_looped`), the search `start` for a bar hit is forced to `0`:
 `long long start = (track_looped || main_looped) ? 0 : r_last + 1;`
-This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger occurs. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the hit is guaranteed to be detected and the track immediately enters the `busy=1, waiting_for_dict=1` state for the new cycle.
+
+This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0 by trying to search from `r_last + 1`. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger is attempted. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the condition `latest_j >= start` is met.
 
 ## 3. Dual-Slot Crossfade Mechanism
 
