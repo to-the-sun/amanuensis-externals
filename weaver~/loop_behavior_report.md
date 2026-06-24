@@ -99,3 +99,18 @@ When the input ramp loops:
 3.  **FIFO:** A `TYPE_LOOP` event is queued.
 4.  **Bar Retrigger:** Because a loop is essentially a large jump, the "Initial Bar Trigger" logic (or the `main_looped` check in the continuous detection) fires a new bar hit for the beginning of the loop.
 5.  **Handover:** The dictionary lookup is performed again for the start of the song/loop, potentially triggering a crossfade if the palette or offset at the start differs from what was playing at the end.
+
+## 6. Proposed Enhancements for Clean Slate Completeness
+
+While the current Clean Slate logic addresses the immediate stability of the state machine, further refinements could ensure a truly seamless "reset-to-zero" experience:
+
+### Eliminating Stale Audio Crossfades
+One remaining artifact is that if a loop occurs while audio is playing, the system may attempt to crossfade from the *previous* bar's audio to the *new* bar's audio at the loop destination. Because the transport has jumped, this crossfade is often musically irrelevant.
+- **Speculation:** Resetting the active `palette` and `offset` slots (or clearing the `control` index history) upon `main_looped` could force the next bar hit to perform a "hard jump" rather than a crossfade. This would ensure that the very first sound heard at the start of the loop is exclusively from the new source.
+
+### Temporal State Reset
+The `last_track_scan` variable tracks the local position of a track.
+- **Speculation:** Resetting `tr->last_track_scan` to `-1.0` upon `main_looped` would force the track to re-enter the "Initial Bar Trigger" logic. This ensures that the detection for the new transport position is handled with the same "cold start" reliability as when the object is first initialized, potentially avoiding redundant `TYPE_LOOP` events or complex range calculations in the same vector as the loop.
+
+### Visualization and Timer Synchronization
+- **Speculation:** The `tr->xf.elapsed` timer and visualization flags (like `viz_trigger_dirty` and `viz_dirty`) could be explicitly reset. While the `{"clear": 1}` command resets the UI, ensuring the internal visualization state is synchronized prevents the delivery of "stale" visual updates from the previous song cycle immediately after the loop. Similarly, resetting the `elapsed` timer to match the new `f_curr` would provide a consistent temporal baseline for the new cycle's crossfade ramps.
