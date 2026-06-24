@@ -52,7 +52,27 @@ When a loop occurs (`main_looped` or `track_looped`), the search `start` for a b
 
 This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0 by trying to search from `r_last + 1`. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger is attempted. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the condition `latest_j >= start` is met.
 
-## 3. Dual-Slot Crossfade Mechanism
+## 3. The Role of `loop_start` in Temporal Alignment
+
+While `weaver~` is agnostic to the internal value of the `loop_start` parameter, this parameter (defined during the transcript generation phase in `buildspans`) is the primary factor in determining the relationship between the ramp and the musical content.
+
+### Temporal Phase Shifting
+`loop_start` acts as a temporal phase shift. In `buildspans`, it is used to calculate the note positions relative to the start of the span:
+`relative_timestamp = calc_timestamp - offset + loop_start`
+
+Because the bar keys in the dictionary (e.g., "0", "4000", "8000") are derived from this `relative_timestamp`, the `loop_start` value effectively shifts which musical slice is assigned to "Bar 0".
+
+### Interaction with the Loop Override
+When a loop occurs in `weaver~`, the **Loop Override** forces the object to look for the bar keyed to `0.0` (or the nearest boundary after 0.0).
+- If `loop_start` was `0.0`, Bar 0 corresponds exactly to the `offset` point in the audio.
+- If `loop_start` was `500ms`, Bar 0 corresponds to a point in the audio `500ms` **before** the offset.
+
+Because the **Loop Override** and **Search Range Quantization** safeguards ensure that `weaver~` always hits the `0.0` key immediately upon reset, the musical alignment established by `loop_start` is preserved across transport loops. `weaver~` doesn't need to know the value of `loop_start`; it simply trusts that the "0" key in the dictionary represents the intended musical start of the loop cycle.
+
+### Safeguard Synchronization
+The `loop_start` value is critical for the **Initial Bar Trigger** logic. When `weaver~` starts or resets, it calculates `initial_bar = floor(tr_scan / bar_len) * bar_len`. If the transcript was generated with a `loop_start` that wasn't a multiple of `bar_len`, this initial trigger would still point to the correct bar key because the quantization logic is identical in both objects. The `weaver~` safeguards (forcing the search range to start at 0) ensure that the first "shifted" bar is never skipped by a transport jump.
+
+## 4. Dual-Slot Crossfade Mechanism
 
 `weaver~` uses a dual-slot architecture to allow seamless transitions between different audio sources (palettes) or different temporal offsets within the same source.
 
@@ -73,7 +93,7 @@ In the DSP loop, `ramp_process` is called for both slots:
 
 The `ramp_process` is "smart": it uses a sliding amplitude follower (`x->last_amp`) and a target length (`high_ms`) to ensure that crossfades are fast during silence but smooth during active audio, preventing clicks.
 
-## 4. Palette and Offset Temporal Anchoring
+## 5. Palette and Offset Temporal Anchoring
 
 A critical aspect of the "weaving" process is how source audio is mapped to the destination.
 
@@ -89,7 +109,7 @@ By storing the *difference*, the DSP thread can calculate the correct source sam
 
 This "anchoring" ensures that even if the ramp jumps or fluctuates, the audio source stays perfectly locked to the intended rhythmic position.
 
-## 5. Summary of Loop Interaction
+## 6. Summary of Loop Interaction
 
 When the input ramp loops:
 1.  **DSP Detects:** `main_looped = true`.
