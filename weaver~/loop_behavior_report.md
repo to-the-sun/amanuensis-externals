@@ -32,15 +32,27 @@ The `busy` state of a track is a compound state controlled by two primary flags:
     - **Metadata Processed:** `tr->waiting_for_dict` is 0.
     Only when all three are true is `tr->busy` set back to 0.
 
-### The Loop Override
-The condition `(!tr->busy || main_looped)` in the bar detection logic is critical.
-*   **Normal Playback:** If the track is `busy` (e.g., still fading from the previous bar), it will ignore new bar hits to prevent "machine-gunning" of triggers.
-*   **The Global Loop Exception:** If `main_looped` is true (the global song ramp reset), the `busy` check is bypassed. This forces the track to immediately look for the first bar of the loop (time 0.0), even if it was in the middle of a fade-out at the end of the previous cycle.
+### The Clean Slate Logic (Global Transport Reset)
+To ensure arbitrary loop points trigger correctly and stale metadata is elegantly discarded, the system implements a "Clean Slate" reset specifically for global transport jumps (`main_looped`).
 
-### Search Range Quantization
-When a loop occurs (`main_looped` or `track_looped`), the search `start` for a bar hit is forced to `0`. 
-`long long start = (track_looped || main_looped) ? 0 : r_last + 1;`
-This ensures that the discontinuity doesn't cause the object to skip over the bar at position 0.0. If `latest_j` (the most recent bar boundary) is `>= start`, a trigger occurs. In a loop, `latest_j` will almost always be 0.0, and since `start` is now 0, the hit is guaranteed to be detected and the track immediately enters the `busy=1, waiting_for_dict=1` state for the new cycle.
+**Implementation:** Upon `main_looped`, the system performs an atomic reset of the entire state pipeline:
+1.  **Force Ramps to Done:** Both crossfade ramps are snapped to their current targets by updating their internal `go` time.
+2.  **Clear Track Pipeline Flags:** `tr->waiting_for_dict`, `tr->has_pending_data`, and `tr->busy` are all reset to 0.
+3.  **Drain the FIFO:** The global bar hit FIFO is cleared (`x->fifo_head = x->fifo_tail`). This effectively cancels any metadata lookup requests that have been queued in the DSP thread but not yet processed by the main thread.
+
+#### Effectiveness and Elegance
+*   **Stale Metadata Mitigation:** Draining the FIFO is the primary defense against race conditions. Since the FIFO is the only communication channel for dictionary lookups, clearing it ensures the main thread perform no further stale lookups for the previous cycle.
+*   **Atomic Reset:** By clearing all flags and snapping ramps simultaneously, the track becomes truly idle at the exact sample of the transport jump. This allows the track to immediately (in the same DSP vector) detect and trigger the *correct* bar key for the new transport position.
+*   **Arbitrary Loop Compatibility:** This architecture is agnostic to bar boundaries. It doesn't force a search to Bar 0; instead, it readies the track to search for *any* bar relevant to the destination time.
+*   **Sonics:** Snapping ramps at a transport jump is sonically transparent as the jump itself is a massive audio discontinuity.
+
+#### Lifecycle of `main_looped`
+The `main_looped` flag is a local boolean within the DSP loop. It is set to `true` for **exactly one sample**—the sample where the incoming ramp value is detected to be less than the previous sample. As soon as the ramp resumes its upward movement on the next sample, the comparison `current_scan < last_scan` becomes false, and `main_looped` returns to `false`.
+
+#### Potential for Missed Bar Triggers
+In the current implementation, there is a technical possibility that a reset could be missed if the loop jump lands in a very specific way:
+1.  **Millisecond Quantization:** The logic currently requires `r_scan != r_last` (a change in the integer millisecond value) to trigger a bar check. If a loop jump occurs but the destination time `current_scan` falls within the same integer millisecond as the source time `last_scan` (e.g., jumping from 1000.9ms to 1000.1ms), the `r_scan != r_last` check will fail and the trigger will be skipped.
+2.  **Global Reset vs. Local Loop:** Currently, `main_looped` (global) triggers the Clean Slate reset to ensure re-triggering, while `track_looped` (local) does not. This is intentional as `track_looped` events are part of the steady-state performance of a track and do not signify a fundamental transport shift that requires a state reset.
 
 ## 3. Dual-Slot Crossfade Mechanism
 

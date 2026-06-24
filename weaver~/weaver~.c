@@ -1087,6 +1087,20 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
         double current_scan = ramp_in[i];
         int main_looped = (current_scan < last_scan);
 
+        if (main_looped) {
+            x->fifo_head = x->fifo_tail;
+            for (long t = 0; t < x->track_cache_count; t++) {
+                t_weaver_track *tr = x->track_cache[t];
+                if (tr) {
+                    tr->busy = 0;
+                    tr->waiting_for_dict = 0;
+                    tr->has_pending_data = 0;
+                    tr->xf.ramp1.go = (double)tr->xf.elapsed - tr->xf.ramp1.length;
+                    tr->xf.ramp2.go = (double)tr->xf.elapsed - tr->xf.ramp2.length;
+                }
+            }
+        }
+
         for (long t = 0; t < x->track_cache_count; t++) {
             t_weaver_track *tr = x->track_cache[t];
             if (!tr) continue;
