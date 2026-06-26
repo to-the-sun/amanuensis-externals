@@ -57,6 +57,8 @@ typedef struct _analyze {
     // Async Worker
     t_async_worker* worker;
     t_critical lock;
+    int invalidated;
+    int pending_analysis;
 
 } t_analyze;
 
@@ -108,6 +110,8 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->last_analysis_frame = 0;
         for(int i=0; i<MAX_BANDS; i++) x->last_peak_frame[i] = -1;
 
+        x->invalidated = 0;
+        x->pending_analysis = 0;
         x->sample_rate = 44100.0;
 
         // Load DLL
@@ -153,6 +157,10 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
 void analyze_free(t_analyze* x) {
     dsp_free((t_pxobject*)x);
+
+    critical_enter(x->lock);
+    x->invalidated = 1;
+    critical_exit(x->lock);
 
     if (x->worker) {
         async_worker_release(x->worker);
@@ -210,13 +218,19 @@ void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins,
 
     int hop_samples = (int)(x->sample_rate * 0.001 * ANALYSIS_HOP_MS);
     if (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
-         async_worker_enqueue(x->worker, x, (method)analyze_worker_task, gensym("analyze"), 0, NULL);
-         x->last_analysis_frame = x->current_sample_count;
+        if (!x->pending_analysis) {
+            x->pending_analysis = 1;
+            async_worker_enqueue(x->worker, x, (method)analyze_worker_task, gensym("analyze"), 0, NULL);
+            x->last_analysis_frame = x->current_sample_count;
+        }
     }
 }
 
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    if (!x->analyzer || !x->analyzer_analyze_audio) return;
+    if (x->invalidated || !x->analyzer || !x->analyzer_analyze_audio) {
+        x->pending_analysis = 0;
+        return;
+    }
 
     // Linearize audio for the DLL (approx last 15 seconds)
     int analysis_seconds = 15;
@@ -224,6 +238,10 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
 
     float* linear_audio = (float*)malloc(sizeof(float) * analysis_samples);
+    if (!linear_audio) {
+        x->pending_analysis = 0;
+        return;
+    }
     int read_ptr = (x->audio_buffer_write_ptr - analysis_samples + x->audio_buffer_size) % x->audio_buffer_size;
     for (int i = 0; i < analysis_samples; i++) {
         linear_audio[i] = x->audio_buffer[read_ptr];
@@ -248,20 +266,22 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     int total_peaks = 0;
                     for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
                     int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
-                    int curr = 0;
-                    for (int bb = 0; bb < MAX_BANDS; bb++) {
-                        for (int k = 0; k < result.bands[bb].num_peaks; k++) {
-                            all_valid_peaks[curr++] = result.bands[bb].peaks[k];
+                    if (all_valid_peaks) {
+                        int curr = 0;
+                        for (int bb = 0; bb < MAX_BANDS; bb++) {
+                            for (int k = 0; k < result.bands[bb].num_peaks; k++) {
+                                all_valid_peaks[curr++] = result.bands[bb].peaks[k];
+                            }
                         }
-                    }
 
-                    if (x->analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
-                        t_atom out_args[2];
-                        atom_setlong(out_args, b);
-                        atom_setfloat(out_args + 1, pr.total_score);
-                        defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+                        if (x->analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
+                            t_atom out_args[2];
+                            atom_setlong(out_args, b);
+                            atom_setfloat(out_args + 1, pr.total_score);
+                            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+                        }
+                        free(all_valid_peaks);
                     }
-                    free(all_valid_peaks);
                     x->last_peak_frame[b] = peak_abs_frame;
                 }
             }
@@ -281,6 +301,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     }
 
     free(linear_audio);
+    x->pending_analysis = 0;
 }
 
 void analyze_output_peak(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
