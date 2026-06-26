@@ -232,8 +232,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Linearize audio for the DLL (approx last 15 seconds)
-    int analysis_seconds = 15;
+    // Linearize audio for the DLL (reduced to last 2 seconds for performance)
+    int analysis_seconds = 2;
     int analysis_samples = (int)(x->sample_rate * analysis_seconds);
     if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
 
