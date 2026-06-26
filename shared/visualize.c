@@ -4,6 +4,7 @@
 #include "ext_systhread.h"
 #include <winsock2.h>
 #include <windows.h>
+#include <shellapi.h>
 #include <stdio.h>
 
 #pragma comment(lib, "ws2_32.lib")
@@ -17,6 +18,9 @@ typedef struct {
     SOCKET sock;
     struct sockaddr_in addr;
     DWORD last_connect_attempt;
+    DWORD last_launch_attempt;
+    char script_name[64];
+    char script_path[MAX_PATH_CHARS];
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
 
@@ -27,8 +31,8 @@ typedef struct _viz_queue_item {
     struct _viz_queue_item *next;
 } t_viz_queue_item;
 
-static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
-static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
+static t_viz_socket crucible_viz = { INVALID_SOCKET };
+static t_viz_socket weaver_viz = { INVALID_SOCKET };
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -57,14 +61,34 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     return NULL;
 }
 
-static void viz_socket_init(t_viz_socket *vs, int port) {
+static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name) {
     memset((char *) &vs->addr, 0, sizeof(vs->addr));
     vs->addr.sin_family = AF_INET;
     vs->addr.sin_port = htons(port);
     vs->addr.sin_addr.S_un.S_addr = inet_addr(SERVER);
     vs->sock = INVALID_SOCKET;
     vs->last_connect_attempt = 0;
+    vs->last_launch_attempt = 0;
+    strncpy(vs->script_name, script_name, 64);
+    vs->script_path[0] = '\0';
     systhread_mutex_new(&vs->mutex, 0);
+
+    // Try to resolve absolute path for the script
+    short pathid = 0;
+    t_fourcc type = 0;
+    char filename[MAX_FILENAME_CHARS];
+
+    // 1. Try "shared/script_name"
+    snprintf(filename, MAX_FILENAME_CHARS, "shared/%s", script_name);
+    if (locatefile_extended(filename, &pathid, &type, NULL, 0) == 0) {
+        path_toabsolutesystempath(pathid, filename, vs->script_path);
+    } else {
+        // 2. Try just "script_name"
+        strncpy(filename, script_name, MAX_FILENAME_CHARS);
+        if (locatefile_extended(filename, &pathid, &type, NULL, 0) == 0) {
+            path_toabsolutesystempath(pathid, filename, vs->script_path);
+        }
+    }
 }
 
 // Background thread function prototype
@@ -76,8 +100,8 @@ int visualize_init() {
         if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
             return 1;
         }
-        viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
-        viz_socket_init(&weaver_viz, PORT_WEAVER);
+        viz_socket_init(&crucible_viz, PORT_CRUCIBLE, "visualizer.py");
+        viz_socket_init(&weaver_viz, PORT_WEAVER, "debug_visualizer.py");
 
         systhread_mutex_new(&queue_mutex, 0);
         systhread_cond_new(&viz_cond, 0);
@@ -147,6 +171,13 @@ static void ensure_connected(t_viz_socket *vs) {
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
+
+                // Auto-launch if connection failed and we have a path
+                if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000)) {
+                    vs->last_launch_attempt = now;
+                    // Launch via python. ShellExecuteA is suitable for this.
+                    ShellExecuteA(NULL, "open", "python", vs->script_path, NULL, SW_SHOWNORMAL);
+                }
             }
         }
     }

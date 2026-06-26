@@ -4,7 +4,7 @@ LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
 buildspans.mxe64: buildspans.c ../crucible/crucible.c ../shared/visualize.c ../shared/logging.c ../shared/async_worker.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -DNO_EXT_MAIN -o buildspans.mxe64 buildspans.c ../crucible/crucible.c ../shared/visualize.c ../shared/logging.c ../shared/async_worker.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32
+	$(CC) $(CFLAGS) -DNO_EXT_MAIN -o buildspans.mxe64 buildspans.c ../crucible/crucible.c ../shared/visualize.c ../shared/logging.c ../shared/async_worker.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32 -lshell32
 
 clean:
 	rm -f buildspans.mxe64

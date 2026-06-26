@@ -4,7 +4,7 @@ LDFLAGS = -L../max-sdk/source/max-sdk-base/c74support/max-includes/x64 -L../max-
 COMMON_SOURCES = ../max-sdk/source/max-sdk-base/c74support/max-includes/common/commonsyms.c
 
 rebar.mxe64: rebar.c ../shared/visualize.c ../shared/async_worker.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -o rebar.mxe64 rebar.c ../shared/visualize.c ../shared/async_worker.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32
+	$(CC) $(CFLAGS) -o rebar.mxe64 rebar.c ../shared/visualize.c ../shared/async_worker.c $(COMMON_SOURCES) $(LDFLAGS) -lws2_32 -lshell32
 
 clean:
 	rm -f rebar.mxe64
