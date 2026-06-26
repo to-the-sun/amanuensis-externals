@@ -21,13 +21,12 @@ typedef struct {
     DWORD last_launch_attempt;
     char script_name[64];
     char script_path[MAX_PATH_CHARS];
-    void *object_context;
-    int launch_in_progress;
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
 
 typedef struct _viz_queue_item {
     t_viz_socket *vs;
+    void *x;    // Object context for logging/launching
     char *type; // Resolved type string
     char *message;
     struct _viz_queue_item *next;
@@ -71,8 +70,6 @@ static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name,
     vs->sock = INVALID_SOCKET;
     vs->last_connect_attempt = 0;
     vs->last_launch_attempt = 0;
-    vs->object_context = x;
-    vs->launch_in_progress = 0;
     strncpy(vs->script_name, script_name, 64);
     vs->script_path[0] = '\0';
     systhread_mutex_new(&vs->mutex, 0);
@@ -191,10 +188,24 @@ void visualize_cleanup() {
     }
 }
 
-void visualize_launch_main_thread(t_viz_socket *vs) {
-    if (!vs || vs->script_path[0] == '\0') return;
+typedef struct _launch_ctx {
+    t_viz_socket *vs;
+    void *x;
+} t_launch_ctx;
 
-    object_post(vs->object_context, "visualize: attempting to launch %s", vs->script_name);
+void visualize_launch_main_thread(void *x, t_symbol *s, short argc, t_atom *av) {
+    t_launch_ctx *ctx = (t_launch_ctx *)x;
+    if (!ctx) return;
+    t_viz_socket *vs = ctx->vs;
+    void *obj = ctx->x;
+
+    if (!vs || vs->script_path[0] == '\0') {
+        sysmem_freeptr(ctx);
+        return;
+    }
+
+    object_post(obj, "visualize: attempting to launch %s", vs->script_name);
+    object_post(obj, "visualize: script path: %s", vs->script_path);
 
     char cmd_args[MAX_PATH_CHARS + 16];
     snprintf(cmd_args, sizeof(cmd_args), "\"%s\"", vs->script_path);
@@ -204,37 +215,37 @@ void visualize_launch_main_thread(t_viz_socket *vs) {
     // 1. Try 'python'
     res = ShellExecuteA(NULL, "open", "python", cmd_args, NULL, SW_SHOWNORMAL);
     if ((INT_PTR)res <= 32) {
-        object_error(vs->object_context, "visualize: failed with 'python' (%d), trying 'pythonw'...", (int)(INT_PTR)res);
+        object_error(obj, "visualize: failed with 'python' (%lld), trying 'pythonw'...", (long long)(INT_PTR)res);
         // 2. Try 'pythonw' (windowless interpreter)
         res = ShellExecuteA(NULL, "open", "pythonw", cmd_args, NULL, SW_SHOWNORMAL);
         if ((INT_PTR)res <= 32) {
-            object_error(vs->object_context, "visualize: failed with 'pythonw' (%d), trying 'py'...", (int)(INT_PTR)res);
+            object_error(obj, "visualize: failed with 'pythonw' (%lld), trying 'py'...", (long long)(INT_PTR)res);
             // 3. Try 'py'
             res = ShellExecuteA(NULL, "open", "py", cmd_args, NULL, SW_SHOWNORMAL);
             if ((INT_PTR)res <= 32) {
-                object_error(vs->object_context, "visualize: failed with 'py' (%d), trying direct execution...", (int)(INT_PTR)res);
+                object_error(obj, "visualize: failed with 'py' (%lld), trying direct execution...", (long long)(INT_PTR)res);
                 // 4. Direct execution
                 res = ShellExecuteA(NULL, "open", vs->script_path, NULL, NULL, SW_SHOWNORMAL);
                 if ((INT_PTR)res <= 32) {
-                    object_error(vs->object_context, "visualize: all launch attempts failed for %s (final error %d)", vs->script_name, (int)(INT_PTR)res);
+                    object_error(obj, "visualize: all launch attempts failed for %s (final error %lld)", vs->script_name, (long long)(INT_PTR)res);
                 } else {
-                    object_post(vs->object_context, "visualize: successfully launched %s via file association", vs->script_name);
+                    object_post(obj, "visualize: successfully launched %s via file association", vs->script_name);
                 }
             } else {
-                object_post(vs->object_context, "visualize: successfully launched %s via 'py'", vs->script_name);
+                object_post(obj, "visualize: successfully launched %s via 'py'", vs->script_name);
             }
         } else {
-            object_post(vs->object_context, "visualize: successfully launched %s via 'pythonw'", vs->script_name);
+            object_post(obj, "visualize: successfully launched %s via 'pythonw'", vs->script_name);
         }
     } else {
-        object_post(vs->object_context, "visualize: successfully launched %s via 'python'", vs->script_name);
+        object_post(obj, "visualize: successfully launched %s via 'python'", vs->script_name);
     }
-    vs->launch_in_progress = 0;
+    sysmem_freeptr(ctx);
 }
 
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static void ensure_connected(t_viz_socket *vs) {
+static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
         DWORD now = GetTickCount();
         if (now - vs->last_connect_attempt < 2000) return;
@@ -257,10 +268,14 @@ static void ensure_connected(t_viz_socket *vs) {
                 vs->sock = INVALID_SOCKET;
 
                 // Auto-launch if connection failed and we have a path
-                if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000) && !vs->launch_in_progress) {
+                if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000)) {
                     vs->last_launch_attempt = now;
-                    vs->launch_in_progress = 1;
-                    defer_low(vs->object_context, (method)visualize_launch_main_thread, (t_symbol *)vs, 0, NULL);
+                    object_post(x, "visualize: triggering deferred launch for %s", vs->script_name);
+
+                    t_launch_ctx *ctx = (t_launch_ctx *)sysmem_newptr(sizeof(t_launch_ctx));
+                    ctx->vs = vs;
+                    ctx->x = x;
+                    defer_low(ctx, (method)visualize_launch_main_thread, NULL, 0, NULL);
                 }
             }
         }
@@ -269,8 +284,8 @@ static void ensure_connected(t_viz_socket *vs) {
 
 // Internal helper for socket sending logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static int perform_send(t_viz_socket *vs, const char *type, const char *message) {
-    ensure_connected(vs);
+static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
+    ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) return -1;
 
     long buf_size = 524288;
@@ -344,7 +359,7 @@ void *viz_worker_thread(void *arg) {
 
         if (item) {
             systhread_mutex_lock(item->vs->mutex);
-            perform_send(item->vs, item->type, item->message);
+            perform_send(item->vs, item->x, item->type, item->message);
             systhread_mutex_unlock(item->vs->mutex);
 
             sysmem_freeptr(item->type);
@@ -377,6 +392,7 @@ void visualize(void *x, const char *message) {
     }
 
     item->vs = vs;
+    item->x = x;
     item->type = (char *)sysmem_newptr(strlen(type_static) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
 
@@ -414,7 +430,7 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
     int received = -1;
     systhread_mutex_lock(vs->mutex);
 
-    if (perform_send(vs, type, message) == 0) {
+    if (perform_send(vs, x, type, message) == 0) {
         fd_set read_fds;
         struct timeval tv;
         tv.tv_sec = 1;

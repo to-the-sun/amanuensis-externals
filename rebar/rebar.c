@@ -680,6 +680,8 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->out_reach = sdk_outlet_new((t_object *)x, NULL);
         x->out_busy = sdk_outlet_new((t_object *)x, NULL);
 
+        visualize_init((t_object *)x);
+
         critical_enter(g_rebar_crit);
         g_instantiating_rebar = x;
 
@@ -742,6 +744,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
 }
 
 void rebar_free(t_rebar *x) {
+    visualize_cleanup();
     if (x->worker) {
         async_worker_release(x->worker);
     }
