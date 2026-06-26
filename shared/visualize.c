@@ -21,6 +21,8 @@ typedef struct {
     DWORD last_launch_attempt;
     char script_name[64];
     char script_path[MAX_PATH_CHARS];
+    void *object_context;
+    int launch_in_progress;
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
 
@@ -61,7 +63,7 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     return NULL;
 }
 
-static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name) {
+static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name, void *x) {
     memset((char *) &vs->addr, 0, sizeof(vs->addr));
     vs->addr.sin_family = AF_INET;
     vs->addr.sin_port = htons(port);
@@ -69,6 +71,8 @@ static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name)
     vs->sock = INVALID_SOCKET;
     vs->last_connect_attempt = 0;
     vs->last_launch_attempt = 0;
+    vs->object_context = x;
+    vs->launch_in_progress = 0;
     strncpy(vs->script_name, script_name, 64);
     vs->script_path[0] = '\0';
     systhread_mutex_new(&vs->mutex, 0);
@@ -82,32 +86,65 @@ static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name)
     snprintf(filename, MAX_FILENAME_CHARS, "shared/%s", script_name);
     if (locatefile_extended(filename, &pathid, &type, NULL, 0) == 0) {
         path_toabsolutesystempath(pathid, filename, vs->script_path);
-    } else {
-        // 2. Try just "script_name"
+    }
+
+    // 2. Try just "script_name"
+    if (vs->script_path[0] == '\0') {
         strncpy(filename, script_name, MAX_FILENAME_CHARS);
         if (locatefile_extended(filename, &pathid, &type, NULL, 0) == 0) {
             path_toabsolutesystempath(pathid, filename, vs->script_path);
         }
     }
 
+    // 3. Try relative to the object's path
+    if (vs->script_path[0] == '\0' && x) {
+        t_symbol *name = object_classname(x);
+        char ext_filename[MAX_FILENAME_CHARS];
+        snprintf(ext_filename, MAX_FILENAME_CHARS, "%s.mxe64", name->s_name);
+
+        if (locatefile_extended(ext_filename, &pathid, &type, NULL, 0) == 0) {
+            char ext_path[MAX_PATH_CHARS];
+            path_toabsolutesystempath(pathid, ext_filename, ext_path);
+
+            char *last_slash = strrchr(ext_path, '\\');
+            if (!last_slash) last_slash = strrchr(ext_path, '/');
+            if (last_slash) {
+                *last_slash = '\0';
+                // Try ../shared/script_name
+                snprintf(vs->script_path, MAX_PATH_CHARS, "%s\\..\\shared\\%s", ext_path, script_name);
+                if (GetFileAttributesA(vs->script_path) == INVALID_FILE_ATTRIBUTES) {
+                    // Try shared/script_name
+                    snprintf(vs->script_path, MAX_PATH_CHARS, "%s\\shared\\%s", ext_path, script_name);
+                    if (GetFileAttributesA(vs->script_path) == INVALID_FILE_ATTRIBUTES) {
+                         vs->script_path[0] = '\0';
+                    }
+                }
+            }
+        }
+    }
+
     if (vs->script_path[0] != '\0') {
-        object_post(NULL, "visualize: found %s at %s", script_name, vs->script_path);
+        // Normalize slashes to Windows style
+        for (int i = 0; vs->script_path[i]; i++) {
+            if (vs->script_path[i] == '/') vs->script_path[i] = '\\';
+        }
+        object_post(x, "visualize: found %s at %s", script_name, vs->script_path);
     } else {
-        object_error(NULL, "visualize: could not locate %s", script_name);
+        object_error(x, "visualize: could not locate %s", script_name);
     }
 }
 
 // Background thread function prototype
 void *viz_worker_thread(void *arg);
 
-int visualize_init() {
+int visualize_init(void *x) {
     if (ref_count == 0) {
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
             return 1;
         }
-        viz_socket_init(&crucible_viz, PORT_CRUCIBLE, "visualizer.py");
-        viz_socket_init(&weaver_viz, PORT_WEAVER, "debug_visualizer.py");
+        viz_socket_init(&crucible_viz, PORT_CRUCIBLE, "visualizer.py", x);
+        viz_socket_init(&weaver_viz, PORT_WEAVER, "debug_visualizer.py", x);
 
         systhread_mutex_new(&queue_mutex, 0);
         systhread_cond_new(&viz_cond, 0);
@@ -154,6 +191,47 @@ void visualize_cleanup() {
     }
 }
 
+void visualize_launch_main_thread(t_viz_socket *vs) {
+    if (!vs || vs->script_path[0] == '\0') return;
+
+    object_post(vs->object_context, "visualize: attempting to launch %s", vs->script_name);
+
+    char cmd_args[MAX_PATH_CHARS + 16];
+    snprintf(cmd_args, sizeof(cmd_args), "\"%s\"", vs->script_path);
+
+    HINSTANCE res;
+
+    // 1. Try 'python'
+    res = ShellExecuteA(NULL, "open", "python", cmd_args, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)res <= 32) {
+        object_error(vs->object_context, "visualize: failed with 'python' (%d), trying 'pythonw'...", (int)(INT_PTR)res);
+        // 2. Try 'pythonw' (windowless interpreter)
+        res = ShellExecuteA(NULL, "open", "pythonw", cmd_args, NULL, SW_SHOWNORMAL);
+        if ((INT_PTR)res <= 32) {
+            object_error(vs->object_context, "visualize: failed with 'pythonw' (%d), trying 'py'...", (int)(INT_PTR)res);
+            // 3. Try 'py'
+            res = ShellExecuteA(NULL, "open", "py", cmd_args, NULL, SW_SHOWNORMAL);
+            if ((INT_PTR)res <= 32) {
+                object_error(vs->object_context, "visualize: failed with 'py' (%d), trying direct execution...", (int)(INT_PTR)res);
+                // 4. Direct execution
+                res = ShellExecuteA(NULL, "open", vs->script_path, NULL, NULL, SW_SHOWNORMAL);
+                if ((INT_PTR)res <= 32) {
+                    object_error(vs->object_context, "visualize: all launch attempts failed for %s (final error %d)", vs->script_name, (int)(INT_PTR)res);
+                } else {
+                    object_post(vs->object_context, "visualize: successfully launched %s via file association", vs->script_name);
+                }
+            } else {
+                object_post(vs->object_context, "visualize: successfully launched %s via 'py'", vs->script_name);
+            }
+        } else {
+            object_post(vs->object_context, "visualize: successfully launched %s via 'pythonw'", vs->script_name);
+        }
+    } else {
+        object_post(vs->object_context, "visualize: successfully launched %s via 'python'", vs->script_name);
+    }
+    vs->launch_in_progress = 0;
+}
+
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
 static void ensure_connected(t_viz_socket *vs) {
@@ -179,16 +257,10 @@ static void ensure_connected(t_viz_socket *vs) {
                 vs->sock = INVALID_SOCKET;
 
                 // Auto-launch if connection failed and we have a path
-                if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000)) {
+                if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000) && !vs->launch_in_progress) {
                     vs->last_launch_attempt = now;
-                    object_post(NULL, "visualize: attempting to launch %s", vs->script_name);
-
-                    // Wrap path in quotes to handle spaces
-                    char cmd_args[MAX_PATH_CHARS + 2];
-                    snprintf(cmd_args, sizeof(cmd_args), "\"%s\"", vs->script_path);
-
-                    // Launch via python. ShellExecuteA is suitable for this.
-                    ShellExecuteA(NULL, "open", "python", cmd_args, NULL, SW_SHOWNORMAL);
+                    vs->launch_in_progress = 1;
+                    defer_low(vs->object_context, (method)visualize_launch_main_thread, (t_symbol *)vs, 0, NULL);
                 }
             }
         }

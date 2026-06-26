@@ -542,7 +542,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 
         // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
-        visualize_init();
+        visualize_init((t_object *)x);
         x->out_bar_data = outlet_new((t_object *)x, NULL); // Generic outlet for logs
         x->track_outlet = outlet_new((t_object *)x, NULL);
         x->span_outlet = outlet_new((t_object *)x, NULL);

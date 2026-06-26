@@ -163,7 +163,7 @@ void ext_main(void *r) {
 void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
     t_smartloop *x = (t_smartloop *)object_alloc(smartloop_class);
     if (x) {
-        visualize_init();
+        visualize_init((t_object *)x);
         x->dict_name = _sym_nothing;
         x->log = 0;
         x->visualize = 1;

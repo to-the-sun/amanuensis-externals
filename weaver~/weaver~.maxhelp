@@ -51,8 +51,6 @@
 			}
 , 			{
 				"box" : 				{
-					"id" : "obj-8",
-					"maxclass" : "attrui",
 					"attr" : "visualize",
 					"id" : "obj-9",
 					"maxclass" : "attrui",

@@ -171,7 +171,7 @@ void ext_main(void *r) {
 void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
     t_crucible *x = (t_crucible *)object_alloc(crucible_class);
     if (x) {
-        visualize_init();
+        visualize_init((t_object *)x);
         x->challenger_dict = dictionary_new();
         x->last_track_id = gensym("");
         x->incumbent_dict_name = gensym("");

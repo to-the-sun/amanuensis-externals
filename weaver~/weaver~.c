@@ -610,7 +610,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
     t_weaver *x = (t_weaver *)object_alloc(weaver_class);
 
     if (x) {
-        visualize_init();
+        visualize_init((t_object *)x);
         x->poly_prefix = _sym_nothing;
         x->log = 0;
         x->visualize = 0;

@@ -5,7 +5,7 @@
 
 // Call this in your object's 'new' function
 // Returns 0 on success, non-zero on failure
-int visualize_init();
+int visualize_init(void *x);
 
 // Call this in your object's 'free' function
 void visualize_cleanup();
