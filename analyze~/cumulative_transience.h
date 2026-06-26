@@ -1,13 +1,14 @@
 #ifndef CUMULATIVE_TRANSIENCE_H
 #define CUMULATIVE_TRANSIENCE_H
 
+#include <stdint.h>
 #include <stdbool.h>
 
+#define BUFFER_LEN 5001
 #define MAX_BANDS 4
-#define BUFFER_LEN 15000
-#define MAX_QUALIFIERS 100
-#define MAX_EVENTS 1024
-#define MAX_PEAK_HISTORY 1024
+#define MAX_QUALIFIERS 256
+#define MAX_PEAK_HISTORY 8192
+#define MAX_EVENTS 32768
 
 typedef struct {
     double ms;
@@ -29,21 +30,15 @@ typedef struct {
     double std_dev;
     double mean;
     double contrast;
+    double peak_std;
     double rating;
     bool buffer_updated;
+    double highest_peak_ms;
+    bool highest_peak_valid;
+    double rolling_score;
     double min_score_seen;
     double max_score_seen;
-    bool highest_peak_valid;
-    double highest_peak_ms;
-    double peak_std;
-    double rolling_score;
 } AnalyzerMetrics;
-
-typedef struct {
-    int frame;
-    int type; // 0: ADD, 1: REMOVE
-    double score;
-} ScoreEvent;
 
 typedef struct SnapshotEntry {
     int p_idx;
@@ -52,25 +47,56 @@ typedef struct SnapshotEntry {
 } SnapshotEntry;
 
 typedef struct {
-    double max_peak;
+    int frame;
+    int type; // 0 for ADD, 1 for REMOVE
+    double score;
+} ScoreEvent;
+
+typedef struct {
+    double accumulated_buffer[BUFFER_LEN];
     double buffer_times[BUFFER_LEN];
+    double max_peak;
+
     double min_score_seen;
     double max_score_seen;
-    double last_score_avg;
-    SnapshotEntry* snapshot_heads[MAX_BANDS];
-    SnapshotEntry* snapshot_tails[MAX_BANDS];
-    double accumulated_buffer[BUFFER_LEN];
     double total_score_sum;
     int score_count;
-    int event_count;
+
+    // Rolling score
     ScoreEvent upcoming_events[MAX_EVENTS];
+    int event_count;
     int event_read_ptr;
-    int current_window_count;
+
     double current_window_scores[MAX_EVENTS];
-    int peak_history_count;
+    int current_window_count;
+    double last_score_avg;
+
+    // Peak history
     double peak_history[MAX_PEAK_HISTORY];
+    int peak_history_count;
+
+    // Snapshots tracking (queue per band)
+    SnapshotEntry* snapshot_heads[MAX_BANDS];
+    SnapshotEntry* snapshot_tails[MAX_BANDS];
 } TransientAnalyzer;
 
+TransientAnalyzer* analyzer_create(double max_peak_value);
+void analyzer_destroy(TransientAnalyzer* self);
+
+int analyzer_process_peak(TransientAnalyzer* self,
+                          int p_idx,
+                          int band_idx,
+                          double time,
+                          const float* env_ptr,
+                          int env_len,
+                          const int* all_valid_peak_indices,
+                          int all_valid_count,
+                          PeakResult* result_out);
+
+void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
+double* analyzer_get_buffer(TransientAnalyzer* self);
+
+// Full analysis structures
 typedef struct {
     float* envelope;
     float* rolling_threshold;
@@ -81,8 +107,10 @@ typedef struct {
 typedef struct {
     float* times;
     int num_frames;
-    BandAnalysis bands[MAX_BANDS];
     float max_peak_value;
+    BandAnalysis bands[MAX_BANDS];
+
+    // Batch analysis metrics history
     double* rolling_scores;
     double* ratings;
     double* std_devs;
@@ -90,23 +118,8 @@ typedef struct {
     double* peak_stds;
 } FullAnalysisResult;
 
-// Function prototypes
-TransientAnalyzer* analyzer_create(double max_peak_value);
-void analyzer_destroy(TransientAnalyzer* self);
-int analyzer_process_peak(TransientAnalyzer* self,
-                          int p_idx,
-                          int band_idx,
-                          double time,
-                          const float* env_ptr,
-                          int env_len,
-                          const int* all_valid_peak_indices,
-                          int all_valid_count,
-                          PeakResult* result_out);
-void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
-double* analyzer_get_buffer(TransientAnalyzer* self);
 int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* result_out);
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
-void analyzer_debug_mel_filters(int sr, int n_fft, int n_mels, double* filters_out);
 
-#endif // CUMULATIVE_TRANSIENCE_H
+#endif
