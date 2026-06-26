@@ -89,6 +89,12 @@ static void viz_socket_init(t_viz_socket *vs, int port, const char *script_name)
             path_toabsolutesystempath(pathid, filename, vs->script_path);
         }
     }
+
+    if (vs->script_path[0] != '\0') {
+        object_post(NULL, "visualize: found %s at %s", script_name, vs->script_path);
+    } else {
+        object_error(NULL, "visualize: could not locate %s", script_name);
+    }
 }
 
 // Background thread function prototype
@@ -175,8 +181,14 @@ static void ensure_connected(t_viz_socket *vs) {
                 // Auto-launch if connection failed and we have a path
                 if (vs->script_path[0] != '\0' && (now - vs->last_launch_attempt > 5000)) {
                     vs->last_launch_attempt = now;
+                    object_post(NULL, "visualize: attempting to launch %s", vs->script_name);
+
+                    // Wrap path in quotes to handle spaces
+                    char cmd_args[MAX_PATH_CHARS + 2];
+                    snprintf(cmd_args, sizeof(cmd_args), "\"%s\"", vs->script_path);
+
                     // Launch via python. ShellExecuteA is suitable for this.
-                    ShellExecuteA(NULL, "open", "python", vs->script_path, NULL, SW_SHOWNORMAL);
+                    ShellExecuteA(NULL, "open", "python", cmd_args, NULL, SW_SHOWNORMAL);
                 }
             }
         }
