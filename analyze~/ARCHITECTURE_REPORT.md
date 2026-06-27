@@ -12,11 +12,14 @@ The "Source of Truth" for all numerical analysis. It is designed to be platform-
 *   **Feature Extraction**: Calculation of Spectral Flux (onset strength) across 4 bands.
 *   **Peak Detection**: Algorithmic identification of transients based on local prominence and rolling thresholds.
 *   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores based on rhythm density.
-*   **State Management**: The `TransientAnalyzer` struct tracks the rolling metrics (Std Dev, Contrast, Rating) and handles the "Cleanup Sweep" (removing old snapshots).
+*   **Rolling Score Calculation**: Maintaining a high-resolution rolling average of resonance scores (calculated over a 10ms window) for real-time visualization.
+*   **State Management**: The `TransientAnalyzer` struct tracks the rolling metrics (Std Dev, Contrast, Rating, Rolling Score) and handles the "Cleanup Sweep" (removing old snapshots).
 
 ### **Boundary Interface**
 *   **Inputs**: Raw `float*` audio buffers or `float*` envelope buffers, sample rates, and frame indices.
-*   **Outputs**: C structs (`PeakResult`, `AnalyzerMetrics`, `FullAnalysisResult`) containing raw numerical data.
+*   **Outputs**: C structs containing raw numerical data.
+    *   **`PeakResult`**: Provides individual resonance scores (`total_score`) in real-time as peaks are identified.
+    *   **`AnalyzerMetrics`**: Provides the 10ms rolling average (`rolling_score`) as a persistent metric.
 *   **Memory**: Caller is responsible for allocating/freeing the audio buffers; the library handles its internal analyzer state.
 
 ---
@@ -66,6 +69,7 @@ A Discord bot that serves as a high-level UI.
 | **FFT / Mel-Filters** | **Primary** | - | - |
 | **Peak Detection Logic** | **Primary** | - | - |
 | **Resonance Scoring** | **Primary** | - | - |
+| **Rolling Score (10ms Avg)** | **Primary** | - | - |
 | **Audio File Loading** | - | - | **librosa** |
 | **Live Audio Capture** | - | **DSP Thread** | - |
 | **Threading/Async** | - | **Async Worker** | **asyncio/threads** |
