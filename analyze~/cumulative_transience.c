@@ -184,7 +184,7 @@ int analyzer_process_peak(TransientAnalyzer* self,
         new_evts[0].frame = p_idx;
         new_evts[0].type = 0; // ADD
         new_evts[0].score = result_out->total_score;
-        new_evts[1].frame = p_idx + 10;
+        new_evts[1].frame = p_idx + 39;
         new_evts[1].type = 1; // REMOVE
         new_evts[1].score = result_out->total_score;
 
