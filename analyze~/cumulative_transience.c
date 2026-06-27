@@ -184,9 +184,14 @@ int analyzer_process_peak(TransientAnalyzer* self,
         new_evts[0].frame = p_idx;
         new_evts[0].type = 0; // ADD
         new_evts[0].score = result_out->total_score;
+        new_evts[0].band_idx = band_idx;
+        new_evts[0].peak_frame = p_idx;
+
         new_evts[1].frame = p_idx + 39;
         new_evts[1].type = 1; // REMOVE
         new_evts[1].score = result_out->total_score;
+        new_evts[1].band_idx = band_idx;
+        new_evts[1].peak_frame = p_idx;
 
         for (int k = 0; k < 2; k++) {
             self->upcoming_events[self->event_count++] = new_evts[k];
@@ -301,11 +306,15 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
 
         if (evt.type == 0) { // ADD
             if (self->current_window_count < MAX_EVENTS) {
-                self->current_window_scores[self->current_window_count++] = evt.score;
+                self->current_window_scores[self->current_window_count].score = evt.score;
+                self->current_window_scores[self->current_window_count].band_idx = evt.band_idx;
+                self->current_window_scores[self->current_window_count].peak_frame = evt.peak_frame;
+                self->current_window_count++;
             }
         } else { // REMOVE
             for (int i = 0; i < self->current_window_count; i++) {
-                if (fabs(self->current_window_scores[i] - evt.score) < 1e-12) {
+                if (self->current_window_scores[i].peak_frame == evt.peak_frame &&
+                    self->current_window_scores[i].band_idx == evt.band_idx) {
                     for (int j = i; j < self->current_window_count - 1; j++) {
                         self->current_window_scores[j] = self->current_window_scores[j+1];
                     }
@@ -317,11 +326,20 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
 
         if (self->current_window_count > 0) {
             double win_sum = 0;
-            for (int i = 0; i < self->current_window_count; i++) win_sum += self->current_window_scores[i];
+            for (int i = 0; i < self->current_window_count; i++) win_sum += self->current_window_scores[i].score;
             self->last_score_avg = win_sum / (double)self->current_window_count;
+        } else {
+            self->last_score_avg = 0.0;
         }
     }
     metrics_out->rolling_score = self->last_score_avg;
+
+    // Populate active scores for visualization
+    metrics_out->num_active_scores = self->current_window_count;
+    if (metrics_out->num_active_scores > 256) metrics_out->num_active_scores = 256;
+    for (int i = 0; i < metrics_out->num_active_scores; i++) {
+        metrics_out->active_scores[i] = self->current_window_scores[i];
+    }
 }
 
 double* analyzer_get_buffer(TransientAnalyzer* self) {

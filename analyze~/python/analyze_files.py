@@ -77,7 +77,9 @@ def generate_video(audio_path, data):
         # Helper for secondary peak lookup
         all_valid_peak_indices = set().union(*peak_indices_list)
 
-        fig, (ax_transient, ax_buf) = plt.subplots(2, 1, figsize=(12, 12), gridspec_kw={'height_ratios': [1, 1]})
+        fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14),
+                                                               gridspec_kw={'height_ratios': [1, 0.1, 1]})
+        fig.subplots_adjust(hspace=0.3)
 
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']
         alphas = [1.0, 0.8, 0.6, 0.4]
@@ -125,11 +127,20 @@ def generate_video(audio_path, data):
         ax_buf.set_xlim(-5000, 0)
         ax_buf.set_ylim(0, 1)
 
+        # Configure Snapshot bar
+        ax_snapshot.set_xlim(-39, 0)
+        ax_snapshot.set_ylim(0, 1)
+        ax_snapshot.set_yticks([])
+        ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=10)
+        ax_snapshot.set_xlabel("Time Relative to Playhead (ms)", fontsize=8)
+        ax_snapshot.grid(True, axis='x', alpha=0.3)
+
         active_flashes = []
         flash_fill_artists = []
         peak_lines = []
         active_scores = [] # List of [text_artist, lifetime, initial_y, val]
         active_qualifiers = [] # List of [line, label, lifetime, val]
+        snapshot_artists = [] # List of hash marks and labels
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
@@ -196,6 +207,22 @@ def generate_video(audio_path, data):
 
             # Update Metrics and Cleanup
             metrics = analyzer.update_metrics(frame)
+
+            # Update Snapshot bar
+            for artist in snapshot_artists:
+                artist.remove()
+            snapshot_artists.clear()
+
+            for s in metrics['active_scores']:
+                rel_ms = float(s['peak_frame'] - frame)
+                score_val = s['score']
+                band_c = colors[s['band_idx']]
+                # Hash mark
+                line = ax_snapshot.axvline(x=rel_ms, color=band_c, lw=2)
+                # Value text
+                txt = ax_snapshot.text(rel_ms + 0.5, 0.5, f"{score_val:+.2f}",
+                                       color=band_c, fontsize=7, va='center', fontweight='bold')
+                snapshot_artists.extend([line, txt])
             
             if metrics['buffer_updated'] or new_peak_data:
                 buffer_line.set_ydata(analyzer.accumulated_buffer)
@@ -269,7 +296,7 @@ def generate_video(audio_path, data):
                 qualifier_artists.append(q[0])
                 qualifier_artists.append(q[1])
 
-            return [playhead_transient, cleanup_transient, buffer_line, mean_line, metrics_text, rating_text, score_display_text] + threshold_lines + flash_fill_artists + peak_lines + score_artists + qualifier_artists
+            return [playhead_transient, cleanup_transient, buffer_line, mean_line, metrics_text, rating_text, score_display_text] + threshold_lines + flash_fill_artists + peak_lines + score_artists + qualifier_artists + snapshot_artists
 
         frame_indices = range(0, len(times), 100)
         num_frames = len(frame_indices)

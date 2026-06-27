@@ -19,6 +19,11 @@ cdef extern from "cumulative_transience.h":
         Qualifier qualifiers[256]
         double snapshot[5001]
 
+    ctypedef struct ActiveScore:
+        double score
+        int band_idx
+        int peak_frame
+
     ctypedef struct AnalyzerMetrics:
         double std_dev
         double mean
@@ -31,6 +36,8 @@ cdef extern from "cumulative_transience.h":
         double rolling_score
         double min_score_seen
         double max_score_seen
+        int num_active_scores
+        ActiveScore active_scores[256]
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
         pass
@@ -149,6 +156,14 @@ cdef class TransientAnalyzer:
         self.min_score_seen = m.min_score_seen
         self.max_score_seen = m.max_score_seen
 
+        active_scores = []
+        for i in range(m.num_active_scores):
+            active_scores.append({
+                'score': m.active_scores[i].score,
+                'band_idx': m.active_scores[i].band_idx,
+                'peak_frame': m.active_scores[i].peak_frame
+            })
+
         return {
             'std_dev': m.std_dev,
             'mean': m.mean,
@@ -159,7 +174,8 @@ cdef class TransientAnalyzer:
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
             'rolling_score': m.rolling_score,
             'min_score_seen': m.min_score_seen,
-            'max_score_seen': m.max_score_seen
+            'max_score_seen': m.max_score_seen,
+            'active_scores': active_scores
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
