@@ -6,8 +6,8 @@ SHARED_SOURCES = ../shared/async_worker.c
 
 all: analyze~.mxe64
 
-analyze~.mxe64: analyze~.c $(COMMON_SOURCES) $(SHARED_SOURCES)
-	$(CC) $(CFLAGS) -o analyze~.mxe64 analyze~.c $(COMMON_SOURCES) $(SHARED_SOURCES) $(LDFLAGS)
+analyze~.mxe64: analyze~.c cumulative_transience.c $(COMMON_SOURCES) $(SHARED_SOURCES)
+	$(CC) $(CFLAGS) -o analyze~.mxe64 analyze~.c cumulative_transience.c $(COMMON_SOURCES) $(SHARED_SOURCES) $(LDFLAGS)
 
 clean:
 	rm -f analyze~.mxe64

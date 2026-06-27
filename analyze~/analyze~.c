@@ -14,13 +14,6 @@
 #define MAX_AUDIO_SECONDS 60
 #define ANALYSIS_HOP_MS 100
 
-typedef TransientAnalyzer* (*analyzer_create_ptr)(double);
-typedef void (*analyzer_destroy_ptr)(TransientAnalyzer*);
-typedef int (*analyzer_process_peak_ptr)(TransientAnalyzer*, int, int, double, const float*, int, const int*, int, PeakResult*);
-typedef void (*analyzer_update_metrics_ptr)(TransientAnalyzer*, int, AnalyzerMetrics*);
-typedef int (*analyzer_analyze_audio_ptr)(const float*, int, int, FullAnalysisResult*);
-typedef void (*analyzer_free_analysis_ptr)(FullAnalysisResult*);
-
 typedef struct _analyze {
     t_pxobject obj;
 
@@ -30,15 +23,6 @@ typedef struct _analyze {
     void* outlet_stddev;
     void* outlet_contrast;
     void* outlet_peakstd;
-
-    // DLL Function Pointers
-    HINSTANCE hLib;
-    analyzer_create_ptr analyzer_create;
-    analyzer_destroy_ptr analyzer_destroy;
-    analyzer_process_peak_ptr analyzer_process_peak;
-    analyzer_update_metrics_ptr analyzer_update_metrics;
-    analyzer_analyze_audio_ptr analyzer_analyze_audio;
-    analyzer_free_analysis_ptr analyzer_free_analysis;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -99,8 +83,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         critical_new(&x->lock);
 
-        x->hLib = NULL;
-        x->analyzer = NULL;
+        x->analyzer = analyzer_create(1.0);
         x->worker = async_worker_create();
 
         x->audio_buffer = NULL;
@@ -113,44 +96,6 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->sample_rate = 44100.0;
-
-        // Load DLL
-        char dll_path[MAX_PATH_CHARS];
-        short pathid = 0;
-        t_fourcc type = 0;
-        char filename[MAX_FILENAME_CHARS];
-        strncpy(filename, "analyze~.mxe64", MAX_FILENAME_CHARS);
-
-        if (locatefile_extended(filename, &pathid, &type, NULL, 0) == 0) {
-            char absolute_path[MAX_PATH_CHARS];
-            path_toabsolutesystempath(pathid, filename, absolute_path);
-            char* last_slash = strrchr(absolute_path, '\\');
-            if (!last_slash) last_slash = strrchr(absolute_path, '/');
-            if (last_slash) {
-                *last_slash = '\0';
-                snprintf(dll_path, MAX_PATH_CHARS, "%s\\libtransience.dll", absolute_path);
-            } else {
-                strcpy(dll_path, "libtransience.dll");
-            }
-        } else {
-            strcpy(dll_path, "libtransience.dll");
-        }
-
-        x->hLib = LoadLibrary(dll_path);
-        if (x->hLib) {
-            x->analyzer_create = (analyzer_create_ptr)GetProcAddress(x->hLib, "analyzer_create");
-            x->analyzer_destroy = (analyzer_destroy_ptr)GetProcAddress(x->hLib, "analyzer_destroy");
-            x->analyzer_process_peak = (analyzer_process_peak_ptr)GetProcAddress(x->hLib, "analyzer_process_peak");
-            x->analyzer_update_metrics = (analyzer_update_metrics_ptr)GetProcAddress(x->hLib, "analyzer_update_metrics");
-            x->analyzer_analyze_audio = (analyzer_analyze_audio_ptr)GetProcAddress(x->hLib, "analyzer_analyze_audio");
-            x->analyzer_free_analysis = (analyzer_free_analysis_ptr)GetProcAddress(x->hLib, "analyzer_free_analysis");
-
-            if (x->analyzer_create) {
-                x->analyzer = x->analyzer_create(1.0);
-            }
-        } else {
-            object_error((t_object*)x, "Could not load libtransience.dll at %s", dll_path);
-        }
     }
     return x;
 }
@@ -166,12 +111,8 @@ void analyze_free(t_analyze* x) {
         async_worker_release(x->worker);
     }
 
-    if (x->analyzer && x->analyzer_destroy) {
-        x->analyzer_destroy(x->analyzer);
-    }
-
-    if (x->hLib) {
-        FreeLibrary(x->hLib);
+    if (x->analyzer) {
+        analyzer_destroy(x->analyzer);
     }
 
     free(x->audio_buffer);
@@ -227,12 +168,12 @@ void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins,
 }
 
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    if (x->invalidated || !x->analyzer || !x->analyzer_analyze_audio) {
+    if (x->invalidated || !x->analyzer) {
         x->pending_analysis = 0;
         return;
     }
 
-    // Linearize audio for the DLL (reduced to last 2 seconds for performance)
+    // Linearize audio (reduced to last 2 seconds for performance)
     int analysis_seconds = 2;
     int analysis_samples = (int)(x->sample_rate * analysis_seconds);
     if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
@@ -249,7 +190,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     }
 
     FullAnalysisResult result;
-    if (x->analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
+    if (analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
         int current_global_frame = x->current_sample_count / (int)(x->sample_rate * 0.001);
         int window_start_frame = (x->current_sample_count - analysis_samples) / (int)(x->sample_rate * 0.001);
 
@@ -262,7 +203,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     PeakResult pr;
                     double time = peak_abs_frame * 0.001;
 
-                    // Collect all peaks for process_peak (DLL signature)
+                    // Collect all peaks for process_peak
                     int total_peaks = 0;
                     for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
                     int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
@@ -274,7 +215,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                             }
                         }
 
-                        if (x->analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
+                        if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
                             t_atom out_args[2];
                             atom_setlong(out_args, b);
                             atom_setfloat(out_args + 1, pr.total_score);
@@ -288,7 +229,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         }
 
         AnalyzerMetrics metrics;
-        x->analyzer_update_metrics(x->analyzer, result.num_frames - 1, &metrics);
+        analyzer_update_metrics(x->analyzer, result.num_frames - 1, &metrics);
 
         t_atom out_args[4];
         atom_setfloat(out_args, metrics.rating);
@@ -297,7 +238,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         atom_setfloat(out_args + 3, metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
 
-        x->analyzer_free_analysis(&result);
+        analyzer_free_analysis(&result);
     }
 
     free(linear_audio);
