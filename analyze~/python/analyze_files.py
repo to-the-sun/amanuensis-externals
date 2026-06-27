@@ -141,6 +141,7 @@ def generate_video(audio_path, data):
         active_scores = [] # List of [text_artist, lifetime, initial_y, val]
         active_qualifiers = [] # List of [line, label, lifetime, val]
         snapshot_artists = [] # List of hash marks and labels
+        last_snapshot_peak_ids = set() # Set of (peak_frame, band_idx)
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
@@ -158,6 +159,7 @@ def generate_video(audio_path, data):
         analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak)
 
         def update(frame):
+            nonlocal last_snapshot_peak_ids
             current_time = times[frame]
             ax_transient.set_xlim(current_time - 20, current_time + 5)
 
@@ -209,20 +211,34 @@ def generate_video(audio_path, data):
             metrics = analyzer.update_metrics(frame)
 
             # Update Snapshot bar
-            for artist in snapshot_artists:
-                artist.remove()
-            snapshot_artists.clear()
+            current_snapshot_peak_ids = set((s['peak_frame'], s['band_idx']) for s in metrics['active_scores'])
 
-            for s in metrics['active_scores']:
-                rel_ms = float(s['peak_frame'] - frame)
-                score_val = s['score']
-                band_c = colors[s['band_idx']]
-                # Hash mark
-                line = ax_snapshot.axvline(x=rel_ms, color=band_c, lw=2)
-                # Value text
-                txt = ax_snapshot.text(rel_ms + 0.5, 0.5, f"{score_val:+.2f}",
-                                       color=band_c, fontsize=7, va='center', fontweight='bold')
-                snapshot_artists.extend([line, txt])
+            # Check if any NEW peaks have entered the window.
+            # We only "re-snapshot" if something new arrived.
+            # If nothing new arrived (even if some left), we hold the previous visual.
+            if any(pid not in last_snapshot_peak_ids for pid in current_snapshot_peak_ids):
+                for artist in snapshot_artists:
+                    artist.remove()
+                snapshot_artists.clear()
+
+                # Render current snapshot
+                for s in metrics['active_scores']:
+                    # In a true snapshot "photo finish", the newest peak is at 0ms.
+                    # All others are relative to that newest peak.
+                    # Find the newest peak in the current set
+                    newest_frame = max(ss['peak_frame'] for ss in metrics['active_scores'])
+                    rel_ms = float(s['peak_frame'] - newest_frame)
+
+                    score_val = s['score']
+                    band_c = colors[s['band_idx']]
+                    # Hash mark
+                    line = ax_snapshot.axvline(x=rel_ms, color=band_c, lw=2)
+                    # Value text
+                    txt = ax_snapshot.text(rel_ms + 0.5, 0.5, f"{score_val:+.2f}",
+                                           color=band_c, fontsize=7, va='center', fontweight='bold')
+                    snapshot_artists.extend([line, txt])
+
+                last_snapshot_peak_ids = current_snapshot_peak_ids
             
             if metrics['buffer_updated'] or new_peak_data:
                 buffer_line.set_ydata(analyzer.accumulated_buffer)

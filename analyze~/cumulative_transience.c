@@ -328,8 +328,6 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
             double win_sum = 0;
             for (int i = 0; i < self->current_window_count; i++) win_sum += self->current_window_scores[i].score;
             self->last_score_avg = win_sum / (double)self->current_window_count;
-        } else {
-            self->last_score_avg = 0.0;
         }
     }
     metrics_out->rolling_score = self->last_score_avg;
