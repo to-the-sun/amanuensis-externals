@@ -6,8 +6,8 @@ import os
 extensions = [
     Extension(
         "cumulative_transience",
-        sources=["ct_extension.pyx", "cumulative_transience.c"],
-        include_dirs=[np.get_include(), "."],
+        sources=["ct_extension.pyx", "../cumulative_transience.c"],
+        include_dirs=[np.get_include(), ".", ".."],
         extra_compile_args=["-O3"] if os.name != "nt" else ["/O2"],
     )
 ]

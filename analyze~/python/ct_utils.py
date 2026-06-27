@@ -12,7 +12,7 @@ def ensure_extension_built():
             break
 
     source_pyx = os.path.join(current_dir, "ct_extension.pyx")
-    source_c = os.path.join(current_dir, "cumulative_transience.c")
+    source_c = os.path.join(current_dir, "..", "cumulative_transience.c")
 
     needs_build = False
     if ext_file is None:
