@@ -173,8 +173,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Linearize audio (reduced to last 2 seconds for performance)
-    int analysis_seconds = 2;
+    // Linearize audio (increased to 6 seconds for context)
+    int analysis_seconds = 6;
     int analysis_samples = (int)(x->sample_rate * analysis_seconds);
     if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
 
@@ -191,45 +191,75 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
     FullAnalysisResult result;
     if (analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
-        int current_global_frame = x->current_sample_count / (int)(x->sample_rate * 0.001);
-        int window_start_frame = (x->current_sample_count - analysis_samples) / (int)(x->sample_rate * 0.001);
+        int samples_per_ms = (int)(x->sample_rate * 0.001);
+        int current_global_frame = x->current_sample_count / samples_per_ms;
+        int window_start_frame = (x->current_sample_count - analysis_samples) / samples_per_ms;
 
-        for (int b = 0; b < MAX_BANDS; b++) {
-            for (int i = 0; i < result.bands[b].num_peaks; i++) {
-                int peak_rel_frame = result.bands[b].peaks[i];
-                int peak_abs_frame = window_start_frame + peak_rel_frame;
+        // Update max_peak dynamically for better normalization
+        if (result.max_peak_value > x->analyzer->max_peak) {
+            x->analyzer->max_peak = (double)result.max_peak_value;
+        }
 
-                if (peak_abs_frame > x->last_peak_frame[b]) {
-                    PeakResult pr;
-                    double time = peak_abs_frame * 0.001;
+        // Collect all peaks in current 6s window for resonance lookback.
+        int total_peaks = 0;
+        for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
+        int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
 
-                    // Collect all peaks for process_peak
-                    int total_peaks = 0;
-                    for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
-                    int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
-                    if (all_valid_peaks) {
-                        int curr = 0;
-                        for (int bb = 0; bb < MAX_BANDS; bb++) {
-                            for (int k = 0; k < result.bands[bb].num_peaks; k++) {
-                                all_valid_peaks[curr++] = result.bands[bb].peaks[k];
-                            }
-                        }
+        if (all_valid_peaks) {
+            int curr = 0;
+            for (int bb = 0; bb < MAX_BANDS; bb++) {
+                for (int k = 0; k < result.bands[bb].num_peaks; k++) {
+                    all_valid_peaks[curr++] = result.bands[bb].peaks[k];
+                }
+            }
 
+            for (int b = 0; b < MAX_BANDS; b++) {
+                for (int i = 0; i < result.bands[b].num_peaks; i++) {
+                    int peak_rel_frame = result.bands[b].peaks[i];
+                    int peak_abs_frame = window_start_frame + peak_rel_frame;
+
+                    if (peak_abs_frame > x->last_peak_frame[b]) {
+                        PeakResult pr;
+                        double time = peak_abs_frame * 0.001;
+
+                        // We pass local relative indices for the envelope and peak indices
+                        // to ensure the internal library calls (e.g., env_ptr[idx]) remain
+                        // memory-safe within the 6-second result buffer.
+                        int prev_event_count = x->analyzer->event_count;
                         if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
+
+                            // Fixup: The analyzer internally stores the most recent snapshot and
+                            // schedules events using the local index we passed.
+                            // To ensure historical lookbacks, rolling metrics, and state cleanup
+                            // work correctly as the window slides, we must shift these internal
+                            // indices to the global absolute frame space.
+
+                            // 1. Shift the stored snapshot index to global absolute frame.
+                            if (x->analyzer->snapshot_tails[b]) {
+                                x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
+                            }
+
+                            // 2. Shift all newly added events to global absolute frames.
+                            // This uses a robust loop to shift exactly the events added by this call.
+                            int new_event_count = x->analyzer->event_count;
+                            for (int k = prev_event_count; k < new_event_count && k < MAX_EVENTS; k++) {
+                                x->analyzer->upcoming_events[k].frame += window_start_frame;
+                            }
+
                             t_atom out_args[2];
                             atom_setlong(out_args, b);
                             atom_setfloat(out_args + 1, pr.total_score);
                             defer(x, (method)analyze_output_peak, NULL, 2, out_args);
                         }
-                        free(all_valid_peaks);
+                        x->last_peak_frame[b] = peak_abs_frame;
                     }
-                    x->last_peak_frame[b] = peak_abs_frame;
                 }
             }
+            free(all_valid_peaks);
         }
 
         AnalyzerMetrics metrics;
-        analyzer_update_metrics(x->analyzer, result.num_frames - 1, &metrics);
+        analyzer_update_metrics(x->analyzer, current_global_frame, &metrics);
 
         t_atom out_args[4];
         atom_setfloat(out_args, metrics.rating);
