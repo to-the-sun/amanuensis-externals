@@ -7,6 +7,7 @@ import shutil
 from datetime import datetime, timezone, timedelta
 from pydub import AudioSegment
 import sys
+import traceback
 
 # Add the parent directory of this script's directory to sys.path so we can import analyze_files
 # This assumes analyze_files.py is in the same directory as Amanuensis.py
@@ -176,4 +177,18 @@ async def periodic_task():
 async def on_ready():
     print(f'We have logged in as {client.user}')
 
-client.run(credentials['token'])
+if __name__ == "__main__":
+    try:
+        client.run(credentials['token'])
+    except Exception as e:
+        print("\n" + "="*60)
+        print("CRITICAL ERROR")
+        print("="*60)
+        traceback.print_exc()
+        print("="*60)
+    finally:
+        # Keep window open for user to see output/errors
+        try:
+            input("\nPress Enter to exit...")
+        except EOFError:
+            pass
