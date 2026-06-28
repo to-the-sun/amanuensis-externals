@@ -448,18 +448,38 @@ def main():
     parser.add_argument("files", nargs="*", help="Optional list of audio files to process.")
     args = parser.parse_args()
 
+    extensions = ('.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aiff')
     audio_files = []
-    if args.files:
-        audio_files = args.files
-    else:
-        extensions = ('.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aiff')
-        # Use current working directory to support shortcuts and drag-and-drop
-        search_dir = os.getcwd()
-        audio_files = [os.path.join(search_dir, f) for f in os.listdir(search_dir) if f.lower().endswith(extensions)]
-        audio_files.sort()
+
+    # Determine search sources: provided arguments or current working directory
+    sources = args.files if args.files else [os.getcwd()]
+
+    for source in sources:
+        if os.path.isdir(source):
+            # Expand directory to all supported audio files within it
+            dir_files = [os.path.join(source, f) for f in os.listdir(source) if f.lower().endswith(extensions)]
+            audio_files.extend(dir_files)
+        elif os.path.isfile(source) and source.lower().endswith(extensions):
+            audio_files.append(source)
+
+    audio_files.sort()
 
     if not audio_files:
         print("No audio files found to process.")
+
+        # Help the user if they are likely running into Windows shortcut "Start in" issues
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if os.getcwd().lower() == script_dir.lower():
+            print("\n" + "="*60)
+            print("TIP: Windows Shortcuts")
+            print("="*60)
+            print("If you are running this from a shortcut, Windows often sets the 'Start in'")
+            print("property to the script's folder. To analyze files in the shortcut's")
+            print("actual folder, either:")
+            print("  1. Clear the 'Start in' field in the Shortcut properties.")
+            print("  2. Drag and drop the folder you want to analyze onto the shortcut.")
+            print("  3. Use the 'analyze_here.bat' helper instead.")
+            print("="*60)
         return
 
     for f in audio_files:
