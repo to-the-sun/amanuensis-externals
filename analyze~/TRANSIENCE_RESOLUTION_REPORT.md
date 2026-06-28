@@ -20,9 +20,9 @@ This report documents the hierarchical levels of resolution within the `cumulati
 *   **Purpose**: The interval at which the Python orchestrator renders a new frame for the MP4 report. It aggregates approximately 33 analysis frames into a single visual update.
 
 ## 4. Visual Rolling Score Window
-*   **Resolution**: 39ms
-*   **Source**: `analyze_files.py` (`s['frame'] > frame - 39`)
-*   **Purpose**: A specific window used in the Python "39ms Rolling Window Snapshot" visualization. It calculates a short-term average of resonance scores for display purposes in the video overlay.
+*   **Resolution**: 39ms (Window Size)
+*   **Source**: `analyze_files.py` (`rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]`)
+*   **Purpose**: A sliding window used in the Python "39ms Rolling Window Snapshot" visualization. At each 30 FPS video frame, the system prunes the current score pool to the most recent 39ms. It calculates the average of these scores and displays them on the snapshot bar, aligned relative to the latest peak in the window.
 
 ## 5. Resonance Exclusion Zone
 *   **Resolution**: 99ms

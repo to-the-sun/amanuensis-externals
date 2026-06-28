@@ -4,9 +4,12 @@ This report details the technical operations that occur when a "snapshot" is tak
 
 ## 1. Triggering and Window Extraction
 
-The process is initiated within the `update` function of the video generator whenever the animation playhead reaches a frame containing a pre-detected peak index ($p_{idx}$) from any of the four frequency bands (Sub-Bass, Bass/Low-Mid, High-Mid, or Treble).
+The process is initiated within the `update` function of the video generator. While the video renders at 30 FPS (~33ms per frame), the underlying analysis catches up at a **1ms resolution**.
 
-*   **Temporal Windowing**: A **5001-sample window** is extracted from the onset strength envelope of the triggering band.
+*   **Sub-Frame Accuracy**: For every millisecond between video frames, the system checks for new peaks and maintains a pool of all scores.
+*   **39ms Sliding Window**: At each video frame, the system prunes the score pool to a 39ms window ending at the current playhead position (`[frame - 38, frame]`). The "Score" displayed in the upper-left is the true average of all scores currently within this window. This ensures that the average is based on a continuous 39ms history and not cut into arbitrary windows.
+
+*   **Temporal Windowing (Resonance)**: When a peak is processed by the C core, a **5001-sample window** is extracted from the onset strength envelope of the triggering band.
 *   **Resolution**: 1ms per sample (representing 5000ms of history + the current 1ms at the peak).
 *   **Alignment & Padding**: The window is aligned to end exactly at the peak ($p_{idx}$). If the peak occurs within the first 5 seconds of the audio ($p_{idx} < 5000$), the window is **zero-padded** at the beginning to maintain the fixed 5001-sample length.
 
@@ -43,10 +46,10 @@ $$\text{Total Score} = peak\_val \times \sum Q$$
 
 *   **Buffer Update**: After score calculation, the `snapshot` is added to the `accumulated_buffer` via element-wise addition.
 *   **Visual Flash**: A green fill (`#2ecc71`) is rendered on the historical buffer plot, briefly visualizing the snapshot's shape as it merges into the history.
-*   **Score Animation**: The calculated score is displayed as floating text (e.g., `+0.45`). Its color is dynamically mapped based on the overall range of scores seen:
-    *   **Bright Green**: High positive resonance.
-    *   **Bright Red**: High negative resonance (rhythmic clash).
-    *   **Subdued Gray**: Neutral/Zero alignment ($#808080$).
+*   **Score Animation**: When a peak first appears, its individual score is displayed as floating text (e.g., `+0.45`).
+*   **Snapshot Bar**: The bottom bar displays all scores currently contributing to the 39ms average.
+    *   **Alignment**: To provide a stable rhythmic reference, the bar is aligned relative to the **latest peak** in the window (set at $x=0$).
+    *   **Rolling Average**: The "Score" displayed in the upper-left of the graph is the average of all scores currently visible in this bar.
 
 ## 5. Sliding Window Cleanup
 
