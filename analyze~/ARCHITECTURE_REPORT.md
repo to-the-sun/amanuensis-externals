@@ -62,6 +62,38 @@ A Discord bot that serves as a high-level UI.
 
 ---
 
+## 4. Normalization and `max_peak` Management
+
+The `max_peak` value is a critical normalization constant representing the maximum spectral flux value encountered at a detected peak. It is used to scale the 5-second snapshots before they are accumulated into the historical buffer, ensuring that the resulting resonance scores are comparable across different audio signals.
+
+### **Determination Strategies**
+
+| Environment | Strategy | Implementation |
+| :--- | :--- | :--- |
+| **Max (`analyze~`)** | **Dynamic Update** | The object initializes `max_peak` at 1.0. During each 100ms background analysis cycle, it checks the `max_peak_value` returned by the FFT/Peak detection pass. If a new peak is found that is higher than the current state, `x->analyzer->max_peak` is updated immediately. |
+| **Python (`analyze_files`)** | **Global Batch** | Before the stateful `TransientAnalyzer` is instantiated, the script performs a "pre-pass" on the entire audio file using `analyzer_analyze_audio`. The absolute maximum flux value found across all bands and peaks in the entire file is captured as `max_peak_value`. |
+
+### **Communication with C Core**
+
+The C core maintains the `max_peak` value within the `TransientAnalyzer` struct. The consumers convey this value using different mechanisms:
+
+1.  **Max External**: Since the Max object maintains a long-lived `TransientAnalyzer` instance, it updates the value via direct member access:
+    ```c
+    if (result.max_peak_value > x->analyzer->max_peak) {
+        x->analyzer->max_peak = (double)result.max_peak_value;
+    }
+    ```
+2.  **Python Extension**: The Python wrapper passes the pre-calculated global maximum during instantiation via the Cython bridge, which calls the C constructor:
+    ```python
+    # Python
+    analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak)
+
+    # Cython/C
+    self._c_analyzer = analyzer_create(max_peak_value)
+    ```
+
+---
+
 ## Summary of Boundaries
 
 | Feature | Core C (`cumulative_transience`) | Max External (`analyze~`) | Python (`analyze_files`) |
