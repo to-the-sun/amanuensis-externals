@@ -14,6 +14,7 @@ import tempfile
 import shutil
 import traceback
 import sys
+import threading
 try:
     import ct_utils
 except ImportError:
@@ -26,20 +27,37 @@ try:
 except ImportError:
     pass
 
-# Ensure built before attempt import
-ct_utils.ensure_extension_built()
-try:
-    import cumulative_transience
-except ImportError:
-    fallback_path = r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python'
-    if fallback_path not in sys.path:
-        sys.path.append(fallback_path)
+_initialized = False
+_init_lock = threading.Lock()
+cumulative_transience = None
+
+def ensure_initialized():
+    """Ensures that the extension is built and imported."""
+    global _initialized, cumulative_transience
+    if _initialized:
+        return
+
+    with _init_lock:
+        if _initialized:
+            return
+
+        # Ensure built before attempt import
+        ct_utils.ensure_extension_built()
         try:
-            import cumulative_transience
+            import cumulative_transience as ct
+            cumulative_transience = ct
         except ImportError:
-            cumulative_transience = None
-    else:
-        cumulative_transience = None
+            fallback_path = r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python'
+            if fallback_path not in sys.path:
+                sys.path.append(fallback_path)
+                try:
+                    import cumulative_transience as ct
+                    cumulative_transience = ct
+                except ImportError:
+                    cumulative_transience = None
+            else:
+                cumulative_transience = None
+        _initialized = True
 
 def get_score_color(score, min_score, max_score):
     """
@@ -75,6 +93,7 @@ def generate_video(audio_path, data):
     (overlapping 4-band analysis) and an accumulating 10-second buffer.
     Returns the path to the generated MP4 file.
     """
+    ensure_initialized()
     if cumulative_transience is None:
         raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
 
@@ -398,6 +417,7 @@ def analyze_audio(file_path):
     Analyzes raw audio data to extract its transient envelope (4-band analysis)
     and identify peaks. Returns a dictionary with all analysis data.
     """
+    ensure_initialized()
     global cumulative_transience
     if cumulative_transience is None:
         raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
@@ -421,6 +441,7 @@ def analyze_audio(file_path):
     return result
 
 def main():
+    ensure_initialized()
     global cumulative_transience
 
     parser = argparse.ArgumentParser(description="Standalone transient analysis and video generation.")
@@ -432,8 +453,9 @@ def main():
         audio_files = args.files
     else:
         extensions = ('.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aiff')
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        audio_files = [os.path.join(current_dir, f) for f in os.listdir(current_dir) if f.lower().endswith(extensions)]
+        # Use current working directory to support shortcuts and drag-and-drop
+        search_dir = os.getcwd()
+        audio_files = [os.path.join(search_dir, f) for f in os.listdir(search_dir) if f.lower().endswith(extensions)]
         audio_files.sort()
 
     if not audio_files:

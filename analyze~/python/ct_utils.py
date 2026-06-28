@@ -30,8 +30,7 @@ def ensure_extension_built():
         os.chdir(current_dir)
         try:
             # Use the same command as the Makefile
-            python_cmd = "python" if os.name == "nt" else "python3"
-            subprocess.run([python_cmd, "setup.py", "build_ext", "--inplace"], check=True)
+            subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"], check=True)
             print("Extension module built successfully.")
         except Exception as e:
             print(f"Warning: Failed to build extension module: {e}")
