@@ -329,9 +329,9 @@ def generate_video(audio_path, data):
 
             return [playhead_transient, cleanup_transient, buffer_line, mean_line, metrics_text, rating_text, score_display_text] + threshold_lines + flash_fill_artists + peak_lines + score_artists + qualifier_artists + snapshot_artists
 
-        frame_indices = range(0, len(times), 100)
+        frame_indices = range(0, len(times), 33)
         num_frames = len(frame_indices)
-        ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=False, interval=100)
+        ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=False, interval=33)
 
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             temp_video_path = tmp.name
@@ -341,7 +341,7 @@ def generate_video(audio_path, data):
             pbar.n = i + 1
             pbar.refresh()
 
-        writer = animation.FFMpegWriter(fps=10, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000)
+        writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000)
         fig.tight_layout(pad=1.5)
         ani.save(temp_video_path, writer=writer, progress_callback=progress_callback)
         pbar.close()
