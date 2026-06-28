@@ -28,7 +28,6 @@ cdef extern from "cumulative_transience.h":
         bint buffer_updated
         double highest_peak_ms
         bint highest_peak_valid
-        double rolling_score
         double min_score_seen
         double max_score_seen
 
@@ -60,7 +59,6 @@ cdef extern from "cumulative_transience.h":
         int num_frames
         float max_peak_value
         BandAnalysis bands[4]
-        double* rolling_scores
         double* ratings
         double* std_devs
         double* contrasts
@@ -157,7 +155,6 @@ cdef class TransientAnalyzer:
             'rating': m.rating,
             'buffer_updated': m.buffer_updated,
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
-            'rolling_score': m.rolling_score,
             'min_score_seen': m.min_score_seen,
             'max_score_seen': m.max_score_seen
         }
@@ -194,9 +191,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         memcpy(peaks.data, res.bands[i].peaks, res.bands[i].num_peaks * sizeof(int))
         peaks_list.append(peaks)
 
-    cdef cnp.ndarray[double, ndim=1] rolling_scores = np.zeros(num_frames, dtype=np.float64)
-    memcpy(rolling_scores.data, res.rolling_scores, num_frames * sizeof(double))
-
     cdef cnp.ndarray[double, ndim=1] ratings = np.zeros(num_frames, dtype=np.float64)
     memcpy(ratings.data, res.ratings, num_frames * sizeof(double))
 
@@ -210,6 +204,5 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "onset_envs": onset_envs,
         "rolling_thresholds": rolling_thresholds,
         "peaks_list": peaks_list,
-        "rolling_scores": rolling_scores,
         "ratings": ratings
     }

@@ -77,18 +77,6 @@ void analyzer_destroy(TransientAnalyzer* self) {
     free(self);
 }
 
-static int compare_events(const void* a, const void* b) {
-    ScoreEvent* e1 = (ScoreEvent*)a;
-    ScoreEvent* e2 = (ScoreEvent*)b;
-    if (e1->frame != e2->frame)
-        return e1->frame - e2->frame;
-    if (e1->type != e2->type)
-        return e1->type - e2->type;
-    if (e1->score < e2->score) return -1;
-    if (e1->score > e2->score) return 1;
-    return 0;
-}
-
 int analyzer_process_peak(TransientAnalyzer* self,
                           int p_idx,
                           int band_idx,
@@ -178,20 +166,6 @@ int analyzer_process_peak(TransientAnalyzer* self,
     self->total_score_sum += result_out->total_score;
     self->score_count++;
 
-    // Add to event queue
-    if (self->event_count + 2 <= MAX_EVENTS) {
-        ScoreEvent new_evts[2];
-        new_evts[0].frame = p_idx;
-        new_evts[0].type = 0; // ADD
-        new_evts[0].score = result_out->total_score;
-        new_evts[1].frame = p_idx + 10;
-        new_evts[1].type = 1; // REMOVE
-        new_evts[1].score = result_out->total_score;
-
-        for (int k = 0; k < 2; k++) {
-            self->upcoming_events[self->event_count++] = new_evts[k];
-        }
-    }
 
     // Update accumulated buffer
     for (int i = 0; i < BUFFER_LEN; i++) {
@@ -291,37 +265,6 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     if (ph_var < 0) ph_var = 0;
     metrics_out->peak_std = ph_var > 0 ? sqrt(ph_var) : 0;
 
-    // Optimized rolling score
-    if (self->event_count > self->event_read_ptr) {
-        qsort(self->upcoming_events + self->event_read_ptr, self->event_count - self->event_read_ptr, sizeof(ScoreEvent), compare_events);
-    }
-    while (self->event_read_ptr < self->event_count && self->upcoming_events[self->event_read_ptr].frame <= frame) {
-        ScoreEvent evt = self->upcoming_events[self->event_read_ptr];
-        self->event_read_ptr++;
-
-        if (evt.type == 0) { // ADD
-            if (self->current_window_count < MAX_EVENTS) {
-                self->current_window_scores[self->current_window_count++] = evt.score;
-            }
-        } else { // REMOVE
-            for (int i = 0; i < self->current_window_count; i++) {
-                if (fabs(self->current_window_scores[i] - evt.score) < 1e-12) {
-                    for (int j = i; j < self->current_window_count - 1; j++) {
-                        self->current_window_scores[j] = self->current_window_scores[j+1];
-                    }
-                    self->current_window_count--;
-                    break;
-                }
-            }
-        }
-
-        if (self->current_window_count > 0) {
-            double win_sum = 0;
-            for (int i = 0; i < self->current_window_count; i++) win_sum += self->current_window_scores[i];
-            self->last_score_avg = win_sum / (double)self->current_window_count;
-        }
-    }
-    metrics_out->rolling_score = self->last_score_avg;
 }
 
 double* analyzer_get_buffer(TransientAnalyzer* self) {
@@ -383,7 +326,6 @@ static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
 }
 
 int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* result_out) {
-    result_out->rolling_scores = NULL;
     result_out->ratings = NULL;
     result_out->std_devs = NULL;
     result_out->contrasts = NULL;
@@ -571,7 +513,6 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     if (!analyzer_analyze_audio(y, len, sr, result_out)) return 0;
 
     int num_frames = result_out->num_frames;
-    result_out->rolling_scores = (double*)malloc(sizeof(double) * num_frames);
     result_out->ratings = (double*)malloc(sizeof(double) * num_frames);
     result_out->std_devs = (double*)malloc(sizeof(double) * num_frames);
     result_out->contrasts = (double*)malloc(sizeof(double) * num_frames);
@@ -602,7 +543,6 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
 
         AnalyzerMetrics m;
         analyzer_update_metrics(analyzer, f, &m);
-        result_out->rolling_scores[f] = m.rolling_score;
         result_out->ratings[f] = m.rating;
         result_out->std_devs[f] = m.std_dev;
         result_out->contrasts[f] = m.contrast;
@@ -621,7 +561,6 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
         if (result->bands[i].rolling_threshold) free(result->bands[i].rolling_threshold);
         if (result->bands[i].peaks) free(result->bands[i].peaks);
     }
-    if (result->rolling_scores) free(result->rolling_scores);
     if (result->ratings) free(result->ratings);
     if (result->std_devs) free(result->std_devs);
     if (result->contrasts) free(result->contrasts);
