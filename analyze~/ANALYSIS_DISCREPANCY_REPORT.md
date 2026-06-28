@@ -29,5 +29,24 @@ While the resonance algorithm requires a 5-second lookback, a 6-second window is
 - All peaks within the 6-second window are now provided as context for resonance calculations.
 - A robust **Timeline Synchronization** mechanism has been implemented. Because the library operates on relative window indices, its internal state (snapshots and scheduled events) is manually shifted to a global absolute frame space immediately after creation. This ensures that historical lookbacks, snapshot cleanup, and rolling metrics work correctly as the window slides across the audio stream.
 
+## Future Considerations: Analysis Window Duration (6s vs 15s)
+
+While the current 6-second window provides a significant improvement over the original 2-second window, increasing this to 15 seconds would offer several theoretical and practical benefits:
+
+### 1. Guaranteed Resonance Context
+**Question**: Does a 6-second window mean that if a peak is not detected in over one second, it's possible that all of the historical peaks it should see might not fall within the five-second window?
+**Answer**: Yes. The `analyze~` object only passes peaks discovered within the *current* analysis window to the resonance algorithm. If a peak occurred 5.5 seconds ago, it is still within the 5-second lookback of the C core, but it would have "fallen off" the back of a 6-second window if the new peak is at the very end. A 15-second window ensures that any peak within the 5-second lookback is guaranteed to be present in the same analysis pass as the peak being processed.
+
+### 2. Rolling Threshold Alignment
+The peak detection logic in `cumulative_transience.c` utilizes a **15-second rolling threshold**. With a 6-second context window, the peak detector is only ever looking at a 6-second history at most. Increasing the window to 15 seconds allows the peak detection algorithm to operate with its full intended historical context, leading to more accurate and stable peak identification.
+
+### 3. Spectrogram & `max_peak` Stabilization
+- **Spectrogram**: STFT normalization is performed relative to the loudest peak in the current window. A 15-second window provides a much more stable reference than 6 seconds, significantly reducing "spectral breathing" artifacts.
+- **`max_peak`**: A 15-second window is 2.5x more likely to capture the true global maximum of the audio stream in any given pass, allowing the dynamic `max_peak` tracker to converge faster and more accurately.
+
+### 4. Processing Trade-offs
+**Question**: Would a 15-second window have any effect other than memory?
+**Answer**: Yes, **CPU usage**. The background analysis task performs STFT and Mel-filtering on the entire window. Moving from 6s to 15s increases the computational load of these stages by ~250%. While this work is offloaded to a background thread and does not impact the audio thread, it does increase the overall CPU footprint of the object.
+
 ## Conclusion
 The remediation strategy implemented in `analyze~.c` resolves the primary causes of divergence by synchronizing the local analysis timeline with a persistent global frame index and providing sufficient historical context for the resonance algorithms, all while maintaining the integrity of the shared algorithm library.
