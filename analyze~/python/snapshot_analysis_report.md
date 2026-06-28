@@ -50,6 +50,7 @@ $$\text{Total Score} = peak\_val \times \sum Q$$
 *   **Snapshot Bar**: The bottom bar displays all scores currently contributing to the 39ms average.
     *   **Alignment**: To provide a stable rhythmic reference, the bar is aligned relative to the **latest peak** in the window (set at $x=0$).
     *   **Rolling Average**: The "Score" displayed in the upper-left of the graph is the average of all scores currently visible in this bar.
+    *   **Persistence**: If the 39ms window becomes empty, the snapshot bar and the "Score" display persist their last valid state rather than clearing to zero.
 
 ## 5. Sliding Window Cleanup
 

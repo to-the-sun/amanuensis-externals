@@ -214,18 +214,15 @@ def generate_video(audio_path, data):
             # Prune scores to the 39ms sliding window ending at the current playhead frame
             rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
             
-            # Calculate rolling average for the current 39ms window
+            # Calculate rolling average and update visualization only if we have scores
+            # This ensures the snapshot bar and score stay fixed when the window is empty
             if rolling_window_scores:
                 current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores)
-            else:
-                current_snapshot_avg = 0.0
 
-            # Update visualization
-            for artist in snapshot_artists:
-                artist.remove()
-            snapshot_artists.clear()
+                for artist in snapshot_artists:
+                    artist.remove()
+                snapshot_artists.clear()
 
-            if rolling_window_scores:
                 # Align relative to the LATEST peak in the current 39ms window
                 # This ensures the most current score is always at the far right (x=0)
                 latest_p_frame = max(s['frame'] for s in rolling_window_scores)
