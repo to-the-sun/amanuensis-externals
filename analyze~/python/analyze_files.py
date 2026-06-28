@@ -163,7 +163,7 @@ def generate_video(audio_path, data):
         ax_snapshot.set_yticks([0, 1, 2, 3])
         ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
         ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold')
-        ax_snapshot.set_xlabel("Time Relative to Playhead (ms)", fontsize=12)
+        ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12)
         ax_snapshot.grid(False)
         for i in range(3):
             ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
@@ -211,32 +211,34 @@ def generate_video(audio_path, data):
             
             last_frame_processed = frame
 
-            # Prune scores that have left the 39ms window
-            # Window is [frame - 39, frame]
-            prev_count = len(rolling_window_scores)
+            # Prune scores to the 39ms sliding window ending at the current playhead frame
             rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
             
-            # Update visualization if set changed or new peaks arrived
-            if len(rolling_window_scores) != prev_count or all_new_peak_data:
-                if rolling_window_scores:
-                    for artist in snapshot_artists:
-                        artist.remove()
-                    snapshot_artists.clear()
+            # Calculate rolling average and update visualization only if we have scores
+            # This ensures the snapshot bar and score stay fixed when the window is empty
+            if rolling_window_scores:
+                current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores)
 
-                    current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores)
-                    
-                    for s in rolling_window_scores:
-                        rel_ms = float(s['frame'] - frame)
-                        score_val = s['score']
-                        band_idx = s['band_idx']
-                        band_c = colors[band_idx]
-                        lane_y = band_idx 
+                for artist in snapshot_artists:
+                    artist.remove()
+                snapshot_artists.clear()
 
-                        line = ax_snapshot.vlines(x=rel_ms, ymin=lane_y - 0.4, ymax=lane_y + 0.4, 
-                                                 color=band_c, lw=3)
-                        txt = ax_snapshot.text(rel_ms + 0.5, lane_y, f"{score_val:+.2f}", 
-                                               color=band_c, fontsize=13, va='center', fontweight='bold')
-                        snapshot_artists.extend([line, txt])
+                # Align relative to the LATEST peak in the current 39ms window
+                # This ensures the most current score is always at the far right (x=0)
+                latest_p_frame = max(s['frame'] for s in rolling_window_scores)
+
+                for s in rolling_window_scores:
+                    rel_ms = float(s['frame'] - latest_p_frame)
+                    score_val = s['score']
+                    band_idx = s['band_idx']
+                    band_c = colors[band_idx]
+                    lane_y = band_idx
+
+                    line = ax_snapshot.vlines(x=rel_ms, ymin=lane_y - 0.4, ymax=lane_y + 0.4,
+                                             color=band_c, lw=3)
+                    txt = ax_snapshot.text(rel_ms + 0.5, lane_y, f"{score_val:+.2f}",
+                                           color=band_c, fontsize=13, va='center', fontweight='bold')
+                    snapshot_artists.extend([line, txt])
 
             current_time = times[frame]
             ax_transient.set_xlim(current_time - 20, current_time + 5)
