@@ -475,10 +475,10 @@ def main():
             print("="*60)
             print("If you are running this from a shortcut, Windows often sets the 'Start in'")
             print("property to the script's folder. To analyze files in the shortcut's")
-            print("actual folder, either:")
-            print("  1. Clear the 'Start in' field in the Shortcut properties.")
-            print("  2. Drag and drop the folder you want to analyze onto the shortcut.")
-            print("  3. Use the 'analyze_here.bat' helper instead.")
+            print("actual folder, please use 'analyze_here.bat' instead.")
+            print("")
+            print("You can copy 'analyze_here.bat' to any folder to analyze its contents,")
+            print("or create a shortcut to the .bat file itself.")
             print("="*60)
         return
 
