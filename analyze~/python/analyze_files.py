@@ -158,7 +158,7 @@ def generate_video(audio_path, data):
         ax_buf.set_ylim(0, 1)
 
         # Configure Snapshot bar
-        ax_snapshot.set_xlim(-39, 1) # Extra space for labels
+        ax_snapshot.set_xlim(-45, 1) # Extra space for labels
         ax_snapshot.set_ylim(-0.5, 3.5) # 4 lanes: 0, 1, 2, 3
         ax_snapshot.set_yticks([0, 1, 2, 3])
         ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
@@ -235,10 +235,11 @@ def generate_video(audio_path, data):
                     band_c = colors[band_idx]
                     lane_y = band_idx
 
+                    score_c = get_score_color(score_val, analyzer.min_score_seen, analyzer.max_score_seen)
                     line = ax_snapshot.vlines(x=rel_ms, ymin=lane_y - 0.4, ymax=lane_y + 0.4,
                                              color=band_c, lw=3)
-                    txt = ax_snapshot.text(rel_ms + 0.5, lane_y, f"{score_val:+.2f}",
-                                           color=band_c, fontsize=13, va='center', fontweight='bold')
+                    txt = ax_snapshot.text(rel_ms - 0.8, lane_y, f"{score_val:+.2f}",
+                                           color=score_c, fontsize=13, va='center', ha='right', fontweight='bold')
                     snapshot_artists.extend([line, txt])
 
             current_time = times[frame]
