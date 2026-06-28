@@ -2,6 +2,8 @@
 #include "ext_obex.h"
 #include "../shared/logging.h"
 #include <windows.h>
+#include <objbase.h>
+#include <shlobj.h>
 
 typedef struct _createproject {
     t_object s_obj;
@@ -14,6 +16,7 @@ void createproject_create(t_createproject *x, t_symbol *s);
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s);
 t_max_err createproject_attr_set_log(t_createproject *x, void *attr, long ac, t_atom *av);
 void createproject_log(t_createproject *x, const char *fmt, ...);
+void modify_shortcut_start_in(t_createproject *x, const char* shortcut_path, const char* working_dir);
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir);
 
 t_class *createproject_class;
@@ -130,12 +133,58 @@ void *createproject_new(t_symbol *s, long argc, t_atom *argv) {
 
 void createproject_assist(t_createproject *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: (symbol) project path, (create) start, (log) attribute");
+        sprintf(s, "Inlet 1: (symbol) project path to create, (create) start project creation, (log) enable/disable logging");
     } else {
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Logging Outlet"); break;
+            case 0: sprintf(s, "Outlet 1: Status and logging information"); break;
         }
     }
+}
+
+void modify_shortcut_start_in(t_createproject *x, const char* shortcut_path, const char* working_dir) {
+    HRESULT hres;
+    IShellLinkA* psl;
+    WCHAR wsz[MAX_PATH];
+
+    hres = CoInitialize(NULL);
+    if (FAILED(hres)) {
+        createproject_log(x, "CoInitialize failed (Error %ld)", hres);
+        return;
+    }
+
+    hres = CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkA, (LPVOID*)&psl);
+    if (SUCCEEDED(hres)) {
+        IPersistFile* ppf;
+        hres = psl->lpVtbl->QueryInterface(psl, &IID_IPersistFile, (LPVOID*)&ppf);
+
+        if (SUCCEEDED(hres)) {
+            MultiByteToWideChar(CP_ACP, 0, shortcut_path, -1, wsz, MAX_PATH);
+
+            hres = ppf->lpVtbl->Load(ppf, wsz, STGM_READWRITE);
+            if (SUCCEEDED(hres)) {
+                hres = psl->lpVtbl->SetWorkingDirectory(psl, working_dir);
+                if (SUCCEEDED(hres)) {
+                    hres = ppf->lpVtbl->Save(ppf, wsz, TRUE);
+                    if (SUCCEEDED(hres)) {
+                        createproject_log(x, "Successfully updated 'Start In' for shortcut: %s", shortcut_path);
+                    } else {
+                        createproject_log(x, "Failed to save shortcut (Error %ld)", hres);
+                    }
+                } else {
+                    createproject_log(x, "Failed to set working directory (Error %ld)", hres);
+                }
+            } else {
+                createproject_log(x, "Failed to load shortcut (Error %ld)", hres);
+            }
+            ppf->lpVtbl->Release(ppf);
+        } else {
+            createproject_log(x, "Failed to get IPersistFile interface (Error %ld)", hres);
+        }
+        psl->lpVtbl->Release(psl);
+    } else {
+        createproject_log(x, "CoCreateInstance failed (Error %ld)", hres);
+    }
+    CoUninitialize();
 }
 
 void copy_directory_recursively(t_createproject *x, const char *src_dir, const char *dest_dir) {
@@ -170,6 +219,9 @@ void copy_directory_recursively(t_createproject *x, const char *src_dir, const c
             } else {
                 if (CopyFileA(src_path, dest_path, FALSE)) {
                     post("createproject: Copied %s to %s", src_path, dest_path);
+                    if (strstr(file_name, "analyze_files.py - Shortcut") != NULL) {
+                        modify_shortcut_start_in(x, dest_path, dest_dir);
+                    }
                 } else {
                     object_error((t_object *)x, "Failed to copy file %s (Error %ld)", src_path, GetLastError());
                 }

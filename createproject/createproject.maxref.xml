@@ -1,25 +1,37 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="createproject" module="max" category="Utility">
-	<digest>Creates a project folder structure from a template</digest>
-	<description>The `createproject` object creates a new directory at the specified path and copies a standard project template into it. It enforces that projects are created within a specific directory structure.</description>
+	<digest>Automates the creation of organized project folder structures from a master template</digest>
+	<description>
+        The <inlinecode>createproject</inlinecode> object streamlines the process of starting new audio projects by enforcing a standardized directory hierarchy and automating the initial setup.
+        When triggered, it creates a new directory at a specified destination and recursively copies the entire contents of a pre-defined project template into it.
+        <br/><br/>
+        <b>Key Features:</b>
+        <ul>
+            <li>Enforces project creation within a specific root directory (e.g., "[Projects]").</li>
+            <li>Recursively copies all template files and subdirectories.</li>
+            <li>Automatically updates the "Start In" (working directory) parameter of any copied shortcuts named "analyze_files.py - Shortcut" to match their new location, ensuring analysis tools function correctly from the start.</li>
+            <li>Includes a dedicated logging system for tracking the creation and copying process.</li>
+        </ul>
+    </description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Utility</metadata>
+		<metadata name="tag">Project Management</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="symbol">
-			<digest>Inlet 1: Project path</digest>
-			<description>A symbol containing the full path for the new project.</description>
+			<digest>Project path / Command inlet</digest>
+			<description>Accepts the full destination path for the new project as a symbol, or specific messages like 'create' to initiate the process.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="anything">
-			<digest>Outlet 1: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides status messages.</description>
+			<digest>Logging and Status Outlet</digest>
+			<description>Outputs detailed status messages, error reports, and confirmation of copied files when the <at>log</at> attribute is enabled.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -30,21 +42,22 @@
 			<arglist>
 				<arg name="path" type="symbol" optional="0" />
 			</arglist>
-			<digest>Create project</digest>
+			<digest>Initiate project creation</digest>
+			<description>Triggers the creation of the project at the specified path. The object will verify that the parent folder is named "[Projects]" before proceeding with the recursive copy of the template.</description>
 		</method>
 		<method name="log">
 			<arglist>
 				<arg name="state" type="int" optional="0" />
 			</arglist>
-			<digest>Set the log attribute</digest>
-			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+			<digest>Toggle logging</digest>
+			<description>Sets the <at>log</at> attribute. When set to 1, all internal operations and errors are reported through the first outlet.</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="log" get="1" set="1" type="long" size="1">
-			<digest>Enable Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status information.</description>
+			<digest>Enable Detailed Logging</digest>
+			<description>When enabled (1), the object provides granular feedback about every directory created and file copied through its outlet. Useful for debugging template structure or verifying successful project initialization.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
@@ -52,6 +65,13 @@
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
+		<seealso name="analyze~" />
+		<seealso name="weaver~" />
+		<seealso name="crucible" />
+		<seealso name="smartloop~" />
+		<seealso name="rebar" />
+		<seealso name="buildspans" />
+		<seealso name="notify" />
 		<seealso name="stemversion" />
 	</seealsolist>
 </c74object>
