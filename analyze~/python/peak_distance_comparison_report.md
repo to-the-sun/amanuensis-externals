@@ -43,5 +43,41 @@ Despite the logic differences, the fundamental constants are aligned for parity:
 | **Resolution** | 1ms | 1ms | Identical |
 | **Distance** | 200ms | 200ms | Identical |
 
+## 6. Relative Benefits & Trade-offs
+
+### C (Single-Pass Greedy)
+*   **Pros**:
+    - **Performance**: Constant memory overhead and O(N) complexity.
+    - **Streaming Friendly**: Ideal for real-time DSP where the full signal is not known in advance.
+    - **Simplicity**: No complex sorting or multi-pass logic required.
+*   **Cons**:
+    - **Sub-optimal Selection**: In dense transient clusters, it might pick a slightly lower peak if it appears later in the sequential scan, provided it is still within the "competition" window of a suppressed higher peak.
+
+### Python/SciPy (Multi-Pass Global)
+*   **Pros**:
+    - **Optimality**: Guarantees the absolute highest energy peaks are preserved by prioritizing them first.
+    - **Consistency**: The result is deterministic and independent of scan direction.
+*   **Cons**:
+    - **Resource Intensive**: Requires the entire signal to be buffered, leading to higher memory usage and O(N log N) complexity due to sorting.
+    - **Batch Only**: Cannot be effectively implemented in a true low-latency streaming environment.
+
+## 7. Strategy Evaluation: Which is Better?
+
+*   **Better for Real-time (C)**: The sequential approach is significantly better for the `analyze~` Max object. Since the object processes audio in small hops (100ms), it needs to make immediate decisions. A global sorting strategy would require buffering the entire track or introducing massive look-ahead latency.
+*   **Better for Offline (Python)**: The SciPy approach is superior for `analyze_files.py` and the associated video generation. In this context, processing time is secondary to achieving a "mathematically perfect" ground-truth visualization of spectral transients.
+
+## 8. Technical Speculation: Replicating SciPy in C
+
+To switch the C engine to exactly replicate the SciPy strategy, the following architectural changes would be necessary:
+
+1.  **Candidate Buffering**: Modify `analyzer_analyze_audio` to store all initial peak candidates (those passing the rolling threshold and prominence checks) into a temporary structure before enforcing any distance constraints.
+2.  **Magnitude Sorting**: Implement a sorting algorithm (e.g., `qsort` with a custom comparator) to order these candidate peaks by their flux magnitude in descending order.
+3.  **Iterative Invalidation Pass**:
+    - Create a boolean mask or flag array for all candidates.
+    - Iterate through the sorted list.
+    - For each candidate, if it hasn't been "invalidated," mark it as accepted and then scan all other candidates to invalidate any that fall within a 200ms radius.
+4.  **Temporal Re-sorting**: After filtering, the remaining accepted peaks must be re-sorted by their original frame index (time) before resonance scoring can proceed.
+5.  **Impact on Max Object**: This would effectively turn `analyze~` into an offline-only analyzer, or require a significant "analysis delay" (likely several seconds) to allow the global logic to resolve peaks before they can be output.
+
 ## Conclusion
 The C implementation is designed for streaming performance and avoids the memory/computational overhead of sorting all peaks globally. While it effectively replicates the *intent* of the 200ms minimum distance, users may notice subtle differences in peak selection in complex audio where multiple high-energy transients occur in very close proximity.
