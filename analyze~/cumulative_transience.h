@@ -33,20 +33,6 @@ typedef struct SnapshotEntry {
 } SnapshotEntry;
 
 typedef struct {
-    int frame;
-    int type; // 0 for ADD, 1 for REMOVE
-    double score;
-    int band_idx;
-    int peak_frame;
-} ScoreEvent;
-
-typedef struct {
-    double score;
-    int band_idx;
-    int peak_frame;
-} ActiveScore;
-
-typedef struct {
     double std_dev;
     double mean;
     double contrast;
@@ -55,11 +41,8 @@ typedef struct {
     bool buffer_updated;
     double highest_peak_ms;
     bool highest_peak_valid;
-    double rolling_score;
     double min_score_seen;
     double max_score_seen;
-    int num_active_scores;
-    ActiveScore active_scores[256];
 } AnalyzerMetrics;
 
 typedef struct {
@@ -71,14 +54,6 @@ typedef struct {
     double max_score_seen;
     double total_score_sum;
     int score_count;
-
-    // Rolling score
-    ScoreEvent upcoming_events[MAX_EVENTS];
-    int event_count;
-    int event_read_ptr;
-
-    ActiveScore current_window_scores[MAX_EVENTS];
-    int current_window_count;
     double last_score_avg;
 
     // Peak history
@@ -121,7 +96,6 @@ typedef struct {
     BandAnalysis bands[MAX_BANDS];
 
     // Batch analysis metrics history
-    double* rolling_scores;
     double* ratings;
     double* std_devs;
     double* contrasts;
