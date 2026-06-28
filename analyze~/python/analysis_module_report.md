@@ -5,19 +5,6 @@ The `cumulative_transience` module serves as the high-performance core engine fo
 
 ---
 
-## CLI Tools
-
-### `analyze_files.py`
-The primary standalone tool for batch processing audio files and generating analysis videos.
-- **File Discovery**: Supports passing individual files or directories as arguments. If no arguments are provided, it defaults to the current working directory.
-- **Robustness**: Automatically filters for supported audio extensions (`.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.aiff`).
-- **Shortcut Support**: Includes specific logic to detect Windows shortcut "Start in" issues and provides troubleshooting tips to the console.
-
-### `analyze_here.bat`
-A Windows helper script that ensures the Python analysis is correctly targeted at the folder where the batch file (or its shortcut) is located.
-
----
-
 ## Core Components
 
 ### 1. `TransientAnalyzer` Class
