@@ -78,8 +78,7 @@ def generate_video(audio_path, data):
         all_valid_peak_indices = set().union(*peak_indices_list)
 
         fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14),
-                                                               gridspec_kw={'height_ratios': [1, 0.1, 1]})
-        fig.subplots_adjust(hspace=0.3)
+                                                               gridspec_kw={'height_ratios': [1, 0.3, 1]})
 
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']
         alphas = [1.0, 0.8, 0.6, 0.4]
@@ -128,12 +127,15 @@ def generate_video(audio_path, data):
         ax_buf.set_ylim(0, 1)
 
         # Configure Snapshot bar
-        ax_snapshot.set_xlim(-39, 0)
-        ax_snapshot.set_ylim(0, 1)
-        ax_snapshot.set_yticks([])
-        ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=10)
-        ax_snapshot.set_xlabel("Time Relative to Playhead (ms)", fontsize=8)
-        ax_snapshot.grid(True, axis='x', alpha=0.3)
+        ax_snapshot.set_xlim(-39, 5) # Extra space for labels
+        ax_snapshot.set_ylim(-0.5, 3.5) # 4 lanes: 0, 1, 2, 3
+        ax_snapshot.set_yticks([0, 1, 2, 3])
+        ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
+        ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold')
+        ax_snapshot.set_xlabel("Time Relative to Newest Peak (ms)", fontsize=12)
+        ax_snapshot.grid(False)
+        for i in range(3):
+            ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
 
         active_flashes = []
         flash_fill_artists = []
@@ -142,12 +144,14 @@ def generate_video(audio_path, data):
         active_qualifiers = [] # List of [line, label, lifetime, val]
         snapshot_artists = [] # List of hash marks and labels
         last_snapshot_peak_ids = set() # Set of (peak_frame, band_idx)
+        last_frame_processed = -1
+        current_snapshot_avg = 0.0
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
                                               fontweight='bold')
 
-        rating_text = ax_transient.text(0.02, 0.93, 'Rating: 0.00', transform=ax_transient.transAxes,
+        rating_text = ax_transient.text(0.02, 0.92, 'Rating: 0.00', transform=ax_transient.transAxes,
                                         verticalalignment='top', fontsize=12, color='#f1c40f',
                                         fontweight='bold')
 
@@ -159,7 +163,18 @@ def generate_video(audio_path, data):
         analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak)
 
         def update(frame):
-            nonlocal last_snapshot_peak_ids
+            nonlocal last_snapshot_peak_ids, last_frame_processed, current_snapshot_avg
+
+            # The animation skips frames (step=100), but the stateful C analyzer
+            # must process EVERY frame to ensure all peaks and REMOVE events are handled.
+            # This loop catches the C core up to the current visual frame.
+            all_new_peak_data = []
+            for f in range(last_frame_processed + 1, frame + 1):
+                new_peak_data = analyzer.process_new_peaks(f, peak_indices_list, onset_envs, all_valid_peak_indices, times)
+                all_new_peak_data.extend(new_peak_data)
+                analyzer.update_metrics(f) # Update events in C core
+            last_frame_processed = frame
+
             current_time = times[frame]
             ax_transient.set_xlim(current_time - 20, current_time + 5)
 
@@ -171,10 +186,8 @@ def generate_video(audio_path, data):
             cleanup_time = current_time - 15
             cleanup_transient.set_xdata([cleanup_time, cleanup_time])
 
-            # Process Peaks
-            new_peak_data = analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times)
-            
-            for p_data in new_peak_data:
+            # Process visually appearing Peaks
+            for p_data in all_new_peak_data:
                 # Clear existing qualifiers when a new peak is processed
                 for q in active_qualifiers:
                     q[0].remove()
@@ -213,34 +226,40 @@ def generate_video(audio_path, data):
             # Update Snapshot bar
             current_snapshot_peak_ids = set((s['peak_frame'], s['band_idx']) for s in metrics['active_scores'])
 
-            # Check if any NEW peaks have entered the window.
-            # We only "re-snapshot" if something new arrived.
-            # If nothing new arrived (even if some left), we hold the previous visual.
-            if any(pid not in last_snapshot_peak_ids for pid in current_snapshot_peak_ids):
-                for artist in snapshot_artists:
-                    artist.remove()
-                snapshot_artists.clear()
+            # If the set of peaks has changed (arrival or departure), we update the snapshot.
+            if current_snapshot_peak_ids != last_snapshot_peak_ids:
+                if metrics['active_scores']:
+                    for artist in snapshot_artists:
+                        artist.remove()
+                    snapshot_artists.clear()
 
-                # Render current snapshot
-                for s in metrics['active_scores']:
-                    # In a true snapshot "photo finish", the newest peak is at 0ms.
-                    # All others are relative to that newest peak.
-                    # Find the newest peak in the current set
+                    # Re-calculate the average specifically for the snapshot
+                    current_snapshot_avg = sum(ss['score'] for ss in metrics['active_scores']) / len(metrics['active_scores'])
+
+                    # Find the newest peak in the current set for relative time
                     newest_frame = max(ss['peak_frame'] for ss in metrics['active_scores'])
-                    rel_ms = float(s['peak_frame'] - newest_frame)
 
-                    score_val = s['score']
-                    band_c = colors[s['band_idx']]
-                    # Hash mark
-                    line = ax_snapshot.axvline(x=rel_ms, color=band_c, lw=2)
-                    # Value text
-                    txt = ax_snapshot.text(rel_ms + 0.5, 0.5, f"{score_val:+.2f}",
-                                           color=band_c, fontsize=7, va='center', fontweight='bold')
-                    snapshot_artists.extend([line, txt])
+                    for s in metrics['active_scores']:
+                        rel_ms = float(s['peak_frame'] - newest_frame)
+                        score_val = s['score']
+                        band_idx = s['band_idx']
+                        band_c = colors[band_idx]
+                        lane_y = band_idx
 
-                last_snapshot_peak_ids = current_snapshot_peak_ids
+                        # Hash mark (limited to lane)
+                        line = ax_snapshot.vlines(x=rel_ms, ymin=lane_y - 0.4, ymax=lane_y + 0.4,
+                                                 color=band_c, lw=3)
+                        # Value text (using white outline for readability if needed, or just larger font)
+                        txt = ax_snapshot.text(rel_ms + 0.5, lane_y, f"{score_val:+.2f}",
+                                               color=band_c, fontsize=11, va='center', fontweight='bold')
+                        snapshot_artists.extend([line, txt])
+
+                # If window is now empty, we hold the previous visual and average.
+                # Only update last_snapshot_peak_ids if it's NOT empty.
+                if current_snapshot_peak_ids:
+                    last_snapshot_peak_ids = current_snapshot_peak_ids
             
-            if metrics['buffer_updated'] or new_peak_data:
+            if metrics['buffer_updated'] or all_new_peak_data:
                 buffer_line.set_ydata(analyzer.accumulated_buffer)
             
             # Dynamic Y-axis scaling for buffer
@@ -250,8 +269,8 @@ def generate_video(audio_path, data):
             mean_line.set_ydata([metrics['mean'], metrics['mean']])
             metrics_text.set_text(f"Std Dev: {metrics['std_dev']:.3f}\nContrast: {metrics['contrast']:.3f}\nPeak Std: {metrics['peak_std']:.3f}")
             rating_text.set_text(f"Rating: {metrics['rating']:.2f}")
-            score_display_text.set_text(f"Score: {metrics['rolling_score']:+.2f}")
-            score_display_text.set_color(get_score_color(metrics['rolling_score'], metrics['min_score_seen'], metrics['max_score_seen']))
+            score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}")
+            score_display_text.set_color(get_score_color(current_snapshot_avg, metrics['min_score_seen'], metrics['max_score_seen']))
 
             # Handle Flash and Fade
             for artist in flash_fill_artists:
@@ -327,6 +346,7 @@ def generate_video(audio_path, data):
             pbar.refresh()
 
         writer = animation.FFMpegWriter(fps=10, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000)
+        fig.tight_layout(pad=2.0)
         ani.save(temp_video_path, writer=writer, progress_callback=progress_callback)
         pbar.close()
         plt.close(fig)
