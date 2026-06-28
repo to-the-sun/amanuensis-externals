@@ -11,7 +11,11 @@ import sys
 # Add the parent directory of this script's directory to sys.path so we can import analyze_files
 # This assumes analyze_files.py is in the same directory as Amanuensis.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import analyze_files
+try:
+    import analyze_files
+except ImportError:
+    sys.path.append(r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python')
+    import analyze_files
 
 # Global configuration
 DEFAULT_CHANNEL = "works-in-progress"  # Channel where the bot will post updates

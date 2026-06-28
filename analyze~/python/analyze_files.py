@@ -14,7 +14,11 @@ import tempfile
 import shutil
 import traceback
 import sys
-import ct_utils
+try:
+    import ct_utils
+except ImportError:
+    sys.path.append(r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python')
+    import ct_utils
 
 try:
     import static_ffmpeg
@@ -27,7 +31,15 @@ ct_utils.ensure_extension_built()
 try:
     import cumulative_transience
 except ImportError:
-    cumulative_transience = None
+    fallback_path = r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python'
+    if fallback_path not in sys.path:
+        sys.path.append(fallback_path)
+        try:
+            import cumulative_transience
+        except ImportError:
+            cumulative_transience = None
+    else:
+        cumulative_transience = None
 
 def get_score_color(score, min_score, max_score):
     """
@@ -410,8 +422,6 @@ def analyze_audio(file_path):
 
 def main():
     global cumulative_transience
-    # Module is imported at top level after ensure_extension_built()
-    import cumulative_transience
 
     parser = argparse.ArgumentParser(description="Standalone transient analysis and video generation.")
     parser.add_argument("files", nargs="*", help="Optional list of audio files to process.")
