@@ -12,14 +12,13 @@ The "Source of Truth" for all numerical analysis. It is designed to be platform-
 *   **Feature Extraction**: Calculation of Spectral Flux (onset strength) across 4 bands.
 *   **Peak Detection**: Algorithmic identification of transients based on local prominence and rolling thresholds.
 *   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores based on rhythm density.
-*   **Rolling Score Calculation**: Maintaining a high-resolution rolling average of resonance scores (calculated over a 39ms window) for real-time visualization.
-*   **State Management**: The `TransientAnalyzer` struct tracks the rolling metrics (Std Dev, Contrast, Rating, Rolling Score) and handles the "Cleanup Sweep" (removing old snapshots).
+*   **State Management**: The `TransientAnalyzer` struct tracks the rolling metrics (Std Dev, Contrast, Rating) and handles the "Cleanup Sweep" (removing old snapshots).
 
 ### **Boundary Interface**
 *   **Inputs**: Raw `float*` audio buffers or `float*` envelope buffers, sample rates, and frame indices.
 *   **Outputs**: C structs containing raw numerical data.
     *   **`PeakResult`**: Provides individual resonance scores (`total_score`) in real-time as peaks are identified.
-    *   **`AnalyzerMetrics`**: Provides the 39ms rolling average (`rolling_score`) as a persistent metric.
+    *   **`AnalyzerMetrics`**: Provides persistent metrics (Std Dev, Contrast, Rating).
 *   **Memory**: Caller is responsible for allocating/freeing the audio buffers; the library handles its internal analyzer state.
 
 ---
@@ -51,6 +50,7 @@ A Cython-based native extension that compiles into `cumulative_transience.pyd` (
 Handles the "heavy lifting" of file management and visualization.
 *   **File I/O**: Uses `librosa` to load and resample various audio formats (MP3, WAV, FLAC).
 *   **Batch Analysis**: Calls `analyze_audio()` to process entire files at once.
+*   **Rolling Score Calculation**: Maintaining a high-resolution rolling average of resonance scores (calculated over a 39ms window) for real-time visualization.
 *   **Graphing**: Uses `Matplotlib` to render the 4-band transient envelopes and rolling thresholds.
 *   **Video Rendering**: Orchestrates `FFmpeg` and `Matplotlib.animation` to generate the synchronized video reports.
 *   **Logic**: Handles the visual "flash and fade" effects and score animations seen in the videos.
@@ -69,7 +69,7 @@ A Discord bot that serves as a high-level UI.
 | **FFT / Mel-Filters** | **Primary** | - | - |
 | **Peak Detection Logic** | **Primary** | - | - |
 | **Resonance Scoring** | **Primary** | - | - |
-| **Rolling Score (39ms Avg)** | **Primary** | - | - |
+| **Rolling Score (39ms Avg)** | - | - | **Primary** |
 | **Audio File Loading** | - | - | **librosa** |
 | **Live Audio Capture** | - | **DSP Thread** | - |
 | **Threading/Async** | - | **Async Worker** | **asyncio/threads** |

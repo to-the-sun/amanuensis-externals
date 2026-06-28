@@ -239,13 +239,6 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                                 x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
                             }
 
-                            // 2. Shift all newly added events to global absolute frames.
-                            // This uses a robust loop to shift exactly the events added by this call.
-                            int new_event_count = x->analyzer->event_count;
-                            for (int k = prev_event_count; k < new_event_count && k < MAX_EVENTS; k++) {
-                                x->analyzer->upcoming_events[k].frame += window_start_frame;
-                            }
-
                             t_atom out_args[2];
                             atom_setlong(out_args, b);
                             atom_setfloat(out_args + 1, pr.total_score);
