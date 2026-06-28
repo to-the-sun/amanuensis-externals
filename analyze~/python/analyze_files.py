@@ -158,7 +158,7 @@ def generate_video(audio_path, data):
         ax_buf.set_ylim(0, 1)
 
         # Configure Snapshot bar
-        ax_snapshot.set_xlim(-39, 1) # Extra space for labels
+        ax_snapshot.set_xlim(-45, 1) # Extra space for labels
         ax_snapshot.set_ylim(-0.5, 3.5) # 4 lanes: 0, 1, 2, 3
         ax_snapshot.set_yticks([0, 1, 2, 3])
         ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
@@ -168,6 +168,7 @@ def generate_video(audio_path, data):
         for i in range(3):
             ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
 
+        POPUP_LIFETIME = 60
         active_flashes = []
         flash_fill_artists = []
         peak_lines = []
@@ -234,10 +235,11 @@ def generate_video(audio_path, data):
                     band_c = colors[band_idx]
                     lane_y = band_idx
 
+                    score_c = get_score_color(score_val, analyzer.min_score_seen, analyzer.max_score_seen)
                     line = ax_snapshot.vlines(x=rel_ms, ymin=lane_y - 0.4, ymax=lane_y + 0.4,
                                              color=band_c, lw=3)
-                    txt = ax_snapshot.text(rel_ms + 0.5, lane_y, f"{score_val:+.2f}",
-                                           color=band_c, fontsize=13, va='center', fontweight='bold')
+                    txt = ax_snapshot.text(rel_ms - 0.8, lane_y, f"{score_val:+.2f}",
+                                           color=score_c, fontsize=13, va='center', ha='right', fontweight='bold')
                     snapshot_artists.extend([line, txt])
 
             current_time = times[frame]
@@ -269,21 +271,16 @@ def generate_video(audio_path, data):
                         q_label = ax_buf.text(q_ms, (qualifier + 1) / 2, f"{qualifier:+.2f}",
                                               color=q_color, fontsize=8, ha='left', va='center',
                                               transform=ax_buf.get_xaxis_transform())
-                        active_qualifiers.append([q_line, q_label, 20, qualifier])
-
-                    # Update previous scores to be smaller
-                    for score in active_scores:
-                        score[0].set_fontsize(10)
-                        score[0].set_fontweight('normal')
+                        active_qualifiers.append([q_line, q_label, POPUP_LIFETIME, qualifier])
 
                     # Create score animation
                     total_score = p_data['total_score']
                     score_text = ax_transient.text(p_data['time'], p_data['peak_val'], f"{total_score:+.2f}",
                                                 color=get_score_color(total_score, analyzer.min_score_seen, analyzer.max_score_seen),
-                                                fontsize=20, fontweight='bold',
+                                                fontsize=10, fontweight='normal',
                                                 ha='center', va='bottom')
-                    active_scores.append([score_text, 20, p_data['peak_val'], total_score])
-                    active_flashes.append([p_data['snapshot'], 20])
+                    active_scores.append([score_text, POPUP_LIFETIME, p_data['peak_val'], total_score])
+                    active_flashes.append([p_data['snapshot'], POPUP_LIFETIME])
 
             # Update Metrics and Cleanup
             metrics = analyzer.update_metrics(frame)
@@ -308,7 +305,7 @@ def generate_video(audio_path, data):
 
             for flash in active_flashes[:]:
                 snapshot, lifetime = flash
-                alpha = (lifetime / 20.0) * 0.5
+                alpha = (lifetime / float(POPUP_LIFETIME)) * 0.5
                 if np.any(snapshot > 0):
                     fill = ax_buf.fill_between(buffer_times, 0, snapshot, color='#2ecc71', alpha=alpha)
                     flash_fill_artists.append(fill)
@@ -326,10 +323,10 @@ def generate_video(audio_path, data):
                     active_scores.remove(score)
                 else:
                     score[1] = lifetime
-                    progress = (20 - lifetime) / 20.0
+                    progress = (POPUP_LIFETIME - lifetime) / float(POPUP_LIFETIME)
                     new_y = initial_y + (progress * 0.1 * current_ylim)
                     txt.set_position((txt.get_position()[0], new_y))
-                    txt.set_alpha(lifetime / 20.0)
+                    txt.set_alpha(lifetime / float(POPUP_LIFETIME))
                     txt.set_color(get_score_color(val, analyzer.min_score_seen, analyzer.max_score_seen))
 
             # Handle highest peak line
@@ -350,7 +347,7 @@ def generate_video(audio_path, data):
                     active_qualifiers.remove(q)
                 else:
                     q[2] = lifetime
-                    alpha = lifetime / 20.0
+                    alpha = lifetime / float(POPUP_LIFETIME)
                     q_line.set_alpha(alpha * 0.8)
                     q_label.set_alpha(alpha)
 
