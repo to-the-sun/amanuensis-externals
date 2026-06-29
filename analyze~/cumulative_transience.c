@@ -61,6 +61,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     self->min_score_seen = 0.0;
     self->max_score_seen = 0.0;
     self->last_score_avg = 0.0;
+    self->frame_duration_ms = 1.0;
 
     return self;
 }
@@ -75,6 +76,14 @@ void analyzer_destroy(TransientAnalyzer* self) {
         }
     }
     free(self);
+}
+
+void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
+    int hop_length = (int)(sr * 0.001);
+    self->frame_duration_ms = 1000.0 * (double)hop_length / (double)sr;
+    for (int i = 0; i < BUFFER_LEN; i++) {
+        self->buffer_times[i] = (double)(i - 5000) * self->frame_duration_ms;
+    }
 }
 
 int analyzer_process_peak(TransientAnalyzer* self,
@@ -339,7 +348,7 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->num_frames = num_frames;
     result_out->times = (float*)malloc(sizeof(float) * num_frames);
     for (int i = 0; i < num_frames; i++) {
-        result_out->times[i] = (float)i * 0.001f;
+        result_out->times[i] = (float)i * (float)hop_length / (float)sr;
     }
 
     double* mel_filters = create_mel_filterbank(sr, n_fft, n_mels);
@@ -519,6 +528,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->peak_stds = (double*)malloc(sizeof(double) * num_frames);
 
     TransientAnalyzer* analyzer = analyzer_create(result_out->max_peak_value);
+    analyzer_set_sample_rate(analyzer, sr);
 
     int total_peaks = 0;
     for (int b = 0; b < MAX_BANDS; b++) total_peaks += result_out->bands[b].num_peaks;
