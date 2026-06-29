@@ -78,8 +78,8 @@ Furthermore, from a psychoacoustic perspective, a 15-second "rolling" `max_peak`
 - **Difficulty**: None. This is a natural result of unified windowing.
 
 #### 6. Temporal Resolution
-- **Upside**: Ensuring both use the same hop-size logic regardless of system SR.
-- **Downside**: Requires Python to resample audio to the "standard" rate expected by the Max environment (e.g., 48kHz) before analysis.
+- **Upside**: Ensuring both use the same hop-size logic regardless of system SR. Max typically operates at a standard 44.1kHz, so they should generally match.
+- **Downside**: If a discrepancy occurs, Python must resample audio to match the Max environment's rate before analysis.
 - **Difficulty**: Low. `librosa` handles resampling easily.
 
 #### 7. STFT Padding and Window Edges
