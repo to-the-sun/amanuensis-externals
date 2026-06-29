@@ -63,3 +63,34 @@ C **can** handle the whole process, and it does so in `analyzer_batch_analyze`. 
 In a real-time environment like **Max**, we cannot use a batch function because the "whole file" doesn't exist yet—it's a continuous stream. The host (`analyze~.c`) must manage the circular buffer, the background threading, and the persistence of the `TransientAnalyzer` state across successive 100ms analysis cycles.
 
 The "back and forth" is the price paid for supporting both offline batch processing (Python) and real-time streaming (Max) using the same underlying numerical core.
+
+## 5. Proposed Change: Unified 15s Sliding Window
+
+The user asked: *Does Python send the entire song of audio for FFT at once?*
+**Yes.** In the current Python implementation, the entire file is loaded and passed to `analyzer_batch_analyze` (or `analyzer_analyze_audio`), which performs the STFT on the full duration in one pass.
+
+The user asked: *What would be the effect of both pipelines only sending a smaller rolling window (e.g., 15s + 200ms lookahead)?*
+
+Switching both Python and Max to a 15s sliding window would "harmonize" the two environments. The primary effects would be:
+- **Consistent Normalization**: Both would experience the same spectral environment, meaning `max_peak` would converge similarly.
+- **Identical Artifacts**: Any windowing artifacts (like STFT edge padding) would be identical in both versions, rather than Python being "clean" and Max having edge ripples.
+- **Computational Efficiency (Python)**: For very long files, memory usage would drop significantly as Python would no longer need to hold the full Mel-spectrogram of the entire song in RAM.
+
+### Speculative Impact on `ANALYSIS_INPUT_DIFFERENCES.md`
+
+If we moved to a unified 15s sliding window with a 200ms lookahead, here is how the documented discrepancies would change:
+
+1.  **Global vs. Converging `max_peak`**:
+    - *Impact*: **Reduced.** While Python would still technically "see" the future if it looks ahead, the 15s limit ensures that early normalization is driven by local energy rather than a distant global maximum. This makes Python's behavior much closer to Max's real-time convergence.
+2.  **Peak Suppression and Minimum Distance**:
+    - *Impact*: **Eliminated.** With a 200ms lookahead, both pipelines can check for "future" peaks before committing to a current one. This prevents the "double-hit" issue in Max where a later, larger peak causes a regression of a previously detected smaller peak.
+3.  **Inter-band Processing Order**:
+    - *Impact*: **No Change (unless implemented).** This is a host-side iteration issue. Even with 15s windows, Max would still process Band 0 then Band 1 unless the `analyze~.c` loop is changed to sort chronologically.
+4.  **Resonance Context**:
+    - *Impact*: **Eliminated.** Since the resonance lookback is 5s and the window is 15s, a 15s window ensures that the "context" available to the C core is identical in both environments.
+5.  **Mel Spectrogram Normalization (Spectral Breathing)**:
+    - *Impact*: **Harmonized.** Both environments would now experience "Spectral Breathing" in the exact same way. While breathing is generally undesirable, having it be *consistent* between offline and real-time is a significant win for predictability.
+6.  **Temporal Resolution**:
+    - *Impact*: **No Change.** This depends on the system sample rate, not the windowing strategy.
+7.  **STFT Padding and Window Edges**:
+    - *Impact*: **Eliminated.** By using a lookahead/lookbehind buffer and a consistent window size, the padding artifacts would occur at the same relative positions in both pipelines, effectively making the "usable" part of the flux envelope identical.
