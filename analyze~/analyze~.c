@@ -220,11 +220,11 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     int buffer_start_frame = window_start_samples / ms_samples;
     int active_start_frame = active_start_samples / ms_samples;
 
-    ChunkAnalysisResult result;
-    if (analyzer_analyze_chunk(x->analyzer, linear_audio, actual_analysis_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, &result)) {
+    ChunkAnalysisResult* result = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    if (result && analyzer_analyze_chunk(x->analyzer, linear_audio, actual_analysis_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, result)) {
 
-        for (int i = 0; i < result.peak_list.num_peaks; i++) {
-            PeakResult* pr = &result.peak_list.peaks[i];
+        for (int i = 0; i < result->peak_list.num_peaks; i++) {
+            PeakResult* pr = &result->peak_list.peaks[i];
 
             t_atom out_args[2];
             atom_setlong(out_args, pr->band_idx);
@@ -233,12 +233,13 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         }
 
         t_atom out_args[4];
-        atom_setfloat(out_args, result.metrics.rating);
-        atom_setfloat(out_args + 1, result.metrics.std_dev);
-        atom_setfloat(out_args + 2, result.metrics.contrast);
-        atom_setfloat(out_args + 3, result.metrics.peak_std);
+        atom_setfloat(out_args, result->metrics.rating);
+        atom_setfloat(out_args + 1, result->metrics.std_dev);
+        atom_setfloat(out_args + 2, result->metrics.contrast);
+        atom_setfloat(out_args + 3, result->metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
     }
+    if (result) free(result);
 
     free(linear_audio);
     x->pending_analysis = 0;

@@ -45,7 +45,7 @@ typedef struct {
     double max_score_seen;
 } AnalyzerMetrics;
 
-#define MAX_PEAKS_PER_CHUNK 64
+#define MAX_PEAKS_PER_CHUNK 16
 
 typedef struct {
     PeakResult peaks[MAX_PEAKS_PER_CHUNK];

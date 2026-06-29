@@ -466,7 +466,8 @@ def analyze_audio(file_path):
     # Active zone: [T - 300ms, T - 201ms]
     # Lookahead: [T - 200ms, T]
     # Context: [T - 15.2s, T - 300ms]
-    
+
+    print(f"Starting sliding window analysis for {len(y)} samples...")
     for t_samples in range(step_samples, len(y) + step_samples, step_samples):
         active_start_samples = t_samples - step_samples - int(sr * 0.2)
         if active_start_samples < 0: continue
@@ -483,6 +484,8 @@ def analyze_audio(file_path):
             all_peaks.extend(res['peaks'])
             # We take the metrics from the very last chunk for the final report
             final_metrics = res['metrics']
+
+    print(f"Analysis loop finished. Found {len(all_peaks)} peaks. Starting pre-processing for video...")
 
     # Convert all_peaks to the format expected by generate_video
     peaks_list = [[] for _ in range(4)]
@@ -564,15 +567,16 @@ if __name__ == "__main__":
     try:
         main()
         print("\nAnalysis complete.")
-    except Exception as e:
+    except BaseException:
         print("\n" + "="*60)
-        print("CRITICAL ERROR")
+        print("TERMINATION LOG")
         print("="*60)
         traceback.print_exc()
         print("="*60)
     finally:
         # Keep window open for user to see output/errors
+        print("\nPersistence check: The script will remain open until you press Enter.")
         try:
             input("\nPress Enter to exit...")
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             pass
