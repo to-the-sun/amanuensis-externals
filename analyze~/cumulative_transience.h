@@ -45,6 +45,18 @@ typedef struct {
     double max_score_seen;
 } AnalyzerMetrics;
 
+#define MAX_PEAKS_PER_CHUNK 64
+
+typedef struct {
+    PeakResult peaks[MAX_PEAKS_PER_CHUNK];
+    int num_peaks;
+} PeakResultList;
+
+typedef struct {
+    PeakResultList peak_list;
+    AnalyzerMetrics metrics;
+} ChunkAnalysisResult;
+
 typedef struct {
     double accumulated_buffer[BUFFER_LEN];
     double buffer_times[BUFFER_LEN];
@@ -83,6 +95,14 @@ int analyzer_process_peak(TransientAnalyzer* self,
 
 void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
 double* analyzer_get_buffer(TransientAnalyzer* self);
+
+int analyzer_analyze_chunk(TransientAnalyzer* self,
+                           const float* y,
+                           int len,
+                           int sr,
+                           int buffer_start_frame,
+                           int active_start_frame,
+                           ChunkAnalysisResult* result_out);
 
 // Full analysis structures
 typedef struct {

@@ -49,6 +49,17 @@ static void fft(double* real, double* imag, int n) {
     }
 }
 
+typedef struct {
+    int p_idx;
+    int band_idx;
+} PeakRef;
+
+static int compare_peaks(const void* a, const void* b) {
+    PeakRef* pa = (PeakRef*)a;
+    PeakRef* pb = (PeakRef*)b;
+    return pa->p_idx - pb->p_idx;
+}
+
 TransientAnalyzer* analyzer_create(double max_peak_value) {
     TransientAnalyzer* self = (TransientAnalyzer*)calloc(1, sizeof(TransientAnalyzer));
     if (!self) return NULL;
@@ -278,6 +289,79 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
 
 double* analyzer_get_buffer(TransientAnalyzer* self) {
     return self->accumulated_buffer;
+}
+
+int analyzer_analyze_chunk(TransientAnalyzer* self,
+                           const float* y,
+                           int len,
+                           int sr,
+                           int buffer_start_frame,
+                           int active_start_frame,
+                           ChunkAnalysisResult* result_out) {
+    FullAnalysisResult res;
+    if (!analyzer_analyze_audio(y, len, sr, &res)) return 0;
+
+    // Update max_peak
+    if (res.max_peak_value > (float)self->max_peak) {
+        self->max_peak = (double)res.max_peak_value;
+    }
+
+    int total_peaks = 0;
+    for (int b = 0; b < MAX_BANDS; b++) total_peaks += res.bands[b].num_peaks;
+
+    PeakRef* all_peaks = (PeakRef*)malloc(sizeof(PeakRef) * (total_peaks + 1));
+    int* all_indices = (int*)malloc(sizeof(int) * (total_peaks + 1));
+    if (!all_peaks || !all_indices) {
+        if (all_peaks) free(all_peaks);
+        if (all_indices) free(all_indices);
+        analyzer_free_analysis(&res);
+        return 0;
+    }
+
+    int curr = 0;
+    for (int b = 0; b < MAX_BANDS; b++) {
+        for (int i = 0; i < res.bands[b].num_peaks; i++) {
+            all_peaks[curr].p_idx = res.bands[b].peaks[i];
+            all_peaks[curr].band_idx = b;
+            all_indices[curr] = res.bands[b].peaks[i];
+            curr++;
+        }
+    }
+
+    qsort(all_peaks, total_peaks, sizeof(PeakRef), compare_peaks);
+
+    result_out->peak_list.num_peaks = 0;
+
+    for (int i = 0; i < total_peaks; i++) {
+        int p_idx = all_peaks[i].p_idx;
+        int b = all_peaks[i].band_idx;
+        int p_global = buffer_start_frame + p_idx;
+
+        // Process only peaks in the active 100ms zone: [active_start_frame, active_start_frame + 99]
+        if (p_global >= active_start_frame && p_global < active_start_frame + 100) {
+            PeakResult pr;
+            double time = (double)p_global * self->frame_duration_ms / 1000.0;
+
+            if (analyzer_process_peak(self, p_idx, b, time, res.bands[b].envelope, res.num_frames, all_indices, total_peaks, &pr)) {
+                // Ensure internal snapshot is shifted to global index
+                if (self->snapshot_tails[b]) {
+                    self->snapshot_tails[b]->p_idx = p_global;
+                }
+
+                if (result_out->peak_list.num_peaks < MAX_PEAKS_PER_CHUNK) {
+                    pr.p_idx = p_global; // Return global index to host
+                    result_out->peak_list.peaks[result_out->peak_list.num_peaks++] = pr;
+                }
+            }
+        }
+    }
+
+    analyzer_update_metrics(self, active_start_frame + 100, &result_out->metrics);
+
+    free(all_peaks);
+    free(all_indices);
+    analyzer_free_analysis(&res);
+    return 1;
 }
 
 #define N_FFT 2048

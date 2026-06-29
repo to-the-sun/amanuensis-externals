@@ -194,22 +194,35 @@ def generate_video(audio_path, data):
         # Instantiate analyzer
         analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
 
+        # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
+        # during animation. This list will be consumed by the update() function.
+        all_processed_peaks = []
+        for p_idx in sorted(all_valid_peak_indices):
+             # Finding which band this peak belongs to
+             band_idx = -1
+             for b in range(4):
+                 if p_idx in peak_indices_list[b]:
+                     band_idx = b
+                     break
+
+             # Process it
+             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times)
+             all_processed_peaks.extend(res_list)
+
         def update(frame):
             nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores
             
-            # Catch up C core and accumulate scores in Python
-            all_new_peak_data = []
-            for f in range(last_frame_processed + 1, frame + 1):
-                new_peak_data = analyzer.process_new_peaks(f, peak_indices_list, onset_envs, all_valid_peak_indices, times)
-                for p in new_peak_data:
-                    rolling_window_scores.append({
-                        'frame': p['p_idx'],
-                        'score': p['total_score'],
-                        'band_idx': p['band_idx']
-                    })
-                all_new_peak_data.extend(new_peak_data)
-                analyzer.update_metrics(f)
+            # Use pre-processed peaks for this visual frame
+            all_new_peak_data = [p for p in all_processed_peaks if p['p_idx'] > last_frame_processed and p['p_idx'] <= frame]
+
+            for p in all_new_peak_data:
+                rolling_window_scores.append({
+                    'frame': p['p_idx'],
+                    'score': p['total_score'],
+                    'band_idx': p['band_idx']
+                })
             
+            analyzer.update_metrics(frame)
             last_frame_processed = frame
 
             # Prune scores to the 39ms sliding window ending at the current playhead frame
@@ -420,8 +433,7 @@ def generate_video(audio_path, data):
 
 def analyze_audio(file_path):
     """
-    Analyzes raw audio data to extract its transient envelope (4-band analysis)
-    and identify peaks. Returns a dictionary with all analysis data.
+    Analyzes raw audio data using a sliding window to mimic real-time behavior.
     """
     ensure_initialized()
     global cumulative_transience
@@ -429,21 +441,75 @@ def analyze_audio(file_path):
         raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
 
     print(f"Analyzing {file_path}...")
-    y, sr = librosa.load(file_path, sr=None, mono=True)
-    result = cumulative_transience.analyze_audio(y, sr)
-    result['filename'] = os.path.basename(file_path)
+    y, sr = librosa.load(file_path, sr=44100, mono=True)
+
+    # Standard 1ms hop at 44.1kHz
+    hop_samples_ms = 44
+    num_frames = (len(y) + hop_samples_ms - 1) // hop_samples_ms
+
+    times = np.arange(num_frames) * (hop_samples_ms / float(sr))
+
+    # We need a dummy pre-analysis to get the 'full' envelopes for the video
+    # But for the true ratings, we use the sliding window loop.
+    full_res = cumulative_transience.analyze_audio(y, sr)
+
+    analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=1.0, sr=sr)
+
+    all_peaks = []
+
+    # 100ms step loop
+    step_ms = 100
+    step_samples = int(sr * 0.1)
+
+    # We follow the same logic as Max:
+    # Trigger every 100ms.
+    # Active zone: [T - 300ms, T - 201ms]
+    # Lookahead: [T - 200ms, T]
+    # Context: [T - 15.2s, T - 300ms]
     
-    # Compatibility with existing result format
-    result['times'] = result['times'].tolist()
+    for t_samples in range(step_samples, len(y) + step_samples, step_samples):
+        active_start_samples = t_samples - step_samples - int(sr * 0.2)
+        if active_start_samples < 0: continue
+
+        window_start_samples = active_start_samples - int(sr * 15.0)
+        if window_start_samples < 0: window_start_samples = 0
+
+        chunk_y = y[window_start_samples : t_samples]
+        buffer_start_frame = window_start_samples // hop_samples_ms
+        active_start_frame = active_start_samples // hop_samples_ms
+
+        res = analyzer.analyze_chunk(chunk_y, sr, buffer_start_frame, active_start_frame)
+        if res:
+            all_peaks.extend(res['peaks'])
+            # We take the metrics from the very last chunk for the final report
+            final_metrics = res['metrics']
+
+    # Convert all_peaks to the format expected by generate_video
+    peaks_list = [[] for _ in range(4)]
+    for p in all_peaks:
+        peaks_list[p['band_idx']].append(p['p_idx'])
+
+    result = {
+        'filename': os.path.basename(file_path),
+        'times': times.tolist(),
+        'sample_rate': sr,
+        'max_peak_value': float(analyzer.max_peak if hasattr(analyzer, 'max_peak') else full_res['max_peak_value']),
+        'onset_envs': [env.tolist() for env in full_res['onset_envs']],
+        'rolling_thresholds': [rt.tolist() for rt in full_res['rolling_thresholds']],
+        'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list]
+    }
+
+    # Add compatibility fields
     for i in range(4):
-        result[f"onset_env_{i}"] = result['onset_envs'][i].tolist()
-        result[f"rolling_threshold_{i}"] = result['rolling_thresholds'][i].tolist()
+        result[f"onset_env_{i}"] = result['onset_envs'][i]
+        result[f"rolling_threshold_{i}"] = result['rolling_thresholds'][i]
+        p_indices = result['peaks_list'][i].tolist()
         result[f"peaks_{i}"] = {
-            "times": result['times'][result['peaks_list'][i]].tolist() if isinstance(result['times'], np.ndarray) else [result['times'][idx] for idx in result['peaks_list'][i]],
-            "values": result['onset_envs'][i][result['peaks_list'][i]].tolist(),
-            "indices": result['peaks_list'][i].tolist()
+            "times": [times[idx] for idx in p_indices],
+            "values": [full_res['onset_envs'][i][idx] for idx in p_indices],
+            "indices": p_indices
         }
-    
+
     return result
 
 def main():

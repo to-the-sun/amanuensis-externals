@@ -174,94 +174,70 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Linearize audio (increased to 6 seconds for context)
-    int analysis_seconds = 6;
+    // Unified 15.2s Window: 15s context + 200ms lookahead
+    double analysis_seconds = 15.2;
     int analysis_samples = (int)(x->sample_rate * analysis_seconds);
-    if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
 
-    float* linear_audio = (float*)malloc(sizeof(float) * analysis_samples);
+    // We analyze the window ending at (current_sample_count + 200ms)
+    // But since we are real-time, "current_sample_count" is our "now".
+    // So the 15.2s window is [now - 15s, now + 0.2s].
+    // Wait, we can't see the future. The 200ms lookahead means the "active" 100ms
+    // we are analyzing now actually happened 200ms ago.
+
+    // Hop is 100ms.
+    // At trigger T:
+    // Active zone: [T - 300ms, T - 201ms]
+    // Lookahead: [T - 200ms, T] (the 200ms we just collected)
+    // Context: [T - 15.2s, T - 300ms]
+
+    int hop_samples = (int)(x->sample_rate * 0.1);
+    int active_start_samples = x->last_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2);
+    if (active_start_samples < 0) {
+         x->pending_analysis = 0;
+         return;
+    }
+
+    // Window start is 15 seconds before the active zone start
+    int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
+    if (window_start_samples < 0) window_start_samples = 0;
+
+    int actual_analysis_samples = x->last_analysis_frame - window_start_samples;
+    if (actual_analysis_samples > x->audio_buffer_size) actual_analysis_samples = x->audio_buffer_size;
+
+    float* linear_audio = (float*)malloc(sizeof(float) * actual_analysis_samples);
     if (!linear_audio) {
         x->pending_analysis = 0;
         return;
     }
-    int read_ptr = (x->audio_buffer_write_ptr - analysis_samples + x->audio_buffer_size) % x->audio_buffer_size;
-    for (int i = 0; i < analysis_samples; i++) {
+
+    int read_ptr = (x->audio_buffer_write_ptr - (x->current_sample_count - window_start_samples) + x->audio_buffer_size) % x->audio_buffer_size;
+    for (int i = 0; i < actual_analysis_samples; i++) {
         linear_audio[i] = x->audio_buffer[read_ptr];
         read_ptr = (read_ptr + 1) % x->audio_buffer_size;
     }
 
-    FullAnalysisResult result;
-    if (analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
-        int hop_samples = (int)(x->sample_rate * 0.001);
-        int current_global_frame = x->current_sample_count / hop_samples;
-        int window_start_frame = (x->current_sample_count - analysis_samples) / hop_samples;
+    int ms_samples = (int)(x->sample_rate * 0.001);
+    int buffer_start_frame = window_start_samples / ms_samples;
+    int active_start_frame = active_start_samples / ms_samples;
 
-        // Update max_peak dynamically for better normalization
-        if (result.max_peak_value > x->analyzer->max_peak) {
-            x->analyzer->max_peak = (double)result.max_peak_value;
+    ChunkAnalysisResult result;
+    if (analyzer_analyze_chunk(x->analyzer, linear_audio, actual_analysis_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, &result)) {
+
+        for (int i = 0; i < result.peak_list.num_peaks; i++) {
+            PeakResult* pr = &result.peak_list.peaks[i];
+
+            t_atom out_args[2];
+            atom_setlong(out_args, pr->band_idx);
+            atom_setfloat(out_args + 1, pr->total_score);
+            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
         }
-
-        // Collect all peaks in current 6s window for resonance lookback.
-        int total_peaks = 0;
-        for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
-        int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
-
-        if (all_valid_peaks) {
-            int curr = 0;
-            for (int bb = 0; bb < MAX_BANDS; bb++) {
-                for (int k = 0; k < result.bands[bb].num_peaks; k++) {
-                    all_valid_peaks[curr++] = result.bands[bb].peaks[k];
-                }
-            }
-
-            for (int b = 0; b < MAX_BANDS; b++) {
-                for (int i = 0; i < result.bands[b].num_peaks; i++) {
-                    int peak_rel_frame = result.bands[b].peaks[i];
-                    int peak_abs_frame = window_start_frame + peak_rel_frame;
-
-                    if (peak_abs_frame > x->last_peak_frame[b]) {
-                        PeakResult pr;
-                        double time = peak_abs_frame * 0.001;
-
-                        // We pass local relative indices for the envelope and peak indices
-                        // to ensure the internal library calls (e.g., env_ptr[idx]) remain
-                        // memory-safe within the 6-second result buffer.
-                        if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
-
-                            // Fixup: The analyzer internally stores the most recent snapshot and
-                            // schedules events using the local index we passed.
-                            // To ensure historical lookbacks, rolling metrics, and state cleanup
-                            // work correctly as the window slides, we must shift these internal
-                            // indices to the global absolute frame space.
-
-                            // 1. Shift the stored snapshot index to global absolute frame.
-                            if (x->analyzer->snapshot_tails[b]) {
-                                x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
-                            }
-
-                            t_atom out_args[2];
-                            atom_setlong(out_args, b);
-                            atom_setfloat(out_args + 1, pr.total_score);
-                            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
-                        }
-                        x->last_peak_frame[b] = peak_abs_frame;
-                    }
-                }
-            }
-            free(all_valid_peaks);
-        }
-
-        AnalyzerMetrics metrics;
-        analyzer_update_metrics(x->analyzer, current_global_frame, &metrics);
 
         t_atom out_args[4];
-        atom_setfloat(out_args, metrics.rating);
-        atom_setfloat(out_args + 1, metrics.std_dev);
-        atom_setfloat(out_args + 2, metrics.contrast);
-        atom_setfloat(out_args + 3, metrics.peak_std);
+        atom_setfloat(out_args, result.metrics.rating);
+        atom_setfloat(out_args + 1, result.metrics.std_dev);
+        atom_setfloat(out_args + 2, result.metrics.contrast);
+        atom_setfloat(out_args + 3, result.metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
-
-        analyzer_free_analysis(&result);
     }
 
     free(linear_audio);
