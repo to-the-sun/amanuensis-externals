@@ -46,7 +46,7 @@ To achieve this, the C core would need to:
 
 ## 4. Speculative Impact Analysis (15s Unified Windowing)
 
-The primary goal is to synchronize the Python visualizer with the Max external. Since the Max external is the "source of truth" for the real-time algorithm, the Python offline analysis should be modified to mimic the 15s sliding window approach.
+The primary goal is to synchronize the Python visualizer with the Max external. Since the Max external is the "source of truth" for the real-time algorithm, the Python offline analysis should be modified to mimic the 15s sliding window approach. 
 
 Furthermore, from a psychoacoustic perspective, a 15-second "rolling" `max_peak` is more realistic than a global one, as human listeners adapt to the current loudness and transient density of a song rather than "knowing" the loudest moment 3 minutes in the future.
 
@@ -87,5 +87,26 @@ Furthermore, from a psychoacoustic perspective, a 15-second "rolling" `max_peak`
 - **Downside**: Slightly more audio data must be processed than is strictly necessary for the output frames.
 - **Difficulty**: Low. Standard overlapping window technique.
 
-## 5. Conclusion
-The "back-and-forth" was an artifact of early development. Moving to a **Unified 15.2s C-Managed Window** (15s context + 200ms lookahead) is the most robust way to ensure that the Python visualizer accurately reflects the Max external's real-time performance.
+## 5. Implementation Speculation: Frequency and Manner
+
+If the unified 15.2s windowing model were implemented, the analysis would be called in the following manner:
+
+- **Frequency**: Both pipelines would operate on a **100ms periodic cycle**.
+    - In **Max**, the background thread would trigger every 4,410 samples (at 44.1kHz).
+    - In **Python**, the orchestration loop would step through the file in increments of 0.1 seconds, slicing the necessary audio chunk for each step.
+- **Manner**: The Host would hand a raw pointer to a contiguous block of 15.2 seconds of PCM audio (approximately 670,320 samples at 44.1kHz) to the C core. 
+    - The C core would return a list of `PeakResult` objects found within the "active" 100ms zone of that window.
+    - The Host would then be responsible for only one thing: **outputting or recording these results.**
+
+### Algorithmic Efficiency and Sample Utilization
+
+One might worry that handing 15.2 seconds of audio every 100ms is inefficient. However, the C core can be designed to use only the samples necessary for each step:
+
+1.  **Incremental FFT/Flux**: The C core doesn't need to re-calculate the STFT for the entire 15s every 100ms. It can maintain a small internal spectral cache, calculating only the *new* 100ms of spectral flux and appending it to its internal history.
+2.  **Targeted Peak Detection**: Peak detection is only run on the "active" 100ms zone (plus the 200ms lookahead). The previous 15s of flux are held in memory as context, but are not re-scanned for peaks.
+3.  **Contextual Resonance**: The resonance calculation only looks back 5s into its existing cumulative energy buffer. 
+
+By using this **Incremental Processing Model**, the CPU cost per 100ms cycle remains nearly identical to the current 6s model, regardless of the fact that the C core has access to a larger 15.2s "window" of raw audio for initial state stabilization.
+
+## 6. Conclusion
+The "back-and-forth" was an artifact of early development. Moving to a **Unified 15.2s C-Managed Window** (15s context + 200ms lookahead) called every 100ms is the most robust way to ensure that the Python visualizer accurately reflects the Max external's real-time performance.
