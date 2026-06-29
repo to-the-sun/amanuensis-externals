@@ -10,14 +10,14 @@ This report documents the hierarchical levels of resolution within the `cumulati
 *   **Purpose**: The highest resolution available. The system ingests raw audio buffers at the hardware or file sample rate. All DSP operations (FFT, Mel-Filtering) begin at this level.
 
 ## 2. Analysis Hop Size (Fundamental Frame)
-*   **Resolution**: 1.0ms (1000 Hz)
+*   **Resolution**: 1.0ms (at 48 kHz) / 0.9977ms (at 44.1 kHz)
 *   **Source**: `cumulative_transience.c` (`hop_length = (int)(sr * 0.001)`)
-*   **Purpose**: This is the "Base Unit" of the algorithm. All spectral flux calculations, envelope generation, and peak indices are quantized to this 1ms resolution. In the C core, 1 frame exactly equals 1 millisecond.
+*   **Purpose**: This is the "Base Unit" of the algorithm. All spectral flux calculations, envelope generation, and peak indices are quantized to this ~1ms resolution. The system now uses precise timing (`hop_length / sr`) to prevent cumulative synchronization drift.
 
 ## 3. Video Animation Step (Visual Frame)
-*   **Resolution**: ~33.3ms (30 FPS)
-*   **Source**: `analyze_files.py` (`interval=33`, `fps=30`)
-*   **Purpose**: The interval at which the Python orchestrator renders a new frame for the MP4 report. It aggregates approximately 33 analysis frames into a single visual update.
+*   **Resolution**: 33.333...ms (30 FPS)
+*   **Source**: `analyze_files.py` (`fps=30`, `np.searchsorted`)
+*   **Purpose**: The interval at which the Python orchestrator renders a new frame for the MP4 report. Audio analysis frames are precisely mapped to the 30 FPS video clock to ensure long-term synchronization.
 
 ## 4. Visual Rolling Score Window
 *   **Resolution**: 39ms (Window Size)

@@ -192,7 +192,7 @@ def generate_video(audio_path, data):
                                    fontweight='bold')
 
         # Instantiate analyzer
-        analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak)
+        analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
 
         def update(frame):
             nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores
@@ -359,9 +359,16 @@ def generate_video(audio_path, data):
 
             return [playhead_transient, cleanup_transient, buffer_line, mean_line, metrics_text, rating_text, score_display_text] + threshold_lines + flash_fill_artists + peak_lines + score_artists + qualifier_artists + snapshot_artists
 
-        frame_indices = range(0, len(times), 33)
+        # Select analysis frames that correspond exactly to 30 FPS video timing
+        duration = times[-1]
+        fps = 30
+        num_video_frames = int(duration * fps)
+        video_frame_times = np.arange(num_video_frames) / float(fps)
+        # times is a list here, convert to np.array for searchsorted
+        frame_indices = np.searchsorted(np.array(times), video_frame_times)
         num_frames = len(frame_indices)
-        ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=False, interval=33)
+
+        ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=False, interval=1000.0/fps)
 
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             temp_video_path = tmp.name

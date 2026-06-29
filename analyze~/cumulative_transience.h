@@ -63,10 +63,13 @@ typedef struct {
     // Snapshots tracking (queue per band)
     SnapshotEntry* snapshot_heads[MAX_BANDS];
     SnapshotEntry* snapshot_tails[MAX_BANDS];
+
+    double frame_duration_ms;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
 void analyzer_destroy(TransientAnalyzer* self);
+void analyzer_set_sample_rate(TransientAnalyzer* self, int sr);
 
 int analyzer_process_peak(TransientAnalyzer* self,
                           int p_idx,

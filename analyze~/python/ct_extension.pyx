@@ -36,6 +36,7 @@ cdef extern from "cumulative_transience.h":
 
     TransientAnalyzer_c* analyzer_create(double max_peak_value)
     void analyzer_destroy(TransientAnalyzer_c* self)
+    void analyzer_set_sample_rate(TransientAnalyzer_c* self, int sr)
     int analyzer_process_peak(TransientAnalyzer_c* self,
                               int p_idx,
                               int band_idx,
@@ -74,10 +75,11 @@ cdef class TransientAnalyzer:
     cdef public double max_score_seen
     cdef object _processed_peaks
 
-    def __cinit__(self, double max_peak_value=1.0):
+    def __cinit__(self, double max_peak_value=1.0, int sr=44100):
         self._c_analyzer = analyzer_create(max_peak_value)
         if self._c_analyzer == NULL:
             raise MemoryError()
+        analyzer_set_sample_rate(self._c_analyzer, sr)
         self.min_score_seen = 0.0
         self.max_score_seen = 0.0
         self._processed_peaks = [set() for _ in range(4)]
@@ -200,6 +202,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
 
     return {
         "times": times,
+        "sample_rate": int(sr),
         "max_peak_value": float(max_peak_value),
         "onset_envs": onset_envs,
         "rolling_thresholds": rolling_thresholds,

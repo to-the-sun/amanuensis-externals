@@ -44,7 +44,14 @@ The peak detection logic in `cumulative_transience.c` utilizes a **15-second rol
 - **Spectrogram**: STFT normalization is performed relative to the loudest peak in the current window. A 15-second window provides a much more stable reference than 6 seconds, significantly reducing "spectral breathing" artifacts.
 - **`max_peak`**: A 15-second window is 2.5x more likely to capture the true global maximum of the audio stream in any given pass, allowing the dynamic `max_peak` tracker to converge faster and more accurately.
 
-### 4. Processing Trade-offs
+### 4. Sampling Rate & Timing Accuracy
+**Speculation**: The algorithm previously assumed a fixed 1ms duration for every analysis hop. At 44.1 kHz, a 44-sample hop actually represents ~0.9977ms. Over several minutes, this discrepancy leads to a noticeable progressive drift between the analysis timeline and the actual audio.
+**Remediation**:
+- The `TransientAnalyzer` now calculates the precise `frame_duration_ms` based on the provided sampling rate (`1000.0 * hop_length / sr`).
+- The `times` array generated during analysis uses this precise floating-point calculation for every frame.
+- In `analyze_files.py`, video frames are mapped to the analysis timeline using `np.searchsorted` against a true 30 FPS clock, ensuring that the generated MP4 remains perfectly synchronized with the audio from start to finish.
+
+### 5. Processing Trade-offs
 **Question**: Would a 15-second window have any effect other than memory?
 **Answer**: Yes, **CPU usage**. The background analysis task performs STFT and Mel-filtering on the entire window. Moving from 6s to 15s increases the computational load of these stages by ~250%. While this work is offloaded to a background thread and does not impact the audio thread, it does increase the overall CPU footprint of the object.
 

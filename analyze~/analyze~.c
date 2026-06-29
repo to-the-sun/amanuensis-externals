@@ -135,6 +135,7 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
 
 void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
     x->sample_rate = samplerate;
+    analyzer_set_sample_rate(x->analyzer, (int)samplerate);
 
     int new_size = (int)(samplerate * MAX_AUDIO_SECONDS);
     if (x->audio_buffer_size != new_size) {
@@ -191,9 +192,9 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
     FullAnalysisResult result;
     if (analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
-        int samples_per_ms = (int)(x->sample_rate * 0.001);
-        int current_global_frame = x->current_sample_count / samples_per_ms;
-        int window_start_frame = (x->current_sample_count - analysis_samples) / samples_per_ms;
+        int hop_samples = (int)(x->sample_rate * 0.001);
+        int current_global_frame = x->current_sample_count / hop_samples;
+        int window_start_frame = (x->current_sample_count - analysis_samples) / hop_samples;
 
         // Update max_peak dynamically for better normalization
         if (result.max_peak_value > x->analyzer->max_peak) {
