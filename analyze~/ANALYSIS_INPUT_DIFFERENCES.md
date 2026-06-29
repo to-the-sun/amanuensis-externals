@@ -2,81 +2,84 @@
 
 This report outlines the technical discrepancies in how data is prepared and "handed off" to the core C transience algorithm (`cumulative_transience.c`) between the offline Python batch processor and the real-time Max external.
 
-## 1. Global vs. Converging `max_peak` Reference
+## 1. Global vs. Converging `max_peak` Reference (Detail)
+
+The `max_peak` value is a critical scaling factor used by the C core to normalize the resonance snapshots (`snapshot *= peak_val / max_peak`).
 
 ### Python (Offline)
-- **Mechanism**: Performs a pre-analysis pass on the entire audio file using `analyzer_analyze_audio`.
-- **Hand-off**: It extracts the absolute maximum flux value from the whole file and passes it as `max_peak_value` during `analyzer_create`.
-- **Impact**: The C algorithm's internal normalization (`snapshot *= peak_val / max_peak`) is stable and consistent for every peak in the file.
+- **Mechanism**: Performs a pre-analysis pass on the entire audio file. It determines the true global maximum flux value of any peak found in the song.
+- **Hand-off**: This global constant is passed to `analyzer_create`.
+- **Impact**: Every peak in the file, from the first second to the last, is normalized against the same stable reference. This ensures that a transient at the beginning of a song has the same relative impact on the resonance buffer as an identical transient at the end.
 
 ### Max (Real-time)
-- **Mechanism**: Initializes the analyzer with a default `max_peak` of `1.0`. It then dynamically updates this value in its background worker whenever a higher flux peak is encountered.
-- **Hand-off**: The C algorithm receives a "converging" maximum.
-- **Impact**: Early peaks in a stream (before a true global maximum is reached) are normalized against an artificially low reference. This results in snapshots having higher relative energy than they would in a batch analysis, which in turn inflates the resonance scores for those early peaks.
+- **Mechanism**: The analyzer begins with a default `max_peak` of `1.0`. As it processes the audio stream, it tracks the highest flux value it has seen *so far*.
+- **Hand-off**: The C core receives this "high-water mark."
+- **Impact**: If a song starts quietly and has a massive peak at the 2-minute mark, all transients in the first two minutes will be normalized against an artificially low `max_peak`. This results in the C core seeing much "hotter" snapshots than it would in a batch analysis, leading to inflated resonance scores and a more volatile `accumulated_buffer` until the true global peak is encountered.
 
-## 2. Peak Suppression and Minimum Distance
+## 2. Minimum Peak Distance and Boundary Suppression (Detail)
+
+The peak detection logic implements a 200ms "exclusion zone" where a smaller peak cannot occur immediately after a larger one.
 
 ### Python (Offline)
-- **Mechanism**: `analyzer_analyze_audio` is called once for the entire duration. The 200ms minimum distance logic is applied in a single global pass.
-- **Hand-off**: If two potential peaks are 150ms apart, only the larger one is ever "handed off" to the resonance processor.
+- **Mechanism**: The 200ms rule is applied once across the entire continuous flux envelope.
+- **Impact**: If a peak occurs at `t=1000ms`, the detector is guaranteed to suppress any smaller peaks until `t=1200ms`.
 
 ### Max (Real-time)
-- **Mechanism**: Re-runs peak detection every 100ms on a sliding window. The detector only suppresses peaks relative to others *within the same 6s window*.
-- **Hand-off**: If a larger peak appears in a *later* window pass that was not present in the pass where a smaller, nearby peak was first detected and processed, both peaks will have been "handed off" to the C core.
-- **Impact**: Real-time analysis can suffer from "double hits" where multiple transients are processed within the 200ms exclusion zone because they weren't visible to the detector at the same time.
+- **Mechanism**: Peak detection is re-run every 100ms on a sliding window. The detector has no memory of peaks found in previous window passes.
+- **Hand-off**: Max uses a `last_peak_frame` check to prevent processing the *same* physical peak twice, but it does not track the *influence* of that peak on its neighbors across window boundaries.
+- **Impact**: If a large peak is detected at the very end of Window A, and a smaller peak appears at the start of Window B (separated by only 50ms), the detector in Window B will not "see" the peak from Window A and will therefore fail to suppress the smaller one. This leads to "double-triggering" in real-time that is physically impossible in the batch implementation.
 
 ## 3. Inter-band Processing Order
 
-### Python (Offline)
-- **Mechanism**: Processes the entire file frame-by-frame. If multiple bands have peaks at different times, they are handed to the C core in strict chronological order.
-- **Hand-off**: A peak at 200ms in Band 0 will always "see" the resonance energy of a peak at 100ms in Band 1.
-
-### Max (Real-time)
-- **Mechanism**: Processes the current window band-by-band (`for b < MAX_BANDS`).
-- **Hand-off**: All peaks for Band 0 are processed, then all for Band 1, and so on.
-- **Impact**: A peak at 100ms in Band 1 will be handed to the C core *after* a peak at 200ms in Band 0. Consequently, the 200ms peak fails to account for the resonance of the 100ms peak because that energy hasn't been added to the buffer yet. This disrupts the chronological accumulation of energy that the resonance algorithm depends on.
-
-## 4. Resonance Context (`all_valid_peak_indices`)
+The `cumulative_transience` algorithm is stateful; the resonance score of a peak depends on the energy already present in the `accumulated_buffer`.
 
 ### Python (Offline)
-- **Mechanism**: Passes a sorted list of every peak in the entire file to every `analyzer_process_peak` call.
-- **Hand-off**: The C core's resonance calculation (`found_peak` loop) checks against every potential transient in the song.
+- **Mechanism**: Sorts every peak from all four frequency bands into a single chronological list.
+- **Hand-off**: Peaks are handed to the C core one-by-one in the exact order they occur in time.
+- **Impact**: A peak at 500ms in the Treble band will correctly "see" the resonance contribution of a peak at 450ms in the Bass band.
 
 ### Max (Real-time)
-- **Mechanism**: Only peaks detected within the current 6-second window are passed as valid indices.
-- **Hand-off**: The C core only "sees" peaks that exist within the current window.
-- **Impact**: Although the C core only looks back 5 seconds, any peak that falls just outside the 6s window but within the 5s lookback (due to windowing or latency) will be missing from the resonance calculation in Max, whereas it would be present in Python.
+- **Mechanism**: The `analyze_worker_task` iterates through the analysis results band-by-band (`for b < MAX_BANDS`).
+- **Hand-off**: It processes all peaks for the Sub-Bass band, then all for Bass, then Mid, then Hi.
+- **Impact**: If a Bass peak occurs at 100ms and a Treble peak occurs at 50ms, the Max external will hand the 100ms peak to the C core *first* because it belongs to a lower band index. The Treble peak at 50ms will then be processed "out of time," failing to contribute its energy to the Bass peak's resonance score and potentially receiving an incorrect score itself.
 
-## 5. Mel Spectrogram Normalization (Spectral Breathing)
+## 4. Rolling Threshold Context Window
+
+The peak detection algorithm utilizes a **15-second rolling threshold** to determine if a flux spike is significant relative to the recent local average.
 
 ### Python (Offline)
-- **Mechanism**: Normalizes the Mel spectrogram relative to the loudest frame in the *entire file*.
-- **Hand-off**: The flux envelope (`env_ptr`) provided to the peak processor is derived from a globally stable spectral representation.
+- **Hand-off**: The C core is provided with the full duration of the audio file, allowing the 15-second threshold to "warm up" and maintain a full history.
 
 ### Max (Real-time)
-- **Mechanism**: Normalizes the Mel spectrogram relative to the loudest frame in the *current 6-second window*.
-- **Hand-off**: As the window slides, the loudest frame within that context changes.
-- **Impact**: This causes "spectral breathing," where the flux value for the exact same peak changes as it moves through the sliding window. This fluctuation impacts both peak detection sensitivity and the final `peak_val` handed to the resonance algorithm.
+- **Hand-off**: The `analyze~` object currently extracts only a **6-second** context window from its circular buffer.
+- **Impact**: The peak detector in the C core is effectively "blind" to any audio older than 6 seconds. This forces the 15-second rolling threshold to operate on a truncated history, leading to different peak detection results (and thus different inputs to the resonance algorithm) compared to the 15-second history available in the Python implementation.
 
-## 6. Temporal Resolution and Resonance Duration
+## 5. Inter-song Buffer Persistence
 
 ### Python (Offline)
-- **Mechanism**: Hop length is `(int)(file_sr * 0.001)`. At 44.1kHz, this is 44 samples.
-- **Hand-off**: The C core treats each hop as 1ms.
-- **Impact**: 5000 frames (the resonance lookback) equals 220,000 samples, which is actually **4.988 seconds** at 44.1kHz.
+- **Mechanism**: A fresh `TransientAnalyzer` is created and destroyed for every individual audio file.
+- **Impact**: The resonance buffer always starts at zero for every song.
 
 ### Max (Real-time)
-- **Mechanism**: Operates at the system sample rate (e.g., 48kHz). Hop length is 48 samples.
-- **Hand-off**: 5000 frames equals 240,000 samples, which is exactly **5.000 seconds**.
-- **Impact**: The physical duration of the "resonance window" differs between the two environments if the sample rates don't match. A 44.1kHz file analyzed offline will have a slightly "tighter" resonance window than the same file played back in a 48kHz Max environment.
+- **Mechanism**: The `analyze~` object maintains a single persistent `TransientAnalyzer` state as long as the object exists in the Max patch.
+- **Impact**: If a user plays "Song A" and then immediately plays "Song B," the resonance energy and `max_peak` from Song A are still present in the analyzer's memory. Song B will be analyzed using the historical context of Song A, leading to results that are entirely different from a standalone analysis of Song B.
+
+## 6. Temporal Resolution and Frame Drift
+
+### Python (Offline)
+- **Mechanism**: Hop length is calculated as `(int)(file_sr * 0.001)`. At 44.1kHz, this is 44 samples (~0.9977ms).
+- **Hand-off**: The C core treats each hop as exactly 1.0ms. After 5000 frames (the resonance lookback), the audio has progressed by **4988ms**.
+
+### Max (Real-time)
+- **Mechanism**: Operates at the system sample rate (e.g., 48kHz). Hop length is exactly 48 samples (1.0ms).
+- **Hand-off**: 5000 frames equals exactly **5000ms** of audio.
+- **Impact**: The physical duration of the "resonance window" is slightly different. A 44.1kHz file analyzed offline has a "tighter" resonance window than the same file analyzed in a 48kHz real-time environment, causing the snapshots to be sampled at slightly different temporal positions.
 
 ## 7. STFT Padding and Window Edges
 
 ### Python (Offline)
 - **Mechanism**: STFT padding occurs only at the absolute start and end of the file.
-- **Impact**: Flux envelopes are "clean" for 99% of the song.
 
 ### Max (Real-time)
-- **Mechanism**: Every 100ms, a new 6-second window is analyzed, with STFT padding at *both* ends.
-- **Hand-off**: The flux envelope handed to the C core has ~23ms of zero-tapered data at the window boundaries.
-- **Impact**: While the 6s window hides these artifacts from the 5s resonance lookback, they still affect the peak detector's ability to identify transients at the very edges of the sliding window, potentially delaying the first detection of a new peak.
+- **Mechanism**: Every 100ms, a new 6-second window is analyzed, with STFT zero-padding applied at *both* ends of the window.
+- **Impact**: The flux envelope handed to the C core has ~23ms of zero-tapered data at the window boundaries. While the 6s window is large enough to "hide" these artifacts from the 5s resonance lookback, they still affect the peak detector's ability to identify transients at the very edges of the sliding window, potentially missing peaks that would be found in the batch version.
