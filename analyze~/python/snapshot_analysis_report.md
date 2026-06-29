@@ -1,71 +1,58 @@
 # Cumulative Transient Analysis: Snapshot & Resonance Score Logic
 
-This report details the technical operations that occur when a "snapshot" is taken for calculating the resonance score of a primary peak in the `cumulative_transience` extension module.
+This report details the technical operations that occur when a "snapshot" is taken for calculating the resonance score of a primary peak. It distinguishes between high-level orchestration (**Python Layer**) and high-performance numerical DSP (**C Core**).
 
-## 1. Triggering and Window Extraction
+## 1. Orchestration and Windowing
 
+### A. Temporal Orchestration (**Python Layer**)
 The process is initiated within the `update` function of the video generator. While the video renders at 30 FPS (~33ms per frame), the underlying analysis catches up at a **1ms resolution**.
+*   **Sub-Frame Accuracy**: For every millisecond between video frames, the Python script (`analyze_files.py`) checks for new peaks and calls the C core via the Cython extension.
+*   **39ms Visual Smoothing**: At each video frame, the Python layer prunes the score pool to a 39ms window ending at the current playhead position (`[frame - 38, frame]`). The displayed "Score" is the average of all scores currently within this window.
 
-*   **Sub-Frame Accuracy**: For every millisecond between video frames, the system checks for new peaks and maintains a pool of all scores.
-*   **39ms Sliding Window**: At each video frame, the system prunes the score pool to a 39ms window ending at the current playhead position (`[frame - 38, frame]`). The "Score" displayed in the upper-left is the true average of all scores currently within this window. This ensures that the average is based on a continuous 39ms history and not cut into arbitrary windows.
-
-*   **Temporal Windowing (Resonance)**: When a peak is processed by the C core, a **5001-sample window** is extracted from the onset strength envelope of the triggering band.
+### B. Temporal Windowing (Resonance) (**C Core**)
+When a peak is processed by the C core (`analyzer_process_peak`), it extracts a **5001-sample window** from the onset strength envelope.
 *   **Resolution**: 1ms per sample (representing 5000ms of history + the current 1ms at the peak).
-*   **Alignment & Padding**: The window is aligned to end exactly at the peak ($p_{idx}$). If the peak occurs within the first 5 seconds of the audio ($p_{idx} < 5000$), the window is **zero-padded** at the beginning to maintain the fixed 5001-sample length.
+*   **Alignment & Padding**: The window is aligned to end exactly at the peak ($p_{idx}$). If the peak occurs within the first 5 seconds of the audio ($p_{idx} < 5000$), the C core handles **zero-padding** at the beginning to maintain the fixed 5001-sample length.
 
-## 2. Normalization
+## 2. Normalization (**C Core**)
 
-To ensure that rhythmic influence is relative across different audio files and sections, each window is normalized before being processed further.
-
-*   **Normalization Factor**: Calculated as $\frac{peak\_val}{max\_peak}$, where:
-    *   `peak_val` is the raw onset strength at the current peak ($p_{idx}$).
-    *   `max_peak` is the global maximum onset strength detected across all four bands for the entire duration of the audio.
+To ensure that rhythmic influence is relative, the C core normalizes each window:
+*   **Normalization Factor**: Calculated as $\frac{peak\_val}{max\_peak}$.
 *   **The Snapshot**: The resulting scaled array is designated as the **`snapshot`**.
 
-## 3. Resonance Score Calculation
+## 3. Resonance Score Calculation (**C Core**)
 
-The **Resonance Score** measures how well the rhythmic "history" contained in the new snapshot aligns with the collective history of all previous transients stored in the `accumulated_buffer`.
+The **Resonance Score** measures how well the rhythmic "history" in the new snapshot aligns with the collective history in the `accumulated_buffer`.
 
-### A. Internal Peak Detection
-The module identifies all internal peaks within the new 5-second `snapshot` using `scipy.signal.find_peaks` with a dynamic minimum height threshold equal to the **average of every point in the snapshot** (`np.mean(snapshot)`).
+### A. Historical Context (The 99ms Offset)
+The C core calculates baseline statistics (`avg`, `max_v`, and `min_v`) from the `accumulated_buffer`. Crucially, it **excludes the last 99ms of the buffer** (`accumulated_buffer[:-99]`) from these calculations to prevent the primary peak from biasing its own resonance score.
 
-### B. Historical Context (The 99ms Offset)
-Baseline statistics (`avg`, `max_v`, and `min_v`) are calculated from the current state of the `accumulated_buffer`. Crucially, the **last 99ms of the buffer are excluded** (`accumulated_buffer[:-99]`) from these calculations. This prevents the primary peak—which is always located at the 0ms mark in every snapshot—from artificially inflating the resonance score or biasing the rhythmic average.
+### B. Rhythmic Alignment (Peak Mapping)
+The C core does not run peak detection on the snapshot. Instead, it utilizes a list of **all valid peak indices** across all bands (pre-calculated during the initial audio analysis pass) to identify which historical moments in the `snapshot` contain relevant rhythmic energy.
 
 ### C. The Qualifier ($Q$)
-For every peak identified in the new snapshot (at relative index $sp_{idx}$), the module checks the energy level ($val$) in the `accumulated_buffer` at that same relative offset:
-
-*   **Positive Alignment (Reward)**: If $val > avg$, then $Q = \frac{val - avg}{max\_v - avg}$.
-*   **Negative Alignment (Penalty)**: If $val < avg$, then $Q = \frac{val - avg}{avg - min\_v}$.
+For every historical peak identified in the new snapshot (at relative index $sp_{idx}$), the C core checks the energy level ($val$) in the `accumulated_buffer` at that same offset:
+*   **Reward**: If $val > avg$, then $Q = \frac{val - avg}{max\_v - avg}$.
+*   **Penalty**: If $val < avg$, then $Q = \frac{val - avg}{avg - min\_v}$.
 
 ### D. Final Score Determination
-Unlike legacy versions that utilized only the single best qualifier, the current module calculates a **`qualifier_sum`** by adding all individual qualifiers calculated for every valid historical peak within the window. The final **Total Score** is the product of the primary `peak_val` (the scalar) and this sum:
+The C core calculates a **`qualifier_sum`** by adding all individual qualifiers. The final **Total Score** is the product of the primary `peak_val` and this sum:
 $$\text{Total Score} = peak\_val \times \sum Q$$
 
-## 4. Accumulation and Visual Feedback
+## 4. Accumulation and State Management (**C Core**)
 
-*   **Buffer Update**: After score calculation, the `snapshot` is added to the `accumulated_buffer` via element-wise addition.
-*   **Visual Flash**: A green fill (`#2ecc71`) is rendered on the historical buffer plot, briefly visualizing the snapshot's shape as it merges into the history.
-*   **Score Animation**: When a peak first appears, its individual score is displayed as floating text (e.g., `+0.45`).
-*   **Snapshot Bar**: The bottom bar displays all scores currently contributing to the 39ms average.
-    *   **Alignment**: To provide a stable rhythmic reference, the bar is aligned relative to the **latest peak** in the window (set at $x=0$).
-    *   **Rolling Average**: The "Score" displayed in the upper-left of the graph is the average of all scores currently visible in this bar.
-    *   **Persistence**: If the 39ms window becomes empty, the snapshot bar and the "Score" display persist their last valid state rather than clearing to zero.
+*   **Buffer Update**: After score calculation, the C core adds the `snapshot` to the `accumulated_buffer` via element-wise addition.
+*   **Sliding Window Cleanup**: Each snapshot is stored in a linked list (`SnapshotEntry`). During the `analyzer_update_metrics` call, the C core identifies snapshots older than **15 seconds** (15,000ms) and **subtracts** them from the `accumulated_buffer` to ensure the "rhythmic memory" remains local.
 
-## 5. Sliding Window Cleanup
+## 5. Visual Feedback and UI (**Python Layer**)
 
-To prevent the `accumulated_buffer` from growing indefinitely and to ensure the "rhythmic memory" reflects the recent context of the audio:
+While the C core handles the numbers, the Python layer (`analyze_files.py`) handles the representation:
+*   **Visual Flash**: Renders a green fill (`#2ecc71`) on the historical buffer plot when a snapshot is added.
+*   **Score Animation**: Displays floating text (e.g., `+0.45`) when a peak is first detected.
+*   **Snapshot Bar**: Manages the bottom bar visualization, aligning all scores relative to the **latest peak** in the 39ms window.
 
-*   **Snapshot Storage**: Each snapshot is stored in a tracking dictionary indexed by its $p_{idx}$.
-*   **Subtraction Sweep**: Exactly **15 seconds** (15,000 frames) after the peak was processed, the module **subtracts** that specific snapshot from the `accumulated_buffer`.
+## 6. Metric Recording (**Python Layer**)
 
-## 6. Post-Processing and Metric Recording
-
-Upon completion of the analysis and video generation, the script records the final aggregated metrics to a persistent storage location.
-
+Upon completion, the Python script records the final aggregated metrics to persistent storage.
 *   **Target Location**: `D:\[Library]\[Audio]\[Works]\[Projects]\{SongName}\ratings.txt`
-*   **Recorded Metrics**:
-    *   **Rating**: The mean of all generated resonance scores.
-    *   **Standard Deviation**: The running standard deviation of the energy in the accumulated buffer (excluding the last 99ms).
-    *   **Contrast**: The ratio of the maximum energy to the mean energy in the accumulated buffer.
-    *   **Bar Length Deviation**: The standard deviation of the temporal position (in ms) of the highest detected peaks in the historical buffer, tracking rhythmic stability.
+*   **Metrics**: Rating (mean resonance), Standard Deviation, Contrast, and Bar Length Deviation (rhythmic stability).
