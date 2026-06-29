@@ -225,7 +225,6 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                         // We pass local relative indices for the envelope and peak indices
                         // to ensure the internal library calls (e.g., env_ptr[idx]) remain
                         // memory-safe within the 6-second result buffer.
-                        int prev_event_count = x->analyzer->event_count;
                         if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
 
                             // Fixup: The analyzer internally stores the most recent snapshot and
