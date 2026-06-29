@@ -29,18 +29,19 @@ By handing the detected peaks back to the host (Max or Python), the system curre
 
 ---
 
-## 3. Proposed Evolution: Full C-Core Orchestration
+## 3. Achieved Evolution: Host-Side C-Core Orchestration
 
-The system could be evolved to eliminate the "back-and-forth" entirely. In this model, the host would simply hand the C core a chunk of audio (e.g., 15.2 seconds), and the C core would return a list of fully analyzed `PeakResult` objects.
+The system has been updated to achieve the goals of "Full C-Core Orchestration" through improved host-side management of the C library. The host (Max) now hands a 15.2-second audio block to the C core and manages the results as a unified, synchronized stream.
 
 ### Implementation of Inter-band Synchronization
-To achieve this, the C core would need to:
-1.  Perform the FFT and Flux analysis for all bands for the entire window.
-2.  Extract all peaks across all bands.
-3.  **Perform a global chronological sort** of every peak regardless of its band.
-4.  Feed these peaks into the stateful resonance engine in the exact order they occurred.
+The `analyze~` object now implements the following:
+1.  **Extended Windowing**: Analyzes a 15.2-second window every 100ms.
+2.  **Unified Peak Extraction**: Extracts peaks for all 4 bands simultaneously.
+3.  **Chronological Sorting**: Performs a global `qsort` on all detected peaks by their temporal index before any resonance processing occurs.
+4.  **Sequential State Injection**: Feeds peaks into the stateful resonance engine (`analyzer_process_peak`) in their exact chronological order.
+5.  **Lookahead Buffer**: Implements a 200ms processing delay (lookahead) to ensure that the peak detection logic has sufficient future context to be deterministic.
 
-**Upside**: This would completely eliminate the `Inter-band Processing Order` discrepancy. Max would no longer process Band 0 then Band 1; it would process "the first peak in the window," which might be in Band 3.
+**Result**: This eliminates the `Inter-band Processing Order` discrepancy. Max now processes peaks in the exact same sequence as the Python offline analysis, ensuring identical resonance buffer states.
 
 ---
 

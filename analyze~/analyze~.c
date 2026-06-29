@@ -14,6 +14,17 @@
 #define MAX_AUDIO_SECONDS 60
 #define ANALYSIS_HOP_MS 100
 
+typedef struct _peak_ref {
+    int rel_frame;
+    int band;
+} t_peak_ref;
+
+int compare_peaks(const void* a, const void* b) {
+    t_peak_ref* pa = (t_peak_ref*)a;
+    t_peak_ref* pb = (t_peak_ref*)b;
+    return pa->rel_frame - pb->rel_frame;
+}
+
 typedef struct _analyze {
     t_pxobject obj;
 
@@ -174,8 +185,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Linearize audio (increased to 6 seconds for context)
-    int analysis_seconds = 6;
+    // Linearize audio (increased to 15.2 seconds for context)
+    double analysis_seconds = 15.2;
     int analysis_samples = (int)(x->sample_rate * analysis_seconds);
     if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
 
@@ -201,55 +212,62 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             x->analyzer->max_peak = (double)result.max_peak_value;
         }
 
-        // Collect all peaks in current 6s window for resonance lookback.
+        // Collect all peaks across all bands for chronological sorting.
         int total_peaks = 0;
         for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
+
+        t_peak_ref* peak_refs = (t_peak_ref*)malloc(sizeof(t_peak_ref) * total_peaks);
         int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
 
-        if (all_valid_peaks) {
+        if (peak_refs && all_valid_peaks) {
             int curr = 0;
             for (int bb = 0; bb < MAX_BANDS; bb++) {
                 for (int k = 0; k < result.bands[bb].num_peaks; k++) {
-                    all_valid_peaks[curr++] = result.bands[bb].peaks[k];
+                    peak_refs[curr].rel_frame = result.bands[bb].peaks[k];
+                    peak_refs[curr].band = bb;
+                    curr++;
                 }
             }
 
-            for (int b = 0; b < MAX_BANDS; b++) {
-                for (int i = 0; i < result.bands[b].num_peaks; i++) {
-                    int peak_rel_frame = result.bands[b].peaks[i];
-                    int peak_abs_frame = window_start_frame + peak_rel_frame;
+            // Sort all peaks in the window chronologically
+            qsort(peak_refs, total_peaks, sizeof(t_peak_ref), compare_peaks);
 
-                    if (peak_abs_frame > x->last_peak_frame[b]) {
-                        PeakResult pr;
-                        double time = peak_abs_frame * 0.001;
+            // Populate all_valid_peaks from the sorted references
+            for (int i = 0; i < total_peaks; i++) {
+                all_valid_peaks[i] = peak_refs[i].rel_frame;
+            }
 
-                        // We pass local relative indices for the envelope and peak indices
-                        // to ensure the internal library calls (e.g., env_ptr[idx]) remain
-                        // memory-safe within the 6-second result buffer.
-                        if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
+            for (int i = 0; i < total_peaks; i++) {
+                int peak_rel_frame = peak_refs[i].rel_frame;
+                int b = peak_refs[i].band;
+                int peak_abs_frame = window_start_frame + peak_rel_frame;
 
-                            // Fixup: The analyzer internally stores the most recent snapshot and
-                            // schedules events using the local index we passed.
-                            // To ensure historical lookbacks, rolling metrics, and state cleanup
-                            // work correctly as the window slides, we must shift these internal
-                            // indices to the global absolute frame space.
+                // Implement 200ms lookahead safety: only process peaks at least 200ms behind current playhead.
+                // This ensures deterministic find_peaks results by allowing future context for suppression.
+                if (peak_abs_frame > x->last_peak_frame[b] && peak_abs_frame < current_global_frame - 200) {
+                    PeakResult pr;
+                    double time = peak_abs_frame * 0.001;
 
-                            // 1. Shift the stored snapshot index to global absolute frame.
-                            if (x->analyzer->snapshot_tails[b]) {
-                                x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
-                            }
+                    // We pass local relative indices for the envelope and peak indices
+                    // to ensure the internal library calls remain memory-safe.
+                    if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
 
-                            t_atom out_args[2];
-                            atom_setlong(out_args, b);
-                            atom_setfloat(out_args + 1, pr.total_score);
-                            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+                        // Fixup: Shift internal indices to global absolute frame space.
+                        if (x->analyzer->snapshot_tails[b]) {
+                            x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
                         }
-                        x->last_peak_frame[b] = peak_abs_frame;
+
+                        t_atom out_args[2];
+                        atom_setlong(out_args, b);
+                        atom_setfloat(out_args + 1, pr.total_score);
+                        defer(x, (method)analyze_output_peak, NULL, 2, out_args);
                     }
+                    x->last_peak_frame[b] = peak_abs_frame;
                 }
             }
-            free(all_valid_peaks);
         }
+        if (peak_refs) free(peak_refs);
+        if (all_valid_peaks) free(all_valid_peaks);
 
         AnalyzerMetrics metrics;
         analyzer_update_metrics(x->analyzer, current_global_frame, &metrics);
