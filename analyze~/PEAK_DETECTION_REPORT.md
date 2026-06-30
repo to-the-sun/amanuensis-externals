@@ -51,11 +51,27 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Global Magnitude Gating
-A peak should not just be a local maximum in flux, but should also represent a significant portion of the band's total energy.
--   **Action**: Introduce a "Band Power Gating" check. Only consider peaks if the raw Mel-bin energy for that frame is above a certain percentile of the 15.2s window's energy.
--   **Recommendation**: A percentile in the range of **10th to 20th** is recommended. This effectively filters out fluctuations that occur during "near-silence" without sacrificing sensitivity during dense rhythmic sections.
+### Strategy 3: Global Magnitude Gating (Average Percentile Variation)
 
-## 5. Conclusion
+Instead of using a fixed percentile floor, this strategy uses the **Average Energy Percentile Rank** of the current 15.2s window as a dynamic gate.
+
+#### Implementation Details:
+1.  **Energy Percentile Calculation**: For every frame in the 15.2s window, the total linear energy of the frequency band is calculated.
+2.  **Percentile Ranking**: Each energy value is converted to its percentile rank (0.0 to 1.0) relative to all other energy values in that same 15.2s window.
+3.  **Average Percentile Gate**: The system calculates the average of these percentile ranks across the entire window.
+4.  **Gating Logic**: A flux-detected peak is only accepted if its corresponding **energy percentile rank** is greater than or equal to this **average percentile**.
+
+#### Speculation on Efficacy:
+-   **Upside**: This is an extremely robust way to eliminate noise-floor "phantom" peaks. In a window that is mostly quiet, a small peak will still have a very high percentile rank, but if the window is dense, only the most significant hits (those above the "median" activity) will pass.
+-   **Upside**: It harmonizes the visualization. By plotting the "Energy Percentile Envelope" (0.0 - 1.0) against the "Average Percentile Line" (~0.5), the user gets an intuitive view of why certain transients are being gated.
+-   **Downside**: In highly compressed or consistently loud audio (where energy variance is low), the "average" rank might still be near 0.5, potentially gating valid rhythmic nuances that are slightly quieter than the average.
+-   **Downside**: Percentile ranking requires sorting or multiple passes over the 15.2s cache, increasing CPU usage in the background task.
+
+## 5. Summary of Technical Definitions
+-   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
+-   `thresh[f]`: The 15-second rolling average of the spectral flux (used in the primary adaptive thresholding).
+-   `max_db`: The peak decibel level found within the 15.2s window, used for STFT normalization.
+
+## 6. Conclusion
 
 The transition to full orchestration and stable windowing has revealed a "leniency bug" in the core detection constants. By increasing the prominence floor and implementing an absolute flux floor, we can restore the selective and accurate peak detection that the system exhibited before the session began.

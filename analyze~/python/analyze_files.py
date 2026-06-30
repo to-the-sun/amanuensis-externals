@@ -131,8 +131,8 @@ def generate_video(audio_path, data):
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead')
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep')
 
-        ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}")
-        ax_transient.set_ylabel("Onset Strength")
+        ax_transient.set_title(f"4-Band Energy Percentile Analysis - {os.path.basename(audio_path)}")
+        ax_transient.set_ylabel("Energy Percentile Rank")
         ax_transient.legend(loc='upper right')
         ax_transient.grid(True, alpha=0.3)
         ax_transient.set_xlim(-20, 5)
@@ -144,8 +144,7 @@ def generate_video(audio_path, data):
             return f"{prefix}{m}:{s:02d}"
         ax_transient.xaxis.set_major_formatter(ticker.FuncFormatter(format_time))
 
-        all_onset_vals = np.concatenate(onset_envs)
-        ax_transient.set_ylim(0, max(all_onset_vals) * 1.1 if len(all_onset_vals) > 0 else 1)
+        ax_transient.set_ylim(0, 1.1)
 
         buffer_times = np.linspace(-5000, 0, 5001)
         buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2)

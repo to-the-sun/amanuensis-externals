@@ -60,6 +60,12 @@ static int compare_peaks(const void* a, const void* b) {
     return pa->p_idx - pb->p_idx;
 }
 
+static int compare_floats(const void* a, const void* b) {
+    float fa = *(const float*)a;
+    float fb = *(const float*)b;
+    return (fa > fb) - (fa < fb);
+}
+
 #define N_FFT 2048
 #define N_MELS 128
 #define CACHE_SIZE 15201 // Enough for 15.2 seconds at 1ms hop
@@ -83,6 +89,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     // Cache pre-allocation
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
     self->flux_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
+    self->energy_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
     self->fft_window = (double*)malloc(sizeof(double) * N_FFT);
     for (int i = 0; i < N_FFT; i++) {
         self->fft_window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)N_FFT));
@@ -106,6 +113,7 @@ void analyzer_destroy(TransientAnalyzer* self) {
     }
     if (self->mel_spectrogram) free(self->mel_spectrogram);
     if (self->flux_envelopes) free(self->flux_envelopes);
+    if (self->energy_envelopes) free(self->energy_envelopes);
     if (self->fft_window) free(self->fft_window);
     if (self->mel_filters) free(self->mel_filters);
     free(self);
@@ -371,11 +379,18 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 
         for (int b = 0; b < MAX_BANDS; b++) {
             double flux = 0;
+            double energy = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
-                double diff = self->mel_spectrogram[m * CACHE_SIZE + f_idx] - self->mel_spectrogram[m * CACHE_SIZE + prev_f_idx];
+                double cur_db = self->mel_spectrogram[m * CACHE_SIZE + f_idx];
+                double prev_db = self->mel_spectrogram[m * CACHE_SIZE + prev_f_idx];
+                double diff = cur_db - prev_db;
                 if (diff > 0) flux += diff;
+
+                // Approximate linear energy from dB
+                energy += pow(10.0, cur_db / 10.0);
             }
             self->flux_envelopes[b * CACHE_SIZE + f_idx] = (float)(flux / 32.0);
+            self->energy_envelopes[b * CACHE_SIZE + f_idx] = (float)energy;
         }
 
         self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE;
@@ -408,52 +423,99 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
     }
 
     for (int b = 0; b < MAX_BANDS; b++) {
-        double current_sum = 0;
-        int window_size = 15000;
+        // Collect energy values for percentile calculation
+        float* energies = (float*)malloc(sizeof(float) * num_frames);
+        float* sorted_energies = (float*)malloc(sizeof(float) * num_frames);
+
+        if (!energies || !sorted_energies) {
+            if (energies) free(energies);
+            if (sorted_energies) free(sorted_energies);
+            continue;
+        }
+
         for (int j = 0; j < num_frames; j++) {
             int f_idx = (read_ptr + j) % CACHE_SIZE;
-            float flux_val = self->flux_envelopes[b * CACHE_SIZE + f_idx];
-            bands[b].envelope[j] = flux_val;
-
-            current_sum += (double)flux_val;
-            if (j >= window_size) {
-                current_sum -= (double)bands[b].envelope[j - window_size];
-                bands[b].rolling_threshold[j] = (float)(current_sum / (double)window_size);
-            } else {
-                bands[b].rolling_threshold[j] = (float)(current_sum / (double)(j + 1));
-            }
+            energies[j] = self->energy_envelopes[b * CACHE_SIZE + f_idx];
         }
+
+        // Sort to calculate ranks
+        memcpy(sorted_energies, energies, sizeof(float) * num_frames);
+        qsort(sorted_energies, num_frames, sizeof(float), compare_floats);
+
+        double rank_sum = 0;
+        for (int j = 0; j < num_frames; j++) {
+            // Percentile rank of energies[j]
+            float val = energies[j];
+            int count = 0;
+            // Simplified rank calculation: find how many are less than val
+            for (int k = 0; k < num_frames; k++) {
+                if (sorted_energies[k] < val) count++;
+                else break;
+            }
+            float rank = (float)count / (float)num_frames;
+            bands[b].envelope[j] = rank; // OVERWRITE envelope with percentile rank
+            rank_sum += rank;
+        }
+
+        float avg_rank = (float)(rank_sum / (double)num_frames);
+        for (int j = 0; j < num_frames; j++) {
+            bands[b].rolling_threshold[j] = avg_rank; // OVERWRITE threshold with average rank
+        }
+
+        free(energies);
+        free(sorted_energies);
     }
 
     // 4. Peak Detection on linearized buffer
     for (int b = 0; b < MAX_BANDS; b++) {
-        float* env = bands[b].envelope;
-        float* thresh = bands[b].rolling_threshold;
+        // We need the ACTUAL flux envelope for peak detection logic
+        float* flux_env = (float*)malloc(sizeof(float) * num_frames);
+        float* rolling_flux_thresh = (float*)malloc(sizeof(float) * num_frames);
+        double current_sum = 0;
+        int window_size = 15000;
+        for (int j = 0; j < num_frames; j++) {
+            int f_idx = (read_ptr + j) % CACHE_SIZE;
+            flux_env[j] = self->flux_envelopes[b * CACHE_SIZE + f_idx];
+            current_sum += (double)flux_env[j];
+            if (j >= window_size) {
+                current_sum -= (double)flux_env[j - window_size];
+                rolling_flux_thresh[j] = (float)(current_sum / (double)window_size);
+            } else {
+                rolling_flux_thresh[j] = (float)(current_sum / (double)(j + 1));
+            }
+        }
+
+        float* energy_rank_env = bands[b].envelope;
+        float* avg_rank_thresh = bands[b].rolling_threshold;
         int* temp_peaks = (int*)malloc(sizeof(int) * num_frames);
         int peak_count = 0;
 
         for (int f = 1; f < num_frames - 1; f++) {
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f]) {
+            // Original Flux Criteria
+            if (flux_env[f] > flux_env[f-1] && flux_env[f] > flux_env[f+1] && flux_env[f] > rolling_flux_thresh[f]) {
+
+                // Strategy 3: Global Magnitude Gating (Average Percentile Rank)
+                if (energy_rank_env[f] < avg_rank_thresh[f]) continue;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
-                    if (env[f] > env[temp_peaks[peak_count-1]]) {
+                    if (flux_env[f] > flux_env[temp_peaks[peak_count-1]]) {
                         temp_peaks[peak_count-1] = f;
                     }
                     too_close = true;
                 }
 
                 if (!too_close) {
-                    float left_min = env[f];
+                    float left_min = flux_env[f];
                     for(int k=f-1; k>=0; k--) {
-                        if (env[k] > env[f]) break;
-                        if (env[k] < left_min) left_min = env[k];
+                        if (flux_env[k] > flux_env[f]) break;
+                        if (flux_env[k] < left_min) left_min = flux_env[k];
                     }
-                    float right_min = env[f];
+                    float right_min = flux_env[f];
                     for(int k=f+1; k<num_frames; k++) {
-                        if (env[k] > env[f]) break;
-                        if (env[k] < right_min) right_min = env[k];
+                        if (flux_env[k] > flux_env[f]) break;
+                        if (flux_env[k] < right_min) right_min = flux_env[k];
                     }
-                    float prom = env[f] - (left_min > right_min ? left_min : right_min);
+                    float prom = flux_env[f] - (left_min > right_min ? left_min : right_min);
                     if (prom >= 0.5f) {
                         temp_peaks[peak_count++] = f;
                     }
@@ -464,6 +526,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         memcpy(bands[b].peaks, temp_peaks, sizeof(int) * peak_count);
         bands[b].num_peaks = peak_count;
         free(temp_peaks);
+        free(flux_env);
+        free(rolling_flux_thresh);
     }
 
     // 5. Converging max_peak
@@ -510,7 +574,17 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         if (p_global >= active_start_frame && p_global < active_start_frame + 100) {
             PeakResult pr;
             double time = (double)p_global * self->frame_duration_ms / 1000.0;
-            if (analyzer_process_peak(self, p_idx, b, time, bands[b].envelope, num_frames, all_indices, total_peaks, &pr)) {
+
+            // Note: We need flux envelopes for snapshot data in PeakResult,
+            // but we overwrote bands[b].envelope with energy percentile ranks for the host.
+            // We temporarily linearize flux again for the library call.
+            float* tmp_flux = (float*)malloc(sizeof(float) * num_frames);
+            for (int j = 0; j < num_frames; j++) {
+                int f_idx = (read_ptr + j) % CACHE_SIZE;
+                tmp_flux[j] = self->flux_envelopes[b * CACHE_SIZE + f_idx];
+            }
+
+            if (analyzer_process_peak(self, p_idx, b, time, tmp_flux, num_frames, all_indices, total_peaks, &pr)) {
                 if (self->snapshot_tails[b]) {
                     self->snapshot_tails[b]->p_idx = p_global;
                 }
@@ -519,6 +593,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
                     result_out->peak_list.peaks[result_out->peak_list.num_peaks++] = pr;
                 }
             }
+            free(tmp_flux);
         }
     }
 

@@ -81,6 +81,7 @@ typedef struct {
     // Incremental Cache State
     double* mel_spectrogram;    // Mel bands cache
     float* flux_envelopes;      // Flux cache per band
+    float* energy_envelopes;    // Linear energy cache per band
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
     int cache_write_ptr;
