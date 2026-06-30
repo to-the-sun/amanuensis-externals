@@ -433,9 +433,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         int* temp_peaks = (int*)malloc(sizeof(int) * num_frames);
         int peak_count = 0;
 
-        // Stage 1: Preliminary Detection (Initial criteria)
         for (int f = 1; f < num_frames - 1; f++) {
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f]) {
+            // Standard criteria + 1dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 1.0f) {
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
                     if (env[f] > env[temp_peaks[peak_count-1]]) {
@@ -462,29 +462,11 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
                 }
             }
         }
-        // Stage 2: Secondary Filtering (Average of detected peaks)
-        double peak_sum = 0;
-        for (int i = 0; i < peak_count; i++) {
-            peak_sum += (double)env[temp_peaks[i]];
-        }
-        float avg_peak_val = (peak_count > 0) ? (float)(peak_sum / (double)peak_count) : 0.0f;
 
-        int final_count = 0;
-        int* final_peaks = (int*)malloc(sizeof(int) * peak_count);
-        for (int i = 0; i < peak_count; i++) {
-            if (env[temp_peaks[i]] >= avg_peak_val) {
-                final_peaks[final_count++] = temp_peaks[i];
-            }
-        }
-
-        bands[b].peaks = final_peaks;
-        bands[b].num_peaks = final_count;
+        bands[b].peaks = (int*)malloc(sizeof(int) * peak_count);
+        memcpy(bands[b].peaks, temp_peaks, sizeof(int) * peak_count);
+        bands[b].num_peaks = peak_count;
         free(temp_peaks);
-
-        // Update threshold returned to host for visualization (average of peaks)
-        for (int j = 0; j < num_frames; j++) {
-            thresh[j] = avg_peak_val;
-        }
     }
 
     // 5. Converging max_peak

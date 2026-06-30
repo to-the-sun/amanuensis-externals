@@ -58,20 +58,24 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Global Magnitude Gating (Secondary Peak-Average Gating)
+### Strategy 3: Absolute Flux Floor (1dB Baseline)
 
-This strategy uses the **Average Magnitude of Detected Peaks** within the 15.2s window as a dynamic filter to eliminate low-level "jitter" and phantom transients.
+This strategy implements a fixed **1dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
 
 #### Implementation Details:
-1.  **Stage 1 Detection**: The system identifies all candidate peaks using the standard criteria (local maximum, 15s rolling flux average, distance, and prominence).
-2.  **Peak Magnitude Averaging**: The system calculates the average **Spectral Flux** (Onset Strength) value of every peak detected in the 15.2s window.
-3.  **Stage 2 Gating**: A candidate peak is only committed to the stateful resonance engine if its Onset Strength is greater than or equal to this **peak-average**.
-4.  **Visual Representation**: The horizontal threshold lines in the 4-band transient graph now represent this **dynamic peak average** instead of the underlying 15s rolling flux average.
+1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **1.0 dB** to be considered a peak candidate.
+2.  **Visual Representation**: Horizontal threshold lines return to showing the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
 
-#### Speculation on Efficacy:
--   **Upside**: High selectivity. By averaging only the peaks themselves, the filter ignores the vast majority of the signal (the quiet gaps) and focuses only on the distribution of "hits". This ensures that in a dense rhythmic section, only the primary hits are kept, while in a sparse section, the average drops and allows more subtle transients to pass.
--   **Upside**: Intuitive Visualization. The user sees the threshold line jump or settle based on the "average strength" of the current rhythm.
--   **Downside**: If a section has one massive transient and many medium ones, the average might be skewed high, causing the medium transients to be gated despite being rhythmically valid.
+#### Speculation on Current Issues:
+
+**1. The Barrage of Tiny Peaks (Low-level Jitter)**
+-   **Cause**: In the new incremental model, the spectrogram is normalized but not necessarily "clamped." In the original offline code, `top_db` (80dB) was used to clip the bottom of the spectrogram. If the incremental cache is missing this clipping or if the stable window is preserving low-level noise that was previously lost in window-edge artifacts, the system will detect every tiny fluctuation above the stable (and very low) rolling threshold.
+-   **Alleviation**: The 1dB absolute floor provides a "sanity check" that ignores any rhythmic activity below a noticeable decibel change.
+
+**2. Missing Large Peaks (Threshold Inflation)**
+-   **Cause**: This is likely a side effect of the "Barrage." When thousands of tiny noise-peaks are processed (Stage 1), they contribute to the 15-second rolling average of the flux. This **inflates the threshold** significantly.
+-   **Impact**: A large, valid peak that occurs in a section with high noise-floor jitter may fail the `env[f] > thresh[f]` check because the `thresh[f]` has been pushed too high by the surrounding noise.
+-   **Alleviation**: By using the 1dB floor to reject noise *before* it affects the threshold or by refining the prominence check, we can allow major transients to stand out more clearly against a lower, more accurate noise floor.
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
