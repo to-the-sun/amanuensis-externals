@@ -412,7 +412,7 @@ void rebar_buildspans_bang(t_buildspans *x) {
     if (rebar) {
         if (rebar->async && rebar->worker && !systhread_ismainthread()) {
             rebar_do_copy_back(rebar);
-        } else if (systhread_ismainthread()) {
+        } else {
             rebar_request_copy_back(rebar);
         }
     }
@@ -794,7 +794,7 @@ void rebar_int(t_rebar *x, long n) {
 
     t_atom a;
     atom_setlong(&a, n);
-    if (x->async && x->worker) {
+    if (x->async && x->worker && !systhread_ismainthread()) {
         async_worker_enqueue(x->worker, x, (method)rebar_do_int, NULL, 1, &a);
     } else {
         rebar_do_int(x, NULL, 1, &a);

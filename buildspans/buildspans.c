@@ -7,152 +7,10 @@
 #include "../shared/async_worker.h"
 #include "../shared/logging.h"
 #include <math.h>
-#include <stdlib.h> // For qsort
-#include <string.h> // For isdigit
+#include <stdlib.h>
+#include <string.h>
 
-// Helper function to generate a hierarchical key symbol
-t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *key) {
-    char key_str[512];
-    snprintf(key_str, 512, "%s::%s::%s::%s", palette->s_name, track->s_name, bar->s_name, key->s_name);
-    return gensym(key_str);
-}
-
-// Helper function to parse a hierarchical key symbol.
-// Returns 1 on success, 0 on failure.
-// Pointers passed for palette, track, bar, and key will be set to newly allocated char buffers.
-// The caller is responsible for freeing these buffers.
-int parse_hierarchical_key(t_symbol *hierarchical_key, char **palette, char **track, char **bar, char **key) {
-    const char *key_str = hierarchical_key->s_name;
-    const char *first_delim = strstr(key_str, "::");
-    if (!first_delim) return 0;
-
-    const char *second_delim = strstr(first_delim + 2, "::");
-    if (!second_delim) return 0;
-
-    const char *third_delim = strstr(second_delim + 2, "::");
-    if (!third_delim) return 0;
-
-    size_t pal_len = first_delim - key_str;
-    *palette = (char *)sysmem_newptr(pal_len + 1);
-    strncpy(*palette, key_str, pal_len);
-    (*palette)[pal_len] = '\0';
-
-    size_t track_len = second_delim - (first_delim + 2);
-    *track = (char *)sysmem_newptr(track_len + 1);
-    strncpy(*track, first_delim + 2, track_len);
-    (*track)[track_len] = '\0';
-
-    size_t bar_len = third_delim - (second_delim + 2);
-    *bar = (char *)sysmem_newptr(bar_len + 1);
-    strncpy(*bar, second_delim + 2, bar_len);
-    (*bar)[bar_len] = '\0';
-
-    *key = (char *)sysmem_newptr(strlen(third_delim + 2) + 1);
-    strcpy(*key, third_delim + 2);
-
-    return 1;
-}
-
-
-// Helper function to convert an atomarray to a string for buildspans_loging
-char* atomarray_to_string(t_atomarray *arr) {
-    if (!arr) return NULL;
-
-    long count = atomarray_getsize(arr);
-    if (count == 0) {
-        char *empty_str = (char *)sysmem_newptr(3);
-        strcpy(empty_str, "[]");
-        return empty_str;
-    }
-
-    long buffer_size = 256; // Initial size
-    char *buffer = (char *)sysmem_newptr(buffer_size);
-    long offset = 0;
-
-    offset += snprintf(buffer + offset, buffer_size - offset, "[");
-
-    for (long i = 0; i < count; i++) {
-        t_atom a;
-        atomarray_getindex(arr, i, &a);
-
-        char temp_str[64];
-        if (atom_gettype(&a) == A_FLOAT) {
-            snprintf(temp_str, 64, "%.2f", atom_getfloat(&a));
-        } else if (atom_gettype(&a) == A_LONG) {
-            snprintf(temp_str, 64, "%ld", atom_getlong(&a));
-        } else {
-            snprintf(temp_str, 64, "?");
-        }
-
-        if (buffer_size - offset < strlen(temp_str) + 4) { // +4 for ", ]\0"
-            buffer_size *= 2;
-            buffer = (char *)sysmem_resizeptr(buffer, buffer_size);
-            if (!buffer) return NULL;
-        }
-
-        offset += snprintf(buffer + offset, buffer_size - offset, "%s", temp_str);
-        if (i < count - 1) {
-            offset += snprintf(buffer + offset, buffer_size - offset, ", ");
-        }
-    }
-
-    snprintf(buffer + offset, buffer_size - offset, "]");
-    return buffer;
-}
-
-
-// Helper function to create a deep copy of a t_atomarray
-t_atomarray* atomarray_deep_copy(t_atomarray *src) {
-    if (!src) {
-        return NULL;
-    }
-    long count;
-    t_atom *atoms;
-    atomarray_getatoms(src, &count, &atoms);
-
-    // atomarray_new with arguments creates a new array and copies the atoms from the source.
-    t_atomarray *dest = atomarray_new(count, atoms);
-    return dest;
-}
-
-
-// Comparison function for qsort
-int compare_longs(const void *a, const void *b) {
-    long la = *(const long *)a;
-    long lb = *(const long *)b;
-    return (la > lb) - (la < lb);
-}
-
-// Struct for holding note pairs for sorting
-typedef struct { double timestamp; double score; } NotePair;
-
-// Comparison function for qsort to sort NotePairs
-int compare_notepairs(const void *a, const void *b) {
-    NotePair *pa = (NotePair *)a;
-    NotePair *pb = (NotePair *)b;
-    if (pa->timestamp < pb->timestamp) return -1;
-    if (pa->timestamp > pb->timestamp) return 1;
-    return 0;
-}
-
-// Struct for holding note data for duplication manifest
-typedef struct {
-    long track_number;
-    double timestamp;
-    double score;
-} t_duplication_manifest_item;
-
-// Comparison function for qsort to sort t_duplication_manifest_item by timestamp
-int compare_manifest_items(const void *a, const void *b) {
-    t_duplication_manifest_item *pa = (t_duplication_manifest_item *)a;
-    t_duplication_manifest_item *pb = (t_duplication_manifest_item *)b;
-    if (pa->timestamp < pb->timestamp) return -1;
-    if (pa->timestamp > pb->timestamp) return 1;
-    return 0;
-}
-
-
-// Function prototypes
+// --- Prototypes ---
 void *buildspans_new(t_symbol *s, long argc, t_atom *argv);
 void buildspans_free(t_buildspans *x);
 void buildspans_clear(t_buildspans *x);
@@ -163,12 +21,9 @@ void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
 void buildspans_track(t_buildspans *x, long n);
-void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
-void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_do_track(t_buildspans *x, long n);
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
-void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
-void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
@@ -194,1720 +49,471 @@ void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_a
 void buildspans_bind_resolve(t_buildspans *x);
 void buildspans_bind_clock_cb(t_buildspans *x);
 void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
 t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
 
-
-// Helper function to send verbose log messages
-void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (s == gensym("track")) {
-        outlet_anything(x->track_outlet, s, argc, argv);
-    } else if (s == gensym("span")) {
-        outlet_anything(x->span_outlet, s, argc, argv);
-    } else if (s == gensym("bar_data")) {
-        // Here argv[0] was the selector
-        t_symbol *sel = atom_getsym(argv);
-        outlet_anything(x->out_bar_data, sel, (short)(argc - 1), argv + 1);
-    }
-}
-
-void buildspans_log(t_buildspans *x, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    vcommon_log(x->log_outlet, x->log, "buildspans", fmt, args);
-    va_end(args);
-}
-
 t_class *buildspans_class;
 
-// A single, consolidated function to get the bar length from the buffer.
-// It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
-// It does not post any messages to the console. The caller is responsible for that.
-long buildspans_get_bar_length(t_buildspans *x) {
-    if (x->local_bar_length > 0) {
-        return (long)x->local_bar_length;
+// --- Dictionary Helpers ---
+t_dictionary* get_sub_dict(t_dictionary *parent, t_symbol *key, int create) {
+    t_dictionary *sub = NULL;
+    if (dictionary_getdictionary(parent, key, (t_object **)&sub) != MAX_ERR_NONE || !sub) {
+        if (create) {
+            sub = dictionary_new();
+            dictionary_appenddictionary(parent, key, (t_object *)sub);
+            dictionary_getdictionary(parent, key, (t_object **)&sub);
+        }
     }
-    if (!x->buffer_ref) {
-        return -1; // Buffer name not set.
-    }
+    return sub;
+}
 
+t_dictionary* buildspans_get_bar_dict(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym, int create) {
+    t_dictionary *pal_dict = get_sub_dict(x->building, palette_sym, create);
+    if (!pal_dict) return NULL;
+    t_dictionary *tr_dict = get_sub_dict(pal_dict, track_sym, create);
+    if (!tr_dict) return NULL;
+    return get_sub_dict(tr_dict, bar_sym, create);
+}
+
+int parse_hierarchical_key(t_symbol *hierarchical_key, t_symbol **palette, t_symbol **track, t_symbol **bar, t_symbol **key) {
+    char buf[512]; strncpy(buf, hierarchical_key->s_name, 512); buf[511] = '\0';
+    char *f = strstr(buf, "::"); if (!f) return 0; *f = '\0'; *palette = gensym(buf);
+    char *s = strstr(f + 2, "::"); if (!s) return 0; *s = '\0'; *track = gensym(f + 2);
+    char *t = strstr(s + 2, "::"); if (!t) return 0; *t = '\0'; *bar = gensym(s + 2);
+    *key = gensym(t + 2); return 1;
+}
+
+t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *key) {
+    char k[512]; snprintf(k, 512, "%s::%s::%s::%s", palette->s_name, track->s_name, bar->s_name, key->s_name);
+    return gensym(k);
+}
+
+char* atomarray_to_string(t_atomarray *arr) {
+    if (!arr) return NULL;
+    long count = atomarray_getsize(arr);
+    if (count == 0) { char *e = (char *)sysmem_newptr(3); strcpy(e, "[]"); return e; }
+    long sz = 256; char *buf = (char *)sysmem_newptr(sz); long off = 0;
+    off += snprintf(buf + off, sz - off, "[");
+    for (long i = 0; i < count; i++) {
+        t_atom a; atomarray_getindex(arr, i, &a); char ts[64];
+        if (atom_gettype(&a) == A_FLOAT) snprintf(ts, 64, "%.2f", atom_getfloat(&a));
+        else if (atom_gettype(&a) == A_LONG) snprintf(ts, 64, "%ld", atom_getlong(&a));
+        else strcpy(ts, "?");
+        if (sz - off < (long)strlen(ts) + 4) { sz *= 2; buf = (char *)sysmem_resizeptr(buf, sz); if (!buf) return NULL; }
+        off += snprintf(buf + off, sz - off, "%s", ts);
+        if (i < count - 1) off += snprintf(buf + off, sz - off, ", ");
+    }
+    snprintf(buf + off, sz - off, "]"); return buf;
+}
+
+t_atomarray* atomarray_deep_copy(t_atomarray *src) {
+    if (!src) return NULL;
+    long c; t_atom *a; atomarray_getatoms(src, &c, &a);
+    return atomarray_new(c, a);
+}
+
+// Comparison functions
+int compare_longs(const void *a, const void *b) { long la = *(const long *)a, lb = *(const long *)b; return (la > lb) - (la < lb); }
+int compare_doubles(const void *a, const void *b) { double da = *(const double *)a, db = *(const double *)b; return (da > db) - (da < db); }
+typedef struct { double timestamp; double score; } NotePair;
+int compare_notepairs(const void *a, const void *b) { NotePair *pa = (NotePair *)a, *pb = (NotePair *)b; return (pa->timestamp > pb->timestamp) - (pa->timestamp < pb->timestamp); }
+typedef struct { long track_number; double timestamp; double score; } t_duplication_manifest_item;
+int compare_manifest_items(const void *a, const void *b) { t_duplication_manifest_item *pa = (t_duplication_manifest_item *)a, *pb = (t_duplication_manifest_item *)b; return (pa->timestamp > pb->timestamp) - (pa->timestamp < pb->timestamp); }
+
+// --- Implementation ---
+void buildspans_log(t_buildspans *x, const char *fmt, ...) { va_list args; va_start(args, fmt); vcommon_log(x->log_outlet, x->log, "buildspans", fmt, args); va_end(args); }
+
+long buildspans_get_bar_length(t_buildspans *x) {
+    if (x->local_bar_length > 0) return (long)x->local_bar_length;
+    if (!x->buffer_ref) return -1;
     t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
     if (!b) {
-        if (!x->bar_warn_sent) {
-            object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
-        }
-        // Kick the buffer reference to force re-binding
-        buffer_ref_set(x->buffer_ref, _sym_nothing);
+        if (!x->bar_warn_sent) { object_warn((t_object *)x, "bar buffer~ not found"); x->bar_warn_sent = 1; }
         buffer_ref_set(x->buffer_ref, (x->s_buffer_name && x->s_buffer_name != _sym_nothing) ? x->s_buffer_name : gensym("bar"));
         b = buffer_ref_getobject(x->buffer_ref);
     }
-    if (!b) {
-        return -1; // Buffer object not found.
-    }
-    x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
-
-    long bar_length = 0;
-    critical_enter(0);
-    float *samples = buffer_locksamples(b);
-    if (samples) {
-        if (buffer_getframecount(b) > 0) {
-            bar_length = (long)samples[0];
-        }
-        buffer_unlocksamples(b);
-        critical_exit(0);
-    } else {
-        critical_exit(0);
-    }
-
-    if (bar_length <= 0) {
-        return -1; // Value in buffer is not positive.
-    }
-
-    if (bar_length != (long)x->local_bar_length) {
-        buildspans_log(x, "bar_length changed to %ld", bar_length);
-        buildspans_log(x, "Retrieved bar length %ld from buffer and cached it.", bar_length);
-    }
-    x->local_bar_length = (double)bar_length; // Cache retrieved bar length
-
-    return bar_length;
+    if (!b) return -1; x->bar_warn_sent = 0;
+    long bl = 0; critical_enter(0); float *s = buffer_locksamples(b);
+    if (s) { if (buffer_getframecount(b) > 0) bl = (long)s[0]; buffer_unlocksamples(b); }
+    critical_exit(0); if (bl > 0) x->local_bar_length = (double)bl; return bl;
 }
 
 void buildspans_visualize_memory(t_buildspans *x) {
     if (!x->visualize) return;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-
-    // 1. Identify all unique palettes
-    long unique_palette_count = 0;
-    t_symbol **unique_palettes = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                int found = 0;
-                for (long j = 0; j < unique_palette_count; j++) {
-                    if (strcmp(unique_palettes[j]->s_name, pal_str) == 0) {
-                        found = 1;
-                        break;
+    long sz = 65536; char *buf = (char *)sysmem_newptr(sz); long off = 0;
+    off += snprintf(buf + off, sz - off, "{\"palettes\":{");
+    long np = 0; t_symbol **pk = NULL; dictionary_getkeys(x->building, &np, &pk);
+    for (long p = 0; p < np; p++) {
+        t_dictionary *pd = NULL; dictionary_getdictionary(x->building, pk[p], (t_object **)&pd); if (!pd) continue;
+        if (p > 0) off += snprintf(buf + off, sz - off, ",");
+        off += snprintf(buf + off, sz - off, "\"%s\":{\"building\":{", pk[p]->s_name);
+        long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk);
+        for (long i = 0; i < nt; i++) {
+            t_dictionary *td = NULL; dictionary_getdictionary(pd, tk[i], (t_object **)&td); if (!td) continue;
+            if (i > 0) off += snprintf(buf + off, sz - off, ",");
+            off += snprintf(buf + off, sz - off, "\"%s\":{\"absolutes\":[", tk[i]->s_name);
+            long nb = 0; t_symbol **bk = NULL; dictionary_getkeys(td, &nb, &bk);
+            long *ts = (long *)sysmem_newptr(nb * sizeof(long)); for (long j = 0; j < nb; j++) ts[j] = atol(bk[j]->s_name);
+            qsort(ts, nb, sizeof(long), compare_longs);
+            int first_abs = 1;
+            for (long j = 0; j < nb; j++) {
+                char bs[32]; snprintf(bs, 32, "%ld", ts[j]); t_dictionary *bd = get_sub_dict(td, gensym(bs), 0);
+                if (bd) {
+                    t_atomarray *aa = NULL; if (dictionary_getatomarray(bd, gensym("absolutes"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                        long ac; t_atom *av; atomarray_getatoms(aa, &ac, &av);
+                        for (long k = 0; k < ac; k++) { if (!first_abs) off += snprintf(buf + off, sz - off, ","); first_abs = 0; off += snprintf(buf + off, sz - off, "%.2f", atom_getfloat(av+k)); }
                     }
                 }
-                if (!found) {
-                    unique_palettes[unique_palette_count++] = gensym(pal_str);
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
+            }
+            off += snprintf(buf + off, sz - off, "],\"offsets\":[");
+            int first_off = 1;
+            for (long j = 0; j < nb; j++) {
+                char bs[32]; snprintf(bs, 32, "%ld", ts[j]); t_dictionary *bd = get_sub_dict(td, gensym(bs), 0);
+                if (bd) { double ov; if (dictionary_getfloat(bd, gensym("offset"), &ov) == MAX_ERR_NONE) { if (!first_off) off += snprintf(buf + off, sz - off, ","); first_off = 0; off += snprintf(buf + off, sz - off, "%.2f", ov); } }
+            }
+            off += snprintf(buf + off, sz - off, "],\"span\":[");
+            if (nb > 0) {
+                char bs[32]; snprintf(bs, 32, "%ld", ts[0]); t_dictionary *bd = get_sub_dict(td, gensym(bs), 0);
+                if (bd) { t_atomarray *aa = NULL; if (dictionary_getatomarray(bd, gensym("span"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                    long ac; t_atom *av; atomarray_getatoms(aa, &ac, &av);
+                    for (long k = 0; k < ac; k++) { if (k > 0) off += snprintf(buf + off, sz - off, ","); off += snprintf(buf + off, sz - off, "%ld", atom_getlong(av + k)); }
+                } }
+            }
+            off += snprintf(buf + off, sz - off, "]}"); sysmem_freeptr(ts); if (bk) sysmem_freeptr(bk);
+        }
+        off += snprintf(buf + off, sz - off, "}}"); if (tk) sysmem_freeptr(tk);
+    }
+    if (pk) sysmem_freeptr(pk);
+    off += snprintf(buf + off, sz - off, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, buildspans_get_bar_length(x), x->loop_start);
+    visualize((t_object *)x, buf); sysmem_freeptr(buf);
+}
+
+void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+    if (s == gensym("track")) outlet_anything(x->track_outlet, s, argc, argv);
+    else if (s == gensym("span")) outlet_anything(x->span_outlet, s, argc, argv);
+    else if (s == gensym("bar_data")) { t_symbol *sel = atom_getsym(argv); outlet_anything(x->out_bar_data, sel, (short)(argc - 1), argv + 1); }
+}
+
+void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym) {
+    t_dictionary *bd = buildspans_get_bar_dict(x, palette_sym, track_sym, bar_sym, 0); if (!bd) return;
+    double mv = 0; dictionary_getfloat(bd, gensym("mean"), &mv); dictionary_appendfloat(bd, gensym("rating"), mv);
+    t_atomarray *ns = atomarray_new(0, NULL); t_atom a; atom_setlong(&a, atol(bar_sym->s_name)); atomarray_appendatom(ns, &a);
+    dictionary_appendatomarray(bd, gensym("span"), (t_object *)ns);
+}
+
+void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array) {
+    if (!span_array) return; long sl = 0; t_atom *sa = NULL; atomarray_getatoms(span_array, &sl, &sa); if (sl == 0) return;
+    t_dictionary *pd = get_sub_dict(x->building, palette_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, track_sym, 0); if (!td) return;
+    double lm = -1.0;
+    for (long i = 0; i < sl; i++) {
+        char bs[32]; snprintf(bs, 32, "%ld", atom_getlong(sa + i)); t_dictionary *bd = get_sub_dict(td, gensym(bs), 0);
+        if (bd) { double m = 0; if (dictionary_getfloat(bd, gensym("mean"), &m) == MAX_ERR_NONE) if (lm == -1.0 || m < lm) lm = m; }
+    }
+    double r = (lm != -1.0) ? (lm * sl) : 0.0;
+    for (long i = 0; i < sl; i++) {
+        char bs[32]; snprintf(bs, 32, "%ld", atom_getlong(sa + i)); t_dictionary *bd = get_sub_dict(td, gensym(bs), 0);
+        if (bd) { dictionary_appendfloat(bd, gensym("rating"), r); dictionary_appendatomarray(bd, gensym("span"), (t_object *)atomarray_deep_copy(span_array)); }
+    }
+}
+
+void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
+    t_dictionary *pd = get_sub_dict(x->building, palette_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, track_sym, 0); if (!td) return;
+    long nb = 0; t_symbol **bk = NULL; dictionary_getkeys(td, &nb, &bk); if (!bk) return;
+    if (nb > 1) {
+        double lmw = -1.0, lmwo = -1.0, lbm = 0.0; long bwc = 0;
+        for (long i = 0; i < nb; i++) {
+            t_dictionary *bd = get_sub_dict(td, bk[i], 0); if (!bd) continue;
+            double m = 0; dictionary_getfloat(bd, gensym("mean"), &m); long ts = atol(bk[i]->s_name);
+            if (lmw == -1.0 || m < lmw) lmw = m;
+            if (ts == last_bar_timestamp) lbm = m;
+            else { if (lmwo == -1.0 || m < lmwo) lmwo = m; bwc++; }
+        }
+        if ((lmw * nb) < (lmwo * bwc) || lbm > (lmw * nb)) buildspans_prune_span(x, palette_sym, track_sym, last_bar_timestamp);
+    }
+    sysmem_freeptr(bk);
+}
+
+void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val) {
+    long bl = buildspans_get_bar_length(x); if (bl <= 0) return;
+    t_dictionary *pd = get_sub_dict(x->building, palette_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, track_sym, 0); if (!td) return;
+    long last = -1, nb = 0; t_symbol **bk = NULL; dictionary_getkeys(td, &nb, &bk);
+    if (bk) { for (long i = 0; i < nb; i++) { long v = atol(bk[i]->s_name); if (v > last) last = v; } sysmem_freeptr(bk); }
+    if (last != -1) {
+        buildspans_deferred_rating_check(x, palette_sym, track_sym, last);
+        long rb = -1; dictionary_getkeys(td, &nb, &bk);
+        if (bk) { for (long i = 0; i < nb; i++) { long v = atol(bk[i]->s_name); if (v > rb) rb = v; } sysmem_freeptr(bk); }
+        if (rb != -1 && relative_comparison_val > (double)rb + 2.0 * bl) buildspans_end_track_span(x, palette_sym, track_sym);
+    }
+}
+
+void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym) {
+    long tn; if (sscanf(track_offset_sym->s_name, "%ld-", &tn) != 1) return;
+    t_dictionary *pd = get_sub_dict(x->building, palette_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, track_offset_sym, 0); if (!td) return;
+    double ov = 0; long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk);
+    if (bk) { if (nb > 0) { t_dictionary *bd = get_sub_dict(td, bk[0], 0); if (bd) dictionary_getfloat(bd, gensym("offset"), &ov); } }
+    double no = find_next_offset(x, palette_sym, tn, ov);
+    if (no == -1.0) { if (bk) sysmem_freeptr(bk); return; }
+    double old = -1.0;
+    for (long i = 0; i < nb; i++) {
+        t_dictionary *bd = get_sub_dict(td, bk[i], 0); if (bd) {
+            t_atomarray *aa = NULL; if (dictionary_getatomarray(bd, gensym("absolutes"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                long ac; t_atom *av; atomarray_getatoms(aa, &ac, &av);
+                for (long k = 0; k < ac; k++) { double t = atom_getfloat(av + k); if (old == -1.0 || t < old) old = t; }
             }
         }
     }
+    if (old != -1.0 && old >= no) { dictionary_deleteentry(pd, track_offset_sym); buildspans_visualize_memory(x); }
+    if (bk) sysmem_freeptr(bk);
+}
 
-    // 2. Generate JSON
-    long buffer_size = 65536;
-    char *json_buffer = (char *)sysmem_newptr(buffer_size);
-    long offset = 0;
-    offset += snprintf(json_buffer + offset, buffer_size, "{\"palettes\":{");
+double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long tn_check, double ov_check) {
+    t_dictionary *pd = get_sub_dict(x->building, palette_sym, 0); if (!pd) return -1.0;
+    long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk); if (!tk) return -1.0;
+    char p[32]; snprintf(p, 32, "%ld-", tn_check); t_dictionary *ud = dictionary_new();
+    for (long i = 0; i < nt; i++) {
+        if (strncmp(tk[i]->s_name, p, strlen(p)) == 0) {
+            t_dictionary *td = NULL; dictionary_getdictionary(pd, tk[i], (t_object **)&td);
+            if (td) {
+                long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk);
+                if (bk) {
+                    if (nb > 0) { t_dictionary *bd = get_sub_dict(td, bk[0], 0); double ov; if (bd && dictionary_getfloat(bd, gensym("offset"), &ov) == MAX_ERR_NONE) { char ks[64]; snprintf(ks, 64, "%.2f", ov); dictionary_appendfloat(ud, gensym(ks), ov); } }
+                    sysmem_freeptr(bk);
+                }
+            }
+        }
+    }
+    sysmem_freeptr(tk);
+    long nu = 0; t_symbol **ok = NULL; dictionary_getkeys(ud, &nu, &ok); double no = -1.0;
+    if (ok) {
+        double *os = (double *)sysmem_newptr(nu * sizeof(double));
+        for (long i = 0; i < nu; i++) { t_atom a; dictionary_getatom(ud, ok[i], &a); os[i] = atom_getfloat(&a); }
+        qsort(os, nu, sizeof(double), compare_doubles);
+        for (long i = 0; i < nu; i++) if (os[i] > ov_check) { no = os[i]; break; }
+        sysmem_freeptr(os); sysmem_freeptr(ok);
+    }
+    object_free(ud); return no;
+}
 
-    for (long p = 0; p < unique_palette_count; p++) {
-        t_symbol *palette_sym = unique_palettes[p];
-        if (p > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
+    long tn; double ov = 0.0; if (sscanf(track_sym->s_name, "%ld-", &tn) != 1) return 0;
+    long acs; t_atom *avs; atomarray_getatoms(span_to_output, &acs, &avs);
+    if (acs > 0) { char bs[32]; snprintf(bs, 32, "%ld", atom_getlong(avs)); t_dictionary *bd = buildspans_get_bar_dict(x, palette_sym, track_sym, gensym(bs), 0); if (bd) dictionary_getfloat(bd, gensym("offset"), &ov); }
+    double no = find_next_offset(x, palette_sym, tn, ov), ear = -1.0, lat = -1.0;
+    for (long i = 0; i < acs; i++) {
+        char bs[32]; snprintf(bs, 32, "%ld", atom_getlong(avs + i)); t_dictionary *bd = buildspans_get_bar_dict(x, palette_sym, track_sym, gensym(bs), 0);
+        if (bd) {
+            t_atomarray *aa = NULL; if (dictionary_getatomarray(bd, gensym("absolutes"), (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                long ac; t_atom *av; atomarray_getatoms(aa, &ac, &av);
+                for (long k = 0; k < ac; k++) { double t = atom_getfloat(av + k); if (ear == -1.0 || t < ear) ear = t; if (lat == -1.0 || t > lat) lat = t; }
+            }
+        }
+    }
+    if (ear == -1.0 || lat < ov || (no != -1.0 && ear > no)) return 0; return 1;
+}
 
-        // Identify unique tracks for this palette
-        long unique_track_count = 0;
-        t_symbol **unique_tracks = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, palette_sym->s_name) == 0) {
-                        int found = 0;
-                        for (long j = 0; j < unique_track_count; j++) {
-                            if (strcmp(unique_tracks[j]->s_name, track_str) == 0) {
-                                found = 1;
-                                break;
+void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array) {
+    if (!span_array) return; long tn; if (sscanf(track_sym->s_name, "%ld-", &tn) != 1) return;
+    long sl; t_atom *sa; atomarray_getatoms(span_array, &sl, &sa);
+    const char* pr[] = {"absolutes", "scores", "mean", "offset", "palette", "rating", "span"};
+    for (long i = 0; i < sl; i++) {
+        char bs[32]; snprintf(bs, 32, "%ld", atom_getlong(sa + i)); t_dictionary *bd = buildspans_get_bar_dict(x, palette_sym, track_sym, gensym(bs), 0); if (!bd) continue;
+        for (int j = 0; j < 7; j++) {
+            t_symbol *ps = gensym(pr[j]); t_atomarray *aa = NULL; t_atom a; t_atom *av = NULL; long ac = 0;
+            if (dictionary_getatomarray(bd, ps, (t_object **)&aa) == MAX_ERR_NONE && aa) atomarray_getatoms(aa, &ac, &av);
+            else if (dictionary_getatom(bd, ps, &a) == MAX_ERR_NONE) { av = &a; ac = 1; }
+            if (ac > 0) {
+                char ok[256]; snprintf(ok, 256, "%ld::%s::%s", tn, bs, pr[j]); t_symbol *os = gensym(ok);
+                if (x->bound_crucible) crucible_do_anything((t_crucible *)x->bound_crucible, os, (short)ac, av);
+                else {
+                    if (!x->async || systhread_ismainthread()) outlet_anything(x->out_bar_data, os, (short)ac, av);
+                    else { t_atom *nav = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom)); if (nav) { atom_setsym(nav, os); for (int k = 0; k < ac; k++) nav[k+1] = av[k]; defer(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), nav); sysmem_freeptr(nav); } }
+                }
+            }
+        }
+    }
+}
+
+void buildspans_process_and_add_note(t_buildspans *x, double calc, double store, double score, double off, long bl) {
+    if (off == 0.0) {
+        t_dictionary *pd = get_sub_dict(x->building, x->current_palette, 0);
+        if (pd) { char ts[64]; snprintf(ts, 64, "%ld-0", x->current_track); dictionary_deleteentry(pd, gensym(ts)); }
+        buildspans_visualize_memory(x); return;
+    }
+    char ts[64]; snprintf(ts, 64, "%ld-%ld", x->current_track, (long)round(off)); t_symbol *tsym = gensym(ts);
+    double rel = calc - off + x->loop_start; long bts = floor(rel / bl) * bl;
+    char bs[32]; snprintf(bs, 32, "%ld", bts); t_symbol *bsym = gensym(bs);
+    t_dictionary *pd = get_sub_dict(x->building, x->current_palette, 1), *td = get_sub_dict(pd, tsym, 1);
+    long last = -1, nbc = 0; t_symbol **bks = NULL; dictionary_getkeys(td, &nbc, &bks);
+    if (bks) { for (long i = 0; i < nbc; i++) { long v = atol(bks[i]->s_name); if (v > last) last = v; } sysmem_freeptr(bks); }
+    if (bts > last && last != -1) buildspans_check_discontiguity(x, x->current_palette, tsym, rel);
+    t_dictionary *bd = get_sub_dict(td, bsym, 1); dictionary_appendfloat(bd, gensym("offset"), off); dictionary_appendsym(bd, gensym("palette"), x->current_palette);
+    t_atomarray *ab = NULL; if (dictionary_getatomarray(bd, gensym("absolutes"), (t_object **)&ab) != MAX_ERR_NONE || !ab) { ab = atomarray_new(0, NULL); dictionary_appendatomarray(bd, gensym("absolutes"), (t_object *)ab); }
+    t_atom a; atom_setfloat(&a, store); atomarray_appendatom(ab, &a);
+    t_atomarray *sc = NULL; if (dictionary_getatomarray(bd, gensym("scores"), (t_object **)&sc) != MAX_ERR_NONE || !sc) { sc = atomarray_new(0, NULL); dictionary_appendatomarray(bd, gensym("scores"), (t_object *)sc); }
+    atom_setfloat(&a, score); atomarray_appendatom(sc, &a);
+    long c = atomarray_getsize(sc); if (c > 0) { double sum = 0.0; t_atom *at; long ac; atomarray_getatoms(sc, &ac, &at); for (long i = 0; i < ac; i++) sum += atom_getfloat(at + i); dictionary_appendfloat(bd, gensym("mean"), sum / c); }
+    dictionary_getkeys(td, &nbc, &bks);
+    if (bks) {
+        long *tss = (long *)sysmem_newptr(nbc * sizeof(long)); for (long i = 0; i < nbc; i++) tss[i] = atol(bks[i]->s_name);
+        qsort(tss, nbc, sizeof(long), compare_longs);
+        t_atomarray *ns = atomarray_new(0, NULL); for (long i = 0; i < nbc; i++) { t_atom ta; atom_setlong(&ta, tss[i]); atomarray_appendatom(ns, &ta); }
+        double lm = -1.0;
+        for (long i = 0; i < nbc; i++) { char bstr[32]; snprintf(bstr, 32, "%ld", tss[i]); t_dictionary *cbd = get_sub_dict(td, gensym(bstr), 0); if (cbd) { double m = 0; dictionary_getfloat(cbd, gensym("mean"), &m); if (lm == -1.0 || m < lm) lm = m; } }
+        for (long i = 0; i < nbc; i++) { char bstr[32]; snprintf(bstr, 32, "%ld", tss[i]); t_dictionary *cbd = get_sub_dict(td, gensym(bstr), 0); if (cbd) { dictionary_appendatomarray(cbd, gensym("span"), (t_object *)atomarray_deep_copy(ns)); dictionary_appendfloat(cbd, gensym("rating"), lm * nbc); } }
+        object_free(ns); sysmem_freeptr(tss); sysmem_freeptr(bks);
+    }
+    buildspans_visualize_memory(x);
+}
+
+void buildspans_end_track_span(t_buildspans *x, t_symbol *pal_sym, t_symbol *tr_sym) {
+    t_dictionary *pd = get_sub_dict(x->building, pal_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, tr_sym, 0); if (!td) return;
+    long nb = 0; t_symbol **bk = NULL; dictionary_getkeys(td, &nb, &bk); if (!bk) return;
+    long *ts = (long *)sysmem_newptr(nb * sizeof(long)); for (long i = 0; i < nb; i++) ts[i] = atol(bk[i]->s_name);
+    qsort(ts, nb, sizeof(long), compare_longs);
+    t_atomarray *so = atomarray_new(0, NULL); for (long i = 0; i < nb; i++) { t_atom a; atom_setlong(&a, ts[i]); atomarray_appendatom(so, &a); }
+    if (buildspans_validate_span_before_output(x, pal_sym, tr_sym, so)) {
+        long tno; sscanf(tr_sym->s_name, "%ld-", &tno); buildspans_output_span_data(x, pal_sym, tr_sym, so);
+        t_atom ta; atom_setlong(&ta, tno); if (x->bound_crucible) crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &ta);
+        else { if (!x->async || systhread_ismainthread()) outlet_anything(x->track_outlet, gensym("track"), 1, &ta); else defer(x, (method)buildspans_defer_output, gensym("track"), 1, &ta); }
+        long ac; t_atom *av; atomarray_getatoms(so, &ac, &av); if (x->bound_crucible) crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)ac, av);
+        else { if (!x->async || systhread_ismainthread()) outlet_anything(x->span_outlet, gensym("span"), (short)ac, av); else defer(x, (method)buildspans_defer_output, gensym("span"), (short)ac, av); }
+    }
+    object_free(so); sysmem_freeptr(ts); sysmem_freeptr(bk);
+    dictionary_deleteentry(pd, tr_sym); buildspans_visualize_memory(x);
+    char dk[256]; snprintf(dk, 256, "%s::%s", pal_sym->s_name, tr_sym->s_name); dictionary_appendsym(x->tracks_ended_in_current_event, gensym(dk), 0);
+}
+
+void buildspans_prune_span(t_buildspans *x, t_symbol *pal_sym, t_symbol *tr_sym, long btk) {
+    t_dictionary *pd = get_sub_dict(x->building, pal_sym, 0); if (!pd) return;
+    t_dictionary *td = get_sub_dict(pd, tr_sym, 0); if (!td) return;
+    long nb = 0; t_symbol **bk = NULL; dictionary_getkeys(td, &nb, &bk); if (!bk) return;
+    long ec = 0; long *bev = (long *)sysmem_newptr(nb * sizeof(long));
+    for (long i = 0; i < nb; i++) { long val = atol(bk[i]->s_name); if (val != btk) bev[ec++] = val; }
+    if (ec > 0) {
+        qsort(bev, ec, sizeof(long), compare_longs);
+        t_atomarray *esa = atomarray_new(0, NULL); for(long i = 0; i < ec; ++i) { t_atom a; atom_setlong(&a, bev[i]); atomarray_appendatom(esa, &a); }
+        buildspans_finalize_and_log_span(x, pal_sym, tr_sym, esa);
+        if (buildspans_validate_span_before_output(x, pal_sym, tr_sym, esa)) {
+            long tno; sscanf(tr_sym->s_name, "%ld-", &tno); buildspans_output_span_data(x, pal_sym, tr_sym, esa);
+            t_atom ta; atom_setlong(&ta, tno); if (x->bound_crucible) crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &ta);
+            else { if (!x->async || systhread_ismainthread()) outlet_anything(x->track_outlet, gensym("track"), 1, &ta); else defer(x, (method)buildspans_defer_output, gensym("track"), 1, &ta); }
+            long ac; t_atom *av; atomarray_getatoms(esa, &ac, &av); if (x->bound_crucible) crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)ac, av);
+            else { if (!x->async || systhread_ismainthread()) outlet_anything(x->span_outlet, gensym("span"), (short)ac, av); else defer(x, (method)buildspans_defer_output, gensym("span"), (short)ac, av); }
+        }
+        object_free(esa);
+        for (long i = 0; i < ec; i++) { char bs[32]; snprintf(bs, 32, "%ld", bev[i]); dictionary_deleteentry(td, gensym(bs)); }
+    }
+    sysmem_freeptr(bev); sysmem_freeptr(bk);
+    char bks[32]; snprintf(bks, 32, "%ld", btk); buildspans_reset_bar_to_standalone(x, pal_sym, tr_sym, gensym(bks));
+    if (ec > 0) { char dk[256]; snprintf(dk, 256, "%s::%s", pal_sym->s_name, tr_sym->s_name); dictionary_appendsym(x->tracks_ended_in_current_event, gensym(dk), 0); }
+    buildspans_visualize_memory(x);
+}
+
+void buildspans_do_offset(t_buildspans *x, double f, double ls) {
+    if (x->async && x->worker && !systhread_ismainthread()) { t_atom a[2]; atom_setfloat(&a[0], f); atom_setfloat(&a[1], ls); async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 2, a); return; }
+    if (x->defer && !systhread_ismainthread()) { t_atom a[2]; atom_setfloat(&a[0], f); atom_setfloat(&a[1], ls); defer(x, (method)buildspans_offset_deferred, NULL, 2, a); return; }
+    if (f <= 0.0) { x->current_offset = f; x->loop_start = ls; x->last_msg_type = gensym("offset"); return; }
+    long nr = (long)round(f), or = (long)round(x->current_offset); if (nr == or) { x->current_offset = f; x->loop_start = ls; return; }
+    x->current_offset = f; x->loop_start = ls; x->last_msg_type = gensym("offset");
+    long bl = buildspans_get_bar_length(x); if (bl <= 0) return;
+    t_dictionary *pd = get_sub_dict(x->building, x->current_palette, 0); if (!pd) return;
+    long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk); if (!tk) return;
+    long mc = 128, mcount = 0; t_duplication_manifest_item *m = (t_duplication_manifest_item *)sysmem_newptr(mc * sizeof(t_duplication_manifest_item));
+    for (long i = 0; i < nt; i++) {
+        t_symbol *ts = tk[i]; long tn; if (sscanf(ts->s_name, "%ld-", &tn) != 1) continue;
+        buildspans_check_discontiguity(x, x->current_palette, ts, f);
+        char tar[64]; snprintf(tar, 64, "%ld-%ld", tn, nr); if (dictionary_hasentry(pd, gensym(tar))) continue;
+        char src[64]; snprintf(src, 64, "%ld-%ld", tn, or);
+        if (strcmp(ts->s_name, src) == 0) {
+            t_dictionary *td = NULL; dictionary_getdictionary(pd, ts, (t_object **)&td);
+            if (td) {
+                long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk);
+                if (bk) {
+                    for (long j = 0; j < nb; j++) {
+                        t_dictionary *bd = get_sub_dict(td, bk[j], 0); if (bd) {
+                            t_atomarray *ab = NULL, *sc = NULL; dictionary_getatomarray(bd, gensym("absolutes"), (t_object **)&ab); dictionary_getatomarray(bd, gensym("scores"), (t_object **)&sc);
+                            if (ab && sc) {
+                                long ac; t_atom *va, *vs; atomarray_getatoms(ab, &ac, &va); atomarray_getatoms(sc, &ac, &vs);
+                                for (long k = 0; k < ac; k++) {
+                                    if (mcount >= mc) { mc *= 2; m = (t_duplication_manifest_item *)sysmem_resizeptr(m, mc * sizeof(t_duplication_manifest_item)); }
+                                    m[mcount].track_number = tn; m[mcount].timestamp = atom_getfloat(va + k); m[mcount].score = atom_getfloat(vs + k); mcount++;
+                                }
                             }
                         }
-                        if (!found) {
-                            unique_tracks[unique_track_count++] = gensym(track_str);
-                        }
                     }
-                    sysmem_freeptr(pal_str);
-                    sysmem_freeptr(track_str);
-                    sysmem_freeptr(bar_str);
-                    sysmem_freeptr(prop_str);
+                    sysmem_freeptr(bk);
                 }
             }
         }
-
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{", 
-                            palette_sym->s_name);
-
-        for (long i = 0; i < unique_track_count; i++) {
-            t_symbol *track_sym = unique_tracks[i];
-            if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
-
-            // a. Find and sort bars for this track
-            long bar_count = 0;
-            long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
-            if (keys) {
-                for (long j = 0; j < num_keys; j++) {
-                     char *pal_str, *track_str, *bar_str, *prop_str;
-                     if (parse_hierarchical_key(keys[j], &pal_str, &track_str, &bar_str, &prop_str)) {
-                         if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_sym->s_name) == 0 && strcmp(prop_str, "mean") == 0) {
-                             bar_timestamps[bar_count++] = atol(bar_str);
-                         }
-                         sysmem_freeptr(pal_str);
-                         sysmem_freeptr(track_str);
-                         sysmem_freeptr(bar_str);
-                         sysmem_freeptr(prop_str);
-                     }
-                }
-            }
-            qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
-
-            // b. Append absolutes
-            int first_absolute = 1;
-            for (long j = 0; j < bar_count; j++) {
-                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
-                t_symbol* abs_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("absolutes"));
-                t_atom *av;
-                long ac = 0;
-                t_atomarray *aa = NULL;
-                t_atom a;
-                if (dictionary_getatomarray(x->building, abs_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
-                    atomarray_getatoms(aa, &ac, &av);
-                } else if (dictionary_getatom(x->building, abs_key, &a) == MAX_ERR_NONE) {
-                    av = &a;
-                    ac = 1;
-                }
-                for (long k = 0; k < ac; k++) {
-                    if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                    first_absolute = 0;
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
-                }
-            }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
-
-            // c. Append offsets
-            int first_offset = 1;
-            for (long j = 0; j < bar_count; j++) {
-                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
-                t_symbol* offset_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("offset"));
-                 if (dictionary_hasentry(x->building, offset_key)) {
-                     if (!first_offset) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                     first_offset = 0;
-                     t_atom a;
-                     dictionary_getatom(x->building, offset_key, &a);
-                     offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&a));
-                 }
-            }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"span\":[");
-
-            // d. Append span data
-            int first_span = 1;
-            // To avoid duplicates, find a representative span from the first bar
-            if (bar_count > 0) {
-                char first_bar_str[32];
-                snprintf(first_bar_str, 32, "%ld", bar_timestamps[0]);
-                t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, gensym(first_bar_str), gensym("span"));
-
-                t_atom *span_atoms;
-                long span_count = 0;
-                t_atomarray *span_aa = NULL;
-                t_atom span_atom;
-                if (dictionary_getatomarray(x->building, span_key, (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                    atomarray_getatoms(span_aa, &span_count, &span_atoms);
-                } else if (dictionary_getatom(x->building, span_key, &span_atom) == MAX_ERR_NONE) {
-                    span_atoms = &span_atom;
-                    span_count = 1;
-                }
-
-                for (long k = 0; k < span_count; k++) {
-                    if (!first_span) {
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                    }
-                    first_span = 0;
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%ld", atom_getlong(span_atoms + k));
-                }
-            }
-
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
-            sysmem_freeptr(bar_timestamps);
-        }
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
-        sysmem_freeptr(unique_tracks);
     }
-    long bar_length = buildspans_get_bar_length(x);
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
-
-    visualize((t_object *)x, json_buffer);
-
-    sysmem_freeptr(json_buffer);
-    sysmem_freeptr(unique_palettes);
-    if(keys) sysmem_freeptr(keys);
-}
-
-
-void ext_main(void *r) {
-    t_class *c;
-
-    common_symbols_init();
-
-    c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, sizeof(t_buildspans), 0L, A_GIMME, 0);
-    class_addmethod(c, (method)buildspans_clear, "clear", 0);
-    class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
-    class_addmethod(c, (method)buildspans_float, "float", A_FLOAT, 0);
-    class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
-    class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
-    class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
-    class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
-    class_addmethod(c, (method)buildspans_bang, "bang", 0);
-    class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
-    class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
-    class_addmethod(c, (method)buildspans_notify, "notify", A_CANT, 0);
-    
-    CLASS_ATTR_SYM(c, "bind", 0, t_buildspans, bind_name);
-    CLASS_ATTR_LABEL(c, "bind", 0, "Bind to Crucible Name");
-    CLASS_ATTR_ACCESSORS(c, "bind", NULL, (method)buildspans_attr_set_bind);
-
-    CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log);
-    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "onoff", "Enable Logging");
-    CLASS_ATTR_DEFAULT(c, "log", 0, "0");
-    CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)buildspans_attr_set_log);
-
-    CLASS_ATTR_LONG(c, "visualize", 0, t_buildspans, visualize);
-    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
-    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
-    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)buildspans_attr_set_visualize);
-
-    CLASS_ATTR_LONG(c, "defer", 0, t_buildspans, defer);
-    CLASS_ATTR_STYLE_LABEL(c, "defer", 0, "onoff", "Deferred Execution");
-    CLASS_ATTR_DEFAULT(c, "defer", 0, "0");
-
-    CLASS_ATTR_LONG(c, "async", 0, t_buildspans, async);
-    CLASS_ATTR_STYLE_LABEL(c, "async", 0, "onoff", "Asynchronous Execution");
-    CLASS_ATTR_DEFAULT(c, "async", 0, "0");
-    CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)buildspans_attr_set_async);
-
-    class_register(CLASS_BOX, c);
-    buildspans_class = c;
-}
-
-void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
-    t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
-    if (x) {
-        x->building = dictionary_new();
-        x->tracks_ended_in_current_event = dictionary_new();
-        x->current_track = 0;
-        x->current_offset = 0.0;
-        x->loop_start = 0.0;
-        x->current_palette = gensym("");
-        x->log_outlet = NULL;
-        x->log = 0;
-        x->visualize = 0;
-        x->defer = 0;
-        x->async = 0;
-        x->worker = NULL;
-        x->buffer_ref = NULL;
-        x->s_buffer_name = NULL;
-        x->local_bar_length = 0;
-        x->instance_id = 1000 + (rand() % 9000);
-        x->bar_warn_sent = 0;
-        x->last_msg_type = gensym("none");
-        x->last_note_calc = 0.0;
-        x->last_note_store = 0.0;
-        x->last_note_score = 0.0;
-        x->bind_name = _sym_nothing;
-        x->bound_crucible = NULL;
-        x->bind_clock = clock_new(x, (method)buildspans_bind_clock_cb);
-        x->bind_attempt_count = 0;
-
-        // Process attributes before creating outlets
-        attr_args_process(x, argc, argv);
-
-        // Hardcode the default buffer name to "bar".
-        buildspans_set_bar_buffer(x, gensym("bar"));
-
-        // Inlets are created from right to left.
-        floatin((t_object *)x, 4);  // Local bar length
-        proxy_new((t_object *)x, 3, NULL); // Palette
-        intin((t_object *)x, 2);    // Track Number
-        proxy_new((t_object *)x, 1, NULL);  // Offset / Loop Start
-
-        // Outlets are created from right to left
-        x->log_outlet = outlet_new((t_object *)x, NULL);
-        visualize_init();
-        x->out_bar_data = outlet_new((t_object *)x, NULL); // Generic outlet for logs
-        x->track_outlet = outlet_new((t_object *)x, NULL);
-        x->span_outlet = outlet_new((t_object *)x, NULL);
+    sysmem_freeptr(tk); buildspans_run_cleanup(x);
+    if (mcount > 0) {
+        qsort(m, mcount, sizeof(t_duplication_manifest_item), compare_manifest_items); long ot = x->current_track;
+        for (long k = 0; k < mcount; k++) { x->current_track = m[k].track_number; buildspans_process_and_add_note(x, m[k].timestamp, m[k].timestamp, m[k].score, f, bl); }
+        x->current_track = ot;
     }
-    return (x);
-}
-
-void buildspans_free(t_buildspans *x) {
-    visualize_cleanup();
-    if (x->worker) {
-        async_worker_release(x->worker);
-    }
-    if (x->bind_clock) {
-        object_free(x->bind_clock);
-    }
-    if (x->bound_crucible) {
-        object_detach_byptr(x, x->bound_crucible);
-    }
-    if (x->building) {
-        object_free(x->building);
-    }
-    if (x->tracks_ended_in_current_event) {
-        object_free(x->tracks_ended_in_current_event);
-    }
-    if (x->buffer_ref) {
-        object_free(x->buffer_ref);
-    }
-}
-
-void buildspans_clear(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
-        return;
-    }
-    if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)buildspans_do_clear, NULL, 0, NULL);
-        return;
-    }
-
-    buildspans_do_clear(x, NULL, 0, NULL);
-}
-
-void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->building) {
-        object_free(x->building);
-    }
-    if (x->tracks_ended_in_current_event) {
-        object_free(x->tracks_ended_in_current_event);
-    }
-    x->building = dictionary_new();
-    x->tracks_ended_in_current_event = dictionary_new();
-    x->current_track = 0;
-    x->current_offset = 0.0;
-    x->loop_start = 0.0;
-    x->current_palette = gensym("");
-    x->local_bar_length = 0;
-    x->last_msg_type = gensym("clear");
-    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
-    buildspans_visualize_memory(x);
-}
-
-// Handler for float messages on the 2nd inlet (proxy #1, offset)
-void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-    else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0);
-}
-
-void buildspans_offset(t_buildspans *x, double f) {
-    if (x->async && x->worker) {
-        t_atom a;
-        atom_setfloat(&a, f);
-        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a);
-        return;
-    }
-    buildspans_do_offset(x, f, 0.0);
-}
-
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        t_atom a[2];
-        atom_setfloat(&a[0], f);
-        atom_setfloat(&a[1], loop_start);
-        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 2, a);
-        return;
-    }
-
-    if (x->defer && !systhread_ismainthread()) {
-        t_atom a[2];
-        atom_setfloat(&a[0], f);
-        atom_setfloat(&a[1], loop_start);
-        defer(x, (method)buildspans_offset_deferred, NULL, 2, a);
-        return;
-    }
-
-    buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
-
-    long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
-
-    if (f <= 0.0) {
-        x->current_offset = f;
-        x->loop_start = loop_start;
-        x->last_msg_type = gensym("offset");
-        buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
-        return;
-    }
-
-    long new_rounded_offset = (long)round(f);
-    long old_rounded_offset = (long)round(x->current_offset);
-
-    if (new_rounded_offset == old_rounded_offset) {
-        x->current_offset = f;
-        x->loop_start = loop_start;
-        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
-        return;
-    }
-
-    // Proceed with duplication
-    double old_offset = x->current_offset;
-    x->current_offset = f;
-    x->loop_start = loop_start;
-    x->last_msg_type = gensym("offset");
-    buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
-
-    // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
-    // Conduct a modified discontiguity check for every track across every palette BEFORE duplication.
-    long num_keys_check;
-    t_symbol **keys_check;
-    dictionary_getkeys(x->building, &num_keys_check, &keys_check);
-    if (keys_check) {
-        t_dictionary *unique_pal_tracks = dictionary_new();
-        for (long i = 0; i < num_keys_check; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys_check[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                char combined[512];
-                snprintf(combined, 512, "%s::%s", pal_str, track_str);
-                t_symbol *combined_sym = gensym(combined);
-                if (!dictionary_hasentry(unique_pal_tracks, combined_sym)) {
-                    dictionary_appendsym(unique_pal_tracks, combined_sym, _sym_nothing);
-                    const char *dash = strchr(track_str, '-');
-                    if (dash) {
-                        double track_offset = (double)atol(dash + 1);
-                        double relative_f = f - track_offset;
-                        buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
-                    }
-                }
-                sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
-            }
-        }
-        object_free(unique_pal_tracks);
-        sysmem_freeptr(keys_check);
-        buildspans_run_cleanup(x);
-    }
-
-    buildspans_log(x, "Duplicating one span for each active track on palette %s.", x->current_palette->s_name);
-
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // --- GATHER PHASE ---
-    buildspans_log(x, "Gathering notes for span duplication.");
-    // First, we gather all the notes that need to be duplicated into a temporary "manifest".
-    // This avoids modifying the `building` dictionary while iterating over its keys.
-    long manifest_capacity = 128;
-    long manifest_count = 0;
-    t_duplication_manifest_item *manifest = (t_duplication_manifest_item *)sysmem_newptr(manifest_capacity * sizeof(t_duplication_manifest_item));
-
-    // 1. Identify all unique track numbers (the integer part of the track-offset key)
-    long unique_track_num_count = 0;
-    long *unique_track_nums = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, x->current_palette->s_name) == 0) {
-                long current_track_num;
-                if (sscanf(track_str, "%ld-", &current_track_num) == 1) {
-                    int found = 0;
-                    for (long j = 0; j < unique_track_num_count; j++) {
-                        if (unique_track_nums[j] == current_track_num) {
-                            found = 1;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        unique_track_nums[unique_track_num_count++] = current_track_num;
-                    }
-                }
-            }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
-        }
-    }
-
-    // 2. For each unique track, find the source span matching old_rounded_offset and add its notes to the manifest.
-    for (long i = 0; i < unique_track_num_count; i++) {
-        long track_num_to_process = unique_track_nums[i];
-
-        // Construct the expected target track-offset identifier and check if it already exists
-        char target_track_str[64];
-        snprintf(target_track_str, 64, "%ld-%ld", track_num_to_process, new_rounded_offset);
-        t_symbol *target_track_sym = gensym(target_track_str);
-
-        int target_exists = 0;
-        for (long j = 0; j < num_keys; j++) {
-            char *p_str, *t_str, *b_str, *pr_str;
-            if (parse_hierarchical_key(keys[j], &p_str, &t_str, &b_str, &pr_str)) {
-                if (strcmp(p_str, x->current_palette->s_name) == 0 && strcmp(t_str, target_track_sym->s_name) == 0) {
-                    target_exists = 1;
-                    sysmem_freeptr(p_str);
-                    sysmem_freeptr(t_str);
-                    sysmem_freeptr(b_str);
-                    sysmem_freeptr(pr_str);
-                    break;
-                }
-                sysmem_freeptr(p_str);
-                sysmem_freeptr(t_str);
-                sysmem_freeptr(b_str);
-                sysmem_freeptr(pr_str);
-            }
-        }
-
-        if (target_exists) {
-            buildspans_log(x, "Target span %s already exists on palette %s. Skipping duplication for this track.", target_track_sym->s_name, x->current_palette->s_name);
-            continue;
-        }
-
-        // Construct the expected source track-offset identifier
-        char source_track_str[64];
-        snprintf(source_track_str, 64, "%ld-%ld", track_num_to_process, old_rounded_offset);
-        t_symbol *source_track_sym = gensym(source_track_str);
-
-        // Now iterate through all keys to find notes belonging to the source span
-        for (long j = 0; j < num_keys; j++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[j], &pal_str, &track_str, &bar_str, &prop_str)) {
-                if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, source_track_sym->s_name) == 0 && strcmp(prop_str, "absolutes") == 0) {
-                    t_atom *abs_atoms = NULL;
-                    long abs_count = 0;
-                    t_atomarray *abs_aa = NULL;
-                    t_atom abs_atom;
-                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
-                        atomarray_getatoms(abs_aa, &abs_count, &abs_atoms);
-                    } else if (dictionary_getatom(x->building, keys[j], &abs_atom) == MAX_ERR_NONE) {
-                        abs_atoms = &abs_atom;
-                        abs_count = 1;
-                    }
-
-                    t_symbol *scores_key = generate_hierarchical_key(x->current_palette, source_track_sym, gensym(bar_str), gensym("scores"));
-                    t_atom *scores_atoms = NULL;
-                    long scores_count = 0;
-                    t_atomarray *scores_aa = NULL;
-                    t_atom scores_atom;
-                    if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
-                        atomarray_getatoms(scores_aa, &scores_count, &scores_atoms);
-                    } else if (dictionary_getatom(x->building, scores_key, &scores_atom) == MAX_ERR_NONE) {
-                        scores_atoms = &scores_atom;
-                        scores_count = 1;
-                    }
-
-                    for (long k = 0; k < abs_count; k++) {
-                        if (manifest_count >= manifest_capacity) {
-                            manifest_capacity *= 2;
-                            manifest = (t_duplication_manifest_item *)sysmem_resizeptr(manifest, manifest_capacity * sizeof(t_duplication_manifest_item));
-                        }
-                        manifest[manifest_count].track_number = track_num_to_process;
-                        manifest[manifest_count].timestamp = atom_getfloat(abs_atoms + k);
-                        manifest[manifest_count].score = atom_getfloat(scores_atoms + k);
-                        manifest_count++;
-                    }
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-    }
-    sysmem_freeptr(unique_track_nums);
-
-    // --- PROCESSING PHASE ---
-    buildspans_log(x, "Processing %ld notes from duplication manifest.", manifest_count);
-    // Now that we have all the notes, we can safely add them to the building dictionary.
-    if (manifest_count > 0) {
-        qsort(manifest, manifest_count, sizeof(t_duplication_manifest_item), compare_manifest_items);
-        long bar_length = buildspans_get_bar_length(x);
-        if (bar_length > 0) {
-            long original_track = x->current_track;
-
-            for (long k = 0; k < manifest_count; k++) {
-                x->current_track = manifest[k].track_number;
-                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].timestamp, manifest[k].score, f, bar_length);
-            }
-
-            x->current_track = original_track;
-        } else {
-             object_warn((t_object *)x, "Bar length is not positive. Cannot process duplicated notes.");
-        }
-    }
-
-    sysmem_freeptr(manifest);
-    if (keys) sysmem_freeptr(keys);
-    buildspans_visualize_memory(x);
-}
-
-// Handler for int messages on the 3rd inlet (proxy #2, track number)
-void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc > 0) buildspans_do_track(x, atom_getlong(argv));
-}
-
-void buildspans_track(t_buildspans *x, long n) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        t_atom a;
-        atom_setlong(&a, n);
-        async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a);
-        return;
-    }
-    if (x->defer && !systhread_ismainthread()) {
-        t_atom a;
-        atom_setlong(&a, n);
-        defer(x, (method)buildspans_track_deferred, NULL, 1, &a);
-        return;
-    }
-
-    buildspans_do_track(x, n);
-}
-
-void buildspans_do_track(t_buildspans *x, long n) {
-    x->current_track = n;
-    x->last_msg_type = gensym("track");
-    buildspans_log(x, "Track updated to: %ld", n);
-}
-
-// Handler for various messages, including palette symbol
-void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    long inlet_num = proxy_getinlet((t_object *)x);
-
-    if (x->async && x->worker && systhread_ismainthread()) {
-        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
-        if (new_argv) {
-            atom_setlong(new_argv, inlet_num);
-            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
-            async_worker_enqueue(x->worker, x, (method)buildspans_anything_deferred, s, argc + 1, new_argv);
-            sysmem_freeptr(new_argv);
-        }
-        return;
-    }
-
-    if (x->defer && !systhread_ismainthread()) {
-        t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
-        if (new_argv) {
-            atom_setlong(new_argv, inlet_num);
-            for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
-            defer(x, (method)buildspans_anything_deferred, s, (short)(argc + 1), new_argv);
-            sysmem_freeptr(new_argv);
-        }
-        return;
-    }
-
-    buildspans_do_anything(x, s, argc, argv, inlet_num);
-}
-
-void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
-    if (argc > 0) {
-        long inlet_num = atom_getlong(argv);
-        buildspans_do_anything(x, s, argc - 1, argv + 1, inlet_num);
-    }
-}
-
-void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num) {
-    // Inlet 3 is the palette symbol inlet
-    if (inlet_num == 3) {
-        // A standalone symbol is a message with argc=0
-        if (argc == 0) {
-            x->current_palette = s;
-            x->last_msg_type = gensym("palette");
-            buildspans_log(x, "Palette set to: %s", s->s_name);
-        } else {
-            // If it has arguments, it's a list starting with a symbol, which we don't handle here.
-            object_error((t_object *)x, "Palette inlet expects a single symbol, but received a list.");
-        }
-    } else if (inlet_num == 0) {
-        if (s == gensym("flush") && argc > 0 && atom_gettype(argv) == A_LONG) {
-            buildspans_flush_track(x, atom_getlong(argv));
-        } else {
-            object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
-        }
-    } else {
-        // Post an error for unhandled messages on other inlets to avoid silent failures.
-        object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
-    }
-}
-
-
-// Handler for float messages on all inlets
-void buildspans_float(t_buildspans *x, double f) {
-    long inlet_num = proxy_getinlet((t_object *)x);
-    if (inlet_num == 1) {
-        buildspans_do_offset(x, f, 0.0);
-    } else {
-        // Fallback for other inlets if they are not already handled by specialized methods
-        if (inlet_num == 0) {
-             object_error((t_object *)x, "Float received in inlet 0, but list expected.");
-        } else if (inlet_num == 2) {
-             buildspans_track(x, (long)f);
-        } else if (inlet_num == 4) {
-             buildspans_local_bar_length(x, f);
-        }
-    }
-}
-
-// Handler for list messages on the main inlet and offset inlet
-void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    long inlet_num = proxy_getinlet((t_object *)x);
-
-    if (x->async && x->worker && systhread_ismainthread()) {
-        if (inlet_num == 1) {
-            async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv);
-        } else {
-            async_worker_enqueue(x->worker, x, (method)buildspans_do_list, s, argc, argv);
-        }
-        return;
-    }
-
-    if (inlet_num == 1) {
-        int valid = 0;
-        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
-            (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-            valid = 1;
-        } else if (argc == 1 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), 0.0);
-            valid = 1;
-        }
-
-        if (!valid) {
-            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start] or float offset.");
-        }
-        return;
-    }
-
-    if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)buildspans_do_list, s, argc, argv);
-        return;
-    }
-
-    buildspans_do_list(x, s, argc, argv);
+    sysmem_freeptr(m); buildspans_visualize_memory(x);
 }
 
 void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
-    if (bar_length <= 0) {
-        object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
-        return;
+    long bl = buildspans_get_bar_length(x); if (bl <= 0) return;
+    double calc, store, score; if (argc == 2) { calc = atom_getfloat(argv); store = calc; score = atom_getfloat(argv+1); } else if (argc == 3) { calc = atom_getfloat(argv); score = atom_getfloat(argv+1); store = atom_getfloat(argv+2); } else return;
+    double eff = (x->current_offset <= 0.0) ? calc : x->current_offset;
+    t_dictionary *pd = get_sub_dict(x->building, x->current_palette, 1);
+    long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk);
+    char p[32]; snprintf(p, 32, "%ld-", x->current_track);
+    t_symbol **ts = (t_symbol **)sysmem_newptr((nt + 1) * sizeof(t_symbol *)); long tc = 0;
+    if (tk) { for (long i = 0; i < nt; i++) if (strncmp(tk[i]->s_name, p, strlen(p)) == 0) ts[tc++] = tk[i]; sysmem_freeptr(tk); }
+    char gs[64]; snprintf(gs, 64, "%ld-%ld", x->current_track, (long)round(eff)); t_symbol *g = gensym(gs); int f = 0;
+    for (long i = 0; i < tc; i++) if (ts[i] == g) { f = 1; break; } if (!f) ts[tc++] = g;
+    for (long i = 0; i < tc; i++) {
+        double ao = eff; t_dictionary *td = get_sub_dict(pd, ts[i], 0);
+        if (td) { long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk); if (bk) { if (nb > 0) { t_dictionary *bd = get_sub_dict(td, bk[0], 0); if (bd) dictionary_getfloat(bd, gensym("offset"), &ao); } sysmem_freeptr(bk); } }
+        buildspans_process_and_add_note(x, calc, store, score, ao, bl);
     }
-    double calc_timestamp, store_timestamp, score;
-
-    if (argc == 2 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT) {
-        calc_timestamp = atom_getfloat(argv);
-        store_timestamp = calc_timestamp;
-        score = atom_getfloat(argv + 1);
-    } else if (argc == 3 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT && atom_gettype(argv + 2) == A_FLOAT) {
-        calc_timestamp = atom_getfloat(argv);
-        score = atom_getfloat(argv + 1);
-        store_timestamp = atom_getfloat(argv + 2);
-    } else {
-        object_error((t_object *)x, "Input must be a list of two floats (timestamp, score) or three floats (synth_timestamp, score, orig_timestamp).");
-        return;
-    }
-
-    buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
-
-    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset <= 0),
-    // we use the current note's calc_timestamp as the effective offset for this processing cycle
-    // without persisting it to x->current_offset.
-    double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
-
-    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f", 
-                    x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
-
-    // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-
-    long unique_tracks_count = 0;
-    t_symbol **unique_track_syms = (t_symbol **)sysmem_newptr((num_keys + 1) * sizeof(t_symbol *));
-    char track_prefix[32];
-    snprintf(track_prefix, 32, "%ld-", x->current_track);
-
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                if (strcmp(pal_str, x->current_palette->s_name) == 0 && strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                    t_symbol *current_track_sym = gensym(track_str);
-                    int found = 0;
-                    for (long j = 0; j < unique_tracks_count; j++) {
-                        if (unique_track_syms[j] == current_track_sym) {
-                            found = 1;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        unique_track_syms[unique_tracks_count++] = current_track_sym;
-                    }
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-    }
-
-    // 2. Also consider the global current offset as a potential new span
-    char current_track_str[64];
-    snprintf(current_track_str, 64, "%ld-%ld", x->current_track, (long)round(effective_offset));
-    t_symbol *current_track_sym = gensym(current_track_str);
-    int global_offset_found = 0;
-    for (long i = 0; i < unique_tracks_count; i++) {
-        if (unique_track_syms[i] == current_track_sym) {
-            global_offset_found = 1;
-            break;
-        }
-    }
-    if (!global_offset_found) {
-        unique_track_syms[unique_tracks_count++] = current_track_sym;
-    }
-
-    // 3. Add the note to each span (identified by its unique track symbol)
-    char candidates_str[1024] = "";
-    for (long i = 0; i < unique_tracks_count; i++) {
-        strncat(candidates_str, unique_track_syms[i]->s_name, 1024 - strlen(candidates_str) - 1);
-        if (i < unique_tracks_count - 1) strncat(candidates_str, ", ", 1024 - strlen(candidates_str) - 1);
-    }
-    buildspans_log(x, "Adding note to %ld span(s) on track %ld (palette %s): %s", 
-                    unique_tracks_count, x->current_track, x->current_palette->s_name, candidates_str);
-
-    for (long i = 0; i < unique_tracks_count; i++) {
-        t_symbol *target_track_sym = unique_track_syms[i];
-
-        // ACTUAL OFFSET RESOLUTION HIERARCHY:
-        // We need the high-precision double offset to correctly assign the note to a bar.
-        double actual_offset = 0.0;
-        int offset_found = 0;
-
-        // TIER 1: Dictionary Lookup
-        // We look at the first available bar from the target active span and use its high-precision offset.
-        // This is the authoritative source for spans that have already received data.
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, target_track_sym->s_name) == 0 && strcmp(key_prop, "offset") == 0) {
-                    t_atom *off_atoms = NULL;
-                    long off_count = 0;
-                    t_atomarray *off_aa = NULL;
-                    t_atom off_atom;
-                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
-                        atomarray_getatoms(off_aa, &off_count, &off_atoms);
-                    } else if (dictionary_getatom(x->building, keys[j], &off_atom) == MAX_ERR_NONE) {
-                        off_atoms = &off_atom;
-                        off_count = 1;
-                    }
-                    if (off_count > 0) actual_offset = atom_getfloat(off_atoms);
-                    offset_found = 1;
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                    break;
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-
-        // TIER 2: Effective Global Offset
-        // If no offset was found in the dictionary, we use the effective_offset.
-        // This handles both the manual current_offset (high precision) and 
-        // the ephemeral auto-initialization (calc_timestamp).
-        if (!offset_found) {
-            actual_offset = effective_offset;
-        }
-
-        buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
-    }
-
-    if (keys) sysmem_freeptr(keys);
-    sysmem_freeptr(unique_track_syms);
-
-    x->last_note_calc = calc_timestamp;
-    x->last_note_store = store_timestamp;
-    x->last_note_score = score;
-    x->last_msg_type = gensym("list");
-    buildspans_run_cleanup(x);
-}
-
-void buildspans_flush_track(t_buildspans *x, long track_num) {
-    long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // 1. Identify all unique tracks for this track number across all palettes
-    long track_count = 0;
-    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    t_symbol **palette_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    char track_prefix[32];
-    snprintf(track_prefix, 32, "%ld-", track_num);
-
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strncmp(key_track, track_prefix, strlen(track_prefix)) == 0) {
-                int found = 0;
-                for(long j=0; j<track_count; ++j) {
-                    if (strcmp(track_syms[j]->s_name, key_track) == 0 && strcmp(palette_syms[j]->s_name, key_pal) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    track_syms[track_count] = gensym(key_track);
-                    palette_syms[track_count] = gensym(key_pal);
-                    track_count++;
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
-    }
-
-    // 2. For each identified track, perform deferred rating check and end the span.
-    for (long i = 0; i < track_count; i++) {
-        t_symbol *track_sym = track_syms[i];
-        t_symbol *palette_sym = palette_syms[i];
-
-        // Find the last bar for this track.
-        long last_bar_timestamp = -1;
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-
-        if (last_bar_timestamp != -1) {
-            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
-        }
-
-        buildspans_end_track_span(x, palette_sym, track_sym);
-    }
-
-    sysmem_freeptr(track_syms);
-    sysmem_freeptr(palette_syms);
-    sysmem_freeptr(keys);
-
-    x->last_msg_type = gensym("flush");
-    buildspans_run_cleanup(x);
-}
-
-
-void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val) {
-    long bar_length = buildspans_get_bar_length(x);
-    if (bar_length <= 0) return;
-
-    // Find the most recent bar for the current track
-    long last_bar_timestamp = -1;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-        sysmem_freeptr(keys);
-    }
-
-    if (last_bar_timestamp != -1) {
-        buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
-
-        // Re-find the most recent bar after potential pruning
-        long most_recent_bar_after_rating_check = -1;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *key_pal, *key_track, *key_bar, *key_prop;
-                if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                    if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                        long bar_val = atol(key_bar);
-                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
-                            most_recent_bar_after_rating_check = bar_val;
-                        }
-                    }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                }
-            }
-            sysmem_freeptr(keys);
-        }
-
-        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length) {
-            buildspans_log(x, "Discontiguous gap detected. Comparison value %.2f is more than %ldms after last bar end (%ld).", relative_comparison_val, bar_length, most_recent_bar_after_rating_check + bar_length);
-            buildspans_end_track_span(x, palette_sym, track_sym);
-        }
-    }
-}
-
-void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
-    if (offset == 0.0) {
-        object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
-        buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
-        buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
-
-        double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
-        buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
-
-        buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
-        buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
-        buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
-        buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
-        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
-
-        // List active spans
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            char active_spans_str[2048] = "";
-            long active_spans_count = 0;
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
-                        if (active_spans_count > 0) strncat(active_spans_str, ", ", 2048 - strlen(active_spans_str) - 1);
-                        strncat(active_spans_str, track_str, 2048 - strlen(active_spans_str) - 1);
-                        active_spans_count++;
-                    }
-                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
-                }
-            }
-            buildspans_log(x, "*** Active spans on palette %s: %s", x->current_palette->s_name, active_spans_str);
-            sysmem_freeptr(keys);
-        }
-
-        // Temporary Fix: Remove the entire span
-        char target_track_str[64];
-        snprintf(target_track_str, 64, "%ld-0", x->current_track);
-        t_symbol *target_track_sym = gensym(target_track_str);
-
-        object_error((t_object *)x, "TEMPORARY FIX: Removing invalid span %s from memory.", target_track_sym->s_name);
-        buildspans_log(x, "*** TEMPORARY FIX: Removing all dictionary entries for span %s on palette %s.", target_track_sym->s_name, x->current_palette->s_name);
-
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, target_track_sym->s_name) == 0) {
-                        dictionary_deleteentry(x->building, keys[i]);
-                    }
-                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
-                }
-            }
-            sysmem_freeptr(keys);
-        }
-        buildspans_visualize_memory(x);
-        return; // Abort processing for this note
-    }
-    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
-    // Get current track symbol (using rounded offset for grouping)
-    char track_str[64];
-    snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
-    t_symbol *track_sym = gensym(track_str);
-
-    // Calculate bar timestamp
-    double relative_timestamp = calc_timestamp - offset + x->loop_start;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset + loop_start): %.2f", relative_timestamp);
-    long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
-    buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
-
-    // --- Find the most recent bar for the current track to see if this is a new bar ---
-    long last_bar_timestamp = -1;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-        sysmem_freeptr(keys);
-    }
-
-    int is_new_bar = (last_bar_timestamp == -1 || bar_timestamp_val > last_bar_timestamp);
-
-    // --- Deferred span ending logic (only if a new bar is detected) ---
-    if (is_new_bar && last_bar_timestamp != -1) {
-        buildspans_check_discontiguity(x, x->current_palette, track_sym, relative_timestamp);
-    }
-
-    // --- ADD OR UPDATE BAR ---
-    char bar_str[32];
-    snprintf(bar_str, 32, "%ld", bar_timestamp_val);
-    t_symbol *bar_sym = gensym(bar_str);
-
-    // Update offset
-    t_symbol *offset_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"));
-    if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
-    dictionary_appendfloat(x->building, offset_key, offset);
-    buildspans_log(x, "%s %.2f", offset_key->s_name, offset);
-    t_atom offset_atom;
-    atom_setfloat(&offset_atom, offset);
-
-    // Update palette
-    t_symbol *palette_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("palette"));
-    if (dictionary_hasentry(x->building, palette_key)) dictionary_deleteentry(x->building, palette_key);
-    dictionary_appendsym(x->building, palette_key, x->current_palette);
-    buildspans_log(x, "%s %s", palette_key->s_name, x->current_palette->s_name);
-    t_atom palette_atom;
-    atom_setsym(&palette_atom, x->current_palette);
-
-    // Update absolutes array
-    t_symbol *absolutes_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("absolutes"));
-    t_atomarray *absolutes_array = NULL;
-    if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&absolutes_array) != MAX_ERR_NONE || !absolutes_array) {
-        // If not found or if it was a single atom, create a new atomarray
-        t_atom existing_atom;
-        if (dictionary_getatom(x->building, absolutes_key, &existing_atom) == MAX_ERR_NONE) {
-            absolutes_array = atomarray_new(1, &existing_atom);
-        } else {
-            absolutes_array = atomarray_new(0, NULL);
-        }
-        t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
-        if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
-        dictionary_appendatom(x->building, absolutes_key, &a);
-    }
-    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
-    atomarray_appendatom(absolutes_array, &new_absolute);
-    char *abs_str = atomarray_to_string(absolutes_array);
-    if (abs_str) {
-        buildspans_log(x, "%s %s", absolutes_key->s_name, abs_str);
-        sysmem_freeptr(abs_str);
-    }
-
-    // Update scores array
-    t_symbol *scores_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("scores"));
-    t_atomarray *scores_array = NULL;
-    if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_array) != MAX_ERR_NONE || !scores_array) {
-        // If not found or if it was a single atom, create a new atomarray
-        t_atom existing_atom;
-        if (dictionary_getatom(x->building, scores_key, &existing_atom) == MAX_ERR_NONE) {
-            scores_array = atomarray_new(1, &existing_atom);
-        } else {
-            scores_array = atomarray_new(0, NULL);
-        }
-        t_atom a; atom_setobj(&a, (t_object *)scores_array);
-        if (dictionary_hasentry(x->building, scores_key)) dictionary_deleteentry(x->building, scores_key);
-        dictionary_appendatom(x->building, scores_key, &a);
-    }
-    t_atom new_score; atom_setfloat(&new_score, score);
-    atomarray_appendatom(scores_array, &new_score);
-    char *scores_str = atomarray_to_string(scores_array);
-    if (scores_str) {
-        buildspans_log(x, "%s %s", scores_key->s_name, scores_str);
-        sysmem_freeptr(scores_str);
-    }
-
-    // Update mean
-    long scores_count = atomarray_getsize(scores_array);
-    if (scores_count > 0) {
-        double sum = 0.0;
-        long count; t_atom *atoms;
-        atomarray_getatoms(scores_array, &count, &atoms);
-        for (long i = 0; i < count; i++) sum += atom_getfloat(&atoms[i]);
-        double mean = sum / count;
-
-        t_symbol *mean_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("mean"));
-        if (dictionary_hasentry(x->building, mean_key)) dictionary_deleteentry(x->building, mean_key);
-        dictionary_appendfloat(x->building, mean_key, mean);
-        buildspans_log(x, "%s %.2f", mean_key->s_name, mean);
-        t_atom mean_atom;
-        atom_setfloat(&mean_atom, mean);
-    }
-
-    // --- UPDATE AND BACK-PROPAGATE SPAN ---
-    // 1. Get all bar timestamps for the current track AND PALETTE.
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    long bar_timestamps_count = 0;
-    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate, then count
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    // To avoid duplicates, only add when we see the 'mean' property
-                    if (strcmp(key_prop, "mean") == 0) {
-                        bar_timestamps[bar_timestamps_count++] = atol(key_bar);
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-        sysmem_freeptr(keys);
-    }
-    qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
-
-    // 2. Create the NEW span array and link it to all bars in the track.
-    t_atomarray *new_span_array = atomarray_new(0, NULL);
-    for (long i = 0; i < bar_timestamps_count; i++) {
-        t_atom a; atom_setlong(&a, bar_timestamps[i]);
-        atomarray_appendatom(new_span_array, &a);
-    }
-    char *span_str = atomarray_to_string(new_span_array);
-    if (span_str) {
-        for (long i = 0; i < bar_timestamps_count; i++) {
-            char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
-            t_symbol *temp_bar_sym = gensym(temp_bar_str);
-            t_symbol *span_key = generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("span"));
-            
-            // Create a deep copy for each bar to ensure no shared ownership
-            t_atomarray *span_copy = atomarray_deep_copy(new_span_array);
-            t_atom span_copy_atom;
-            atom_setobj(&span_copy_atom, (t_object *)span_copy);
-            dictionary_appendatom(x->building, span_key, &span_copy_atom);
-
-            // Logging
-            char log_buffer[512];
-            snprintf(log_buffer, 512, "%s %s", span_key->s_name, span_str);
-            buildspans_log(x, "%s", log_buffer);
-        }
-        sysmem_freeptr(span_str);
-    }
-    object_free(new_span_array); // Free the original master array
-
-    // --- RATING CALCULATION & BACK-PROPAGATION ---
-    double final_lowest_mean = -1.0;
-    for (long i = 0; i < bar_timestamps_count; i++) {
-        char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
-        t_symbol *temp_bar_sym = gensym(temp_bar_str);
-        t_symbol *mean_key = generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("mean"));
-        t_atom *m_atoms = NULL;
-        long m_count = 0;
-        t_atomarray *m_aa = NULL;
-        t_atom m_atom;
-        if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-            atomarray_getatoms(m_aa, &m_count, &m_atoms);
-        } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-            m_atoms = &m_atom;
-            m_count = 1;
-        }
-        if (m_count > 0) {
-            double current_bar_mean = atom_getfloat(m_atoms);
-            if (final_lowest_mean == -1.0 || current_bar_mean < final_lowest_mean) {
-                final_lowest_mean = current_bar_mean;
-            }
-        }
-    }
-    if (final_lowest_mean != -1.0) {
-        double final_rating = final_lowest_mean * bar_timestamps_count;
-        for (long i = 0; i < bar_timestamps_count; i++) {
-            char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
-            t_symbol *temp_bar_sym = gensym(temp_bar_str);
-            t_symbol *rating_key = generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("rating"));
-            if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
-            dictionary_appendfloat(x->building, rating_key, final_rating);
-            buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
-        }
-        buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
-    }
-
-    sysmem_freeptr(bar_timestamps);
-    buildspans_visualize_memory(x);
-}
-
-void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // 1. Find the first 'span' atomarray for the track. They are all shared.
-    t_atomarray *span_to_output = NULL;
-    t_atomarray *span_aa = NULL;
-    t_atom span_atom;
-    int span_found_robustly = 0;
-
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "span") == 0) {
-                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                        span_to_output = span_aa;
-                        span_found_robustly = 1;
-                    } else if (dictionary_getatom(x->building, keys[i], &span_atom) == MAX_ERR_NONE) {
-                        span_to_output = atomarray_new(1, &span_atom);
-                        span_found_robustly = 1;
-                    }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                    if (span_found_robustly) break; // Found it.
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-    }
-
-    // 2. If no span was found (e.g., single bar), create one locally.
-    int local_span_created = 0;
-    if (!span_to_output && keys) {
-        local_span_created = 1;
-        span_to_output = atomarray_new(0, NULL);
-        long bar_count = 0;
-        long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-             if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                     bar_timestamps[bar_count++] = atol(key_bar);
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-        qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
-        for(long i=0; i<bar_count; ++i) {
-            t_atom a;
-            atom_setlong(&a, bar_timestamps[i]);
-            atomarray_appendatom(span_to_output, &a);
-        }
-        sysmem_freeptr(bar_timestamps);
-    }
-
-
-    // 3. Calculate rating and output.
-    if (span_to_output) {
-        if (buildspans_validate_span_before_output(x, palette_sym, track_sym, span_to_output)) {
-            long span_size;
-            t_atom *span_atoms;
-            atomarray_getatoms(span_to_output, &span_size, &span_atoms);
-
-            double lowest_mean = -1.0;
-            if (span_size > 0) {
-                for (long i = 0; i < span_size; i++) {
-                    long bar_ts = atom_getlong(&span_atoms[i]);
-                    char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
-                    t_symbol *bar_sym = gensym(bar_str);
-                    t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-                    t_atom *m_atoms = NULL;
-                    long m_count = 0;
-                    t_atomarray *m_aa = NULL;
-                    t_atom m_atom;
-                    if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-                        atomarray_getatoms(m_aa, &m_count, &m_atoms);
-                    } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-                        m_atoms = &m_atom;
-                        m_count = 1;
-                    }
-                    if (m_count > 0) {
-                        double bar_mean = atom_getfloat(m_atoms);
-                        if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
-                            lowest_mean = bar_mean;
-                        }
-                    }
-                }
-            }
-            double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
-            buildspans_log(x, "Ending span for track %s on palette %s with rating %.2f (%.2f * %ld)", track_sym->s_name, palette_sym->s_name, final_rating, lowest_mean, span_size);
-
-            long track_num_to_output;
-            sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
-
-            // Outlet 3: Detailed span data
-            buildspans_output_span_data(x, palette_sym, track_sym, span_to_output);
-
-            // Outlet 2: Track number
-            t_atom t_atom_track;
-            atom_setlong(&t_atom_track, track_num_to_output);
-            if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
-            } else {
-                if (!x->async || systhread_ismainthread()) {
-                    outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
-                } else {
-                    defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
-                }
-            }
-
-            // Outlet 1: Span list
-            if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
-            } else {
-                if (!x->async || systhread_ismainthread()) {
-                    outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
-                } else {
-                    defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
-                }
-            }
-        }
-
-        if (local_span_created || (span_found_robustly && span_to_output != span_aa)) {
-            object_free(span_to_output);
-        }
-    }
-
-    // 4. Delete all keys associated with the track AND palette.
-    if (keys) {
-        t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
-        long delete_count = 0;
-        for(long i=0; i<num_keys; ++i) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                 if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                     keys_to_delete[delete_count++] = keys[i];
-                 }
-                 sysmem_freeptr(key_pal);
-                 sysmem_freeptr(key_track);
-                 sysmem_freeptr(key_bar);
-                 sysmem_freeptr(key_prop);
-             }
-        }
-        for(long i=0; i<delete_count; ++i) {
-            dictionary_deleteentry(x->building, keys_to_delete[i]);
-        }
-        sysmem_freeptr(keys_to_delete);
-        sysmem_freeptr(keys);
-    }
-
-    buildspans_visualize_memory(x);
-    // Defer the cleanup check by adding the track to a temporary dictionary.
-    // We'll store it as palette::track to be sure
-    char deferred_key[256];
-    snprintf(deferred_key, 256, "%s::%s", palette_sym->s_name, track_sym->s_name);
-    dictionary_appendsym(x->tracks_ended_in_current_event, gensym(deferred_key), 0);
+    sysmem_freeptr(ts); x->last_note_calc = calc; x->last_note_store = store; x->last_note_score = score; x->last_msg_type = gensym("list"); buildspans_run_cleanup(x);
 }
 
 void buildspans_run_cleanup(t_buildspans *x) {
-    long num_ended_tracks;
-    t_symbol **ended_track_keys;
-    dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
-    if (ended_track_keys) {
-        for (long i = 0; i < num_ended_tracks; i++) {
-            // Re-parse the palette and track from the deferred key "pal::track"
-            char *pal_str = NULL;
-            char *track_str = strstr(ended_track_keys[i]->s_name, "::");
-            if (track_str) {
-                size_t pal_len = track_str - ended_track_keys[i]->s_name;
-                pal_str = (char *)sysmem_newptr(pal_len + 1);
-                strncpy(pal_str, ended_track_keys[i]->s_name, pal_len);
-                pal_str[pal_len] = '\0';
-                track_str += 2;
-                buildspans_cleanup_track_offset_if_needed(x, gensym(pal_str), gensym(track_str));
-                sysmem_freeptr(pal_str);
-            }
-        }
-        sysmem_freeptr(ended_track_keys);
-    }
+    long ne; t_symbol **ek; dictionary_getkeys(x->tracks_ended_in_current_event, &ne, &ek);
+    if (ek) { for (long i = 0; i < ne; i++) { char *p = NULL, *t = strstr(ek[i]->s_name, "::"); if (t) { size_t pl = t - ek[i]->s_name; p = (char *)sysmem_newptr(pl + 1); strncpy(p, ek[i]->s_name, pl); p[pl] = 0; buildspans_cleanup_track_offset_if_needed(x, gensym(p), gensym(t + 2)); sysmem_freeptr(p); } } sysmem_freeptr(ek); }
     dictionary_clear(x->tracks_ended_in_current_event);
 }
 
-
-void buildspans_bang(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL);
-        return;
-    }
-    if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)buildspans_do_bang, NULL, 0, NULL);
-        return;
-    }
-
-    buildspans_do_bang(x, NULL, 0, NULL);
-}
-
-void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
-
-    buildspans_log(x, "Flush triggered by bang for all palettes.");
-
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-
-    if (keys) {
-        long unique_palette_count = 0;
-        t_symbol **unique_palettes = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                int found = 0;
-                for (long j = 0; j < unique_palette_count; j++) {
-                    if (strcmp(unique_palettes[j]->s_name, pal_str) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    unique_palettes[unique_palette_count++] = gensym(pal_str);
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-
-        for (long i = 0; i < unique_palette_count; i++) {
-            buildspans_flush(x, unique_palettes[i]);
-        }
-
-        sysmem_freeptr(unique_palettes);
-        sysmem_freeptr(keys);
-    }
-
-    x->local_bar_length = 0;
-    x->last_msg_type = gensym("bang");
-    buildspans_log(x, "Bar length reset to zero after flush.");
-}
-
-void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
-    long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_flush: utilizing bar_length %ld", bar_length);
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // 1. Identify all unique tracks FOR THIS PALETTE.
-    long track_count = 0;
-    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0) {
-                int found = 0;
-                for(long j=0; j<track_count; ++j) {
-                    if (strcmp(track_syms[j]->s_name, key_track) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    track_syms[track_count++] = gensym(key_track);
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
-    }
-
-    // 2. For each track, perform deferred rating check and end the span.
-    for (long i = 0; i < track_count; i++) {
-        t_symbol *track_sym = track_syms[i];
-
-        // Find the last bar for this track.
-        long last_bar_timestamp = -1;
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-
-        if (last_bar_timestamp != -1) {
-            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
-        }
-
-        buildspans_end_track_span(x, palette_sym, track_sym);
-    }
-
-    sysmem_freeptr(track_syms);
-    sysmem_freeptr(keys);
-
-    x->last_msg_type = gensym("flush");
-    buildspans_run_cleanup(x);
-}
-
+void buildspans_bang(t_buildspans *x) { if (x->async && x->worker && !systhread_ismainthread()) { async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL); return; } if (x->defer && !systhread_ismainthread()) { defer(x, (method)buildspans_do_bang, NULL, 0, NULL); return; } buildspans_do_bang(x, NULL, 0, NULL); }
+void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) { long bl = buildspans_get_bar_length(x); long nk; t_symbol **ks; dictionary_getkeys(x->building, &nk, &ks); if (ks) { for (long i = 0; i < nk; i++) buildspans_flush(x, ks[i]); sysmem_freeptr(ks); } x->local_bar_length = 0; x->last_msg_type = gensym("bang"); }
+void buildspans_clear(t_buildspans *x) { if (x->async && x->worker && !systhread_ismainthread()) { async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL); return; } if (x->defer && !systhread_ismainthread()) { defer(x, (method)buildspans_do_clear, NULL, 0, NULL); return; } buildspans_do_clear(x, NULL, 0, NULL); }
+void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) { if (x->building) object_free(x->building); if (x->tracks_ended_in_current_event) object_free(x->tracks_ended_in_current_event); x->building = dictionary_new(); x->tracks_ended_in_current_event = dictionary_new(); x->current_track = 0; x->current_offset = 0.0; x->loop_start = 0.0; x->current_palette = gensym(""); x->local_bar_length = 0; x->last_msg_type = gensym("clear"); buildspans_visualize_memory(x); }
+void buildspans_offset(t_buildspans *x, double f) { if (x->async && x->worker && !systhread_ismainthread()) { t_atom a; atom_setfloat(&a, f); async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a); return; } buildspans_do_offset(x, f, 0.0); }
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) { if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1)); else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0); }
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) { if (argc > 0) buildspans_do_track(x, atom_getlong(argv)); }
+void buildspans_track(t_buildspans *x, long n) { if (x->async && x->worker && !systhread_ismainthread()) { t_atom a; atom_setlong(&a, n); async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a); return; } buildspans_do_track(x, n); }
+void buildspans_do_track(t_buildspans *x, long n) { x->current_track = n; x->last_msg_type = gensym("track"); }
+void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) { long il = proxy_getinlet((t_object *)x); if (x->async && x->worker && !systhread_ismainthread()) { t_atom *nav = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom)); if (nav) { atom_setlong(nav, il); for (long i = 0; i < argc; i++) nav[i+1] = argv[i]; async_worker_enqueue(x->worker, x, (method)buildspans_anything_deferred, s, argc + 1, nav); sysmem_freeptr(nav); } return; } buildspans_do_anything(x, s, argc, argv, il); }
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) { if (argc > 0) buildspans_do_anything(x, s, argc - 1, argv + 1, atom_getlong(argv)); }
+void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long il) { if (il == 3 && argc == 0) { x->current_palette = s; x->last_msg_type = gensym("palette"); } else if (il == 0 && s == gensym("flush") && argc > 0) buildspans_flush_track(x, atom_getlong(argv)); }
+void buildspans_float(t_buildspans *x, double f) { long il = proxy_getinlet((t_object *)x); if (il == 1) buildspans_do_offset(x, f, 0.0); else if (il == 2) buildspans_track(x, (long)f); else if (il == 4) buildspans_local_bar_length(x, f); }
+void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) { long il = proxy_getinlet((t_object *)x); if (x->async && x->worker && !systhread_ismainthread()) { if (il == 1) async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv); else async_worker_enqueue(x->worker, x, (method)buildspans_do_list, s, argc, argv); return; } if (il == 1) { if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1)); else if (argc == 1) buildspans_do_offset(x, atom_getfloat(argv), 0.0); return; } buildspans_do_list(x, s, argc, argv); }
 
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0:
-                sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind/async) attributes.");
-                break;
-            case 1:
-                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
-                break;
-            case 2:
-                sprintf(s, "Inlet 3: (int) Track Number");
-                break;
-            case 3:
-                sprintf(s, "Inlet 4: (symbol) Palette");
-                break;
-            case 4:
-                sprintf(s, "Inlet 5: (float) Local Bar Length");
-                break;
+            case 0: sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind/async) attributes."); break;
+            case 1: sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]"); break;
+            case 2: sprintf(s, "Inlet 3: (int) Track Number"); break;
+            case 3: sprintf(s, "Inlet 4: (symbol) Palette"); break;
+            case 4: sprintf(s, "Inlet 5: (float) Local Bar Length"); break;
         }
     } else { // ASSIST_OUTLET
         switch (a) {
@@ -1919,876 +525,122 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     }
 }
 
-void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
-    if (s && s->s_name) {
-        x->s_buffer_name = s;
-        if (x->buffer_ref) {
-            buffer_ref_set(x->buffer_ref, s);
-        } else {
-            x->buffer_ref = buffer_ref_new((t_object *)x, s);
-        }
-        buildspans_log(x, "Buffer set to: %s", s->s_name);
-        if (s == gensym("bar") && !buffer_ref_getobject(x->buffer_ref)) {
-            object_error((t_object *)x, "bar buffer~ not found");
-        }
-    } else {
-        object_error((t_object *)x, "set_bar_buffer requires a valid buffer name.");
-    }
-}
-
-void buildspans_local_bar_length(t_buildspans *x, double f) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        t_atom a;
-        atom_setfloat(&a, f);
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
-        return;
-    }
-    t_atom a;
-    atom_setfloat(&a, f);
-    buildspans_do_local_bar_length(x, NULL, 1, &a);
-}
-
-void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    double f = atom_getfloat(argv);
-    long old_bar_length = (long)x->local_bar_length;
-    if (f <= 0) {
-        x->local_bar_length = 0;
-    } else {
-        x->local_bar_length = f;
-    }
-    if ((long)x->local_bar_length != old_bar_length) {
-        buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
-        if (x->bound_crucible) {
-            crucible_do_local_bar_length((t_crucible *)x->bound_crucible, NULL, 1, argv);
-        }
-    }
-    buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
-}
-
-t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) {
-    if (ac && av) {
-        x->async = atom_getlong(av);
-        if (x->async) {
-            if (!x->worker) x->worker = async_worker_create();
-            // If already bound to an async crucible, sync worker
-            if (x->bound_crucible) {
-                t_crucible *c = (t_crucible *)x->bound_crucible;
-                if (c->async && c->worker && c->worker != x->worker) {
-                    async_worker_release(x->worker);
-                    x->worker = c->worker;
-                    async_worker_retain(x->worker);
-                    buildspans_log(x, "Synced background worker with already bound crucible.");
-                }
-            }
-        } else if (x->worker) {
-            async_worker_release(x->worker);
-            x->worker = NULL;
-        }
-    }
-    return MAX_ERR_NONE;
-}
-
-t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) {
-    if (ac && av) {
-        x->log = atom_getlong(av);
-        buildspans_log(x, "log attribute set to %ld", x->log);
-    }
-    return MAX_ERR_NONE;
-}
+void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) { if (s && s->s_name) { x->s_buffer_name = s; if (x->buffer_ref) buffer_ref_set(x->buffer_ref, s); else x->buffer_ref = buffer_ref_new((t_object *)x, s); } }
+void buildspans_local_bar_length(t_buildspans *x, double f) { if (x->async && x->worker && !systhread_ismainthread()) { t_atom a; atom_setfloat(&a, f); async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a); return; } t_atom a; atom_setfloat(&a, f); buildspans_do_local_bar_length(x, NULL, 1, &a); }
+void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) { double f = atom_getfloat(argv); x->local_bar_length = (f > 0) ? f : 0; if (x->bound_crucible) crucible_do_local_bar_length((t_crucible *)x->bound_crucible, NULL, 1, argv); }
+t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) { if (ac && av) { x->async = atom_getlong(av); if (x->async && !x->worker) x->worker = async_worker_create(); else if (!x->async && x->worker) { async_worker_release(x->worker); x->worker = NULL; } } return MAX_ERR_NONE; }
+t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) { if (ac && av) x->log = atom_getlong(av); return MAX_ERR_NONE; }
 
 void buildspans_bind_resolve(t_buildspans *x) {
-    t_object *patcher = NULL;
-    t_object *box = NULL;
-    t_object *obj = NULL;
-    t_symbol *varname = NULL;
-    int found = 0;
-
-    if (x->bind_name == _sym_nothing || x->bind_name == gensym("")) {
-        if (x->bound_crucible) {
-            object_detach_byptr(x, x->bound_crucible);
-            x->bound_crucible = NULL;
-        }
-        x->bind_attempt_count = 0;
-        return;
-    }
-
-    object_obex_lookup(x, gensym("#P"), &patcher);
-    if (!patcher) {
-        // If we can't find the patcher yet, retry in a bit
-        if (x->bind_clock) clock_delay(x->bind_clock, 100);
-        return;
-    }
-
+    t_object *p = NULL, *b = NULL, *o = NULL; t_symbol *vn = NULL; int found = 0;
+    if (x->bind_name == _sym_nothing || x->bind_name == gensym("")) { if (x->bound_crucible) object_detach_byptr(x, x->bound_crucible); x->bound_crucible = NULL; x->bind_attempt_count = 0; return; }
+    object_obex_lookup(x, gensym("#P"), &p); if (!p) { if (x->bind_clock) clock_delay(x->bind_clock, 100); return; }
     x->bind_attempt_count++;
-
-    for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
-        obj = jbox_get_object(box);
-        if (obj) {
-            varname = NULL;
-            varname = (t_symbol *)object_attr_getsym(box, gensym("varname"));
-            if (varname == x->bind_name) {
-                if (object_classname_compare(obj, gensym("crucible")) ||
-                    object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
-
-                    // Ensure the class is actually registered before attaching, 
-                    // to avoid the Max SDK console error "object_attach_byptr: ... is not registered"
-                    t_symbol *clsname = object_classname(obj);
-                    if (!class_findbyname(CLASS_BOX, clsname) && !class_findbyname(CLASS_NOBOX, clsname)) {
-                        continue; // Skip this object for now, it will be retried
-                    }
-
-                    if (x->bound_crucible && x->bound_crucible != obj) {
-                        object_detach_byptr(x, x->bound_crucible);
-                    }
-
-                    x->bound_crucible = obj;
-                    object_attach_byptr(x, x->bound_crucible);
-                    
-                    if (x->bind_attempt_count > 1) {
-                        object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
-                    } else {
-                        object_post((t_object *)x, "Bind to crucible '%s': SUCCESS", x->bind_name->s_name);
-                    }
-                    buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
-
-                    // Sync worker if both are async
-                    if (x->async) {
-                        t_crucible *c = (t_crucible *)obj;
-                        if (c->async && c->worker) {
-                            if (x->worker) async_worker_release(x->worker);
-                            x->worker = c->worker;
-                            async_worker_retain(x->worker);
-                            buildspans_log(x, "Synced background worker with bound crucible.");
-                        }
-                    }
-                    found = 1;
-                    break;
+    for (b = jpatcher_get_firstobject(p); b; b = jbox_get_nextobject(b)) {
+        o = jbox_get_object(b); if (o) {
+            vn = (t_symbol *)object_attr_getsym(b, gensym("varname"));
+            if (vn == x->bind_name) {
+                if (object_classname_compare(o, gensym("crucible")) || object_classname_compare(o, gensym("rebar_crucible_internal"))) {
+                    t_symbol *cls = object_classname(o); if (!class_findbyname(CLASS_BOX, cls) && !class_findbyname(CLASS_NOBOX, cls)) continue;
+                    if (x->bound_crucible && x->bound_crucible != o) object_detach_byptr(x, x->bound_crucible);
+                    x->bound_crucible = o; object_attach_byptr(x, x->bound_crucible);
+                    if (x->async) { t_crucible *c = (t_crucible *)o; if (c->async && c->worker) { if (x->worker) async_worker_release(x->worker); x->worker = c->worker; async_worker_retain(x->worker); } }
+                    found = 1; break;
                 }
             }
         }
     }
-
-    if (found) {
-        x->bind_attempt_count = 0;
-        return;
-    }
-
-    // Not found
-    if (x->bound_crucible) {
-        object_detach_byptr(x, x->bound_crucible);
-    }
-    x->bound_crucible = NULL;
-
-    if (x->bind_attempt_count == 1) {
-        object_error((t_object *)x, "Bind to crucible '%s' FAILED immediately. Retrying...", x->bind_name->s_name);
-    } else {
-        object_warn((t_object *)x, "Re-attempting bind to crucible '%s': STILL FAILED (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
-    }
-    
-    // If we have a bind name but didn't find the object, retry periodically
+    if (found) { x->bind_attempt_count = 0; return; }
+    if (x->bound_crucible) object_detach_byptr(x, x->bound_crucible); x->bound_crucible = NULL;
     if (x->bind_clock) clock_delay(x->bind_clock, 1000);
 }
-
-void buildspans_bind_clock_cb(t_buildspans *x) {
-    if (x->bind_name != _sym_nothing && x->bind_name != gensym("") && !x->bound_crucible) {
-        buildspans_bind_resolve(x);
-    }
-}
-
-void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
-    if (msg == gensym("free") && sender == x->bound_crucible) {
-        x->bound_crucible = NULL;
-        buildspans_log(x, "Bound crucible freed, unbinding.");
-    }
-}
-
-t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) {
-    if (ac && av) {
-        x->bind_name = atom_getsym(av);
-        x->bind_attempt_count = 0; // Reset for new name
-        buildspans_log(x, "bind attribute set to %s", x->bind_name->s_name);
-        buildspans_bind_resolve(x);
-    }
-    return MAX_ERR_NONE;
-}
-
-t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av) {
-    if (ac && av) {
-        x->visualize = atom_getlong(av);
-        buildspans_log(x, "visualize attribute set to %ld", x->visualize);
-    }
-    return MAX_ERR_NONE;
-}
-
-void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // 1. Identify all bars to end.
-    long end_count = 0;
-    long *bars_to_end_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
-
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                long bar_val = atol(key_bar);
-                if (bar_val != bar_to_keep) {
-                    bars_to_end_vals[end_count++] = bar_val;
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
-    }
-
-    // 2. Finalize the state of the ended bars and then output.
-    if (end_count > 0) {
-        buildspans_log(x, "Pruning span for track %s on palette %s, keeping bar %ld", track_sym->s_name, palette_sym->s_name, bar_to_keep);
-        qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
-
-        // Create the list of ended bars
-        t_atomarray *ended_span_array = atomarray_new(0, NULL);
-        for(long i = 0; i < end_count; ++i) {
-            t_atom a; atom_setlong(&a, bars_to_end_vals[i]);
-            atomarray_appendatom(ended_span_array, &a);
-        }
-
-        // Finalize the span data *before* outputting
-        buildspans_log(x, "Finalizing ended span...");
-        buildspans_finalize_and_log_span(x, palette_sym, track_sym, ended_span_array);
-
-        // Validate and output the finalized data
-        if (buildspans_validate_span_before_output(x, palette_sym, track_sym, ended_span_array)) {
-            long span_size;
-            t_atom *span_atoms;
-            atomarray_getatoms(ended_span_array, &span_size, &span_atoms);
-
-            long track_num_to_output;
-            sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
-
-            // Outlet 3: Detailed span data
-            buildspans_output_span_data(x, palette_sym, track_sym, ended_span_array);
-
-            // Outlet 2: Track number
-            t_atom t_atom_track;
-            atom_setlong(&t_atom_track, track_num_to_output);
-            if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
-            } else {
-                if (!x->async || systhread_ismainthread()) {
-                    outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
-                } else {
-                    defer(x, (method)buildspans_defer_output, gensym("track"), 1, &t_atom_track);
-                }
-            }
-
-            // Outlet 1: Span list
-            if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
-            } else {
-                if (!x->async || systhread_ismainthread()) {
-                    outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
-                } else {
-                    defer(x, (method)buildspans_defer_output, gensym("span"), (short)span_size, span_atoms);
-                }
-            }
-        }
-        object_free(ended_span_array);
-    }
-
-    // 4. Delete keys for ended bars.
-    t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
-    long delete_count = 0;
-    for (long i = 0; i < end_count; i++) {
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bars_to_end_vals[i]);
-        for(long j=0; j<num_keys; ++j) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_bar, bar_str) == 0) {
-                     keys_to_delete[delete_count++] = keys[j];
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
-        }
-    }
-    for(long i=0; i<delete_count; ++i) {
-        dictionary_deleteentry(x->building, keys_to_delete[i]);
-    }
-
-    sysmem_freeptr(keys_to_delete);
-    sysmem_freeptr(bars_to_end_vals);
-    sysmem_freeptr(keys);
-
-    char bar_to_keep_str[32];
-    snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
-    buildspans_log(x, "Resetting kept bar...");
-    buildspans_reset_bar_to_standalone(x, palette_sym, track_sym, gensym(bar_to_keep_str));
-
-    // Since a span was ended, we need to schedule a cleanup check.
-    if (end_count > 0) {
-        char deferred_key[256];
-        snprintf(deferred_key, 256, "%s::%s", palette_sym->s_name, track_sym->s_name);
-        dictionary_appendsym(x->tracks_ended_in_current_event, gensym(deferred_key), 0);
-    }
-
-    buildspans_visualize_memory(x);
-}
-
-
-void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym) {
-    // Update rating to mean
-    t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-    t_atom *m_atoms = NULL;
-    long m_count = 0;
-    t_atomarray *m_aa = NULL;
-    t_atom m_atom;
-    if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-        atomarray_getatoms(m_aa, &m_count, &m_atoms);
-    } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-        m_atoms = &m_atom;
-        m_count = 1;
-    }
-
-    if (m_count > 0) {
-        double mean_val = atom_getfloat(m_atoms);
-
-        t_symbol *rating_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("rating"));
-        if (dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
-        dictionary_appendfloat(x->building, rating_key, mean_val);
-        buildspans_log(x, "%s %.2f", rating_key->s_name, mean_val);
-    }
-
-    // Update span to be only itself
-    t_atomarray *new_span_array = atomarray_new(0, NULL);
-    t_atom new_bar_atom;
-    atom_setlong(&new_bar_atom, atol(bar_sym->s_name));
-    atomarray_appendatom(new_span_array, &new_bar_atom);
-
-    t_atom new_span_atom;
-    atom_setobj(&new_span_atom, (t_object *)new_span_array);
-
-    t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
-    dictionary_appendatom(x->building, span_key, &new_span_atom);
-
-    char *span_str = atomarray_to_string(new_span_array);
-    if (span_str) {
-        buildspans_log(x, "%s %s", span_key->s_name, span_str);
-        sysmem_freeptr(span_str);
-    }
-}
-
-
-void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array) {
-    if (!span_array) return;
-
-    long span_size = 0;
-    t_atom *span_atoms = NULL;
-    atomarray_getatoms(span_array, &span_size, &span_atoms);
-    if (span_size == 0) return;
-
-    // 1. Calculate the final rating for this span.
-    double lowest_mean = -1.0;
-    for (long i = 0; i < span_size; i++) {
-        long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
-        t_symbol *bar_sym = gensym(bar_str);
-        t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-        t_atom *m_atoms = NULL;
-        long m_count = 0;
-        t_atomarray *m_aa = NULL;
-        t_atom m_atom;
-        if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-            atomarray_getatoms(m_aa, &m_count, &m_atoms);
-        } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-            m_atoms = &m_atom;
-            m_count = 1;
-        }
-        if (m_count > 0) {
-            double bar_mean = atom_getfloat(m_atoms);
-            if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
-                lowest_mean = bar_mean;
-            }
-        }
-    }
-    double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
-
-    // 2. Back-propagate the final rating and span to all bars in the span.
-    t_atom rating_atom;
-    atom_setfloat(&rating_atom, final_rating);
-    char *span_str = atomarray_to_string(span_array);
-
-    for (long i = 0; i < span_size; i++) {
-        long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
-        t_symbol *bar_sym = gensym(bar_str);
-
-        t_symbol *rating_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("rating"));
-        if(dictionary_hasentry(x->building, rating_key)) dictionary_deleteentry(x->building, rating_key);
-        dictionary_appendatom(x->building, rating_key, &rating_atom);
-        buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
-
-        // Create a deep copy for each bar to ensure no shared ownership
-        t_atomarray *span_copy = atomarray_deep_copy(span_array);
-        t_atom span_copy_atom;
-        atom_setobj(&span_copy_atom, (t_object *)span_copy);
-        t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
-        if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
-        dictionary_appendatom(x->building, span_key, &span_copy_atom);
-
-        if (span_str) {
-            buildspans_log(x, "%s %s", span_key->s_name, span_str);
-        }
-    }
-    if (span_str) sysmem_freeptr(span_str);
-}
-
-
-void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // 1. Get all bars for the track AND PALETTE
-    long bar_count = 0;
-    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                bar_timestamps[bar_count++] = atol(key_bar);
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
-    }
-    
-    int prune_span = 0;
-    if (bar_count > 1) {
-        // 2. RATING WITH LAST BAR
-        double lowest_mean_with = -1.0;
-        for (long i = 0; i < bar_count; i++) {
-            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
-            t_symbol *bar_sym = gensym(bar_str);
-            t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-            t_atom *m_atoms = NULL;
-            long m_count = 0;
-            t_atomarray *m_aa = NULL;
-            t_atom m_atom;
-            if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-                atomarray_getatoms(m_aa, &m_count, &m_atoms);
-            } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-                m_atoms = &m_atom;
-                m_count = 1;
-            }
-            if (m_count > 0) {
-                double bar_mean = atom_getfloat(m_atoms);
-                if (lowest_mean_with == -1.0 || bar_mean < lowest_mean_with) {
-                    lowest_mean_with = bar_mean;
-                }
-            }
-        }
-        double rating_with = lowest_mean_with * bar_count;
-
-        // 3. RATING WITHOUT LAST BAR
-        double lowest_mean_without = -1.0;
-        long bars_without_count = 0;
-        double last_bar_mean = 0.0;
-        for (long i = 0; i < bar_count; i++) {
-            char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[i]);
-            t_symbol *bar_sym = gensym(bar_str);
-            t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
-            t_atom *m_atoms = NULL;
-            long m_count = 0;
-            t_atomarray *m_aa = NULL;
-            t_atom m_atom;
-            if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-                atomarray_getatoms(m_aa, &m_count, &m_atoms);
-            } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
-                m_atoms = &m_atom;
-                m_count = 1;
-            }
-            if (m_count > 0) {
-                double bar_mean = atom_getfloat(m_atoms);
-                if (bar_timestamps[i] == last_bar_timestamp) {
-                    last_bar_mean = bar_mean;
-                } else {
-                     if (lowest_mean_without == -1.0 || bar_mean < lowest_mean_without) {
-                        lowest_mean_without = bar_mean;
-                    }
-                    bars_without_count++;
-                }
-            }
-        }
-        double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
-        
-        if (rating_with < rating_without) {
-            buildspans_log(x, "Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
-            prune_span = 1;
-        } else if (last_bar_mean > rating_with) {
-            buildspans_log(x, "Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
-            prune_span = 1;
-        } else {
-            buildspans_log(x, "Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
-        }
-
-        if (prune_span) {
-            buildspans_prune_span(x, palette_sym, track_sym, last_bar_timestamp);
-        }
-    }
-    
-    sysmem_freeptr(bar_timestamps);
-    sysmem_freeptr(keys);
-}
-
-// New comparison function for doubles
-int compare_doubles(const void *a, const void *b) {
-    double da = *(const double *)a;
-    double db = *(const double *)b;
-    return (da > db) - (da < db);
-}
-
-double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return -1.0;
-
-    t_dictionary *unique_offsets_dict = dictionary_new();
-    char track_prefix[32];
-    snprintf(track_prefix, 32, "%ld-", track_num_to_check);
-
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strncmp(track_str, track_prefix, strlen(track_prefix)) == 0 && strcmp(prop_str, "offset") == 0) {
-                t_atom *off_atoms = NULL;
-                long off_count = 0;
-                t_atomarray *off_aa = NULL;
-                t_atom off_atom;
-                if (dictionary_getatomarray(x->building, keys[i], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
-                    atomarray_getatoms(off_aa, &off_count, &off_atoms);
-                } else if (dictionary_getatom(x->building, keys[i], &off_atom) == MAX_ERR_NONE) {
-                    off_atoms = &off_atom;
-                    off_count = 1;
-                }
-                if (off_count > 0) {
-                    double current_offset = atom_getfloat(off_atoms);
-                    char offset_key_str[64];
-                    snprintf(offset_key_str, 64, "%.2f", current_offset);
-                    dictionary_appendfloat(unique_offsets_dict, gensym(offset_key_str), current_offset);
-                }
-            }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
-        }
-    }
-    if (keys) sysmem_freeptr(keys);
-
-    long num_unique_offsets;
-    t_symbol **offset_keys;
-    dictionary_getkeys(unique_offsets_dict, &num_unique_offsets, &offset_keys);
-    if (!offset_keys) {
-        object_free(unique_offsets_dict);
-        return -1.0;
-    }
-
-    double *offsets = (double *)sysmem_newptr(num_unique_offsets * sizeof(double));
-    for(long i = 0; i < num_unique_offsets; i++) {
-        t_atom a;
-        dictionary_getatom(unique_offsets_dict, offset_keys[i], &a);
-        offsets[i] = atom_getfloat(&a);
-    }
-    
-    qsort(offsets, num_unique_offsets, sizeof(double), compare_doubles);
-    
-    double next_offset_time = -1.0;
-    for (long i = 0; i < num_unique_offsets; i++) {
-        if (offsets[i] > offset_val_to_check) {
-            next_offset_time = offsets[i];
-            break;
-        }
-    }
-
-    sysmem_freeptr(offsets);
-    sysmem_freeptr(offset_keys);
-    object_free(unique_offsets_dict);
-
-    return next_offset_time;
-}
-
-int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
-    long track_num;
-    double offset_val = 0.0;
-
-    if (sscanf(track_sym->s_name, "%ld-", &track_num) != 1) {
-        return 0; // Should not happen
-    }
-
-    // Retrieve actual double offset from dictionary (pick first bar)
-    long ac_span; t_atom *av_span;
-    atomarray_getatoms(span_to_output, &ac_span, &av_span);
-    if (ac_span > 0) {
-        long first_bar_ts = atom_getlong(av_span);
-        char bar_str[32]; snprintf(bar_str, 32, "%ld", first_bar_ts);
-        t_symbol *offset_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("offset"));
-        t_atom a;
-        if (dictionary_getatom(x->building, offset_key, &a) == MAX_ERR_NONE) {
-            offset_val = atom_getfloat(&a);
-        } else {
-            // Fallback: parse from symbol if dictionary lookup fails
-            const char *offset_part = strchr(track_sym->s_name, '-');
-            if (offset_part) offset_val = (double)atol(offset_part+1);
-        }
-    }
-
-    double next_offset = find_next_offset(x, palette_sym, track_num, offset_val);
-
-    double earliest_absolute = -1.0;
-    double latest_absolute = -1.0;
-
-    long span_size;
-    t_atom *span_atoms;
-    atomarray_getatoms(span_to_output, &span_size, &span_atoms);
-
-    for (long i = 0; i < span_size; i++) {
-        long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bar_ts);
-        t_symbol *bar_sym = gensym(bar_str);
-        t_symbol *absolutes_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("absolutes"));
-
-        t_atom *av = NULL;
-        long ac = 0;
-        t_atomarray *aa = NULL;
-        t_atom a;
-        if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
-            atomarray_getatoms(aa, &ac, &av);
-        } else if (dictionary_getatom(x->building, absolutes_key, &a) == MAX_ERR_NONE) {
-            av = &a;
-            ac = 1;
-        }
-
-        if (ac > 0) {
-            for (long k = 0; k < ac; k++) {
-                double current_time = atom_getfloat(av + k);
-                if (earliest_absolute == -1.0 || current_time < earliest_absolute) {
-                    earliest_absolute = current_time;
-                }
-                if (latest_absolute == -1.0 || current_time > latest_absolute) {
-                    latest_absolute = current_time;
-                }
-            }
-        }
-    }
-
-    if (earliest_absolute == -1.0) { // No notes in span
-        buildspans_log(x, "Validation: Span %s has no notes. Aborting.", track_sym->s_name);
-        return 0;
-    }
-
-    if (latest_absolute < offset_val) {
-        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is strictly before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
-        return 0;
-    }
-
-    if (next_offset != -1.0 && earliest_absolute > next_offset) {
-        buildspans_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
-        return 0;
-    }
-
-    buildspans_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
-    return 1;
-}
-
-void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array) {
-    if (!span_atom_array) return;
-
-    long track_num_to_output;
-    if (sscanf(track_sym->s_name, "%ld-", &track_num_to_output) != 1) {
-        return; // Failed to parse track number
-    }
-
-    long span_size;
-    t_atom *span_atoms;
-    atomarray_getatoms(span_atom_array, &span_size, &span_atoms);
-
-    const char* properties_to_output[] = {
-        "absolutes", "scores", "mean", "offset", "palette", "rating", "span"
-    };
-    int num_properties = sizeof(properties_to_output) / sizeof(properties_to_output[0]);
-
-    for (long i = 0; i < span_size; i++) {
-        long bar_ts = atom_getlong(&span_atoms[i]);
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bar_ts);
-        t_symbol *bar_sym = gensym(bar_str);
-
-        for (int j = 0; j < num_properties; j++) {
-            t_symbol *prop_sym = gensym(properties_to_output[j]);
-            t_symbol *hierarchical_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, prop_sym);
-
-            t_atom *av = NULL;
-            long ac = 0;
-            t_atomarray *aa = NULL;
-            t_atom a;
-
-            if (dictionary_getatomarray(x->building, hierarchical_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
-                atomarray_getatoms(aa, &ac, &av);
-            } else if (dictionary_getatom(x->building, hierarchical_key, &a) == MAX_ERR_NONE) {
-                av = &a;
-                ac = 1;
-            }
-
-            if (ac > 0) {
-                char output_key_str[256];
-                snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
-                t_symbol *output_key_sym = gensym(output_key_str);
-                if (x->bound_crucible) {
-                    crucible_do_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
-                } else {
-                    if (!x->async || systhread_ismainthread()) {
-                        outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
-                    } else {
-                        t_atom *new_argv = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom));
-                        if (new_argv) {
-                            atom_setsym(new_argv, output_key_sym);
-                            for (int k = 0; k < ac; k++) new_argv[k+1] = av[k];
-                            defer(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
-                            sysmem_freeptr(new_argv);
-                        }
+void buildspans_bind_clock_cb(t_buildspans *x) { if (x->bind_name != _sym_nothing && x->bind_name != gensym("") && !x->bound_crucible) buildspans_bind_resolve(x); }
+void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) { if (msg == gensym("free") && sender == x->bound_crucible) { x->bound_crucible = NULL; } }
+t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) { if (ac && av) { x->bind_name = atom_getsym(av); x->bind_attempt_count = 0; buildspans_bind_resolve(x); } return MAX_ERR_NONE; }
+t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av) { if (ac && av) x->visualize = atom_getlong(av); return MAX_ERR_NONE; }
+
+void buildspans_flush_track(t_buildspans *x, long track_num) {
+    long bl = buildspans_get_bar_length(x); if (bl <= 0) return;
+    long np = 0; t_symbol **pk = NULL; dictionary_getkeys(x->building, &np, &pk);
+    if (!pk) return; char pref[32]; snprintf(pref, 32, "%ld-", track_num);
+    for (long p = 0; p < np; p++) {
+        t_dictionary *pd = NULL; dictionary_getdictionary(x->building, pk[p], (t_object **)&pd); if (!pd) continue;
+        long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk); if (!tk) continue;
+        for (long i = 0; i < nt; i++) {
+            if (strncmp(tk[i]->s_name, pref, strlen(pref)) == 0) {
+                t_dictionary *td = NULL; dictionary_getdictionary(pd, tk[i], (t_object **)&td);
+                if (td) {
+                    long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk);
+                    if (bk) {
+                        long last = -1; for (long j = 0; j < nb; j++) { long v = atol(bk[j]->s_name); if (v > last) last = v; }
+                        if (last != -1) buildspans_deferred_rating_check(x, pk[p], tk[i], last);
+                        buildspans_end_track_span(x, pk[p], tk[i]); sysmem_freeptr(bk);
                     }
                 }
             }
         }
+        sysmem_freeptr(tk);
     }
+    sysmem_freeptr(pk); x->last_msg_type = gensym("flush"); buildspans_run_cleanup(x);
 }
 
-
-void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym) {
-    // 1. Parse the track and offset from the input symbol.
-    long track_num_to_check;
-    double offset_val_to_check = 0.0;
-
-    if (sscanf(track_offset_sym->s_name, "%ld-", &track_num_to_check) != 1) {
-        return; // Not a valid track-offset symbol
-    }
-
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
-
-    // Retrieve actual double offset from dictionary for this track AND palette
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_offset_sym->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
-                t_atom a;
-                dictionary_getatom(x->building, keys[i], &a);
-                offset_val_to_check = atom_getfloat(&a);
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-                break;
+void buildspans_flush(t_buildspans *x, t_symbol *pal_sym) {
+    long bl = buildspans_get_bar_length(x); if (bl <= 0) return;
+    t_dictionary *pd = get_sub_dict(x->building, pal_sym, 0); if (!pd) return;
+    long nt = 0; t_symbol **tk = NULL; dictionary_getkeys(pd, &nt, &tk); if (!tk) return;
+    for (long i = 0; i < nt; i++) {
+        t_dictionary *td = NULL; dictionary_getdictionary(pd, tk[i], (t_object **)&td);
+        if (td) {
+            long nb; t_symbol **bk; dictionary_getkeys(td, &nb, &bk);
+            if (bk) {
+                long last = -1; for (long j = 0; j < nb; j++) { long v = atol(bk[j]->s_name); if (v > last) last = v; }
+                if (last != -1) buildspans_deferred_rating_check(x, pal_sym, tk[i], last);
+                buildspans_end_track_span(x, pal_sym, tk[i]); sysmem_freeptr(bk);
             }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
         }
     }
+    sysmem_freeptr(tk); x->last_msg_type = gensym("flush"); buildspans_run_cleanup(x);
+}
 
-    buildspans_log(x, "--- Cleanup Check for %s on palette %s (Precision offset: %.2f) ---", track_offset_sym->s_name, palette_sym->s_name, offset_val_to_check);
+void ext_main(void *r) {
+    t_class *c = class_new("buildspans", (method)buildspans_new, (method)buildspans_free, sizeof(t_buildspans), 0L, A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_clear, "clear", 0);
+    class_addmethod(c, (method)buildspans_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_float, "float", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_offset, "ft1", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_track, "in2", A_LONG, 0);
+    class_addmethod(c, (method)buildspans_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)buildspans_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)buildspans_bang, "bang", 0);
+    class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
+    class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
+    class_addmethod(c, (method)buildspans_notify, "notify", A_CANT, 0);
+    CLASS_ATTR_SYM(c, "bind", 0, t_buildspans, bind_name);
+    CLASS_ATTR_ACCESSORS(c, "bind", NULL, (method)buildspans_attr_set_bind);
+    CLASS_ATTR_LONG(c, "log", 0, t_buildspans, log); CLASS_ATTR_ACCESSORS(c, "log", NULL, (method)buildspans_attr_set_log);
+    CLASS_ATTR_LONG(c, "visualize", 0, t_buildspans, visualize); CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)buildspans_attr_set_visualize);
+    CLASS_ATTR_LONG(c, "async", 0, t_buildspans, async); CLASS_ATTR_ACCESSORS(c, "async", NULL, (method)buildspans_attr_set_async);
+    class_register(CLASS_BOX, c); buildspans_class = c;
+}
 
-    // --- Single Pass ---
-    // In one loop, we will:
-    // a) Find the oldest absolute time for the specific track-offset we are checking.
-    // b) Collect all keys that belong to the track-offset to be checked.
-    double oldest_absolute_time = -1.0;
-    t_symbol **keys_to_delete = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    long delete_count = 0;
-    
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            // Check if it's the specific track-offset and palette we are interested in
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_offset_sym->s_name) == 0) {
-                // b) Collect this key for potential deletion
-                keys_to_delete[delete_count++] = keys[i];
-
-                // a) Find the oldest absolute time
-                if (strcmp(prop_str, "absolutes") == 0) {
-                    t_atom *av = NULL;
-                    long ac = 0;
-                    t_atomarray *aa = NULL;
-                    t_atom a;
-                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&aa) == MAX_ERR_NONE && aa) {
-                        atomarray_getatoms(aa, &ac, &av);
-                    } else if (dictionary_getatom(x->building, keys[i], &a) == MAX_ERR_NONE) {
-                        av = &a;
-                        ac = 1;
-                    }
-                    for (long k = 0; k < ac; k++) {
-                        double current_time = atom_getfloat(av + k);
-                        if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {
-                            oldest_absolute_time = current_time;
-                        }
-                    }
-                }
-            }
-
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
-        }
+void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
+    t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
+    if (x) {
+        x->building = dictionary_new(); x->tracks_ended_in_current_event = dictionary_new();
+        x->current_track = 0; x->current_offset = 0.0; x->loop_start = 0.0; x->current_palette = gensym("");
+        x->log = 0; x->visualize = 0; x->async = 0; x->worker = NULL; x->buffer_ref = NULL; x->local_bar_length = 0;
+        x->bind_name = _sym_nothing; x->bound_crucible = NULL; x->bind_clock = clock_new(x, (method)buildspans_bind_clock_cb); x->bind_attempt_count = 0;
+        attr_args_process(x, argc, argv); buildspans_set_bar_buffer(x, gensym("bar"));
+        floatin((t_object *)x, 4); proxy_new((t_object *)x, 3, NULL); intin((t_object *)x, 2); proxy_new((t_object *)x, 1, NULL);
+        x->log_outlet = outlet_new((t_object *)x, NULL); visualize_init();
+        x->out_bar_data = outlet_new((t_object *)x, NULL); x->track_outlet = outlet_new((t_object *)x, NULL); x->span_outlet = outlet_new((t_object *)x, NULL);
     }
+    return (x);
+}
 
-    // --- Process Collected Data ---
-    
-    // 2. Find the next chronological offset from our unique set.
-    double next_offset_time = find_next_offset(x, palette_sym, track_num_to_check, offset_val_to_check);
-
-    if (next_offset_time == -1.0) {
-        buildspans_log(x, "Cleanup: No subsequent offset found for track %ld on palette %s. No action taken.", track_num_to_check, palette_sym->s_name);
-        goto cleanup;
-    }
-    buildspans_log(x, "Cleanup: Next offset for track %ld on palette %s is %.2f.", track_num_to_check, palette_sym->s_name, next_offset_time);
-
-    if (oldest_absolute_time == -1.0) {
-        buildspans_log(x, "Cleanup: No absolute timestamps found for %s on palette %s. No action taken.", track_offset_sym->s_name, palette_sym->s_name);
-        goto cleanup;
-    }
-    buildspans_log(x, "Cleanup: Oldest absolute time for %s on palette %s is %.2f.", track_offset_sym->s_name, palette_sym->s_name, oldest_absolute_time);
-
-    // 3. Compare and potentially delete.
-    if (oldest_absolute_time >= next_offset_time) {
-        buildspans_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting %ld keys for %s on palette %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name, palette_sym->s_name);
-
-        for (long i = 0; i < delete_count; i++) {
-            dictionary_deleteentry(x->building, keys_to_delete[i]);
-        }
-        buildspans_visualize_memory(x);
-    } else {
-        buildspans_log(x, "Cleanup: Condition not met (%.2f < %.2f). No action taken.", oldest_absolute_time, next_offset_time);
-    }
-
-cleanup:
-    sysmem_freeptr(keys_to_delete);
-    if(keys) sysmem_freeptr(keys);
+void buildspans_free(t_buildspans *x) {
+    visualize_cleanup(); if (x->worker) async_worker_release(x->worker);
+    if (x->bind_clock) object_free(x->bind_clock); if (x->bound_crucible) object_detach_byptr(x, x->bound_crucible);
+    if (x->building) object_free(x->building); if (x->tracks_ended_in_current_event) object_free(x->tracks_ended_in_current_event);
+    if (x->buffer_ref) object_free(x->buffer_ref);
 }
