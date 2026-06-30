@@ -51,20 +51,20 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Global Magnitude Gating (Average Percentile Variation)
+### Strategy 3: Global Magnitude Gating (Flat 20th Percentile)
 
-Instead of using a fixed percentile floor, this strategy uses the **Average Energy Percentile Rank** of the current 15.2s window as a dynamic gate.
+This strategy uses a **Flat 20th Percentile Energy Floor** as a dynamic gate to eliminate noise-floor detection.
 
 #### Implementation Details:
 1.  **Energy Percentile Calculation**: For every frame in the 15.2s window, the total linear energy of the frequency band is calculated.
 2.  **Percentile Ranking**: Each energy value is converted to its percentile rank (0.0 to 1.0) relative to all other energy values in that same 15.2s window.
-3.  **Average Percentile Gate**: The system calculates the average of these percentile ranks across the entire window.
-4.  **Gating Logic**: A flux-detected peak is only accepted if its corresponding **energy percentile rank** is greater than or equal to this **average percentile**.
+3.  **Flat 20th Gate**: The gate threshold is fixed at **0.2** (the 20th percentile).
+4.  **Gating Logic**: A flux-detected peak is only accepted if its corresponding **energy percentile rank** is greater than or equal to **0.2**.
 
 #### Speculation on Efficacy:
--   **Upside**: This is an extremely robust way to eliminate noise-floor "phantom" peaks. In a window that is mostly quiet, a small peak will still have a very high percentile rank, but if the window is dense, only the most significant hits (those above the "median" activity) will pass.
--   **Upside**: It harmonizes the visualization. By plotting the "Energy Percentile Envelope" (0.0 - 1.0) against the "Average Percentile Line" (~0.5), the user gets an intuitive view of why certain transients are being gated.
--   **Downside**: In highly compressed or consistently loud audio (where energy variance is low), the "average" rank might still be near 0.5, potentially gating valid rhythmic nuances that are slightly quieter than the average.
+-   **Upside**: Guaranteed noise rejection. Any fluctuation occurring within the quietest 20% of the 15.2s context is automatically discarded.
+-   **Upside**: Visual Clarity. The "Energy Percentile Envelope" (0.0 - 1.0) is plotted against a constant horizontal line at 0.2, making the gating process entirely transparent to the user.
+-   **Downside**: In sections of extreme silence (e.g., a fade-out), the 20th percentile might still contain purely electronic noise, although this is mitigated by the stable 15.2s context.
 -   **Downside**: Percentile ranking requires sorting or multiple passes over the 15.2s cache, increasing CPU usage in the background task.
 
 ## 5. Summary of Technical Definitions

@@ -457,9 +457,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
             rank_sum += rank;
         }
 
-        float avg_rank = (float)(rank_sum / (double)num_frames);
+        float flat_20th_gate = 0.2f;
         for (int j = 0; j < num_frames; j++) {
-            bands[b].rolling_threshold[j] = avg_rank; // OVERWRITE threshold with average rank
+            bands[b].rolling_threshold[j] = flat_20th_gate; // OVERWRITE threshold with flat 20th percentile
         }
 
         free(energies);
@@ -494,7 +494,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
             // Original Flux Criteria
             if (flux_env[f] > flux_env[f-1] && flux_env[f] > flux_env[f+1] && flux_env[f] > rolling_flux_thresh[f]) {
 
-                // Strategy 3: Global Magnitude Gating (Average Percentile Rank)
+            // Strategy 3: Global Magnitude Gating (Flat 20th Percentile)
                 if (energy_rank_env[f] < avg_rank_thresh[f]) continue;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
