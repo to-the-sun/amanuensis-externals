@@ -51,21 +51,20 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Global Magnitude Gating (Flat 20th Percentile)
+### Strategy 3: Global Magnitude Gating (Secondary Peak-Average Gating)
 
-This strategy uses a **Flat 20th Percentile Energy Floor** as a dynamic gate to eliminate noise-floor detection.
+This strategy uses the **Average Magnitude of Detected Peaks** within the 15.2s window as a dynamic filter to eliminate low-level "jitter" and phantom transients.
 
 #### Implementation Details:
-1.  **Energy Percentile Calculation**: For every frame in the 15.2s window, the total linear energy of the frequency band is calculated.
-2.  **Percentile Ranking**: Each energy value is converted to its percentile rank (0.0 to 1.0) relative to all other energy values in that same 15.2s window.
-3.  **Flat 20th Gate**: The gate threshold is fixed at **0.2** (the 20th percentile).
-4.  **Gating Logic**: A flux-detected peak is only accepted if its corresponding **energy percentile rank** is greater than or equal to **0.2**.
+1.  **Stage 1 Detection**: The system identifies all candidate peaks using the standard criteria (local maximum, 15s rolling flux average, distance, and prominence).
+2.  **Peak Magnitude Averaging**: The system calculates the average **Spectral Flux** (Onset Strength) value of every peak detected in the 15.2s window.
+3.  **Stage 2 Gating**: A candidate peak is only committed to the stateful resonance engine if its Onset Strength is greater than or equal to this **peak-average**.
+4.  **Visual Representation**: The horizontal threshold lines in the 4-band transient graph now represent this **dynamic peak average** instead of the underlying 15s rolling flux average.
 
 #### Speculation on Efficacy:
--   **Upside**: Guaranteed noise rejection. Any fluctuation occurring within the quietest 20% of the 15.2s context is automatically discarded.
--   **Implementation Note**: This gating is performed internally. The visualization continues to show the primary **Onset Strength** (Spectral Flux) metrics, ensuring that the primary analysis remains flux-centric while benefiting from power-based noise suppression.
--   **Downside**: In sections of extreme silence (e.g., a fade-out), the 20th percentile might still contain purely electronic noise, although this is mitigated by the stable 15.2s context.
--   **Downside**: Percentile ranking requires sorting or multiple passes over the 15.2s cache, increasing CPU usage in the background task.
+-   **Upside**: High selectivity. By averaging only the peaks themselves, the filter ignores the vast majority of the signal (the quiet gaps) and focuses only on the distribution of "hits". This ensures that in a dense rhythmic section, only the primary hits are kept, while in a sparse section, the average drops and allows more subtle transients to pass.
+-   **Upside**: Intuitive Visualization. The user sees the threshold line jump or settle based on the "average strength" of the current rhythm.
+-   **Downside**: If a section has one massive transient and many medium ones, the average might be skewed high, causing the medium transients to be gated despite being rhythmically valid.
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.

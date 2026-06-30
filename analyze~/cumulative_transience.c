@@ -60,11 +60,6 @@ static int compare_peaks(const void* a, const void* b) {
     return pa->p_idx - pb->p_idx;
 }
 
-static int compare_floats(const void* a, const void* b) {
-    float fa = *(const float*)a;
-    float fb = *(const float*)b;
-    return (fa > fb) - (fa < fb);
-}
 
 #define N_FFT 2048
 #define N_MELS 128
@@ -89,7 +84,6 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     // Cache pre-allocation
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
     self->flux_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
-    self->energy_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
     self->fft_window = (double*)malloc(sizeof(double) * N_FFT);
     for (int i = 0; i < N_FFT; i++) {
         self->fft_window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)N_FFT));
@@ -113,7 +107,6 @@ void analyzer_destroy(TransientAnalyzer* self) {
     }
     if (self->mel_spectrogram) free(self->mel_spectrogram);
     if (self->flux_envelopes) free(self->flux_envelopes);
-    if (self->energy_envelopes) free(self->energy_envelopes);
     if (self->fft_window) free(self->fft_window);
     if (self->mel_filters) free(self->mel_filters);
     free(self);
@@ -379,18 +372,11 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 
         for (int b = 0; b < MAX_BANDS; b++) {
             double flux = 0;
-            double energy = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
-                double cur_db = self->mel_spectrogram[m * CACHE_SIZE + f_idx];
-                double prev_db = self->mel_spectrogram[m * CACHE_SIZE + prev_f_idx];
-                double diff = cur_db - prev_db;
+                double diff = self->mel_spectrogram[m * CACHE_SIZE + f_idx] - self->mel_spectrogram[m * CACHE_SIZE + prev_f_idx];
                 if (diff > 0) flux += diff;
-
-                // Approximate linear energy from dB
-                energy += pow(10.0, cur_db / 10.0);
             }
             self->flux_envelopes[b * CACHE_SIZE + f_idx] = (float)(flux / 32.0);
-            self->energy_envelopes[b * CACHE_SIZE + f_idx] = (float)energy;
         }
 
         self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE;
@@ -447,28 +433,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         int* temp_peaks = (int*)malloc(sizeof(int) * num_frames);
         int peak_count = 0;
 
-        // Strategy 3: Internal Energy Percentile Gating
-        float* energies = (float*)malloc(sizeof(float) * num_frames);
-        float* sorted_energies = (float*)malloc(sizeof(float) * num_frames);
-        for (int j = 0; j < num_frames; j++) {
-            int f_idx = (read_ptr + j) % CACHE_SIZE;
-            energies[j] = self->energy_envelopes[b * CACHE_SIZE + f_idx];
-        }
-        memcpy(sorted_energies, energies, sizeof(float) * num_frames);
-        qsort(sorted_energies, num_frames, sizeof(float), compare_floats);
-
+        // Stage 1: Preliminary Detection (Initial criteria)
         for (int f = 1; f < num_frames - 1; f++) {
             if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f]) {
-
-                // Percentile Rank check
-                float cur_e = energies[f];
-                int count = 0;
-                for (int k = 0; k < num_frames; k++) {
-                    if (sorted_energies[k] < cur_e) count++;
-                    else break;
-                }
-                float rank = (float)count / (float)num_frames;
-                if (rank < 0.2f) continue; // Flat 20th Percentile Gate
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
                     if (env[f] > env[temp_peaks[peak_count-1]]) {
@@ -495,12 +462,29 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
                 }
             }
         }
-        bands[b].peaks = (int*)malloc(sizeof(int) * peak_count);
-        memcpy(bands[b].peaks, temp_peaks, sizeof(int) * peak_count);
-        bands[b].num_peaks = peak_count;
+        // Stage 2: Secondary Filtering (Average of detected peaks)
+        double peak_sum = 0;
+        for (int i = 0; i < peak_count; i++) {
+            peak_sum += (double)env[temp_peaks[i]];
+        }
+        float avg_peak_val = (peak_count > 0) ? (float)(peak_sum / (double)peak_count) : 0.0f;
+
+        int final_count = 0;
+        int* final_peaks = (int*)malloc(sizeof(int) * peak_count);
+        for (int i = 0; i < peak_count; i++) {
+            if (env[temp_peaks[i]] >= avg_peak_val) {
+                final_peaks[final_count++] = temp_peaks[i];
+            }
+        }
+
+        bands[b].peaks = final_peaks;
+        bands[b].num_peaks = final_count;
         free(temp_peaks);
-        free(energies);
-        free(sorted_energies);
+
+        // Update threshold returned to host for visualization (average of peaks)
+        for (int j = 0; j < num_frames; j++) {
+            thresh[j] = avg_peak_val;
+        }
     }
 
     // 5. Converging max_peak
