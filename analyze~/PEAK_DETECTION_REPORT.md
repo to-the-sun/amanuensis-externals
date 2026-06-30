@@ -15,6 +15,7 @@ A frame `f` is considered a peak candidate if it meets three local criteria:
 ### B. Prominence Check
 Currently, a very basic prominence check is applied:
 -   `prom = env[f] - max(left_min, right_min)`
+-   `left_min` / `right_min`: These represent the "valley" floors on either side of the peak. They are calculated by searching outward from the candidate frame `f` until a value higher than `env[f]` is encountered or the buffer edge is reached. The lowest flux value found during these searches is the local minimum for that side.
 -   `if (prom >= 0.5f)`: The peak is accepted.
 
 ## 2. Why Over-detection is Occurring
@@ -46,12 +47,14 @@ We should revert to more conservative constants. A true transient should be sign
 -   **Action**: Implement an **absolute flux floor** (e.g., `1.0`). If the flux is below this value, it's noise, regardless of the rolling threshold.
 
 ### Strategy 2: Adaptive Prominence
+The "local threshold" (`thresh[f]`) used here is the **15-second rolling average of the spectral flux**. It represents the expected "activity level" in that frequency band over a long context window.
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
 ### Strategy 3: Global Magnitude Gating
 A peak should not just be a local maximum in flux, but should also represent a significant portion of the band's total energy.
 -   **Action**: Introduce a "Band Power Gating" check. Only consider peaks if the raw Mel-bin energy for that frame is above a certain percentile of the 15.2s window's energy.
+-   **Recommendation**: A percentile in the range of **10th to 20th** is recommended. This effectively filters out fluctuations that occur during "near-silence" without sacrificing sensitivity during dense rhythmic sections.
 
 ## 5. Conclusion
 
