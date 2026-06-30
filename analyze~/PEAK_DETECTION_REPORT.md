@@ -63,7 +63,7 @@ This strategy uses a **Flat 20th Percentile Energy Floor** as a dynamic gate to 
 
 #### Speculation on Efficacy:
 -   **Upside**: Guaranteed noise rejection. Any fluctuation occurring within the quietest 20% of the 15.2s context is automatically discarded.
--   **Upside**: Visual Clarity. The "Energy Percentile Envelope" (0.0 - 1.0) is plotted against a constant horizontal line at 0.2, making the gating process entirely transparent to the user.
+-   **Implementation Note**: This gating is performed internally. The visualization continues to show the primary **Onset Strength** (Spectral Flux) metrics, ensuring that the primary analysis remains flux-centric while benefiting from power-based noise suppression.
 -   **Downside**: In sections of extreme silence (e.g., a fade-out), the 20th percentile might still contain purely electronic noise, although this is mitigated by the stable 15.2s context.
 -   **Downside**: Percentile ranking requires sorting or multiple passes over the 15.2s cache, increasing CPU usage in the background task.
 
