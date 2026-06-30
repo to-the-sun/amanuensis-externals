@@ -46,12 +46,13 @@ Instead of creating and removing scores/qualifiers on the fly:
 
 If Matplotlib's charting overhead remains prohibitive, the system could move to a more low-level drawing model.
 
-#### A. Achieved: Direct Pixel Rendering (OpenCV + MoviePy)
-For the specific task of generating an offline MP4 report, this was identified as the **most efficient approach and has now been implemented**.
--   **Status**: **ACHIEVED**. The renderer has been completely rewritten to bypass Matplotlib's scene graph.
--   **Benefit**: Rendering speed has increased by approximately **5x to 10x** in real-world usage.
--   **Implementation**: High-fidelity recreations of grids, dashed/dotted lines, and axis labels ensure visual parity with the original Matplotlib output.
--   **Optimization**: Strategies 1-3 (Blitting, Artist Pooling) are natively handled by this model as it operates on a single pre-allocated NumPy pixel buffer with direct O(1) mutations.
+#### A. Achieved: Optimized Matplotlib Backend (Blitting + Artist Pooling)
+The rendering system has been overhauled to utilize Matplotlib's high-performance features while maintaining the flexibility of a full charting engine.
+-   **Status**: **ACHIEVED**. Strategies 1-3 have been fully implemented.
+-   **Strategy 1 (Blitting)**: `blit=True` is now enabled, ensuring that static elements (grids, axes, labels) are cached and not redrawn every frame.
+-   **Strategy 2 (Artist Pooling)**: All dynamic elements (popup scores, qualifier lines, historical flashes) are recycled from pre-allocated pools, eliminating the overhead of frequent object creation and removal.
+-   **Strategy 3 (Buffer Optimization)**: The historical 5s buffer uses pre-calculated vertices and efficient `PolyCollection` path updates, significantly speeding up the "flash" effect rendering.
+-   **Performance**: While still subject to Python's execution speed, these optimizations provide a smoother rendering experience and lower CPU overhead compared to the original reconstructive model.
 
 #### B. Alternative: Hardware Accelerated UI (PySide/PyQt + OpenGL)
 Best suited if real-time interactive playback within a Python window is required.
