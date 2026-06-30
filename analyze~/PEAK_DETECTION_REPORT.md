@@ -4,7 +4,14 @@ This report details the current peak detection mechanism in the `cumulative_tran
 
 ## 1. How Peak Detection Works Right Now
 
-The peak detection logic is encapsulated within `analyzer_analyze_audio` (and replicated in the new `analyzer_analyze_chunk`). It operates on the **Spectral Flux** envelopes for each of the 4 frequency bands.
+The peak detection logic is encapsulated within `analyzer_analyze_audio` (and replicated in the new `analyzer_analyze_chunk`). It operates on the **Spectral Flux** (Onset Strength) envelopes for each of the 4 frequency bands.
+
+### Units and Calculation
+The Onset Strength is calculated in terms of **average positive change in decibels (dB) per frame**.
+1.  The Mel spectrogram is converted to log-power (dB).
+2.  The difference between the current frame and the previous frame is calculated for every Mel-band.
+3.  Only positive differences (increases in energy) are accumulated.
+4.  The final Onset Strength for a band is the **average of these positive dB changes** across all Mel-bins assigned to that band (32 bins per band).
 
 ### A. Candidate Identification
 A frame `f` is considered a peak candidate if it meets three local criteria:
