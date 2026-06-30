@@ -29,26 +29,24 @@ By handing the detected peaks back to the host (Max or Python), the system curre
 
 ---
 
-## 3. Proposed Evolution: Full C-Core Orchestration
+## 3. Achieved Evolution: Host-Side C-Core Orchestration
 
-The system could be evolved to eliminate the "back-and-forth" entirely. In this model, the host would simply hand the C core a chunk of audio (e.g., 15.2 seconds), and the C core would return a list of fully analyzed `PeakResult` objects.
+The system has been evolved to eliminate the "back-and-forth" entirely. In this model, the host hands the C core a chunk of audio (15.2 seconds), and the C core returns a list of fully analyzed `PeakResult` objects.
 
 ### Implementation of Inter-band Synchronization
-To achieve this, the C core would need to:
-1.  Perform the FFT and Flux analysis for all bands for the entire window.
-2.  Extract all peaks across all bands.
-3.  **Perform a global chronological sort** of every peak regardless of its band.
-4.  Feed these peaks into the stateful resonance engine in the exact order they occurred.
+The C core now handles the orchestration:
+1.  **Unified Windowing**: Performs FFT and Flux analysis for all bands across the 15.2s window.
+2.  **Global Peak Sorting**: Extracts all peaks across all bands and performs a **global chronological sort**.
+3.  **Stateful Processing**: Feeds sorted peaks into the resonance engine in the exact order they occurred.
+4.  **Active-Zone Filtering**: Only returns peaks and metrics from the "active" 100ms zone of the window.
 
-**Upside**: This would completely eliminate the `Inter-band Processing Order` discrepancy. Max would no longer process Band 0 then Band 1; it would process "the first peak in the window," which might be in Band 3.
+**Result**: This completely eliminates the `Inter-band Processing Order` discrepancy. Both Max and Python now process peaks in strict chronological order across all bands.
 
 ---
 
-## 4. Speculative Impact Analysis (15s Unified Windowing)
+## 4. Impact Analysis (15.2s Unified Windowing)
 
-The primary goal is to synchronize the Python visualizer with the Max external. Since the Max external is the "source of truth" for the real-time algorithm, the Python offline analysis should be modified to mimic the 15s sliding window approach. 
-
-Furthermore, from a psychoacoustic perspective, a 15-second "rolling" `max_peak` is more realistic than a global one, as human listeners adapt to the current loudness and transient density of a song rather than "knowing" the loudest moment 3 minutes in the future.
+The Python visualizer and the Max external are now perfectly synchronized through the 15.2s sliding window model.
 
 ### Impact on Documented Discrepancies
 

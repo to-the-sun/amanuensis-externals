@@ -31,8 +31,16 @@ cdef extern from "cumulative_transience.h":
         double min_score_seen
         double max_score_seen
 
+    ctypedef struct PeakResultList:
+        PeakResult peaks[64]
+        int num_peaks
+
+    ctypedef struct ChunkAnalysisResult:
+        PeakResultList peak_list
+        AnalyzerMetrics metrics
+
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
-        pass
+        double max_peak
 
     TransientAnalyzer_c* analyzer_create(double max_peak_value)
     void analyzer_destroy(TransientAnalyzer_c* self)
@@ -48,6 +56,16 @@ cdef extern from "cumulative_transience.h":
                               PeakResult* result_out)
     void analyzer_update_metrics(TransientAnalyzer_c* self, int frame, AnalyzerMetrics* metrics_out)
     double* analyzer_get_buffer(TransientAnalyzer_c* self)
+
+    int analyzer_analyze_chunk(TransientAnalyzer_c* self,
+                               const float* y,
+                               int len,
+                               int sr,
+                               int buffer_start_frame,
+                               int active_start_frame,
+                               ChunkAnalysisResult* result_out)
+
+    void analyzer_push_audio(TransientAnalyzer_c* self, const float* y, int len, int sr)
 
     ctypedef struct BandAnalysis:
         float* envelope
@@ -73,6 +91,7 @@ cdef class TransientAnalyzer:
     cdef TransientAnalyzer_c* _c_analyzer
     cdef public double min_score_seen
     cdef public double max_score_seen
+    cdef public double max_peak
     cdef object _processed_peaks
 
     def __cinit__(self, double max_peak_value=1.0, int sr=44100):
@@ -142,6 +161,55 @@ cdef class TransientAnalyzer:
                 results.append(peak_res)
 
         return results
+
+    def push_audio(self, cnp.ndarray[float, ndim=1] y, int sr):
+        analyzer_push_audio(self._c_analyzer, <float*>y.data, len(y), sr)
+
+    def analyze_chunk(self, cnp.ndarray[float, ndim=1] y, int sr, int buffer_start_frame, int active_start_frame):
+        cdef ChunkAnalysisResult res
+        cdef int ret = analyzer_analyze_chunk(self._c_analyzer, <float*>y.data, len(y), sr, buffer_start_frame, active_start_frame, &res)
+
+        if not ret:
+            return None
+
+        cdef list peaks = []
+        cdef PeakResult pr
+        for i in range(res.peak_list.num_peaks):
+            pr = res.peak_list.peaks[i]
+            peak_data = {
+                'p_idx': pr.p_idx,
+                'band_idx': pr.band_idx,
+                'time': pr.time,
+                'peak_val': pr.peak_val,
+                'total_score': pr.total_score,
+                'qualifiers': [],
+                'snapshot': np.zeros(5001, dtype=np.float64)
+            }
+            for j in range(pr.num_qualifiers):
+                peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
+
+            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
+            peaks.append(peak_data)
+
+        m = res.metrics
+        self.min_score_seen = m.min_score_seen
+        self.max_score_seen = m.max_score_seen
+        self.max_peak = self._c_analyzer.max_peak
+
+        return {
+            'peaks': peaks,
+            'metrics': {
+                'std_dev': m.std_dev,
+                'mean': m.mean,
+                'contrast': m.contrast,
+                'peak_std': m.peak_std,
+                'rating': m.rating,
+                'buffer_updated': m.buffer_updated,
+                'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
+                'min_score_seen': m.min_score_seen,
+                'max_score_seen': m.max_score_seen
+            }
+        }
 
     def update_metrics(self, int frame):
         cdef AnalyzerMetrics m

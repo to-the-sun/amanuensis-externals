@@ -45,6 +45,18 @@ typedef struct {
     double max_score_seen;
 } AnalyzerMetrics;
 
+#define MAX_PEAKS_PER_CHUNK 16
+
+typedef struct {
+    PeakResult peaks[MAX_PEAKS_PER_CHUNK];
+    int num_peaks;
+} PeakResultList;
+
+typedef struct {
+    PeakResultList peak_list;
+    AnalyzerMetrics metrics;
+} ChunkAnalysisResult;
+
 typedef struct {
     double accumulated_buffer[BUFFER_LEN];
     double buffer_times[BUFFER_LEN];
@@ -65,6 +77,15 @@ typedef struct {
     SnapshotEntry* snapshot_tails[MAX_BANDS];
 
     double frame_duration_ms;
+
+    // Incremental Cache State
+    double* mel_spectrogram;    // Mel bands cache
+    float* flux_envelopes;      // Flux cache per band
+    double* mel_filters;        // Pre-calculated filters
+    double* fft_window;         // Pre-calculated window
+    int cache_write_ptr;
+    int cache_count;
+    int sample_rate;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
@@ -83,6 +104,16 @@ int analyzer_process_peak(TransientAnalyzer* self,
 
 void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
 double* analyzer_get_buffer(TransientAnalyzer* self);
+
+int analyzer_analyze_chunk(TransientAnalyzer* self,
+                           const float* y,
+                           int len,
+                           int sr,
+                           int buffer_start_frame,
+                           int active_start_frame,
+                           ChunkAnalysisResult* result_out);
+
+void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int sr);
 
 // Full analysis structures
 typedef struct {

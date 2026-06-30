@@ -44,6 +44,8 @@ typedef struct _analyze {
     int invalidated;
     int pending_analysis;
 
+    ChunkAnalysisResult* result_buffer;
+
 } t_analyze;
 
 void* analyze_new(t_symbol* s, long argc, t_atom* argv);
@@ -96,6 +98,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->sample_rate = 44100.0;
+        x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
     }
     return x;
 }
@@ -114,6 +117,8 @@ void analyze_free(t_analyze* x) {
     if (x->analyzer) {
         analyzer_destroy(x->analyzer);
     }
+
+    if (x->result_buffer) free(x->result_buffer);
 
     free(x->audio_buffer);
     critical_free(x->lock);
@@ -174,97 +179,60 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Linearize audio (increased to 6 seconds for context)
-    int analysis_seconds = 6;
-    int analysis_samples = (int)(x->sample_rate * analysis_seconds);
-    if (analysis_samples > x->current_sample_count) analysis_samples = x->current_sample_count;
+    // Incremental Model: We send only the NEW 100ms hop to the C core.
+    int hop_samples = (int)(x->sample_rate * 0.1);
 
-    float* linear_audio = (float*)malloc(sizeof(float) * analysis_samples);
-    if (!linear_audio) {
+    // The "current" 100ms hop we just filled in the circular buffer
+    int hop_start_samples = x->last_analysis_frame - hop_samples;
+    if (hop_start_samples < 0) {
         x->pending_analysis = 0;
         return;
     }
-    int read_ptr = (x->audio_buffer_write_ptr - analysis_samples + x->audio_buffer_size) % x->audio_buffer_size;
-    for (int i = 0; i < analysis_samples; i++) {
-        linear_audio[i] = x->audio_buffer[read_ptr];
+
+    float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
+    if (!hop_audio) {
+        x->pending_analysis = 0;
+        return;
+    }
+
+    int read_ptr = (x->audio_buffer_write_ptr - (x->current_sample_count - hop_start_samples) + x->audio_buffer_size) % x->audio_buffer_size;
+    for (int i = 0; i < hop_samples; i++) {
+        hop_audio[i] = x->audio_buffer[read_ptr];
         read_ptr = (read_ptr + 1) % x->audio_buffer_size;
     }
 
-    FullAnalysisResult result;
-    if (analyzer_analyze_audio(linear_audio, analysis_samples, (int)x->sample_rate, &result)) {
-        int hop_samples = (int)(x->sample_rate * 0.001);
-        int current_global_frame = x->current_sample_count / hop_samples;
-        int window_start_frame = (x->current_sample_count - analysis_samples) / hop_samples;
+    // Calculation of global frames for the C core's internal alignment
+    int ms_samples = (int)(x->sample_rate * 0.001);
 
-        // Update max_peak dynamically for better normalization
-        if (result.max_peak_value > x->analyzer->max_peak) {
-            x->analyzer->max_peak = (double)result.max_peak_value;
+    // Buffer start frame in the C core's internal 15.2s cache.
+    // If the cache is full, it's (active_start_frame - 15000).
+    int active_start_samples = x->last_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2);
+    int active_start_frame = active_start_samples / ms_samples;
+
+    int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
+    if (window_start_samples < 0) window_start_samples = 0;
+    int buffer_start_frame = window_start_samples / ms_samples;
+
+    if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
+
+        for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+            PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
+
+            t_atom out_args[2];
+            atom_setlong(out_args, pr->band_idx);
+            atom_setfloat(out_args + 1, pr->total_score);
+            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
         }
-
-        // Collect all peaks in current 6s window for resonance lookback.
-        int total_peaks = 0;
-        for (int bb = 0; bb < MAX_BANDS; bb++) total_peaks += result.bands[bb].num_peaks;
-        int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
-
-        if (all_valid_peaks) {
-            int curr = 0;
-            for (int bb = 0; bb < MAX_BANDS; bb++) {
-                for (int k = 0; k < result.bands[bb].num_peaks; k++) {
-                    all_valid_peaks[curr++] = result.bands[bb].peaks[k];
-                }
-            }
-
-            for (int b = 0; b < MAX_BANDS; b++) {
-                for (int i = 0; i < result.bands[b].num_peaks; i++) {
-                    int peak_rel_frame = result.bands[b].peaks[i];
-                    int peak_abs_frame = window_start_frame + peak_rel_frame;
-
-                    if (peak_abs_frame > x->last_peak_frame[b]) {
-                        PeakResult pr;
-                        double time = peak_abs_frame * 0.001;
-
-                        // We pass local relative indices for the envelope and peak indices
-                        // to ensure the internal library calls (e.g., env_ptr[idx]) remain
-                        // memory-safe within the 6-second result buffer.
-                        if (analyzer_process_peak(x->analyzer, peak_rel_frame, b, time, result.bands[b].envelope, result.num_frames, all_valid_peaks, total_peaks, &pr)) {
-
-                            // Fixup: The analyzer internally stores the most recent snapshot and
-                            // schedules events using the local index we passed.
-                            // To ensure historical lookbacks, rolling metrics, and state cleanup
-                            // work correctly as the window slides, we must shift these internal
-                            // indices to the global absolute frame space.
-
-                            // 1. Shift the stored snapshot index to global absolute frame.
-                            if (x->analyzer->snapshot_tails[b]) {
-                                x->analyzer->snapshot_tails[b]->p_idx = peak_abs_frame;
-                            }
-
-                            t_atom out_args[2];
-                            atom_setlong(out_args, b);
-                            atom_setfloat(out_args + 1, pr.total_score);
-                            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
-                        }
-                        x->last_peak_frame[b] = peak_abs_frame;
-                    }
-                }
-            }
-            free(all_valid_peaks);
-        }
-
-        AnalyzerMetrics metrics;
-        analyzer_update_metrics(x->analyzer, current_global_frame, &metrics);
 
         t_atom out_args[4];
-        atom_setfloat(out_args, metrics.rating);
-        atom_setfloat(out_args + 1, metrics.std_dev);
-        atom_setfloat(out_args + 2, metrics.contrast);
-        atom_setfloat(out_args + 3, metrics.peak_std);
+        atom_setfloat(out_args, x->result_buffer->metrics.rating);
+        atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
+        atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
+        atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
-
-        analyzer_free_analysis(&result);
     }
 
-    free(linear_audio);
+    free(hop_audio);
     x->pending_analysis = 0;
 }
 
