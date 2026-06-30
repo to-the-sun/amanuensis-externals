@@ -197,7 +197,7 @@ def generate_video(audio_path, data):
         # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
         # during animation. This list will be consumed by the update() function.
         all_processed_peaks = []
-        for p_idx in sorted(all_valid_peak_indices):
+        for p_idx in tqdm(sorted(all_valid_peak_indices), desc="Pre-processing Peaks", unit="peak"):
              # Finding which band this peak belongs to
              band_idx = -1
              for b in range(4):
@@ -468,7 +468,8 @@ def analyze_audio(file_path):
     # Context: [T - 15.2s, T - 300ms]
 
     print(f"Starting sliding window analysis for {len(y)} samples...")
-    for t_samples in range(step_samples, len(y) + step_samples, step_samples):
+    num_steps = len(range(step_samples, len(y) + step_samples, step_samples))
+    for t_samples in tqdm(range(step_samples, len(y) + step_samples, step_samples), total=num_steps, desc="Sliding Window Analysis", unit="step"):
         active_start_samples = t_samples - step_samples - int(sr * 0.2)
         if active_start_samples < 0: continue
 
@@ -557,7 +558,7 @@ def main():
             print("="*60)
         return
 
-    for f in audio_files:
+    for f in tqdm(audio_files, desc="Processing Audio Files", unit="file"):
         if not os.path.exists(f): continue
         result = analyze_audio(f)
         if result:
