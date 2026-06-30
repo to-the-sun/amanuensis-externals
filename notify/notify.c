@@ -190,7 +190,7 @@ int bar_key_compare(const void *a, const void *b) {
 }
 
 void notify_int(t_notify *x, long n) {
-    if (x->async && x->worker && !systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
         async_worker_enqueue(x->worker, x, (method)notify_do_fill, NULL, 1, &a);
@@ -467,7 +467,7 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void notify_bang(t_notify *x) {
-    if (x->async && x->worker && !systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)notify_do_bang, NULL, 0, NULL);
         return;
     }
