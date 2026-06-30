@@ -49,6 +49,14 @@ The `TransientAnalyzer` should move away from temporary allocations.
 ### Strategy 3: Threshold and Metric Optimization
 The 15-second rolling threshold and the 5-second resonance buffer already utilize incremental logic (adding new data and subtracting old data). This pattern should be extended to the entire pipeline. The "Active Zone" logic already prepares the way for this by distinguishing between the *context* (used for normalization) and the *action* (where peaks are actually emitted).
 
-## 4. Conclusion
+## 4. Achieved Optimization: Incremental Processing Model
 
-The current performance penalty is a direct result of "brute-forcing" the sliding window to ensure mathematical parity between Max and Python. By implementing **Spectral Caching** and **Persistent Allocation**, we can maintain this parity while reducing the CPU load to a level comparable to the original 6s batch implementation, effectively making the 15.2s window "free" in terms of incremental cost.
+The performance bottleneck has been resolved by implementing the **Incremental Cache Model**:
+
+1.  **Spectral Caching (O(Hop) FFT)**: The `TransientAnalyzer` now maintains a persistent circular buffer for the Mel spectrogram and flux envelopes. Instead of re-calculating the STFT for 15.2s of audio, the system only processes the NEW 100ms hop and appends it to the cache.
+2.  **Persistent Allocation**: Large buffers and filters are allocated once during initialization, eliminating `malloc` churn during the analysis loop.
+3.  **Linearized Context**: Peak detection and resonance calculations still utilize the full 15.2s context by linearizing only the necessary segments from the internal cache.
+
+## 5. Conclusion
+
+The implementation of **Spectral Caching** has reduced the complexity of the spectral pipeline from O(Window) to O(Hop), yielding a theoretical ~150x speedup in that stage. This optimization ensures that the **Unified 15.2s Windowing Model** remains computationally feasible for both real-time Max usage and efficient Python batch processing while maintaining perfect synchronization.

@@ -65,6 +65,8 @@ cdef extern from "cumulative_transience.h":
                                int active_start_frame,
                                ChunkAnalysisResult* result_out)
 
+    void analyzer_push_audio(TransientAnalyzer_c* self, const float* y, int len, int sr)
+
     ctypedef struct BandAnalysis:
         float* envelope
         float* rolling_threshold
@@ -159,6 +161,9 @@ cdef class TransientAnalyzer:
                 results.append(peak_res)
 
         return results
+
+    def push_audio(self, cnp.ndarray[float, ndim=1] y, int sr):
+        analyzer_push_audio(self._c_analyzer, <float*>y.data, len(y), sr)
 
     def analyze_chunk(self, cnp.ndarray[float, ndim=1] y, int sr, int buffer_start_frame, int active_start_frame):
         cdef ChunkAnalysisResult res

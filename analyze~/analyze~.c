@@ -44,6 +44,8 @@ typedef struct _analyze {
     int invalidated;
     int pending_analysis;
 
+    ChunkAnalysisResult* result_buffer;
+
 } t_analyze;
 
 void* analyze_new(t_symbol* s, long argc, t_atom* argv);
@@ -96,6 +98,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->sample_rate = 44100.0;
+        x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
     }
     return x;
 }
@@ -114,6 +117,8 @@ void analyze_free(t_analyze* x) {
     if (x->analyzer) {
         analyzer_destroy(x->analyzer);
     }
+
+    if (x->result_buffer) free(x->result_buffer);
 
     free(x->audio_buffer);
     critical_free(x->lock);
@@ -174,57 +179,44 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Unified 15.2s Window: 15s context + 200ms lookahead
-    double analysis_seconds = 15.2;
-    int analysis_samples = (int)(x->sample_rate * analysis_seconds);
-
-    // We analyze the window ending at (current_sample_count + 200ms)
-    // But since we are real-time, "current_sample_count" is our "now".
-    // So the 15.2s window is [now - 15s, now + 0.2s].
-    // Wait, we can't see the future. The 200ms lookahead means the "active" 100ms
-    // we are analyzing now actually happened 200ms ago.
-
-    // Hop is 100ms.
-    // At trigger T:
-    // Active zone: [T - 300ms, T - 201ms]
-    // Lookahead: [T - 200ms, T] (the 200ms we just collected)
-    // Context: [T - 15.2s, T - 300ms]
-
+    // Incremental Model: We send only the NEW 100ms hop to the C core.
     int hop_samples = (int)(x->sample_rate * 0.1);
-    int active_start_samples = x->last_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2);
-    if (active_start_samples < 0) {
-         x->pending_analysis = 0;
-         return;
-    }
 
-    // Window start is 15 seconds before the active zone start
-    int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
-    if (window_start_samples < 0) window_start_samples = 0;
-
-    int actual_analysis_samples = x->last_analysis_frame - window_start_samples;
-    if (actual_analysis_samples > x->audio_buffer_size) actual_analysis_samples = x->audio_buffer_size;
-
-    float* linear_audio = (float*)malloc(sizeof(float) * actual_analysis_samples);
-    if (!linear_audio) {
+    // The "current" 100ms hop we just filled in the circular buffer
+    int hop_start_samples = x->last_analysis_frame - hop_samples;
+    if (hop_start_samples < 0) {
         x->pending_analysis = 0;
         return;
     }
 
-    int read_ptr = (x->audio_buffer_write_ptr - (x->current_sample_count - window_start_samples) + x->audio_buffer_size) % x->audio_buffer_size;
-    for (int i = 0; i < actual_analysis_samples; i++) {
-        linear_audio[i] = x->audio_buffer[read_ptr];
+    float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
+    if (!hop_audio) {
+        x->pending_analysis = 0;
+        return;
+    }
+
+    int read_ptr = (x->audio_buffer_write_ptr - (x->current_sample_count - hop_start_samples) + x->audio_buffer_size) % x->audio_buffer_size;
+    for (int i = 0; i < hop_samples; i++) {
+        hop_audio[i] = x->audio_buffer[read_ptr];
         read_ptr = (read_ptr + 1) % x->audio_buffer_size;
     }
 
+    // Calculation of global frames for the C core's internal alignment
     int ms_samples = (int)(x->sample_rate * 0.001);
-    int buffer_start_frame = window_start_samples / ms_samples;
+
+    // Buffer start frame in the C core's internal 15.2s cache.
+    // If the cache is full, it's (active_start_frame - 15000).
+    int active_start_samples = x->last_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2);
     int active_start_frame = active_start_samples / ms_samples;
 
-    ChunkAnalysisResult* result = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (result && analyzer_analyze_chunk(x->analyzer, linear_audio, actual_analysis_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, result)) {
+    int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
+    if (window_start_samples < 0) window_start_samples = 0;
+    int buffer_start_frame = window_start_samples / ms_samples;
 
-        for (int i = 0; i < result->peak_list.num_peaks; i++) {
-            PeakResult* pr = &result->peak_list.peaks[i];
+    if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
+
+        for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+            PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
             t_atom out_args[2];
             atom_setlong(out_args, pr->band_idx);
@@ -233,15 +225,14 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         }
 
         t_atom out_args[4];
-        atom_setfloat(out_args, result->metrics.rating);
-        atom_setfloat(out_args + 1, result->metrics.std_dev);
-        atom_setfloat(out_args + 2, result->metrics.contrast);
-        atom_setfloat(out_args + 3, result->metrics.peak_std);
+        atom_setfloat(out_args, x->result_buffer->metrics.rating);
+        atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
+        atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
+        atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
     }
-    if (result) free(result);
 
-    free(linear_audio);
+    free(hop_audio);
     x->pending_analysis = 0;
 }
 

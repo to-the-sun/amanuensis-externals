@@ -469,18 +469,27 @@ def analyze_audio(file_path):
 
     print(f"Starting sliding window analysis for {len(y)} samples...")
     num_steps = len(range(step_samples, len(y) + step_samples, step_samples))
+    # Incremental optimization: We only need to push the new hop
+    last_t = 0
     for t_samples in tqdm(range(step_samples, len(y) + step_samples, step_samples), total=num_steps, desc="Sliding Window Analysis", unit="step"):
+        # The new 100ms hop
+        hop_y = y[last_t : t_samples]
+        last_t = t_samples
+
         active_start_samples = t_samples - step_samples - int(sr * 0.2)
-        if active_start_samples < 0: continue
+        if active_start_samples < 0:
+            # We still need to push the initial audio to maintain cache alignment
+            analyzer.push_audio(hop_y, sr)
+            continue
 
         window_start_samples = active_start_samples - int(sr * 15.0)
         if window_start_samples < 0: window_start_samples = 0
 
-        chunk_y = y[window_start_samples : t_samples]
         buffer_start_frame = window_start_samples // hop_samples_ms
         active_start_frame = active_start_samples // hop_samples_ms
 
-        res = analyzer.analyze_chunk(chunk_y, sr, buffer_start_frame, active_start_frame)
+        # In the incremental model, analyze_chunk handles pushing the new hop_y
+        res = analyzer.analyze_chunk(hop_y, sr, buffer_start_frame, active_start_frame)
         if res:
             all_peaks.extend(res['peaks'])
             # We take the metrics from the very last chunk for the final report

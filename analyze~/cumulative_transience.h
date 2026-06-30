@@ -77,6 +77,15 @@ typedef struct {
     SnapshotEntry* snapshot_tails[MAX_BANDS];
 
     double frame_duration_ms;
+
+    // Incremental Cache State
+    double* mel_spectrogram;    // Mel bands cache
+    float* flux_envelopes;      // Flux cache per band
+    double* mel_filters;        // Pre-calculated filters
+    double* fft_window;         // Pre-calculated window
+    int cache_write_ptr;
+    int cache_count;
+    int sample_rate;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
@@ -103,6 +112,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
                            int buffer_start_frame,
                            int active_start_frame,
                            ChunkAnalysisResult* result_out);
+
+void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int sr);
 
 // Full analysis structures
 typedef struct {
