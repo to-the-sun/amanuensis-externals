@@ -63,7 +63,7 @@ Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 This strategy implements a fixed **3dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
 
 #### Implementation Details:
-1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **3.0 dB** to be considered a peak candidate.
+1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **1.0 dB** to be considered a peak candidate.
 2.  **Visual Representation**: Horizontal threshold lines return to showing the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
 
 #### Speculation on Current Issues:
