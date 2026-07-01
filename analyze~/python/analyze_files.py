@@ -118,18 +118,18 @@ def generate_video(audio_path, data):
         transient_lines = []
         threshold_lines = []
         for i in range(4):
-            line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i])
+            line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2)
             transient_lines.append(line)
-            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5)
+            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1)
             threshold_lines.append(t_line)
             # Add scatter for peaks
             p_indices = list(peak_indices_list[i])
             peak_times = [times[idx] for idx in p_indices]
             peak_vals = [onset_envs[i][idx] for idx in p_indices]
-            ax_transient.scatter(peak_times, peak_vals, color='#e74c3c', marker='x', s=30, alpha=alphas[i])
+            ax_transient.scatter(peak_times, peak_vals, color='#e74c3c', marker='x', s=60, alpha=1.0, zorder=10)
 
-        playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead')
-        cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep')
+        playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
+        cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
 
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}")
         ax_transient.set_ylabel("Onset Strength")
@@ -200,18 +200,18 @@ def generate_video(audio_path, data):
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
-                                              fontweight='bold', zorder=10)
+                                              fontweight='bold', zorder=20)
 
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes,
                                         verticalalignment='top', fontsize=12, color='#f1c40f',
-                                        fontweight='bold', zorder=10)
+                                        fontweight='bold', zorder=20)
 
         # Debug console pool
         MAX_DEBUG_LINES = 10
         debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes,
                                                verticalalignment='top', horizontalalignment='right',
                                                fontsize=12, family='monospace', color='#2ecc71',
-                                               fontweight='bold', visible=False, zorder=10)
+                                               fontweight='bold', visible=False, zorder=20)
                              for i in range(MAX_DEBUG_LINES)]
         active_debug_lines = [] # list of {'text', 'lifetime', 'band_idx'}
 
@@ -219,8 +219,8 @@ def generate_video(audio_path, data):
                                    verticalalignment='top', fontsize=10, color='#f1c40f',
                                    fontweight='bold')
 
-        # Instantiate analyzer
-        analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
+        # Instantiate pre-analyzer to get global score range
+        pre_analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
 
         # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
         # during animation. This list will be consumed by the update() function.
@@ -235,8 +235,15 @@ def generate_video(audio_path, data):
                      break
 
              # Process it
-             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
+             res_list = pre_analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
              all_processed_peaks.extend(res_list)
+             pre_analyzer.update_metrics(p_idx)
+
+        global_min_score = pre_analyzer.min_score_seen
+        global_max_score = pre_analyzer.max_score_seen
+
+        # Instantiate fresh analyzer for video buffer accumulation
+        analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
 
         def update(frame):
             nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines
@@ -251,6 +258,11 @@ def generate_video(audio_path, data):
             pool_snap_lines.set_visible(False)
             for st in pool_snap_texts: st.set_visible(False)
             highest_peak_line.set_visible(False)
+
+            # Dynamically process peaks to update cumulative buffer as playhead advances
+            analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
+            # Explicitly update metrics to ensure buffer cleanup and rolling stats are current
+            analyzer.update_metrics(frame)
 
             # Use pre-processed peaks for this visual frame
             all_new_peak_data = [p for p in all_processed_peaks if p['p_idx'] > last_frame_processed and p['p_idx'] <= frame]
@@ -286,7 +298,7 @@ def generate_video(audio_path, data):
                     band_idx = s['band_idx']
                     lane_y = band_idx
 
-                    score_c = get_score_color(score_val, analyzer.min_score_seen, analyzer.max_score_seen)
+                    score_c = get_score_color(score_val, global_min_score, global_max_score)
 
                     segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]])
                     seg_colors.append(colors[band_idx])
@@ -375,7 +387,7 @@ def generate_video(audio_path, data):
             metrics_text.set_text(f"Std Dev: {metrics['std_dev']:.3f}\nContrast: {metrics['contrast']:.3f}\nPeak Std: {metrics['peak_std']:.3f}")
             rating_text.set_text(f"Rating: {metrics['rating']:.2f}")
             score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}")
-            score_display_text.set_color(get_score_color(current_snapshot_avg, metrics['min_score_seen'], metrics['max_score_seen']))
+            score_display_text.set_color(get_score_color(current_snapshot_avg, global_min_score, global_max_score))
 
             # Handle Flash and Fade (Object Pool)
             for flash in active_flashes[:]:
@@ -400,7 +412,7 @@ def generate_video(audio_path, data):
                     txt.set_position((p_time, new_y))
                     txt.set_text(f"{val:+.2f}")
                     txt.set_alpha(life / float(POPUP_LIFETIME))
-                    txt.set_color(get_score_color(val, analyzer.min_score_seen, analyzer.max_score_seen))
+                    txt.set_color(get_score_color(val, global_min_score, global_max_score))
                     txt.set_visible(True)
                     score[1] -= 1
                 if score[1] <= 0:
