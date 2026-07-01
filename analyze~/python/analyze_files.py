@@ -18,7 +18,7 @@ import threading
 try:
     import ct_utils
 except ImportError:
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python')
     import ct_utils
 
 try:
@@ -42,7 +42,16 @@ def ensure_initialized():
             import cumulative_transience as ct
             cumulative_transience = ct
         except ImportError:
-            cumulative_transience = None
+            fallback_path = r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python'
+            if fallback_path not in sys.path:
+                sys.path.append(fallback_path)
+                try:
+                    import cumulative_transience as ct
+                    cumulative_transience = ct
+                except ImportError:
+                    cumulative_transience = None
+            else:
+                cumulative_transience = None
         _initialized = True
 
 def get_score_color(score, min_score, max_score):
@@ -177,10 +186,21 @@ def generate_video(audio_path, data):
         pbar.close(); plt.close(fig)
 
         # Recording metrics to [audio_file]_ratings.txt in same folder
-        ratings_file = os.path.splitext(audio_path)[0] + "_ratings.txt"
-        with open(ratings_file, 'w', encoding='utf-8') as f:
-            f.write(f"Rating: {ratings[-1]:.2f}\nStandard Deviation: {std_devs[-1]:.3f}\nContrast: {contrasts[-1]:.3f}\nBar Length Deviation: {peak_stds[-1]:.3f}\n")
-        print(f"Metrics recorded to {ratings_file}")
+        try:
+            song_name = os.path.splitext(os.path.basename(audio_path))[0]
+            project_dir = rf'D:\[Library]\[Audio]\[Works]\[Projects]\{song_name}'
+            if os.path.exists(project_dir):
+                ratings_file = os.path.join(project_dir, 'ratings.txt')
+                with open(ratings_file, 'w', encoding='utf-8') as f:
+                    f.write(f"Rating: {ratings[-1]:.2f}\n")
+                    f.write(f"Standard Deviation: {std_devs[-1]:.3f}\n")
+                    f.write(f"Contrast: {contrasts[-1]:.3f}\n")
+                    f.write(f"Bar Length Deviation: {peak_stds[-1]:.3f}\n")
+                print(f"Metrics recorded to {ratings_file}")
+            else:
+                print(f"Skipping recording metrics: {project_dir} does not exist.")
+        except Exception as e:
+            print(f"Error recording metrics: {e}")
 
         output_video = os.path.splitext(audio_path)[0] + ".mp4"
         if shutil.which("ffmpeg"):
