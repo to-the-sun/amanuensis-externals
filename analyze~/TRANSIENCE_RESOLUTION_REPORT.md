@@ -44,10 +44,10 @@ This report documents the hierarchical levels of resolution within the `cumulati
 *   **Source**: `cumulative_transience.c` (`BUFFER_LEN 5001`, `start = p_idx - 5000`)
 *   **Purpose**: The primary window of historical context. For every new transient, the algorithm looks back exactly 5 seconds into the `accumulated_buffer` to calculate its cumulative resonance score based on previous rhythmic activity.
 
-## 9. Analysis Context Window
-*   **Resolution**: 6,000ms (6 Seconds)
-*   **Source**: `analyze~.c` (`analysis_seconds = 6`)
-*   **Purpose**: The amount of audio linearized from the circular buffer and sent to the C core in the Max environment. The extra 1 second (beyond the 5s lookback) provides a safety margin for FFT padding artifacts and peak detection latency, ensuring that any peak found has a full 5s of valid history available.
+## 9. Analysis Context Window (Unified 15.2s Model)
+*   Resolution: 15,200ms (15.2 Seconds)
+*   Source: `analyze~.c` (`active_start_frame - 15000`)
+*   Purpose: The amount of historical context maintained by the C core for each analysis hop. This 15.2s window (15s context + 200ms lookahead) ensures that the resonance lookback (5s) and the adaptive threshold (15s) operate with full parity between real-time and offline analysis.
 
 ## 10. Rolling Threshold & State Cleanup
 *   **Resolution**: 15,000ms (15 Seconds)
@@ -75,6 +75,6 @@ This report documents the hierarchical levels of resolution within the `cumulati
 | **Processing Hop**| 100.0 | Orchestration | Max MSP |
 | **Peak Distance** | 200.0 | Logic | C Core |
 | **Lookback Window**| 5,000.0 | Context | C Core |
-| **Context Window** | 6,000.0 | Integration | Max MSP |
+| **Context Window** | 15,200.0| Integration | Max MSP |
 | **Cleanup/Thresh** | 15,000.0 | Management | C Core |
 | **Global Buffer** | 60,000.0 | Storage | Max MSP |

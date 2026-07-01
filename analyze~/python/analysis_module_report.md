@@ -98,6 +98,7 @@ Performs full spectral decomposition and feature extraction on raw audio.
 | **State Retention** | 15s | Snapshots persist in the accumulated buffer for 15 seconds. |
 | **Peak Detection Distance** | 200ms | Minimum distance enforced between peaks in the same band. |
 | **Peak Prominence** | 0.5 | Minimum prominence required for flux peak detection. |
+| **Noise Floor** | 3.0 | Absolute flux floor (dB) for transient identification. |
 
 ---
 

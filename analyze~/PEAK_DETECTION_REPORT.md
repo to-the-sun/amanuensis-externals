@@ -58,24 +58,24 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Absolute Flux Floor (5dB Baseline)
+### Strategy 3: Absolute Flux Floor (3dB Baseline)
 
-This strategy implements a fixed **5dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
+This strategy implements a fixed **3dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
 
 #### Implementation Details:
-1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **5.0 dB** to be considered a peak candidate.
+1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **3.0 dB** to be considered a peak candidate.
 2.  **Visual Representation**: Horizontal threshold lines return to showing the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
 
 #### Speculation on Current Issues:
 
 **1. The Barrage of Tiny Peaks (Low-level Jitter)**
 -   **Cause**: In the new incremental model, the spectrogram is normalized but not necessarily "clamped." In the original offline code, `top_db` (80dB) was used to clip the bottom of the spectrogram. If the incremental cache is missing this clipping or if the stable window is preserving low-level noise that was previously lost in window-edge artifacts, the system will detect every tiny fluctuation above the stable (and very low) rolling threshold.
--   **Alleviation**: The 1dB absolute floor provides a "sanity check" that ignores any rhythmic activity below a noticeable decibel change.
+-   **Alleviation**: The 3dB absolute floor provides a "sanity check" that ignores any rhythmic activity below a noticeable decibel change.
 
 **2. Missing Large Peaks (Threshold Inflation)**
 -   **Cause**: This is likely a side effect of the "Barrage." When thousands of tiny noise-peaks are processed (Stage 1), they contribute to the 15-second rolling average of the flux. This **inflates the threshold** significantly.
 -   **Impact**: A large, valid peak that occurs in a section with high noise-floor jitter may fail the `env[f] > thresh[f]` check because the `thresh[f]` has been pushed too high by the surrounding noise.
--   **Alleviation**: By using the 1dB floor to reject noise *before* it affects the threshold or by refining the prominence check, we can allow major transients to stand out more clearly against a lower, more accurate noise floor.
+-   **Alleviation**: By using the 3dB floor to reject noise *before* it affects the threshold or by refining the prominence check, we can allow major transients to stand out more clearly against a lower, more accurate noise floor.
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.

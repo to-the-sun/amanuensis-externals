@@ -5,15 +5,15 @@ Discrepancies in the output of the `analyze~` Max object compared to its Python 
 
 ## Technical Speculations & Implementation Notes
 
-### 1. Context Window Mismatch
-**Speculation**: The `analyze~` object previously extracted a 2-second context window. However, the `analyzer_process_peak` function implements a 5-second resonance lookback. This rendered the analyzer "blind" to 60% of the historical context.
-**Remediation**: The real-time analysis window has been increased to **6 seconds**. 
+### 1. Context Window Synchronization (Unified 15.2s Model)
+**Speculation**: The `analyze~` object previously used a 2-second or 6-second context window. However, the `analyzer_process_peak` function implements a 5-second resonance lookback, and the adaptive peak threshold requires up to 15 seconds of history for stable convergence.
+**Remediation**: The real-time analysis window has been increased to **15.2 seconds** (15 seconds of historical context + 200ms lookahead).
 
-**Rationale for 6-second vs. 5-second Window**:
-While the resonance algorithm requires a 5-second lookback, a 6-second window is utilized to provide a critical "safety margin" for the following reasons:
-- **FFT Padding**: The spectral analysis phase (`analyzer_analyze_audio`) uses an STFT that artificially zeros out approximately 23ms of the envelope at the start and end of the buffer due to FFT padding. A 6-second window ensures that even when looking back 5 seconds, the algorithm is accessing "clean" spectral data unaffected by these padding artifacts.
-- **Peak Detection Look-Ahead**: The peak detection logic identifies peaks by comparing a frame to its neighbors (`f-1`, `f+1`). This means detected peaks are always slightly delayed from the absolute end of the buffer. The extra second of window length ensures that the "newest" detected peaks still have a full 5 seconds of valid historical data behind them, preventing the algorithm from zero-filling the lookback snapshots.
-- **Internal Algorithmic Guardrails**: Although 6 seconds of peak data are provided to the analyzer, the core `cumulative_transience.c` library internally filters this list. The `analyzer_process_peak` function strictly considers only peaks within the range `[p_idx - 5000, p_idx - 99]` relative to the peak being analyzed. Thus, the extra data provides a buffer for detection but is programmatically excluded from the final resonance calculation, ensuring exact alignment with the 5-second specification.
+**Rationale for 15.2-second Window**:
+- **Resonance Context**: A 15-second window guarantees that every peak within the 5-second resonance lookback is present in the same analysis pass, providing 100% parity with offline batch results.
+- **FFT Padding**: The spectral analysis phase (`analyzer_analyze_audio`) uses an STFT that artificially zeros out approximately 23ms of the envelope at the start and end of the buffer. The 15.2s window ensures the "active" zone is miles away from these padding artifacts.
+- **Peak Detection Look-Ahead**: The system implements a 200ms lookahead margin. This ensures that the peak detection logic can determine if a current candidate is a local maximum before committing to its score, eliminating "double-hits" in the real-time stream.
+- **Threshold Convergence**: The 15-second rolling threshold for peak identification now has access to its full intended history, preventing "sensitivity spikes" that occurred with smaller windows.
 
 ### 2. Volatile Spectrogram Normalization
 **Speculation**: In `analyzer_analyze_audio`, the Mel spectrogram is normalized relative to the peak decibel level found within the current window. In a real-time sliding window, this causes the resulting flux envelopes to "breathe."
@@ -29,22 +29,11 @@ While the resonance algorithm requires a 5-second lookback, a 6-second window is
 - All peaks within the 6-second window are now provided as context for resonance calculations.
 - A robust **Timeline Synchronization** mechanism has been implemented. Because the library operates on relative window indices, its internal state (snapshots and scheduled events) is manually shifted to a global absolute frame space immediately after creation. This ensures that historical lookbacks, snapshot cleanup, and rolling metrics work correctly as the window slides across the audio stream.
 
-## Future Considerations: Analysis Window Duration (6s vs 15s)
+### 2. Spectrogram & `max_peak` Stabilization
+- **Spectrogram**: STFT normalization is performed relative to the loudest peak in the current 15.2s window. This significantly reduces "spectral breathing" artifacts compared to smaller windows.
+- **`max_peak` Reference**: The `TransientAnalyzer` state is initialized with a `max_peak` of `1.0` and updated dynamically. The 15.2s window allows the system to converge towards the global maximum rapidly.
 
-While the current 6-second window provides a significant improvement over the original 2-second window, increasing this to 15 seconds would offer several theoretical and practical benefits:
-
-### 1. Guaranteed Resonance Context
-**Question**: Does a 6-second window mean that if a peak is not detected in over one second, it's possible that all of the historical peaks it should see might not fall within the five-second window?
-**Answer**: Yes. The `analyze~` object only passes peaks discovered within the *current* analysis window to the resonance algorithm. If a peak occurred 5.5 seconds ago, it is still within the 5-second lookback of the C core, but it would have "fallen off" the back of a 6-second window if the new peak is at the very end. A 15-second window ensures that any peak within the 5-second lookback is guaranteed to be present in the same analysis pass as the peak being processed.
-
-### 2. Rolling Threshold Alignment
-The peak detection logic in `cumulative_transience.c` utilizes a **15-second rolling threshold**. With a 6-second context window, the peak detector is only ever looking at a 6-second history at most. Increasing the window to 15 seconds allows the peak detection algorithm to operate with its full intended historical context, leading to more accurate and stable peak identification.
-
-### 3. Spectrogram & `max_peak` Stabilization
-- **Spectrogram**: STFT normalization is performed relative to the loudest peak in the current window. A 15-second window provides a much more stable reference than 6 seconds, significantly reducing "spectral breathing" artifacts.
-- **`max_peak`**: A 15-second window is 2.5x more likely to capture the true global maximum of the audio stream in any given pass, allowing the dynamic `max_peak` tracker to converge faster and more accurately.
-
-### 4. Sampling Rate & Timing Accuracy
+### 3. Sampling Rate & Timing Accuracy
 **Speculation**: The algorithm previously assumed a fixed 1ms duration for every analysis hop. At 44.1 kHz, a 44-sample hop actually represents ~0.9977ms. Over several minutes, this discrepancy leads to a noticeable progressive drift between the analysis timeline and the actual audio.
 **Remediation**:
 - The `TransientAnalyzer` now calculates the precise `frame_duration_ms` based on the provided sampling rate (`1000.0 * hop_length / sr`).

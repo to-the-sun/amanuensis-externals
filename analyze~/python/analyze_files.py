@@ -312,11 +312,11 @@ def generate_video(audio_path, data):
                 # Add to debug console
                 # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
                 q_sum = sum(q['val'] for q in p_data['qualifiers'])
-                # Qualification Equation: (Flux > Thresh & Flux >= 2.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
+                # Qualification Equation: (Flux > Thresh & Flux >= 3.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
                 # Note: detected_peak_val is the flux seen at detection time in the incremental loop
                 f_val = p_data.get('detected_peak_val', p_data['peak_val'])
                 debug_msg = (f"[B{p_data['band_idx']}] (Flux:{f_val:.2f} > Th:{p_data['thresh_val']:.2f} & "
-                             f"Flux >= 2.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
+                             f"Flux >= 3.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
                              f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
 
                 active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p_data['band_idx']})
