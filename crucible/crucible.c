@@ -30,7 +30,11 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
 
+#ifndef REBAR_INTERNAL_BINDING
+#ifndef REBAR_INTERNAL_BINDING
 t_class *crucible_class;
+#endif
+#endif
 
 void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("-")) {

@@ -14,6 +14,11 @@
 
 // --- Symbol Renaming ---
 
+t_class *rebar_notify_class;
+t_class *rebar_buildspans_class;
+t_class *rebar_crucible_class;
+
+
 #define notify_class rebar_notify_class
 #define note_compare rebar_note_compare
 #define bar_key_compare rebar_bar_key_compare

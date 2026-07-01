@@ -117,9 +117,10 @@ void async_worker_release(t_async_worker *worker) {
     }
 }
 
+
 int async_worker_is_worker_thread(t_async_worker *worker) {
     if (!worker) return 0;
-    return systhread_self() == worker->thread;
+    return (systhread_self() == worker->thread);
 }
 
 void async_worker_enqueue(t_async_worker *worker, void *x, method m, t_symbol *s, long argc, t_atom *argv) {

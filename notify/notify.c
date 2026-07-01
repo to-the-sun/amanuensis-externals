@@ -46,7 +46,11 @@ typedef struct _notify {
     double bar_length;
 } t_notify;
 
+#ifndef REBAR_INTERNAL_BINDING
+#ifndef REBAR_INTERNAL_BINDING
 t_class *notify_class;
+#endif
+#endif
 
 // Function prototypes
 void *notify_new(t_symbol *s, long argc, t_atom *argv);
@@ -63,6 +67,7 @@ int note_compare(const void *a, const void *b);
 int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 
+#ifndef NO_EXT_MAIN
 void ext_main(void *r) {
     t_class *c;
 
@@ -90,6 +95,7 @@ void ext_main(void *r) {
     class_register(CLASS_BOX, c);
     notify_class = c;
 }
+#endif
 
 void notify_defer_output(t_notify *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("palette")) {
