@@ -1,6 +1,7 @@
 import numpy as np
 cimport numpy as cnp
 from libc.string cimport memcpy
+from libc.stdlib cimport malloc, free
 
 cnp.import_array()
 
@@ -206,10 +207,13 @@ cdef class TransientAnalyzer:
         analyzer_push_audio(self._c_analyzer, <float*>y.data, len(y), sr)
 
     def analyze_chunk(self, cnp.ndarray[float, ndim=1] y, int sr, int buffer_start_frame, int active_start_frame):
-        cdef ChunkAnalysisResult res
-        cdef int ret = analyzer_analyze_chunk(self._c_analyzer, <float*>y.data, len(y), sr, buffer_start_frame, active_start_frame, &res)
+        cdef ChunkAnalysisResult* res = <ChunkAnalysisResult*>malloc(sizeof(ChunkAnalysisResult))
+        if res == NULL: raise MemoryError()
+
+        cdef int ret = analyzer_analyze_chunk(self._c_analyzer, <float*>y.data, len(y), sr, buffer_start_frame, active_start_frame, res)
 
         if not ret:
+            free(res)
             return None
 
         cdef list peaks = []
@@ -248,7 +252,7 @@ cdef class TransientAnalyzer:
             memcpy(f_arr.data, res.last_flux[b], 100 * sizeof(float))
             flux_list.append(f_arr)
 
-        return {
+        result = {
             'peaks': peaks,
             'flux': flux_list,
             'metrics': {
@@ -263,6 +267,8 @@ cdef class TransientAnalyzer:
                 'max_score_seen': m.max_score_seen
             }
         }
+        free(res)
+        return result
 
     def update_metrics(self, int frame):
         cdef AnalyzerMetrics m

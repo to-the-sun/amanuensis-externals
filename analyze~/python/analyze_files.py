@@ -233,9 +233,22 @@ def main():
         if result: generate_video(f, result)
 
 if __name__ == "__main__":
-    try: main(); print("\nAnalysis complete.")
-    except BaseException: traceback.print_exc()
+    try:
+        main()
+        print("\nAnalysis complete.")
+    except Exception:
+        print("\n" + "="*60)
+        print("ERROR ENCOUNTERED DURING ANALYSIS")
+        print("="*60)
+        traceback.print_exc()
+        print("="*60)
+    except BaseException:
+        # Catch KeyboardInterrupt, SystemExit, etc.
+        traceback.print_exc()
     finally:
+        # Keep window open for user to see output/errors
         print("\nPersistence check: The script will remain open until you press Enter.")
-        try: input("\nPress Enter to exit...")
-        except (EOFError, KeyboardInterrupt): pass
+        try:
+            input("\nPress Enter to exit...")
+        except (EOFError, KeyboardInterrupt):
+            pass

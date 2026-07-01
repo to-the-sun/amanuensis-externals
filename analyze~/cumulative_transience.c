@@ -349,15 +349,17 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         int tend = last_t + step; if (tend > len) tend = len;
         if (tend - last_t == 0) break;
         int act_s = last_t - (int)(sr * 0.2), win_s = act_s - (int)(sr * 15.0); if (win_s < 0) win_s = 0;
-        ChunkAnalysisResult res; analyzer_analyze_chunk(a, y + last_t, tend - last_t, sr, win_s / hop, act_s / hop, &res);
-        for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) result_out->bands[b].envelope[f] = res.last_flux[b][i]; }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res.metrics.rating; result_out->std_devs[f] = res.metrics.std_dev; result_out->means[f] = res.metrics.mean; result_out->contrasts[f] = res.metrics.contrast; result_out->peak_stds[f] = res.metrics.peak_std; } }
-        for (int i = 0; i < res.peak_list.num_peaks; i++) {
-            PeakResult* pr = &res.peak_list.peaks[i]; int b = pr->band_idx;
+        ChunkAnalysisResult* res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+        if (!res) { analyzer_destroy(a); return 0; }
+        analyzer_analyze_chunk(a, y + last_t, tend - last_t, sr, win_s / hop, act_s / hop, res);
+        for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) result_out->bands[b].envelope[f] = res->last_flux[b][i]; }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; } }
+        for (int i = 0; i < res->peak_list.num_peaks; i++) {
+            PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
             memcpy(&pband[b][result_out->bands[b].num_peaks++], pr, sizeof(PeakResult));
         }
-        last_t = tend;
+        free(res); last_t = tend;
     }
     result_out->max_peak_value = (float)analyzer_get_max_peak(a); result_out->min_score_seen = a->min_score_seen; result_out->max_score_seen = a->max_score_seen;
     for(int b=0; b<MAX_BANDS; b++) {
