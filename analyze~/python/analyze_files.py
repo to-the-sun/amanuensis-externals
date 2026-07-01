@@ -133,7 +133,7 @@ def generate_video(audio_path, data):
 
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}")
         ax_transient.set_ylabel("Onset Strength")
-        ax_transient.legend(loc='upper right')
+        # ax_transient.legend(loc='upper right') # Legend removed per user request
         ax_transient.grid(True, alpha=0.3)
         ax_transient.set_xlim(-20, 5)
 
@@ -208,12 +208,12 @@ def generate_video(audio_path, data):
 
         # Debug console pool
         MAX_DEBUG_LINES = 10
-        debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.04), '', transform=ax_transient.transAxes,
+        debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes,
                                                verticalalignment='top', horizontalalignment='right',
-                                               fontsize=8, family='monospace', color='#2ecc71',
+                                               fontsize=11, family='monospace', color='#2ecc71',
                                                fontweight='bold', visible=False, zorder=10)
                              for i in range(MAX_DEBUG_LINES)]
-        active_debug_lines = [] # list of {'text', 'lifetime'}
+        active_debug_lines = [] # list of {'text', 'lifetime', 'band_idx'}
 
         metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes,
                                    verticalalignment='top', fontsize=10, color='#f1c40f',
@@ -316,10 +316,14 @@ def generate_video(audio_path, data):
             # Process visually appearing Peaks
             for p_data in all_new_peak_data:
                 # Add to debug console
-                # [Band 0] Flux: 12.34 > Thresh: 4.56 & Prom: 7.78 >= 0.50
-                debug_msg = (f"[Band {p_data['band_idx']}] Flux: {p_data['peak_val']:.2f} > "
-                             f"Thresh: {p_data['thresh_val']:.2f} & Prom: {p_data['prominence']:.2f} >= 0.50")
-                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME})
+                # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
+                q_sum = sum(q['val'] for q in p_data['qualifiers'])
+                # Qualification Equation: (Flux > Thresh & Flux >= 1.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
+                debug_msg = (f"[B{p_data['band_idx']}] (Flux:{p_data['peak_val']:.2f} > Th:{p_data['thresh_val']:.2f} & "
+                             f"Flux >= 1.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
+                             f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
+
+                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p_data['band_idx']})
                 if len(active_debug_lines) > MAX_DEBUG_LINES:
                     active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
 
@@ -432,6 +436,7 @@ def generate_video(audio_path, data):
                 if debug['lifetime'] > 0:
                     txt_artist = debug_console_pool[i]
                     txt_artist.set_text(debug['text'])
+                    txt_artist.set_color(colors[debug['band_idx']])
                     txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)) # Quick fade out at the end
                     txt_artist.set_visible(True)
                     debug['lifetime'] -= 1
@@ -588,9 +593,18 @@ def analyze_audio(file_path):
     print(f"Analysis loop finished. Found {len(all_peaks)} peaks. Starting pre-processing for video...")
 
     # Convert all_peaks to the format expected by generate_video
+    # and capture the detailed parameters for synchronization
     peaks_list = [[] for _ in range(4)]
+    peaks_params_list = [{'thresh_vals': [], 'left_mins': [], 'right_mins': [], 'proms': []} for _ in range(4)]
+
     for p in all_peaks:
-        peaks_list[p['band_idx']].append(p['p_idx'])
+        b = p['band_idx']
+        peaks_list[b].append(p['p_idx'])
+        params = peaks_params_list[b]
+        params['thresh_vals'].append(p.get('thresh_val', 0.0))
+        params['left_mins'].append(p.get('left_min', 0.0))
+        params['right_mins'].append(p.get('right_min', 0.0))
+        params['proms'].append(p.get('prominence', 0.0))
 
     result = {
         'filename': os.path.basename(file_path),
@@ -600,7 +614,7 @@ def analyze_audio(file_path):
         'onset_envs': [env.tolist() for env in full_res['onset_envs']],
         'rolling_thresholds': [rt.tolist() for rt in full_res['rolling_thresholds']],
         'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list],
-        'peaks_params_list': full_res.get('peaks_params_list', None)
+        'peaks_params_list': peaks_params_list
     }
 
     # Add compatibility fields

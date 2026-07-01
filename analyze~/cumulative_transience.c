@@ -448,41 +448,43 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         for (int f = 1; f < num_frames - 1; f++) {
             // Standard criteria + 1dB Absolute Floor
             if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 1.0f) {
+                bool replaced = false;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
-                    if (env[f] > env[temp_peaks[peak_count-1]]) {
-                        temp_peaks[peak_count-1] = f;
-                    }
                     too_close = true;
+                    if (env[f] > env[temp_peaks[peak_count-1]]) {
+                        replaced = true;
+                    }
                 }
 
-                float left_min = env[f];
-                for(int k=f-1; k>=0; k--) {
-                    if (env[k] > env[f]) break;
-                    if (env[k] < left_min) left_min = env[k];
-                }
-                float right_min = env[f];
-                for(int k=f+1; k<num_frames; k++) {
-                    if (env[k] > env[f]) break;
-                    if (env[k] < right_min) right_min = env[k];
-                }
-                float prom = env[f] - (left_min > right_min ? left_min : right_min);
+                if (!too_close || replaced) {
+                    float left_min = env[f];
+                    for(int k=f-1; k>=0; k--) {
+                        if (env[k] > env[f]) break;
+                        if (env[k] < left_min) left_min = env[k];
+                    }
+                    float right_min = env[f];
+                    for(int k=f+1; k<num_frames; k++) {
+                        if (env[k] > env[f]) break;
+                        if (env[k] < right_min) right_min = env[k];
+                    }
+                    float prom = env[f] - (left_min > right_min ? left_min : right_min);
 
-                if (prom >= 0.5f) {
-                    if (too_close) {
-                        if (env[f] == env[temp_peaks[peak_count-1]]) {
+                    if (prom >= 0.5f) {
+                        if (replaced) {
+                            temp_peaks[peak_count-1] = f;
                             temp_thresh[peak_count-1] = thresh[f];
                             temp_left[peak_count-1] = left_min;
                             temp_right[peak_count-1] = right_min;
                             temp_prom[peak_count-1] = prom;
+                        } else if (!too_close) {
+                            temp_peaks[peak_count] = f;
+                            temp_thresh[peak_count] = thresh[f];
+                            temp_left[peak_count] = left_min;
+                            temp_right[peak_count] = right_min;
+                            temp_prom[peak_count] = prom;
+                            peak_count++;
                         }
-                    } else {
-                        temp_peaks[peak_count] = f;
-                        temp_thresh[peak_count] = thresh[f];
-                        temp_left[peak_count] = left_min;
-                        temp_right[peak_count] = right_min;
-                        temp_prom[peak_count] = prom;
-                        peak_count++;
                     }
                 }
             }
@@ -782,43 +784,46 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
         float* temp_prom = (float*)malloc(sizeof(float) * num_frames);
 
         for (int f = 1; f < num_frames - 1; f++) {
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f]) {
+            // Standard criteria + 1dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 1.0f) {
                 // Simplified SciPy-like find_peaks with distance and prominence
+                bool replaced = false;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
-                    if (env[f] > env[temp_peaks[peak_count-1]]) {
-                        temp_peaks[peak_count-1] = f;
-                    }
                     too_close = true;
+                    if (env[f] > env[temp_peaks[peak_count-1]]) {
+                        replaced = true;
+                    }
                 }
 
-                float left_min = env[f];
-                for(int k=f-1; k>=0; k--) {
-                    if (env[k] > env[f]) break;
-                    if (env[k] < left_min) left_min = env[k];
-                }
-                float right_min = env[f];
-                for(int k=f+1; k<num_frames; k++) {
-                    if (env[k] > env[f]) break;
-                    if (env[k] < right_min) right_min = env[k];
-                }
+                if (!too_close || replaced) {
+                    float left_min = env[f];
+                    for(int k=f-1; k>=0; k--) {
+                        if (env[k] > env[f]) break;
+                        if (env[k] < left_min) left_min = env[k];
+                    }
+                    float right_min = env[f];
+                    for(int k=f+1; k<num_frames; k++) {
+                        if (env[k] > env[f]) break;
+                        if (env[k] < right_min) right_min = env[k];
+                    }
 
-                float prom = env[f] - (left_min > right_min ? left_min : right_min);
-                if (prom >= 0.5f) {
-                    if (too_close) {
-                        if (env[f] == env[temp_peaks[peak_count-1]]) {
+                    float prom = env[f] - (left_min > right_min ? left_min : right_min);
+                    if (prom >= 0.5f) {
+                        if (replaced) {
+                            temp_peaks[peak_count-1] = f;
                             temp_thresh[peak_count-1] = thresh[f];
                             temp_left[peak_count-1] = left_min;
                             temp_right[peak_count-1] = right_min;
                             temp_prom[peak_count-1] = prom;
+                        } else if (!too_close) {
+                            temp_peaks[peak_count] = f;
+                            temp_thresh[peak_count] = thresh[f];
+                            temp_left[peak_count] = left_min;
+                            temp_right[peak_count] = right_min;
+                            temp_prom[peak_count] = prom;
+                            peak_count++;
                         }
-                    } else {
-                        temp_peaks[peak_count] = f;
-                        temp_thresh[peak_count] = thresh[f];
-                        temp_left[peak_count] = left_min;
-                        temp_right[peak_count] = right_min;
-                        temp_prom[peak_count] = prom;
-                        peak_count++;
                     }
                 }
             }
