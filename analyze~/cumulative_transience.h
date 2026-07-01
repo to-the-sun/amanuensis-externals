@@ -102,6 +102,7 @@ typedef struct {
     double* fft_imag;
 
     long long total_frames_pushed; // To track global frame index alignment
+    long long total_samples_received;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
