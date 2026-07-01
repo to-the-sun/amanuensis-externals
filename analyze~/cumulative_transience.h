@@ -100,6 +100,7 @@ typedef struct {
 TransientAnalyzer* analyzer_create(double max_peak_value);
 void analyzer_destroy(TransientAnalyzer* self);
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr);
+double analyzer_get_max_peak(TransientAnalyzer* self);
 
 int analyzer_process_peak(TransientAnalyzer* self,
                           int p_idx,

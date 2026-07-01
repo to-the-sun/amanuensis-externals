@@ -4,10 +4,15 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <stdio.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+#define N_FFT 2048
+#define N_MELS 128
+#define CACHE_SIZE 15201 // Enough for 15.2 seconds at 1ms hop
 
 // Internal FFT implementation: Simple Radix-2 FFT
 static void fft(double* real, double* imag, int n) {
@@ -59,11 +64,6 @@ static int compare_peaks(const void* a, const void* b) {
     PeakRef* pb = (PeakRef*)b;
     return pa->p_idx - pb->p_idx;
 }
-
-
-#define N_FFT 2048
-#define N_MELS 128
-#define CACHE_SIZE 15201 // Enough for 15.2 seconds at 1ms hop
 
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels);
 
@@ -127,6 +127,10 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
     for (int i = 0; i < BUFFER_LEN; i++) {
         self->buffer_times[i] = (double)(i - 5000) * self->frame_duration_ms;
     }
+}
+
+double analyzer_get_max_peak(TransientAnalyzer* self) {
+    return self->max_peak;
 }
 
 int analyzer_process_peak(TransientAnalyzer* self,
@@ -340,8 +344,6 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
     }
 
     int hop_length = (int)(sr * 0.001);
-
-    // Combine overlap with new audio
     int combined_len = self->overlap_len + len;
     float* combined = (float*)malloc(sizeof(float) * combined_len);
     if (self->overlap_len > 0) {
@@ -349,17 +351,7 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
     }
     memcpy(combined + self->overlap_len, y, sizeof(float) * len);
 
-    // Process only as many hops as fully fit within the new combined audio,
-    // respecting the N_FFT / 2 lookahead and lookback.
-    // We start at frame 0 (center of FFT window at index 0)
-    // The needed range for frame 'f' is [f*hop - N_FFT/2, f*hop + N_FFT/2]
-
-    // To ensure we process ALL of 'y', we need to check how many frames
-    // are covered by 'y' starting from the previous overlap state.
-    // The previous processed frames ended at self->overlap_len in the combined buffer.
-
     int num_frames = len / hop_length;
-
     double* real = (double*)malloc(sizeof(double) * N_FFT);
     double* imag = (double*)malloc(sizeof(double) * N_FFT);
 
@@ -369,39 +361,24 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 
         for (int i = 0; i < N_FFT; i++) {
             int idx = start + i;
-            if (idx >= 0 && idx < combined_len) {
-                real[i] = (double)combined[idx] * self->fft_window[i];
-            } else if (idx < 0) {
-                // If we are at the very beginning of the stream, use reflection
-                real[i] = (double)combined[-idx] * self->fft_window[i];
-            } else {
-                // If we hit the end of current combined buffer, use reflection
-                // Actually, we shouldn't hit this if num_frames is calculated correctly
-                // to stay within the 'safe' zone, but as a fallback:
-                int ref_idx = 2 * combined_len - 2 - idx;
-                if (ref_idx >= 0 && ref_idx < combined_len) {
-                    real[i] = (double)combined[ref_idx] * self->fft_window[i];
-                } else {
-                    real[i] = 0;
-                }
-            }
-            imag[i] = 0;
+            int r_idx = idx;
+            if (r_idx < 0) r_idx = -r_idx;
+            if (r_idx >= combined_len) r_idx = 2 * combined_len - 2 - r_idx;
+            real[i] = (r_idx >= 0 && r_idx < combined_len) ? (double)combined[r_idx] * self->fft_window[i] : 0.0;
+            imag[i] = 0.0;
         }
 
         fft(real, imag, N_FFT);
 
-        // Current write position in circular buffer
         int f_idx = self->cache_write_ptr;
-
         double frame_max_db = -DBL_MAX;
         for (int m = 0; m < N_MELS; m++) {
             double mel_val = 0;
             for (int i = 0; i < (N_FFT / 2 + 1); i++) {
-                double re = real[i];
-                double im = imag[i];
-                mel_val += (re * re + im * im) * self->mel_filters[m * (N_FFT / 2 + 1) + i];
+                // Normalize power by N^2 (Forward gain is N)
+                double power = (real[i] * real[i] + imag[i] * imag[i]) / ((double)N_FFT * (double)N_FFT);
+                mel_val += power * self->mel_filters[m * (N_FFT / 2 + 1) + i];
             }
-
             if (mel_val < 1e-10) mel_val = 1e-10;
             double db_val = 10.0 * log10(mel_val);
             self->mel_spectrogram[m * CACHE_SIZE + f_idx] = db_val;
@@ -410,41 +387,33 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 
         if (frame_max_db > self->max_mel_db) self->max_mel_db = frame_max_db;
 
-        // Apply 80dB clamping relative to rolling max
-        double top_db = 80.0;
-        double floor_db = self->max_mel_db - top_db;
+        double floor_db = self->max_mel_db - 80.0;
         for (int m = 0; m < N_MELS; m++) {
             if (self->mel_spectrogram[m * CACHE_SIZE + f_idx] < floor_db) {
                 self->mel_spectrogram[m * CACHE_SIZE + f_idx] = floor_db;
             }
         }
 
-        // Calculate Flux for this frame across bands
         int prev_f_idx = (f_idx - 1 + CACHE_SIZE) % CACHE_SIZE;
-
         for (int b = 0; b < MAX_BANDS; b++) {
-            double flux = 0;
+            double flux_sum = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
                 double diff = self->mel_spectrogram[m * CACHE_SIZE + f_idx] - self->mel_spectrogram[m * CACHE_SIZE + prev_f_idx];
-                if (diff > 0) flux += diff;
+                if (diff > 0) flux_sum += diff;
             }
-            self->flux_envelopes[b * CACHE_SIZE + f_idx] = (float)(flux / 32.0);
+            self->flux_envelopes[b * CACHE_SIZE + f_idx] = (float)(flux_sum / 32.0);
         }
 
         self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE;
         if (self->cache_count < CACHE_SIZE) self->cache_count++;
     }
 
-    // Save tail for next overlap
-    // We want to keep enough samples for N_FFT/2 lookahead of the NEXT hop.
-    // The next hop (f=num_frames) would have center = num_frames * hop + overlap_len
-    // Its range would start at center - N_FFT/2.
-    int next_start = num_frames * hop_length;
-    int remaining = combined_len - next_start;
-
-    if (remaining > N_FFT) remaining = N_FFT; // Cap it
+    // Save tail for next overlap (preserves lookback context)
+    int used_up_to = num_frames * hop_length;
+    int remaining = combined_len - used_up_to;
+    if (remaining > N_FFT) remaining = N_FFT;
     if (remaining > 0) {
-        memcpy(self->overlap_buffer, combined + next_start, sizeof(float) * remaining);
+        memcpy(self->overlap_buffer, combined + (combined_len - remaining), sizeof(float) * remaining);
         self->overlap_len = remaining;
     } else {
         self->overlap_len = 0;
@@ -463,10 +432,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
                            int active_start_frame,
                            ChunkAnalysisResult* result_out) {
 
-    // 1. Push ONLY NEW audio into cache
     analyzer_push_audio(self, y, len, sr);
 
-    // 2. Linearize the 15.2s context from circular cache for processing
     int num_frames = self->cache_count;
     int read_ptr = (self->cache_write_ptr - num_frames + CACHE_SIZE) % CACHE_SIZE;
 
@@ -474,9 +441,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
     for (int b = 0; b < MAX_BANDS; b++) {
         bands[b].envelope = (float*)malloc(sizeof(float) * num_frames);
         bands[b].rolling_threshold = (float*)malloc(sizeof(float) * num_frames);
-    }
 
-    for (int b = 0; b < MAX_BANDS; b++) {
         double current_sum = 0;
         int window_size = 15000;
         for (int j = 0; j < num_frames; j++) {
@@ -494,7 +459,6 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         }
     }
 
-    // 4. Peak Detection on linearized buffer
     for (int b = 0; b < MAX_BANDS; b++) {
         float* env = bands[b].envelope;
         float* thresh = bands[b].rolling_threshold;
@@ -506,15 +470,12 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         int peak_count = 0;
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 3dB Absolute Floor
             if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 3.0f) {
                 bool replaced = false;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
                     too_close = true;
-                    if (env[f] > env[temp_peaks[peak_count-1]]) {
-                        replaced = true;
-                    }
+                    if (env[f] > env[temp_peaks[peak_count-1]]) replaced = true;
                 }
 
                 if (!too_close || replaced) {
@@ -563,40 +524,24 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         memcpy(bands[b].proms, temp_prom, sizeof(float) * peak_count);
 
         bands[b].num_peaks = peak_count;
-        free(temp_peaks);
-        free(temp_thresh);
-        free(temp_left);
-        free(temp_right);
-        free(temp_prom);
+        free(temp_peaks); free(temp_thresh); free(temp_left); free(temp_right); free(temp_prom);
     }
 
-    // 5. Converging max_peak
     float global_max = 0;
     bool any_peak = false;
     for (int b = 0; b < MAX_BANDS; b++) {
         for (int i = 0; i < bands[b].num_peaks; i++) {
-            int p_idx = bands[b].peaks[i];
-            float val = bands[b].envelope[p_idx];
-            if (!any_peak || val > global_max) {
-                global_max = val;
-                any_peak = true;
-            }
+            float val = bands[b].envelope[bands[b].peaks[i]];
+            if (!any_peak || val > global_max) { global_max = val; any_peak = true; }
         }
     }
-    if (any_peak && global_max > (float)self->max_peak) {
-        self->max_peak = (double)global_max;
-    }
-
-    // Qualification check: Only keep peaks where Flux >= 1.0 (already done in detection)
-    // and where we have some resonance context.
-    // The C-core analyzer_process_peak will return the final score.
+    if (any_peak && global_max > (float)self->max_peak) self->max_peak = (double)global_max;
 
     int total_peaks = 0;
     for (int b = 0; b < MAX_BANDS; b++) total_peaks += bands[b].num_peaks;
 
     PeakRef* all_peaks_ref = (PeakRef*)malloc(sizeof(PeakRef) * (total_peaks + 1));
     int* all_indices = (int*)malloc(sizeof(int) * (total_peaks + 1));
-
     int curr = 0;
     for (int b = 0; b < MAX_BANDS; b++) {
         for (int i = 0; i < bands[b].num_peaks; i++) {
@@ -609,14 +554,12 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
     qsort(all_peaks_ref, total_peaks, sizeof(PeakRef), compare_peaks);
 
     result_out->peak_list.num_peaks = 0;
-
     for (int i = 0; i < total_peaks; i++) {
         int p_idx = all_peaks_ref[i].p_idx;
         int b = all_peaks_ref[i].band_idx;
         int p_global = buffer_start_frame + p_idx;
 
         if (p_global >= active_start_frame && p_global < active_start_frame + 100) {
-            // Find the peak in bands[b].peaks to get its params
             double p_val = 0, t_val = 0, l_val = 0, r_val = 0, pr_val = 0;
             for (int k = 0; k < bands[b].num_peaks; k++) {
                 if (bands[b].peaks[k] == p_idx) {
@@ -632,9 +575,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
             PeakResult pr;
             double time = (double)p_global * self->frame_duration_ms / 1000.0;
             if (analyzer_process_peak(self, p_idx, b, time, bands[b].envelope, num_frames, all_indices, total_peaks, p_val, t_val, l_val, r_val, pr_val, &pr)) {
-                if (self->snapshot_tails[b]) {
-                    self->snapshot_tails[b]->p_idx = p_global;
-                }
+                if (self->snapshot_tails[b]) self->snapshot_tails[b]->p_idx = p_global;
                 if (result_out->peak_list.num_peaks < MAX_PEAKS_PER_CHUNK) {
                     pr.p_idx = p_global;
                     result_out->peak_list.peaks[result_out->peak_list.num_peaks++] = pr;
@@ -645,43 +586,26 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
 
     analyzer_update_metrics(self, active_start_frame + 100, &result_out->metrics);
 
-    // Cleanup linearized buffers
     for (int b = 0; b < MAX_BANDS; b++) {
-        free(bands[b].envelope);
-        free(bands[b].rolling_threshold);
-        free(bands[b].peaks);
-        free(bands[b].thresh_vals);
-        free(bands[b].left_mins);
-        free(bands[b].right_mins);
-        free(bands[b].proms);
+        free(bands[b].envelope); free(bands[b].rolling_threshold);
+        free(bands[b].peaks); free(bands[b].thresh_vals);
+        free(bands[b].left_mins); free(bands[b].right_mins); free(bands[b].proms);
     }
-    free(all_peaks_ref);
-    free(all_indices);
-
+    free(all_peaks_ref); free(all_indices);
     return 1;
 }
-
-#define N_FFT 2048
-#define N_MELS 128
 
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
     double* filters = (double*)malloc(sizeof(double) * n_mels * (n_fft / 2 + 1));
     memset(filters, 0, sizeof(double) * n_mels * (n_fft / 2 + 1));
-
-    double f_min = 0;
-    double f_max = sr / 2.0;
-
-    static const double f_sp = 200.0 / 3.0;
-    static const double min_log_hz = 1000.0;
-    const double min_log_mel = (min_log_hz - 0.0) / f_sp;
-    const double log_step = log(6.4) / 27.0;
+    double f_min = 0, f_max = sr / 2.0;
+    static const double f_sp = 200.0 / 3.0, min_log_hz = 1000.0;
+    const double min_log_mel = (min_log_hz - 0.0) / f_sp, log_step = log(6.4) / 27.0;
 
     #define HZ_TO_MEL(hz) ((hz) < min_log_hz ? ((hz) - 0.0) / f_sp : min_log_mel + log((hz) / min_log_hz) / log_step)
     #define MEL_TO_HZ(mel) ((mel) < min_log_mel ? 0.0 + (mel) * f_sp : min_log_hz * exp(log_step * ((mel) - min_log_mel)))
 
-    double mel_min = HZ_TO_MEL(f_min);
-    double mel_max = HZ_TO_MEL(f_max);
-
+    double mel_min = HZ_TO_MEL(f_min), mel_max = HZ_TO_MEL(f_max);
     double* mel_points = (double*)malloc(sizeof(double) * (n_mels + 2));
     for (int i = 0; i < n_mels + 2; i++) {
         double mel = mel_min + i * (mel_max - mel_min) / (n_mels + 1);
@@ -690,119 +614,72 @@ static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
 
     int n_fft_bins = n_fft / 2 + 1;
     for (int j = 0; j < n_mels; j++) {
-        double f_low = mel_points[j];
-        double f_mid = mel_points[j+1];
-        double f_high = mel_points[j+2];
-
+        double f_low = mel_points[j], f_mid = mel_points[j+1], f_high = mel_points[j+2];
         for (int i = 0; i < n_fft_bins; i++) {
             double f = i * (double)sr / n_fft;
             double weight = 0;
-            if (f >= f_low && f <= f_mid) {
-                weight = (f - f_low) / (f_mid - f_low);
-            } else if (f >= f_mid && f <= f_high) {
-                weight = (f_high - f) / (f_high - f_mid);
-            }
+            if (f >= f_low && f <= f_mid) weight = (f - f_low) / (f_mid - f_low);
+            else if (f >= f_mid && f <= f_high) weight = (f_high - f) / (f_high - f_mid);
             filters[j * n_fft_bins + i] = weight;
         }
-
         double enorm = 2.0 / (f_high - f_low);
-        for (int i = 0; i < n_fft_bins; i++) {
-            filters[j * n_fft_bins + i] *= enorm;
-        }
+        for (int i = 0; i < n_fft_bins; i++) filters[j * n_fft_bins + i] *= enorm;
     }
-
     free(mel_points);
     return filters;
 }
 
 int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* result_out) {
-    result_out->ratings = NULL;
-    result_out->std_devs = NULL;
-    result_out->contrasts = NULL;
-    result_out->peak_stds = NULL;
-
+    result_out->ratings = NULL; result_out->std_devs = NULL; result_out->contrasts = NULL; result_out->peak_stds = NULL;
     int hop_length = (int)(sr * 0.001);
-    int n_fft = N_FFT;
-    int n_mels = N_MELS;
     int num_frames = (len + hop_length - 1) / hop_length;
-
     result_out->num_frames = num_frames;
     result_out->times = (float*)malloc(sizeof(float) * num_frames);
-    for (int i = 0; i < num_frames; i++) {
-        result_out->times[i] = (float)i * (float)hop_length / (float)sr;
-    }
+    for (int i = 0; i < num_frames; i++) result_out->times[i] = (float)i * (float)hop_length / (float)sr;
 
-    double* mel_filters = create_mel_filterbank(sr, n_fft, n_mels);
-
-    double* window = (double*)malloc(sizeof(double) * n_fft);
-    for (int i = 0; i < n_fft; i++) {
-        window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)n_fft));
-    }
-
-    double* mel_spectrogram = (double*)malloc(sizeof(double) * n_mels * num_frames);
-    memset(mel_spectrogram, 0, sizeof(double) * n_mels * num_frames);
-
-    double* real = (double*)malloc(sizeof(double) * n_fft);
-    double* imag = (double*)malloc(sizeof(double) * n_fft);
-
+    double* window = (double*)malloc(sizeof(double) * N_FFT);
+    for (int i = 0; i < N_FFT; i++) window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)N_FFT));
+    double* mel_filters = create_mel_filterbank(sr, N_FFT, N_MELS);
+    double* mel_spectrogram = (double*)malloc(sizeof(double) * N_MELS * num_frames);
+    double* real = (double*)malloc(sizeof(double) * N_FFT);
+    double* imag = (double*)malloc(sizeof(double) * N_FFT);
     double rolling_max_mel_db = -DBL_MAX;
 
     for (int f = 0; f < num_frames; f++) {
-        int start = f * hop_length - n_fft / 2;
-
-        for (int i = 0; i < n_fft; i++) {
-            int idx = start + i;
-            if (idx < 0) {
-                idx = -idx;
-            } else if (idx >= len) {
-                idx = 2 * len - 2 - idx;
-            }
-            
-            if (idx >= 0 && idx < len) {
-                real[i] = (double)y[idx] * window[i];
-            } else {
-                real[i] = 0;
-            }
-            imag[i] = 0;
+        int center = f * hop_length;
+        int start_idx = center - N_FFT / 2;
+        for (int i = 0; i < N_FFT; i++) {
+            int idx = start_idx + i;
+            int r_idx = idx;
+            if (r_idx < 0) r_idx = -r_idx;
+            if (r_idx >= len) r_idx = 2 * len - 2 - r_idx;
+            real[i] = (r_idx >= 0 && r_idx < len) ? (double)y[r_idx] * window[i] : 0.0;
+            imag[i] = 0.0;
         }
-
-        fft(real, imag, n_fft);
-
+        fft(real, imag, N_FFT);
         double frame_max_db = -DBL_MAX;
-        for (int m = 0; m < n_mels; m++) {
+        for (int m = 0; m < N_MELS; m++) {
             double mel_val = 0;
-            for (int i = 0; i < (n_fft / 2 + 1); i++) {
-                double re = real[i];
-                double im = imag[i];
-                mel_val += (re * re + im * im) * mel_filters[m * (n_fft / 2 + 1) + i];
+            for (int i = 0; i < (N_FFT / 2 + 1); i++) {
+                double power = (real[i] * real[i] + imag[i] * imag[i]) / ((double)N_FFT * (double)N_FFT);
+                mel_val += power * mel_filters[m * (N_FFT / 2 + 1) + i];
             }
-
             if (mel_val < 1e-10) mel_val = 1e-10;
             double db_val = 10.0 * log10(mel_val);
             mel_spectrogram[m * num_frames + f] = db_val;
             if (db_val > frame_max_db) frame_max_db = db_val;
         }
-
         if (frame_max_db > rolling_max_mel_db) rolling_max_mel_db = frame_max_db;
-
-        // Apply 80dB clamping relative to rolling max to match incremental analyzer
-        double top_db = 80.0;
-        double floor_db = rolling_max_mel_db - top_db;
-        for (int m = 0; m < n_mels; m++) {
-            if (mel_spectrogram[m * num_frames + f] < floor_db) {
-                mel_spectrogram[m * num_frames + f] = floor_db;
-            }
+        double floor_db = rolling_max_mel_db - 80.0;
+        for (int m = 0; m < N_MELS; m++) {
+            if (mel_spectrogram[m * num_frames + f] < floor_db) mel_spectrogram[m * num_frames + f] = floor_db;
         }
     }
-    free(real);
-    free(imag);
-    free(window);
-    free(mel_filters);
+    free(real); free(imag); free(window); free(mel_filters);
 
     for (int b = 0; b < MAX_BANDS; b++) {
         result_out->bands[b].envelope = (float*)malloc(sizeof(float) * num_frames);
-        memset(result_out->bands[b].envelope, 0, sizeof(float) * num_frames);
-
+        result_out->bands[b].envelope[0] = 0.0f;
         for (int f = 1; f < num_frames; f++) {
             double flux = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
@@ -811,8 +688,6 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
             }
             result_out->bands[b].envelope[f] = (float)(flux / 32.0);
         }
-        result_out->bands[b].envelope[0] = 0.0f;
-
         result_out->bands[b].rolling_threshold = (float*)malloc(sizeof(float) * num_frames);
         double current_sum = 0;
         int window_size = 15000;
@@ -821,9 +696,7 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
             if (f >= window_size) {
                 current_sum -= (double)result_out->bands[b].envelope[f - window_size];
                 result_out->bands[b].rolling_threshold[f] = (float)(current_sum / (double)window_size);
-            } else {
-                result_out->bands[b].rolling_threshold[f] = (float)(current_sum / (double)(f + 1));
-            }
+            } else result_out->bands[b].rolling_threshold[f] = (float)(current_sum / (double)(f + 1));
         }
     }
 
@@ -832,146 +705,94 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
         float* thresh = result_out->bands[b].rolling_threshold;
         int* temp_peaks = (int*)malloc(sizeof(int) * num_frames);
         int peak_count = 0;
-
         float* temp_thresh = (float*)malloc(sizeof(float) * num_frames);
         float* temp_left = (float*)malloc(sizeof(float) * num_frames);
         float* temp_right = (float*)malloc(sizeof(float) * num_frames);
         float* temp_prom = (float*)malloc(sizeof(float) * num_frames);
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 3dB Absolute Floor
             if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 3.0f) {
-                // Simplified SciPy-like find_peaks with distance and prominence
-                bool replaced = false;
-                bool too_close = false;
+                bool replaced = false, too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
                     too_close = true;
-                    if (env[f] > env[temp_peaks[peak_count-1]]) {
-                        replaced = true;
-                    }
+                    if (env[f] > env[temp_peaks[peak_count-1]]) replaced = true;
                 }
-
                 if (!too_close || replaced) {
                     float left_min = env[f];
-                    for(int k=f-1; k>=0; k--) {
-                        if (env[k] > env[f]) break;
-                        if (env[k] < left_min) left_min = env[k];
-                    }
+                    for(int k=f-1; k>=0; k--) { if (env[k] > env[f]) break; if (env[k] < left_min) left_min = env[k]; }
                     float right_min = env[f];
-                    for(int k=f+1; k<num_frames; k++) {
-                        if (env[k] > env[f]) break;
-                        if (env[k] < right_min) right_min = env[k];
-                    }
-
+                    for(int k=f+1; k<num_frames; k++) { if (env[k] > env[f]) break; if (env[k] < right_min) right_min = env[k]; }
                     float prom = env[f] - (left_min > right_min ? left_min : right_min);
                     if (prom >= 0.5f) {
                         if (replaced) {
-                            temp_peaks[peak_count-1] = f;
-                            temp_thresh[peak_count-1] = thresh[f];
-                            temp_left[peak_count-1] = left_min;
-                            temp_right[peak_count-1] = right_min;
-                            temp_prom[peak_count-1] = prom;
+                            temp_peaks[peak_count-1] = f; temp_thresh[peak_count-1] = thresh[f];
+                            temp_left[peak_count-1] = left_min; temp_right[peak_count-1] = right_min; temp_prom[peak_count-1] = prom;
                         } else if (!too_close) {
-                            temp_peaks[peak_count] = f;
-                            temp_thresh[peak_count] = thresh[f];
-                            temp_left[peak_count] = left_min;
-                            temp_right[peak_count] = right_min;
-                            temp_prom[peak_count] = prom;
+                            temp_peaks[peak_count] = f; temp_thresh[peak_count] = thresh[f];
+                            temp_left[peak_count] = left_min; temp_right[peak_count] = right_min; temp_prom[peak_count] = prom;
                             peak_count++;
                         }
                     }
                 }
             }
         }
-
         result_out->bands[b].peaks = (int*)malloc(sizeof(int) * peak_count);
         result_out->bands[b].thresh_vals = (float*)malloc(sizeof(float) * peak_count);
         result_out->bands[b].left_mins = (float*)malloc(sizeof(float) * peak_count);
         result_out->bands[b].right_mins = (float*)malloc(sizeof(float) * peak_count);
         result_out->bands[b].proms = (float*)malloc(sizeof(float) * peak_count);
-
         memcpy(result_out->bands[b].peaks, temp_peaks, sizeof(int) * peak_count);
         memcpy(result_out->bands[b].thresh_vals, temp_thresh, sizeof(float) * peak_count);
         memcpy(result_out->bands[b].left_mins, temp_left, sizeof(float) * peak_count);
         memcpy(result_out->bands[b].right_mins, temp_right, sizeof(float) * peak_count);
         memcpy(result_out->bands[b].proms, temp_prom, sizeof(float) * peak_count);
-
         result_out->bands[b].num_peaks = peak_count;
-        free(temp_peaks);
-        free(temp_thresh);
-        free(temp_left);
-        free(temp_right);
-        free(temp_prom);
+        free(temp_peaks); free(temp_thresh); free(temp_left); free(temp_right); free(temp_prom);
     }
-
-    float global_max = 0;
-    bool any_peak = false;
+    float global_max = 0; bool any_peak = false;
     for (int b = 0; b < MAX_BANDS; b++) {
         for (int i = 0; i < result_out->bands[b].num_peaks; i++) {
-            int p_idx = result_out->bands[b].peaks[i];
-            float val = result_out->bands[b].envelope[p_idx];
-            if (!any_peak || val > global_max) {
-                global_max = val;
-                any_peak = true;
-            }
+            float val = result_out->bands[b].envelope[result_out->bands[b].peaks[i]];
+            if (!any_peak || val > global_max) { global_max = val; any_peak = true; }
         }
     }
     result_out->max_peak_value = any_peak ? global_max : 1.0f;
-
     free(mel_spectrogram);
-
     return 1;
 }
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out) {
     if (!analyzer_analyze_audio(y, len, sr, result_out)) return 0;
-
     int num_frames = result_out->num_frames;
     result_out->ratings = (double*)malloc(sizeof(double) * num_frames);
     result_out->std_devs = (double*)malloc(sizeof(double) * num_frames);
     result_out->contrasts = (double*)malloc(sizeof(double) * num_frames);
     result_out->peak_stds = (double*)malloc(sizeof(double) * num_frames);
-
     TransientAnalyzer* analyzer = analyzer_create(result_out->max_peak_value);
     analyzer_set_sample_rate(analyzer, sr);
-
     int total_peaks = 0;
     for (int b = 0; b < MAX_BANDS; b++) total_peaks += result_out->bands[b].num_peaks;
     int* all_valid_peaks = (int*)malloc(sizeof(int) * total_peaks);
     int curr = 0;
     for (int b = 0; b < MAX_BANDS; b++) {
-        for (int i = 0; i < result_out->bands[b].num_peaks; i++) {
-            all_valid_peaks[curr++] = result_out->bands[b].peaks[i];
-        }
+        for (int i = 0; i < result_out->bands[b].num_peaks; i++) all_valid_peaks[curr++] = result_out->bands[b].peaks[i];
     }
-
     for (int f = 0; f < num_frames; f++) {
         for (int b = 0; b < MAX_BANDS; b++) {
             for (int i = 0; i < result_out->bands[b].num_peaks; i++) {
-                int p_idx = result_out->bands[b].peaks[i];
-                if (p_idx == f) {
+                if (result_out->bands[b].peaks[i] == f) {
                     PeakResult pr;
-                    analyzer_process_peak(analyzer, p_idx, b, result_out->times[f], result_out->bands[b].envelope, num_frames, all_valid_peaks, total_peaks,
-                                          result_out->bands[b].envelope[p_idx],
-                                          result_out->bands[b].thresh_vals[i],
-                                          result_out->bands[b].left_mins[i],
-                                          result_out->bands[b].right_mins[i],
-                                          result_out->bands[b].proms[i],
-                                          &pr);
+                    analyzer_process_peak(analyzer, f, b, result_out->times[f], result_out->bands[b].envelope, num_frames, all_valid_peaks, total_peaks,
+                                          result_out->bands[b].envelope[f], result_out->bands[b].thresh_vals[i],
+                                          result_out->bands[b].left_mins[i], result_out->bands[b].right_mins[i], result_out->bands[b].proms[i], &pr);
                 }
             }
         }
-
         AnalyzerMetrics m;
         analyzer_update_metrics(analyzer, f, &m);
-        result_out->ratings[f] = m.rating;
-        result_out->std_devs[f] = m.std_dev;
-        result_out->contrasts[f] = m.contrast;
-        result_out->peak_stds[f] = m.peak_std;
+        result_out->ratings[f] = m.rating; result_out->std_devs[f] = m.std_dev; result_out->contrasts[f] = m.contrast; result_out->peak_stds[f] = m.peak_std;
     }
-
-    free(all_valid_peaks);
-    analyzer_destroy(analyzer);
+    free(all_valid_peaks); analyzer_destroy(analyzer);
     return 1;
 }
 

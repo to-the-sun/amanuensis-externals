@@ -45,11 +45,12 @@ cdef extern from "cumulative_transience.h":
         AnalyzerMetrics metrics
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
-        double max_peak
+        pass
 
     TransientAnalyzer_c* analyzer_create(double max_peak_value)
     void analyzer_destroy(TransientAnalyzer_c* self)
     void analyzer_set_sample_rate(TransientAnalyzer_c* self, int sr)
+    double analyzer_get_max_peak(TransientAnalyzer_c* self)
     int analyzer_process_peak(TransientAnalyzer_c* self,
                               int p_idx,
                               int band_idx,
@@ -239,7 +240,7 @@ cdef class TransientAnalyzer:
         m = res.metrics
         self.min_score_seen = m.min_score_seen
         self.max_score_seen = m.max_score_seen
-        self.max_peak = self._c_analyzer.max_peak
+        self.max_peak = analyzer_get_max_peak(self._c_analyzer)
 
         return {
             'peaks': peaks,
