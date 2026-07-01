@@ -63,7 +63,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     if (self->fft_window) for (int i = 0; i < N_FFT; i++) self->fft_window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)N_FFT));
     self->sample_rate = 44100;
     self->mel_filters = create_mel_filterbank(self->sample_rate, N_FFT, N_MELS);
-    self->overlap_buffer = (float*)calloc(N_FFT, sizeof(float));
+    self->overlap_buffer = (float*)calloc(N_FFT * 4, sizeof(float));
     self->fft_real = (double*)malloc(sizeof(double) * N_FFT);
     self->fft_imag = (double*)malloc(sizeof(double) * N_FFT);
     if (!self->mel_spectrogram || !self->flux_envelopes || !self->fft_window || !self->mel_filters || !self->overlap_buffer || !self->fft_real || !self->fft_imag) {
@@ -186,33 +186,60 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
 double* analyzer_get_buffer(TransientAnalyzer* self) { return self->accumulated_buffer; }
 
 void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int sr) {
-    if (self->sample_rate != sr) { analyzer_set_sample_rate(self, sr); self->overlap_len = 0; }
-    int hop = (int)(sr * 0.001), combined_len = self->overlap_len + len;
+    if (self->sample_rate != sr) {
+        analyzer_set_sample_rate(self, sr);
+        self->overlap_len = 0;
+        self->total_samples_received = 0;
+    }
+    int hop = (int)(sr * 0.001);
+    int combined_len = self->overlap_len + len;
     if (combined_len > self->combined_scratch_cap) {
-        int ncap = combined_len + 4096; float* ns = (float*)realloc(self->combined_scratch, sizeof(float) * ncap);
+        int ncap = combined_len + N_FFT * 2;
+        float* ns = (float*)realloc(self->combined_scratch, sizeof(float) * ncap);
         if (ns) { self->combined_scratch = ns; self->combined_scratch_cap = ncap; } else return;
     }
     if (self->overlap_len > 0) memcpy(self->combined_scratch, self->overlap_buffer, sizeof(float) * self->overlap_len);
-    memcpy(self->combined_scratch + self->overlap_len, y, sizeof(float) * len);
-    int num_f = combined_len / hop;
-    for (int f = 0; f < num_f; f++) {
-        int center = f * hop, start = center - N_FFT / 2;
+    if (len > 0) memcpy(self->combined_scratch + self->overlap_len, y, sizeof(float) * len);
+
+    long long current_scratch_start = self->total_samples_received - self->overlap_len;
+    long long current_total_samples = self->total_samples_received + len;
+
+    while (1) {
+        long long next_f = self->total_frames_pushed;
+        long long center_sample_global = next_f * hop;
+        long long end_sample_needed_global = center_sample_global + N_FFT / 2;
+
+        if (end_sample_needed_global > current_total_samples) break;
+
+        int f_idx = self->cache_write_ptr;
+        double frame_max = -DBL_MAX;
+
         for (int i = 0; i < N_FFT; i++) {
-            int idx = start + i;
-            self->fft_real[i] = (idx >= 0 && idx < combined_len) ? (double)self->combined_scratch[idx] * self->fft_window[i] : 0.0;
+            long long g_idx = center_sample_global - N_FFT / 2 + i;
+            if (g_idx < 0) {
+                self->fft_real[i] = 0.0;
+            } else if (g_idx >= current_total_samples) {
+                self->fft_real[i] = 0.0;
+            } else {
+                int l_idx = (int)(g_idx - current_scratch_start);
+                self->fft_real[i] = (double)self->combined_scratch[l_idx] * self->fft_window[i];
+            }
             self->fft_imag[i] = 0.0;
         }
         fft(self->fft_real, self->fft_imag, N_FFT);
-        int f_idx = self->cache_write_ptr; double frame_max = -DBL_MAX;
+
         for (int m = 0; m < N_MELS; m++) {
             double mel = 0;
             for (int i = 0; i < (N_FFT / 2 + 1); i++) {
                 double p = (self->fft_real[i] * self->fft_real[i] + self->fft_imag[i] * self->fft_imag[i]) / ((double)N_FFT * (double)N_FFT);
                 mel += p * self->mel_filters[m * (N_FFT / 2 + 1) + i];
             }
-            if (mel < 1e-10) mel = 1e-10; double db = 10.0 * log10(mel);
-            self->mel_spectrogram[m * CACHE_SIZE + f_idx] = db; if (db > frame_max) frame_max = db;
+            if (mel < 1e-10) mel = 1e-10;
+            double db = 10.0 * log10(mel);
+            self->mel_spectrogram[m * CACHE_SIZE + f_idx] = db;
+            if (db > frame_max) frame_max = db;
         }
+
         if (frame_max > self->max_mel_db) self->max_mel_db = frame_max;
         double floor = self->max_mel_db - 80.0;
         for (int m = 0; m < N_MELS; m++) if (self->mel_spectrogram[m * CACHE_SIZE + f_idx] < floor) self->mel_spectrogram[m * CACHE_SIZE + f_idx] = floor;
@@ -225,11 +252,24 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
             }
             self->flux_envelopes[b * CACHE_SIZE + f_idx] = (float)(fsum / 32.0);
         }
-        self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE; if (self->cache_count < CACHE_SIZE) self->cache_count++;
+        self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE;
+        if (self->cache_count < CACHE_SIZE) self->cache_count++;
         self->total_frames_pushed++;
     }
-    int used = num_f * hop, rem = combined_len - used; if (rem > N_FFT) rem = N_FFT;
-    if (rem > 0) { memcpy(self->overlap_buffer, self->combined_scratch + (combined_len - rem), sizeof(float) * rem); self->overlap_len = rem; } else self->overlap_len = 0;
+
+    self->total_samples_received = current_total_samples;
+    long long next_window_start_global = (long long)self->total_frames_pushed * hop - N_FFT / 2;
+    if (next_window_start_global < 0) next_window_start_global = 0;
+
+    if (next_window_start_global < self->total_samples_received) {
+        int rem = (int)(self->total_samples_received - next_window_start_global);
+        if (rem > N_FFT * 4) rem = N_FFT * 4;
+        int offset = (int)(next_window_start_global - current_scratch_start);
+        memcpy(self->overlap_buffer, self->combined_scratch + offset, sizeof(float) * rem);
+        self->overlap_len = rem;
+    } else {
+        self->overlap_len = 0;
+    }
 }
 
 int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int sr, int buffer_start_frame, int active_start_frame, ChunkAnalysisResult* result_out) {
@@ -342,16 +382,21 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->peak_stds = (double*)malloc(sizeof(double) * num_f);
     for (int b = 0; b < MAX_BANDS; b++) { result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float)); result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float)); result_out->bands[b].peaks = NULL; result_out->bands[b].num_peaks = 0; }
     TransientAnalyzer* a = analyzer_create(1.0); if(!a) return 0;
-    analyzer_set_sample_rate(a, sr); int step = (int)(sr * 0.1);
+    analyzer_set_sample_rate(a, sr); int step = hop * 100;
     PeakResult* pband[MAX_BANDS]; int pcap[MAX_BANDS];
     for(int b=0; b<MAX_BANDS; b++) { pcap[b] = 1024; pband[b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[b]); }
-    for (int last_t = 0; last_t < len; ) {
-        int tend = last_t + step; if (tend > len) tend = len;
-        if (tend - last_t == 0) break;
+    int flush_samples = (int)(sr * 0.3);
+    for (int last_t = 0; last_t < len + flush_samples; last_t += step) {
         int act_s = last_t - (int)(sr * 0.2), win_s = act_s - (int)(sr * 15.0); if (win_s < 0) win_s = 0;
         ChunkAnalysisResult* res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
         if (!res) { analyzer_destroy(a); return 0; }
-        analyzer_analyze_chunk(a, y + last_t, tend - last_t, sr, win_s / hop, act_s / hop, res);
+        float* push_ptr = (float*)calloc(step, sizeof(float));
+        if (last_t < len) {
+            int rem = len - last_t;
+            memcpy(push_ptr, y + last_t, sizeof(float) * (rem < step ? rem : step));
+        }
+        analyzer_analyze_chunk(a, push_ptr, step, sr, win_s / hop, act_s / hop, res);
+        free(push_ptr);
         for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) result_out->bands[b].envelope[f] = res->last_flux[b][i]; }
         for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
@@ -359,7 +404,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
             memcpy(&pband[b][result_out->bands[b].num_peaks++], pr, sizeof(PeakResult));
         }
-        free(res); last_t = tend;
+        free(res);
     }
     result_out->max_peak_value = (float)analyzer_get_max_peak(a); result_out->min_score_seen = a->min_score_seen; result_out->max_score_seen = a->max_score_seen;
     for(int b=0; b<MAX_BANDS; b++) {
