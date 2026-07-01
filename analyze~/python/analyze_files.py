@@ -3,11 +3,13 @@ import librosa
 import numpy as np
 import scipy.signal
 import os
+import cv2
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
 import matplotlib.ticker as ticker
+from moviepy import VideoClip, AudioFileClip
+from rendering_engine import OCVRenderer
 from tqdm import tqdm
 import subprocess
 import tempfile
@@ -104,47 +106,37 @@ def generate_video(audio_path, data):
         rolling_thresholds = data['rolling_thresholds']
         peak_indices_list = data['peaks_list']
         max_peak = data['max_peak_value']
-
-        # Helper for secondary peak lookup
         all_valid_peak_indices = set().union(*peak_indices_list)
 
-        fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14),
-                                                               gridspec_kw={'height_ratios': [1, 0.4, 1]})
+        duration = times[-1]
+        fps = 30
+        num_video_frames = int(duration * fps)
+        video_frame_times = np.arange(num_video_frames) / float(fps)
+        frame_indices = np.searchsorted(np.array(times), video_frame_times)
+        num_frames = len(frame_indices)
 
-        colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']
-        alphas = [1.0, 0.8, 0.6, 0.4]
-        labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
-
-        transient_lines = []
-        threshold_lines = []
-        for i in range(4):
-            line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2)
-            transient_lines.append(line)
-            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1)
-            threshold_lines.append(t_line)
-
-        playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
-        cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
-
+        # 1. Generate Static Background using Matplotlib
+        fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}")
         ax_transient.set_ylabel("Onset Strength")
-        # ax_transient.legend(loc='upper right') # Legend removed per user request
         ax_transient.grid(True, alpha=0.3)
-        ax_transient.set_xlim(-20, 5)
-
+        ax_transient.set_xlim(-20, 5) # Placeholder
         def format_time(x, pos):
             m = int(abs(x) // 60)
             s = int(abs(x) % 60)
             prefix = "-" if x < 0 else ""
             return f"{prefix}{m}:{s:02d}"
         ax_transient.xaxis.set_major_formatter(ticker.FuncFormatter(format_time))
-
         all_onset_vals = np.concatenate(onset_envs)
         ax_transient.set_ylim(0, max(all_onset_vals) * 1.1 if len(all_onset_vals) > 0 else 1)
 
-        buffer_times = np.linspace(-5000, 0, 5001)
-        buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2)
-        mean_line, = ax_buf.plot([-5000, 0], [0, 0], color='#808080', lw=1, ls='--', alpha=0.5, label='Mean Energy')
+        ax_snapshot.set_xlim(-45, 1)
+        ax_snapshot.set_ylim(-0.5, 3.5)
+        ax_snapshot.set_yticks([0, 1, 2, 3])
+        ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
+        ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold')
+        ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12)
+
         ax_buf.set_title("Accumulated 5s Historical Buffer")
         ax_buf.set_xlabel("Time Relative to Peak (ms)")
         ax_buf.set_ylabel("Accumulated Energy")
@@ -152,338 +144,161 @@ def generate_video(audio_path, data):
         ax_buf.set_xlim(-5000, 0)
         ax_buf.set_ylim(0, 1)
 
-        # Configure Snapshot bar
-        ax_snapshot.set_xlim(-45, 1) # Extra space for labels
-        ax_snapshot.set_ylim(-0.5, 3.5) # 4 lanes: 0, 1, 2, 3
-        ax_snapshot.set_yticks([0, 1, 2, 3])
-        ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold')
-        ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold')
-        ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12)
-        ax_snapshot.grid(False)
-        for i in range(3):
-            ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
+        fig.tight_layout(pad=1.5)
+        fig.canvas.draw()
+        # Handle different matplotlib versions
+        if hasattr(fig.canvas, 'tostring_rgb'):
+            bg_rgb = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        else:
+            bg_rgb = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            # RGBA to RGB
+            bg_rgb = bg_rgb.reshape(-1, 4)[:, :3].flatten()
+
+        bg_rgb = bg_rgb.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+        # Capture metadata for renderer
+        layout_metadata = {}
+        for key, ax in zip(['ax_transient', 'ax_snapshot', 'ax_buf'], [ax_transient, ax_snapshot, ax_buf]):
+            bbox = ax.get_position()
+            width, height = fig.get_size_inches() * fig.dpi
+            layout_metadata[key] = {
+                'bbox_px': [bbox.x0 * width, (1-bbox.y1) * height, bbox.x1 * width, (1-bbox.y0) * height],
+                'xlim': ax.get_xlim(),
+                'ylim': ax.get_ylim()
+            }
+        plt.close(fig)
+
+        # 2. Initialize OCV Renderer
+        renderer = OCVRenderer(bg_rgb, layout_metadata)
+        static_data = {
+            'title': f"4-Band Transient Analysis - {os.path.basename(audio_path)}",
+            'times': times,
+            'max_onset_val': max(np.concatenate(onset_envs)) if any(len(e) > 0 for e in onset_envs) else 1.0,
+            'onset_envs': onset_envs,
+            'rolling_thresholds': rolling_thresholds
+        }
 
         POPUP_LIFETIME = 60
-        MAX_POOL = 128
-
-        # Strategy 3: Pre-calculate X indices for buffer
-        snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
-
-        # Artist Pools
-        pool_scores = [ax_transient.text(0, 0, '', visible=False) for _ in range(MAX_POOL)]
-        pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]
-        pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]
-        pool_snapshots = [ax_buf.fill_between(buffer_times, 0, 0, visible=False, color='#2ecc71') for _ in range(MAX_POOL)]
-
-        # Snapshot artists pool (4 lanes * max peaks in 39ms)
-        MAX_SNAPSHOT_POOL = 32
-        # LineCollection is more efficient than individual vlines
-        from matplotlib.collections import LineCollection
-        pool_snap_lines = LineCollection([], colors=[], linewidths=3, visible=False)
-        ax_snapshot.add_collection(pool_snap_lines)
-        pool_snap_texts = [ax_snapshot.text(0, 0, '', visible=False, fontsize=13, va='center', ha='right', fontweight='bold') for _ in range(MAX_SNAPSHOT_POOL)]
-
-        active_flashes = [] # [pool_idx, lifetime]
-        active_scores = []  # [pool_idx, lifetime, initial_y, val, time]
-        active_qualifiers = [] # [pool_idx, lifetime, ms, val]
-
-        # Pool for 'highest peak' line
-        highest_peak_line = ax_buf.axvline(0, visible=False, color='#f1c40f', lw=2, ls='--')
-
-        # Real-time peak scatter (appears as they are identified)
-        live_peaks_x = []
-        live_peaks_y = []
-        live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=11)
-
-        last_frame_processed = -1
-        current_snapshot_avg = 0.0
-        rolling_window_scores = [] # List of {'frame', 'score', 'band_idx'}
-
-        score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
-                                              verticalalignment='top', fontsize=20, color='#808080',
-                                              fontweight='bold', zorder=20)
-
-        rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes,
-                                        verticalalignment='top', fontsize=12, color='#f1c40f',
-                                        fontweight='bold', zorder=20)
-
-        # Debug console pool
-        MAX_DEBUG_LINES = 10
-        debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes,
-                                               verticalalignment='top', horizontalalignment='right',
-                                               fontsize=12, family='monospace', color='#2ecc71',
-                                               fontweight='bold', visible=False, zorder=20)
-                             for i in range(MAX_DEBUG_LINES)]
-        active_debug_lines = [] # list of {'text', 'lifetime', 'band_idx'}
-
-        metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes,
-                                   verticalalignment='top', fontsize=10, color='#f1c40f',
-                                   fontweight='bold')
-
-        # Instantiate analyzer for real-time video buffer accumulation
         analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
         peaks_params_list = data.get('peaks_params_list', None)
 
-        def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines
+        # State for dynamic elements
+        state = {
+            'live_peaks': [], # list of (time, val)
+            'rolling_window_scores': [],
+            'active_flashes': [],
+            'active_scores': [],
+            'active_qualifiers': [],
+            'active_debug_lines': [],
+            'current_snapshot_avg': 0.0,
+            'min_score': 0.0,
+            'max_score': 0.0,
+            'rating': 0.0,
+            'metrics': {'std_dev': 0.0, 'contrast': 0.0, 'peak_std': 0.0},
+            'accumulated_buffer': np.zeros(5001),
+            'mean': 0.0,
+            'highest_peak_ms': None
+        }
 
-            # Reset visibility of all pooled artists for blitting safety
-            # (Though technically only the ones that were active last frame need reset)
-            for s in pool_scores: s.set_visible(False)
-            for l in pool_qualifier_lines: l.set_visible(False)
-            for t in pool_qualifier_labels: t.set_visible(False)
-            for f in pool_snapshots: f.set_visible(False)
-            for d in debug_console_pool: d.set_visible(False)
-            pool_snap_lines.set_visible(False)
-            for st in pool_snap_texts: st.set_visible(False)
-            highest_peak_line.set_visible(False)
+        last_computed_frame = -1
+        def make_frame(t):
+            nonlocal last_computed_frame
+            frame_idx = int(t * fps)
+            if frame_idx >= len(frame_indices): frame_idx = len(frame_indices) - 1
 
-            # Dynamically process peaks to update cumulative buffer as playhead advances
-            # and capture live results for real-time visualization
-            live_peak_results = analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
+            # Ensure sequential processing for stateful elements
+            for idx in range(last_computed_frame + 1, frame_idx + 1):
+                frame = frame_indices[idx]
 
-            # Update Metrics and Cleanup
-            metrics = analyzer.update_metrics(frame)
+                # 1. Update Analyzer State
+                live_peak_results = analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
+                metrics = analyzer.update_metrics(frame)
 
-            for p in live_peak_results:
-                rolling_window_scores.append({
-                    'frame': p['p_idx'],
-                    'score': p['total_score'],
-                    'band_idx': p['band_idx']
-                })
+                state['min_score'] = metrics['min_score_seen']
+                state['max_score'] = metrics['max_score_seen']
+                state['rating'] = metrics['rating']
+                state['metrics'] = metrics
+                state['accumulated_buffer'] = analyzer.accumulated_buffer
+                state['mean'] = metrics['mean']
+                state['highest_peak_ms'] = metrics['highest_peak_ms']
 
-            last_frame_processed = frame
+                for p in live_peak_results:
+                    state['rolling_window_scores'].append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
+                    state['live_peaks'].append((p['time'], p['peak_val']))
 
-            # Prune scores to the 39ms sliding window ending at the current playhead frame
-            rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
+                    q_sum = sum(q['val'] for q in p['qualifiers'])
+                    f_val = p.get('detected_peak_val', p['peak_val'])
+                    debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & "
+                                 f"Flux >= 3.0 & Pr:{p['prominence']:.2f} >= 0.50) | "
+                                 f"Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
+                    state['active_debug_lines'].insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
 
-            # Calculate rolling average and update visualization only if we have scores
-            # This ensures the snapshot bar and score stay fixed when the window is empty
-            if rolling_window_scores:
-                current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores)
+                    if p['snapshot'] is not None:
+                        state['active_qualifiers'].clear()
+                        for q_info in p['qualifiers']:
+                            state['active_qualifiers'].append({'lifetime': POPUP_LIFETIME, 'ms': q_info['ms'], 'val': q_info['val']})
 
-                # Align relative to the LATEST peak in the current 39ms window
-                # This ensures the most current score is always at the far right (x=0)
-                latest_p_frame = max(s['frame'] for s in rolling_window_scores)
+                        state['active_scores'].append({'lifetime': POPUP_LIFETIME, 'y': p['peak_val'], 'val': p['total_score'], 'time': p['time']})
+                        state['active_flashes'].append({'lifetime': POPUP_LIFETIME, 'snapshot': p['snapshot'].copy()})
 
-                segments = []
-                seg_colors = []
+                # 2. Prune and Update lifetimes
+                state['rolling_window_scores'] = [s for s in state['rolling_window_scores'] if s['frame'] > frame - 39]
+                if state['rolling_window_scores']:
+                    state['current_snapshot_avg'] = sum(s['score'] for s in state['rolling_window_scores']) / len(state['rolling_window_scores'])
 
-                for i, s in enumerate(rolling_window_scores[:MAX_SNAPSHOT_POOL]):
-                    rel_ms = float(s['frame'] - latest_p_frame)
-                    score_val = s['score']
-                    band_idx = s['band_idx']
-                    lane_y = band_idx
+                for flash in state['active_flashes'][:]:
+                    flash['lifetime'] -= 1
+                    if flash['lifetime'] <= 0: state['active_flashes'].remove(flash)
 
-                    score_c = get_score_color(score_val, metrics['min_score_seen'], metrics['max_score_seen'])
+                for score in state['active_scores'][:]:
+                    score['lifetime'] -= 1
+                    if score['lifetime'] <= 0: state['active_scores'].remove(score)
 
-                    segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]])
-                    seg_colors.append(colors[band_idx])
+                for q in state['active_qualifiers'][:]:
+                    q['lifetime'] -= 1
+                    if q['lifetime'] <= 0: state['active_qualifiers'].remove(q)
 
-                    txt = pool_snap_texts[i]
-                    txt.set_position((rel_ms - 0.8, lane_y))
-                    txt.set_text(f"{score_val:+.2f}")
-                    txt.set_color(score_c)
-                    txt.set_visible(True)
+                for d in state['active_debug_lines'][:]:
+                    d['lifetime'] -= 1
+                    if d['lifetime'] <= 0: state['active_debug_lines'].remove(d)
 
-                if segments:
-                    pool_snap_lines.set_segments(segments)
-                    pool_snap_lines.set_colors(seg_colors)
-                    pool_snap_lines.set_visible(True)
+            last_computed_frame = frame_idx
 
-            current_time = times[frame]
-            ax_transient.set_xlim(current_time - 20, current_time + 5)
+            # 3. Call Renderer
+            render_frame_data = {
+                'frame': frame_indices[frame_idx],
+                'live_peaks': state['live_peaks'],
+                'rolling_window_scores': state['rolling_window_scores'],
+                'min_score': state['min_score'],
+                'max_score': state['max_score'],
+                'accumulated_buffer': state['accumulated_buffer'],
+                'mean': state['mean'],
+                'active_flashes': [{'alpha': (f['lifetime']/POPUP_LIFETIME)*0.5, 'snapshot': f['snapshot']} for f in state['active_flashes']],
+                'highest_peak_ms': state['highest_peak_ms'],
+                'current_score': state['current_snapshot_avg'],
+                'rating': state['rating'],
+                'metrics': state['metrics'],
+                'debug_lines': [{'text': d['text'], 'band_idx': d['band_idx'], 'alpha': min(1.0, d['lifetime']/10.0)} for d in state['active_debug_lines'][:10]],
+                'active_scores': [{'val': s['val'], 'time': s['time'], 'y': s['y'] + (1 - s['lifetime']/POPUP_LIFETIME)*0.1*static_data['max_onset_val'], 'alpha': s['lifetime']/POPUP_LIFETIME} for s in state['active_scores']],
+                'active_qualifiers': [{'ms': q['ms'], 'val': q['val'], 'alpha': q['lifetime']/POPUP_LIFETIME} for q in state['active_qualifiers']]
+            }
 
-            for i in range(4):
-                threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]])
-                threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+            return renderer.render_frame(render_frame_data, static_data)
 
-            playhead_transient.set_xdata([current_time, current_time])
-            cleanup_time = current_time - 15
-            cleanup_transient.set_xdata([cleanup_time, cleanup_time])
-
-            # Process visually appearing Peaks (using live results)
-            for p_data in live_peak_results:
-                # Update real-time peak scatter
-                live_peaks_x.append(p_data['time'])
-                live_peaks_y.append(p_data['peak_val'])
-                live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
-
-                # Add to debug console
-                # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
-                q_sum = sum(q['val'] for q in p_data['qualifiers'])
-                # Qualification Equation: (Flux > Thresh & Flux >= 3.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
-                # Note: detected_peak_val is the flux seen at detection time in the incremental loop
-                f_val = p_data.get('detected_peak_val', p_data['peak_val'])
-                debug_msg = (f"[B{p_data['band_idx']}] (Flux:{f_val:.2f} > Th:{p_data['thresh_val']:.2f} & "
-                             f"Flux >= 3.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
-                             f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
-
-                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p_data['band_idx']})
-                if len(active_debug_lines) > MAX_DEBUG_LINES:
-                    active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
-
-                # Use pools instead of creating artists
-                if p_data['snapshot'] is not None:
-                    # Clear existing qualifiers by ending their lifetime or just clearing the list
-                    # Matplotlib blitting requires we keep the list consistent
-                    active_qualifiers.clear()
-
-                    for q_info in p_data['qualifiers']:
-                        if len(active_qualifiers) < MAX_POOL:
-                            idx = len(active_qualifiers)
-                            active_qualifiers.append([idx, POPUP_LIFETIME, q_info['ms'], q_info['val']])
-
-                    # Score animation pool
-                    for i in range(MAX_POOL):
-                        if not any(a[0] == i for a in active_scores):
-                            active_scores.append([i, POPUP_LIFETIME, p_data['peak_val'], p_data['total_score'], p_data['time']])
-                            break
-
-                    # Flash pool
-                    for i in range(MAX_POOL):
-                        if not any(a[0] == i for a in active_flashes):
-                            # Update PolyCollection path
-                            snap = p_data['snapshot']
-                            poly = pool_snapshots[i]
-                            # Pre-calculate points for fill_between replacement (Strategy 3)
-                            verts = np.zeros((len(snap_verts_x), 2))
-                            verts[:, 0] = snap_verts_x
-                            verts[1:-1, 1] = snap
-                            poly.set_paths([verts])
-
-                            active_flashes.append([i, POPUP_LIFETIME])
-                            break
-
-            if metrics['buffer_updated'] or live_peak_results:
-                buffer_line.set_ydata(analyzer.accumulated_buffer)
-
-            # Dynamic Y-axis scaling for buffer
-            current_max = np.max(analyzer.accumulated_buffer[:-99]) if len(analyzer.accumulated_buffer) > 99 else 0
-            ax_buf.set_ylim(0, max(0.1, current_max * 1.1))
-
-            mean_line.set_ydata([metrics['mean'], metrics['mean']])
-            metrics_text.set_text(f"Std Dev: {metrics['std_dev']:.3f}\nContrast: {metrics['contrast']:.3f}\nPeak Std: {metrics['peak_std']:.3f}")
-            rating_text.set_text(f"Rating: {metrics['rating']:.2f}")
-            score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}")
-            score_display_text.set_color(get_score_color(current_snapshot_avg, metrics['min_score_seen'], metrics['max_score_seen']))
-
-            # Handle Flash and Fade (Object Pool)
-            for flash in active_flashes[:]:
-                idx, life = flash
-                poly = pool_snapshots[idx]
-                if life > 0:
-                    alpha = (life / float(POPUP_LIFETIME)) * 0.5
-                    poly.set_alpha(alpha)
-                    poly.set_visible(True)
-                    flash[1] -= 1
-                if flash[1] <= 0:
-                    active_flashes.remove(flash)
-
-            # Handle Score Animations (Object Pool)
-            current_ylim = ax_transient.get_ylim()[1]
-            for score in active_scores[:]:
-                idx, life, initial_y, val, p_time = score
-                txt = pool_scores[idx]
-                if life > 0:
-                    progress = (POPUP_LIFETIME - life) / float(POPUP_LIFETIME)
-                    new_y = initial_y + (progress * 0.1 * current_ylim)
-                    txt.set_position((p_time, new_y))
-                    txt.set_text(f"{val:+.2f}")
-                    txt.set_alpha(life / float(POPUP_LIFETIME))
-                    txt.set_color(get_score_color(val, metrics['min_score_seen'], metrics['max_score_seen']))
-                    txt.set_visible(True)
-                    score[1] -= 1
-                if score[1] <= 0:
-                    active_scores.remove(score)
-
-            # Handle highest peak line (Object Pool)
-            if metrics['highest_peak_ms'] is not None:
-                highest_peak_line.set_xdata([metrics['highest_peak_ms'], metrics['highest_peak_ms']])
-                highest_peak_line.set_visible(True)
-
-            # Handle Qualifier Animations (Object Pool)
-            for q in active_qualifiers[:]:
-                idx, life, ms, val = q
-                line = pool_qualifier_lines[idx]
-                label = pool_qualifier_labels[idx]
-                if life > 0:
-                    alpha = life / float(POPUP_LIFETIME)
-                    qc = get_score_color(val, -1.0, 1.0)
-                    line.set_xdata([ms, ms])
-                    line.set_color(qc)
-                    line.set_alpha(alpha * 0.8)
-                    line.set_visible(True)
-
-                    label.set_position((ms, (val + 1) / 2))
-                    label.set_text(f"{val:+.2f}")
-                    label.set_color(qc)
-                    label.set_alpha(alpha)
-                    label.set_visible(True)
-                    q[1] -= 1
-                if q[1] <= 0:
-                    active_qualifiers.remove(q)
-
-            # Handle Debug Console
-            for i, debug in enumerate(active_debug_lines[:]):
-                if debug['lifetime'] > 0:
-                    txt_artist = debug_console_pool[i]
-                    txt_artist.set_text(debug['text'])
-                    txt_artist.set_color(colors[debug['band_idx']])
-                    txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)) # Quick fade out at the end
-                    txt_artist.set_visible(True)
-                    debug['lifetime'] -= 1
-                else:
-                    active_debug_lines.remove(debug)
-
-            # Optimization: Only return visible artists for blitting
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, mean_line,
-                              metrics_text, rating_text, score_display_text, live_peaks_scatter]
-            if highest_peak_line.get_visible(): changed_artists.append(highest_peak_line)
-            if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
-
-            changed_artists.extend(threshold_lines)
-            changed_artists.extend(transient_lines)
-
-            for p in pool_snapshots:
-                if p.get_visible(): changed_artists.append(p)
-            for s in pool_scores:
-                if s.get_visible(): changed_artists.append(s)
-            for l in pool_qualifier_lines:
-                if l.get_visible(): changed_artists.append(l)
-            for t in pool_qualifier_labels:
-                if t.get_visible(): changed_artists.append(t)
-            for st in pool_snap_texts:
-                if st.get_visible(): changed_artists.append(st)
-            for d in debug_console_pool:
-                if d.get_visible(): changed_artists.append(d)
-
-            return changed_artists
-
-        # Select analysis frames that correspond exactly to 30 FPS video timing
-        duration = times[-1]
-        fps = 30
-        num_video_frames = int(duration * fps)
-        video_frame_times = np.arange(num_video_frames) / float(fps)
-        # times is a list here, convert to np.array for searchsorted
-        frame_indices = np.searchsorted(np.array(times), video_frame_times)
-        num_frames = len(frame_indices)
-
-        ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=True, interval=1000.0/fps)
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            temp_video_path = tmp.name
-
-        pbar = tqdm(total=num_frames, desc="Rendering Video", unit="frame")
-        def progress_callback(i, n):
-            pbar.n = i + 1
-            pbar.refresh()
-
-        writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000)
-        fig.tight_layout(pad=1.5)
-        ani.save(temp_video_path, writer=writer, progress_callback=progress_callback)
-        pbar.close()
-        plt.close(fig)
+        # Mux audio and render in one pass
+        output_video = os.path.splitext(audio_path)[0] + ".mp4"
+        print(f"Saving video to: {output_video}")
+        try:
+            audio_clip = AudioFileClip(audio_path)
+            clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
+            clip.write_videofile(output_video, fps=fps, codec='libx264', audio_codec='aac',
+                                 logger='bar' if sys.stdout.isatty() else None)
+        except Exception as e:
+            print(f"Error generating video with audio: {e}")
+            traceback.print_exc()
+            # Fallback to silent video
+            clip = VideoClip(make_frame, duration=duration)
+            clip.write_videofile(output_video, fps=fps, codec='libx264', logger='bar' if sys.stdout.isatty() else None)
 
         # Record final metrics
         try:
@@ -505,16 +320,7 @@ def generate_video(audio_path, data):
         except Exception as e:
             print(f"Error recording metrics: {e}")
 
-        output_video = os.path.splitext(audio_path)[0] + ".mp4"
-        if shutil.which("ffmpeg"):
-            cmd = ['ffmpeg', '-y', '-i', temp_video_path, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-ac', '1', '-shortest', output_video]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(temp_video_path): os.remove(temp_video_path)
-            print(f"Video generated: {output_video}")
-            return output_video
-        else:
-            print("Error: ffmpeg not found.")
-            return None
+        return output_video
     except Exception as e:
         traceback.print_exc()
         return None
