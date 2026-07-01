@@ -193,7 +193,7 @@ def generate_video(audio_path, data):
         # Real-time peak scatter (appears as they are identified)
         live_peaks_x = []
         live_peaks_y = []
-        live_peaks_scatter = ax_transient.scatter([], [], color='#000000', marker='x', s=80, alpha=1.0, zorder=11)
+        live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=11)
 
         last_frame_processed = -1
         current_snapshot_avg = 0.0
