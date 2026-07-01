@@ -58,7 +58,7 @@ This report details the final reconciliation of discrepancies between the Max Ex
 | **Hop Size** | 1ms (precisely calculated per SR) |
 | **Mel Bands** | 128 (4 analysis bands of 32 each) |
 | **Noise Floor** | 80dB below rolling max energy |
-| **Peak Threshold** | 3.0dB above 15s rolling mean |
+| **Peak Threshold** | 1.0dB above 15s rolling mean |
 | **Min Peak Distance** | 200ms |
 | **Peak Prominence** | 0.50 |
 | **Resonance Lookback** | 5.0 seconds |

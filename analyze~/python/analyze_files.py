@@ -98,11 +98,11 @@ def generate_video(audio_path, data):
         ax_snapshot.set_xlim(-45, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
         for i in range(3): ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
-        pool_scores = [ax_transient.text(0, 0, '', visible=False) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; pool_snapshots = [ax_buf.fill_between(buffer_times, 0, 0, visible=False, color='#2ecc71') for _ in range(MAX_POOL)]
+        pool_scores = [ax_transient.text(0, 0, '', visible=False) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; snapshot_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#2ecc71', lw=2, label='Current Snapshot', zorder=10)
         MAX_SNAPSHOT_POOL = 32; from matplotlib.collections import LineCollection; pool_snap_lines = LineCollection([], colors=[], linewidths=3, visible=False); ax_snapshot.add_collection(pool_snap_lines); pool_snap_texts = [ax_snapshot.text(0, 0, '', visible=False, fontsize=13, va='center', ha='right', fontweight='bold') for _ in range(MAX_SNAPSHOT_POOL)]
         active_flashes = []; active_scores = []; active_qualifiers = []; live_peaks_x = []; live_peaks_y = []
         live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=11)
-        current_snapshot_avg = 0.0; rolling_window_scores = []
+        current_snapshot_avg = 0.0; rolling_window_scores = []; last_snapshot_display = None
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=20, color='#808080', fontweight='bold', zorder=20)
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=12, color='#f1c40f', fontweight='bold', zorder=20)
         MAX_DEBUG_LINES = 10; debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes, verticalalignment='top', horizontalalignment='right', fontsize=12, family='monospace', color='#2ecc71', fontweight='bold', visible=False, zorder=20) for i in range(MAX_DEBUG_LINES)]; active_debug_lines = []
@@ -110,11 +110,10 @@ def generate_video(audio_path, data):
         accumulated_buffer = np.zeros(5001); last_frame_processed = -1; peak_search_ptr = 0
 
         def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer
+            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display
             for s in pool_scores: s.set_visible(False)
             for l in pool_qualifier_lines: l.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
-            for f in pool_snapshots: f.set_visible(False)
             for d in debug_console_pool: d.set_visible(False)
             pool_snap_lines.set_visible(False)
             for st in pool_snap_texts: st.set_visible(False)
@@ -125,7 +124,7 @@ def generate_video(audio_path, data):
             for p in new_peaks:
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
-                debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 3.0 & Pr:{p['prominence']:.2f} >= 0.50) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
+                debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 1.0 & Pr:{p['prominence']:.2f} >= 0.50) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
                 active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
                 if len(active_debug_lines) > MAX_DEBUG_LINES: active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
                 active_qualifiers.clear()
@@ -133,23 +132,36 @@ def generate_video(audio_path, data):
                     if len(active_qualifiers) < MAX_POOL: active_qualifiers.append([len(active_qualifiers), POPUP_LIFETIME, q_info['ms'], q_info['val']])
                 for i in range(MAX_POOL):
                     if not any(a[0] == i for a in active_scores): active_scores.append([i, POPUP_LIFETIME, p['peak_val'], p['total_score'], p['time']]); break
-                for i in range(MAX_POOL):
-                    if not any(a[0] == i for a in active_flashes):
-                        snap = p['snapshot']; poly = pool_snapshots[i]; verts = np.zeros((len(snap_verts_x), 2)); verts[:, 0] = snap_verts_x; verts[1:-1, 1] = snap; poly.set_paths([verts]); active_flashes.append([i, POPUP_LIFETIME]); break
+                snapshot_line.set_ydata(p['snapshot'])
                 live_peaks_x.append(p['time']); live_peaks_y.append(p['peak_val']); live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
             last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
             if rolling_window_scores:
-                current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores); latest_p_frame = max(s['frame'] for s in rolling_window_scores); segments = []; seg_colors = []
+                current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores); latest_p_frame = max(s['frame'] for s in rolling_window_scores); segments = []; seg_colors = []; snap_data = []
                 for i, s in enumerate(rolling_window_scores[:MAX_SNAPSHOT_POOL]):
-                    rel_ms = float(s['frame'] - latest_p_frame); score_val = s['score']; band_idx = s['band_idx']; lane_y = band_idx; score_c = get_score_color(score_val, min_score_seen, max_score_seen); segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]]); seg_colors.append(colors[band_idx]); txt = pool_snap_texts[i]; txt.set_position((rel_ms - 0.8, lane_y)); txt.set_text(f"{score_val:+.2f}"); txt.set_color(score_c); txt.set_visible(True)
-                if segments: pool_snap_lines.set_segments(segments); pool_snap_lines.set_colors(seg_colors); pool_snap_lines.set_visible(True)
+                    rel_ms = float(s['frame'] - latest_p_frame); score_val = s['score']; band_idx = s['band_idx']; lane_y = band_idx; score_c = get_score_color(score_val, min_score_seen, max_score_seen)
+                    segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]]); seg_colors.append(colors[band_idx])
+                    snap_data.append(((rel_ms - 0.8, lane_y), f"{score_val:+.2f}", score_c))
+                last_snapshot_display = (segments, seg_colors, snap_data)
+
+            if last_snapshot_display:
+                segs, cols, s_data = last_snapshot_display
+                pool_snap_lines.set_segments(segs); pool_snap_lines.set_colors(cols); pool_snap_lines.set_visible(True)
+                for i, (pos, txt_val, color) in enumerate(s_data):
+                    txt = pool_snap_texts[i]; txt.set_position(pos); txt.set_text(txt_val); txt.set_color(color); txt.set_visible(True)
+
             current_time = times[frame]; ax_transient.set_xlim(current_time - 20, current_time + 5)
+            t_start = current_time - 20; t_end = current_time + 5
+            idx_start = np.searchsorted(times, t_start); idx_end = np.searchsorted(times, t_end)
+            local_max = 0.0
+            for b_env in onset_envs:
+                if idx_start < len(b_env):
+                    seg = b_env[idx_start:idx_end]
+                    if len(seg) > 0:
+                        m = np.max(seg)
+                        if m > local_max: local_max = m
+            ax_transient.set_ylim(0, max(1.0, local_max * 1.1))
             for i in range(4): threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]]); threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer); current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
-            for flash in active_flashes[:]:
-                idx, life = flash; poly = pool_snapshots[idx]
-                if life > 0: poly.set_alpha((life / float(POPUP_LIFETIME)) * 0.5); poly.set_visible(True); flash[1] -= 1
-                else: active_flashes.remove(flash)
             current_ylim = ax_transient.get_ylim()[1]
             for score in active_scores[:]:
                 idx, life, initial_y, val, p_time = score; txt = pool_scores[idx]
@@ -162,10 +174,8 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, mean_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
-            for p in pool_snapshots:
-                if p.get_visible(): changed_artists.append(p)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)
             for l in pool_qualifier_lines:
