@@ -15,6 +15,7 @@ cdef extern from "cumulative_transience.h":
         double time
         double peak_val
         double total_score
+        double detected_peak_val
         double thresh_val
         double left_min
         double right_min
@@ -57,6 +58,7 @@ cdef extern from "cumulative_transience.h":
                               int env_len,
                               const int* all_valid_peak_indices,
                               int all_valid_count,
+                              double detected_peak_val,
                               double thresh_val,
                               double left_min,
                               double right_min,
@@ -140,7 +142,8 @@ cdef class TransientAnalyzer:
                                 p_params['thresh_vals'][i],
                                 p_params['left_mins'][i],
                                 p_params['right_mins'][i],
-                                p_params['proms'][i]
+                                p_params['proms'][i],
+                                p_params['detected_peak_vals'][i]
                             )
                     new_peaks_to_proc.append((p_idx, band_idx, params))
 
@@ -155,23 +158,24 @@ cdef class TransientAnalyzer:
         cdef cnp.ndarray[float, ndim=1] env
         cdef int ret
 
-        cdef double t_val, l_val, r_val, pr_val
+        cdef double t_val, l_val, r_val, pr_val, p_val
         for p_idx, band_idx, params in new_peaks_to_proc:
             self._processed_peaks[band_idx].add(p_idx)
             env = np.ascontiguousarray(onset_envs[band_idx], dtype=np.float32)
 
+            p_val = 0.0
             t_val = 0.0
             l_val = 0.0
             r_val = 0.0
             pr_val = 0.0
             if params:
-                t_val, l_val, r_val, pr_val = params
+                t_val, l_val, r_val, pr_val, p_val = params
 
             ret = analyzer_process_peak(
                 self._c_analyzer, p_idx, band_idx, <double>times[p_idx],
                 <float*>env.data, len(env),
                 <int*>all_valid_arr.data, all_valid_count,
-                t_val, l_val, r_val, pr_val, &res
+                p_val, t_val, l_val, r_val, pr_val, &res
             )
 
             if ret:
@@ -181,6 +185,7 @@ cdef class TransientAnalyzer:
                     'time': res.time,
                     'peak_val': res.peak_val,
                     'total_score': res.total_score,
+                    'detected_peak_val': res.detected_peak_val,
                     'thresh_val': res.thresh_val,
                     'left_min': res.left_min,
                     'right_min': res.right_min,
@@ -217,6 +222,7 @@ cdef class TransientAnalyzer:
                 'time': pr.time,
                 'peak_val': pr.peak_val,
                 'total_score': pr.total_score,
+                'detected_peak_val': pr.detected_peak_val,
                 'thresh_val': pr.thresh_val,
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
@@ -292,6 +298,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[float, ndim=1] l_mins
     cdef cnp.ndarray[float, ndim=1] r_mins
     cdef cnp.ndarray[float, ndim=1] proms
+    cdef cnp.ndarray[float, ndim=1] d_peaks
 
     for i in range(4):
         env = np.zeros(num_frames, dtype=np.float32)
@@ -318,11 +325,16 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         proms = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
         memcpy(proms.data, res.bands[i].proms, res.bands[i].num_peaks * sizeof(float))
 
+        d_peaks = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        for k in range(res.bands[i].num_peaks):
+            d_peaks[k] = env[res.bands[i].peaks[k]]
+
         peaks_params_list.append({
             'thresh_vals': t_vals,
             'left_mins': l_mins,
             'right_mins': r_mins,
-            'proms': proms
+            'proms': proms,
+            'detected_peak_vals': d_peaks
         })
 
     cdef cnp.ndarray[double, ndim=1] ratings = np.zeros(num_frames, dtype=np.float64)

@@ -210,7 +210,7 @@ def generate_video(audio_path, data):
         MAX_DEBUG_LINES = 10
         debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes,
                                                verticalalignment='top', horizontalalignment='right',
-                                               fontsize=11, family='monospace', color='#2ecc71',
+                                               fontsize=12, family='monospace', color='#2ecc71',
                                                fontweight='bold', visible=False, zorder=10)
                              for i in range(MAX_DEBUG_LINES)]
         active_debug_lines = [] # list of {'text', 'lifetime', 'band_idx'}
@@ -319,7 +319,9 @@ def generate_video(audio_path, data):
                 # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
                 q_sum = sum(q['val'] for q in p_data['qualifiers'])
                 # Qualification Equation: (Flux > Thresh & Flux >= 1.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
-                debug_msg = (f"[B{p_data['band_idx']}] (Flux:{p_data['peak_val']:.2f} > Th:{p_data['thresh_val']:.2f} & "
+                # Note: detected_peak_val is the flux seen at detection time in the incremental loop
+                f_val = p_data.get('detected_peak_val', p_data['peak_val'])
+                debug_msg = (f"[B{p_data['band_idx']}] (Flux:{f_val:.2f} > Th:{p_data['thresh_val']:.2f} & "
                              f"Flux >= 1.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
                              f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
 
@@ -595,7 +597,7 @@ def analyze_audio(file_path):
     # Convert all_peaks to the format expected by generate_video
     # and capture the detailed parameters for synchronization
     peaks_list = [[] for _ in range(4)]
-    peaks_params_list = [{'thresh_vals': [], 'left_mins': [], 'right_mins': [], 'proms': []} for _ in range(4)]
+    peaks_params_list = [{'thresh_vals': [], 'left_mins': [], 'right_mins': [], 'proms': [], 'detected_peak_vals': []} for _ in range(4)]
 
     for p in all_peaks:
         b = p['band_idx']
@@ -605,6 +607,7 @@ def analyze_audio(file_path):
         params['left_mins'].append(p.get('left_min', 0.0))
         params['right_mins'].append(p.get('right_min', 0.0))
         params['proms'].append(p.get('prominence', 0.0))
+        params['detected_peak_vals'].append(p.get('detected_peak_val', 0.0))
 
     result = {
         'filename': os.path.basename(file_path),

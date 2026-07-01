@@ -21,6 +21,7 @@ typedef struct {
     double time;
     double peak_val;
     double total_score;
+    double detected_peak_val;   // The EXACT flux value at detection
     double thresh_val;
     double left_min;
     double right_min;
@@ -90,6 +91,10 @@ typedef struct {
     int cache_write_ptr;
     int cache_count;
     int sample_rate;
+    double max_mel_db;          // Rolling max mel energy for clamping
+
+    float* overlap_buffer;      // To store the end of the last audio push for seamless FFT
+    int overlap_len;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
@@ -104,6 +109,7 @@ int analyzer_process_peak(TransientAnalyzer* self,
                           int env_len,
                           const int* all_valid_peak_indices,
                           int all_valid_count,
+                          double detected_peak_val,
                           double thresh_val,
                           double left_min,
                           double right_min,
