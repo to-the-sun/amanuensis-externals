@@ -43,6 +43,7 @@ cdef extern from "cumulative_transience.h":
     ctypedef struct ChunkAnalysisResult:
         PeakResultList peak_list
         AnalyzerMetrics metrics
+        float last_flux[4][100]
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
         pass
@@ -81,11 +82,7 @@ cdef extern from "cumulative_transience.h":
     ctypedef struct BandAnalysis:
         float* envelope
         float* rolling_threshold
-        int* peaks
-        float* thresh_vals
-        float* left_mins
-        float* right_mins
-        float* proms
+        PeakResult* peaks
         int num_peaks
 
     ctypedef struct FullAnalysisResult:
@@ -95,10 +92,12 @@ cdef extern from "cumulative_transience.h":
         BandAnalysis bands[4]
         double* ratings
         double* std_devs
+        double* means
         double* contrasts
         double* peak_stds
+        double min_score_seen
+        double max_score_seen
 
-    int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* result_out)
     int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
 
@@ -242,8 +241,16 @@ cdef class TransientAnalyzer:
         self.max_score_seen = m.max_score_seen
         self.max_peak = analyzer_get_max_peak(self._c_analyzer)
 
+        cdef list flux_list = []
+        cdef cnp.ndarray[float, ndim=1] f_arr
+        for b in range(4):
+            f_arr = np.zeros(100, dtype=np.float32)
+            memcpy(f_arr.data, res.last_flux[b], 100 * sizeof(float))
+            flux_list.append(f_arr)
+
         return {
             'peaks': peaks,
+            'flux': flux_list,
             'metrics': {
                 'std_dev': m.std_dev,
                 'mean': m.mean,
@@ -288,18 +295,11 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
 
     cdef list onset_envs = []
     cdef list rolling_thresholds = []
-    cdef list peaks_list = []
+    cdef list full_peaks_list = []
 
     cdef cnp.ndarray[float, ndim=1] env
     cdef cnp.ndarray[float, ndim=1] thresh
-    cdef cnp.ndarray[int, ndim=1] peaks
-
-    cdef list peaks_params_list = []
-    cdef cnp.ndarray[float, ndim=1] t_vals
-    cdef cnp.ndarray[float, ndim=1] l_mins
-    cdef cnp.ndarray[float, ndim=1] r_mins
-    cdef cnp.ndarray[float, ndim=1] proms
-    cdef cnp.ndarray[float, ndim=1] d_peaks
+    cdef PeakResult pr
 
     for i in range(4):
         env = np.zeros(num_frames, dtype=np.float32)
@@ -310,38 +310,47 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         memcpy(thresh.data, res.bands[i].rolling_threshold, num_frames * sizeof(float))
         rolling_thresholds.append(thresh)
 
-        peaks = np.zeros(res.bands[i].num_peaks, dtype=np.int32)
-        memcpy(peaks.data, res.bands[i].peaks, res.bands[i].num_peaks * sizeof(int))
-        peaks_list.append(peaks)
-
-        t_vals = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
-        memcpy(t_vals.data, res.bands[i].thresh_vals, res.bands[i].num_peaks * sizeof(float))
-
-        l_mins = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
-        memcpy(l_mins.data, res.bands[i].left_mins, res.bands[i].num_peaks * sizeof(float))
-
-        r_mins = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
-        memcpy(r_mins.data, res.bands[i].right_mins, res.bands[i].num_peaks * sizeof(float))
-
-        proms = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
-        memcpy(proms.data, res.bands[i].proms, res.bands[i].num_peaks * sizeof(float))
-
-        d_peaks = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        band_peaks = []
         for k in range(res.bands[i].num_peaks):
-            d_peaks[k] = env[res.bands[i].peaks[k]]
-
-        peaks_params_list.append({
-            'thresh_vals': t_vals,
-            'left_mins': l_mins,
-            'right_mins': r_mins,
-            'proms': proms,
-            'detected_peak_vals': d_peaks
-        })
+            pr = res.bands[i].peaks[k]
+            peak_data = {
+                'p_idx': pr.p_idx,
+                'band_idx': pr.band_idx,
+                'time': pr.time,
+                'peak_val': pr.peak_val,
+                'total_score': pr.total_score,
+                'detected_peak_val': pr.detected_peak_val,
+                'thresh_val': pr.thresh_val,
+                'left_min': pr.left_min,
+                'right_min': pr.right_min,
+                'prominence': pr.prominence,
+                'qualifiers': [],
+                'snapshot': np.zeros(5001, dtype=np.float64)
+            }
+            for j in range(pr.num_qualifiers):
+                peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
+            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
+            band_peaks.append(peak_data)
+        full_peaks_list.append(band_peaks)
 
     cdef cnp.ndarray[double, ndim=1] ratings = np.zeros(num_frames, dtype=np.float64)
     memcpy(ratings.data, res.ratings, num_frames * sizeof(double))
 
+    cdef cnp.ndarray[double, ndim=1] std_devs = np.zeros(num_frames, dtype=np.float64)
+    memcpy(std_devs.data, res.std_devs, num_frames * sizeof(double))
+
+    cdef cnp.ndarray[double, ndim=1] means = np.zeros(num_frames, dtype=np.float64)
+    memcpy(means.data, res.means, num_frames * sizeof(double))
+
+    cdef cnp.ndarray[double, ndim=1] contrasts = np.zeros(num_frames, dtype=np.float64)
+    memcpy(contrasts.data, res.contrasts, num_frames * sizeof(double))
+
+    cdef cnp.ndarray[double, ndim=1] peak_stds = np.zeros(num_frames, dtype=np.float64)
+    memcpy(peak_stds.data, res.peak_stds, num_frames * sizeof(double))
+
     cdef float max_peak_value = res.max_peak_value
+    cdef double min_score_seen = res.min_score_seen
+    cdef double max_score_seen = res.max_score_seen
 
     analyzer_free_analysis(&res)
 
@@ -349,9 +358,14 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "times": times,
         "sample_rate": int(sr),
         "max_peak_value": float(max_peak_value),
+        "min_score_seen": float(min_score_seen),
+        "max_score_seen": float(max_score_seen),
         "onset_envs": onset_envs,
         "rolling_thresholds": rolling_thresholds,
-        "peaks_list": peaks_list,
-        "peaks_params_list": peaks_params_list,
-        "ratings": ratings
+        "peaks": full_peaks_list,
+        "ratings": ratings,
+        "std_devs": std_devs,
+        "means": means,
+        "contrasts": contrasts,
+        "peak_stds": peak_stds
     }

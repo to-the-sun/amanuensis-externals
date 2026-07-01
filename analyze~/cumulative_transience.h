@@ -43,14 +43,14 @@ typedef struct {
     double contrast;
     double peak_std;
     double rating;
-    bool buffer_updated;
+    int buffer_updated;
     double highest_peak_ms;
-    bool highest_peak_valid;
+    int highest_peak_valid;
     double min_score_seen;
     double max_score_seen;
 } AnalyzerMetrics;
 
-#define MAX_PEAKS_PER_CHUNK 16
+#define MAX_PEAKS_PER_CHUNK 64
 
 typedef struct {
     PeakResult peaks[MAX_PEAKS_PER_CHUNK];
@@ -60,6 +60,7 @@ typedef struct {
 typedef struct {
     PeakResultList peak_list;
     AnalyzerMetrics metrics;
+    float last_flux[MAX_BANDS][100];
 } ChunkAnalysisResult;
 
 typedef struct {
@@ -95,6 +96,12 @@ typedef struct {
 
     float* overlap_buffer;      // To store the end of the last audio push for seamless FFT
     int overlap_len;
+    float* combined_scratch;    // Reuse to avoid realloc
+    int combined_scratch_cap;
+    double* fft_real;           // Reuse to avoid realloc
+    double* fft_imag;
+
+    long long total_frames_pushed; // To track global frame index alignment
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
@@ -134,11 +141,7 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 typedef struct {
     float* envelope;
     float* rolling_threshold;
-    int* peaks;
-    float* thresh_vals;
-    float* left_mins;
-    float* right_mins;
-    float* proms;
+    PeakResult* peaks;
     int num_peaks;
 } BandAnalysis;
 
@@ -151,11 +154,14 @@ typedef struct {
     // Batch analysis metrics history
     double* ratings;
     double* std_devs;
+    double* means;
     double* contrasts;
     double* peak_stds;
+
+    double min_score_seen;
+    double max_score_seen;
 } FullAnalysisResult;
 
-int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* result_out);
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
 void analyzer_debug_mel_filters(int sr, int n_fft, int n_mels, double* filters_out);

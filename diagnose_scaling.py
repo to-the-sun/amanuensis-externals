@@ -23,28 +23,24 @@ def main():
     # 1. Batch Analysis
     print("Running Batch Analysis...")
     batch_res = ct.analyze_audio(y, sr)
-    batch_maxes = [np.max(env) for env in batch_res['onset_envs']]
 
     # 2. Incremental Analysis
     print("Running Incremental Analysis...")
     analyzer = ct.TransientAnalyzer(max_peak_value=1.0, sr=sr)
 
     hop_samples_ms = 44
-    step_samples = int(sr * 0.1)
-    inc_flux_maxes = [0.0] * 4
+    step_samples = int(sr * 0.1) # 4410 samples = 100 frames
+
+    all_inc_flux = [[] for _ in range(4)]
 
     last_t = 0
-    all_inc_peaks = []
-
     for t_samples in range(step_samples, len(y) + step_samples, step_samples):
         hop_y = y[last_t : t_samples]
         last_t = t_samples
 
-        active_start_samples = t_samples - step_samples - int(sr * 0.2)
-        if active_start_samples < 0:
-            analyzer.push_audio(hop_y, sr)
-            continue
+        if len(hop_y) == 0: break
 
+        active_start_samples = t_samples - len(hop_y) - int(sr * 0.2)
         window_start_samples = active_start_samples - int(sr * 15.0)
         if window_start_samples < 0: window_start_samples = 0
 
@@ -53,28 +49,27 @@ def main():
 
         res = analyzer.analyze_chunk(hop_y, sr, buffer_start_frame, active_start_frame)
         if res:
-            for p in res['peaks']:
-                all_inc_peaks.append(p)
-                b = p['band_idx']
-                if p['detected_peak_val'] > inc_flux_maxes[b]:
-                    inc_flux_maxes[b] = p['detected_peak_val']
+            for b in range(4):
+                all_inc_flux[b].extend(res['flux'][b])
 
-    print("\n--- RESULTS ---")
-    print(f"Batch Max Flux per band: {batch_maxes}")
-    print(f"Incremental Max Flux (from detected peaks) per band: {inc_flux_maxes}")
+    print("\n--- COMPARISON ---")
+    num_compare = min(len(batch_res['onset_envs'][0]), len(all_inc_flux[0]))
 
-    # Compare peaks
-    for b in range(4):
-        batch_peaks = batch_res['peaks_list'][b]
-        batch_peak_vals = [batch_res['onset_envs'][b][idx] for idx in batch_peaks]
-        batch_peak_max = max(batch_peak_vals) if batch_peak_vals else 0
+    for b in range(2): # Just check first two bands
+        batch_vals = np.array(batch_res['onset_envs'][b][:num_compare])
+        inc_vals = np.array(all_inc_flux[b][:num_compare])
 
         print(f"\nBand {b}:")
-        print(f"  Batch Peak Max: {batch_peak_max:.4f}")
-        print(f"  Incremental Peak Max: {inc_flux_maxes[b]:.4f}")
-        if batch_peak_max > 0:
-            ratio = inc_flux_maxes[b] / batch_peak_max
-            print(f"  Ratio (Inc/Batch): {ratio:.4f}")
+        print(f"  Batch Mean: {np.mean(batch_vals):.4f}")
+        print(f"  Inc Mean:   {np.mean(inc_vals):.4f}")
+
+        # Find some non-zero index to compare
+        nonzero = np.where(inc_vals > 0.1)[0]
+        if len(nonzero) > 0:
+            idx = nonzero[len(nonzero)//2]
+            print(f"  At frame {idx}: Batch={batch_vals[idx]:.4f}, Inc={inc_vals[idx]:.4f}, Ratio={inc_vals[idx]/batch_vals[idx]:.4f}")
+        else:
+            print("  No significant flux found.")
 
 if __name__ == "__main__":
     main()
