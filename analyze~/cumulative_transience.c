@@ -506,8 +506,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         int peak_count = 0;
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 5dB Absolute Floor
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 5.0f) {
+            // Standard criteria + 2dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 2.0f) {
                 bool replaced = false;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
@@ -852,8 +852,8 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
         float* temp_prom = (float*)malloc(sizeof(float) * num_frames);
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 5dB Absolute Floor
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 5.0f) {
+            // Standard criteria + 2dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 2.0f) {
                 // Simplified SciPy-like find_peaks with distance and prominence
                 bool replaced = false;
                 bool too_close = false;

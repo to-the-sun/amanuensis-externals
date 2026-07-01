@@ -122,11 +122,6 @@ def generate_video(audio_path, data):
             transient_lines.append(line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1)
             threshold_lines.append(t_line)
-            # Add scatter for pre-analyzed peaks (faint red)
-            p_indices = list(peak_indices_list[i])
-            peak_times = [times[idx] for idx in p_indices]
-            peak_vals = [onset_envs[i][idx] for idx in p_indices]
-            ax_transient.scatter(peak_times, peak_vals, color='#c0392b', marker='x', s=60, alpha=0.3, zorder=10)
 
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -198,7 +193,7 @@ def generate_video(audio_path, data):
         # Real-time peak scatter (appears as they are identified)
         live_peaks_x = []
         live_peaks_y = []
-        live_peaks_scatter = ax_transient.scatter([], [], color='#00ffff', marker='x', s=80, alpha=1.0, zorder=11)
+        live_peaks_scatter = ax_transient.scatter([], [], color='#000000', marker='x', s=80, alpha=1.0, zorder=11)
 
         last_frame_processed = -1
         current_snapshot_avg = 0.0
@@ -317,11 +312,11 @@ def generate_video(audio_path, data):
                 # Add to debug console
                 # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
                 q_sum = sum(q['val'] for q in p_data['qualifiers'])
-                # Qualification Equation: (Flux > Thresh & Flux >= 5.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
+                # Qualification Equation: (Flux > Thresh & Flux >= 2.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
                 # Note: detected_peak_val is the flux seen at detection time in the incremental loop
                 f_val = p_data.get('detected_peak_val', p_data['peak_val'])
                 debug_msg = (f"[B{p_data['band_idx']}] (Flux:{f_val:.2f} > Th:{p_data['thresh_val']:.2f} & "
-                             f"Flux >= 5.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
+                             f"Flux >= 2.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
                              f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
 
                 active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p_data['band_idx']})
