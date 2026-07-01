@@ -122,11 +122,11 @@ def generate_video(audio_path, data):
             transient_lines.append(line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1)
             threshold_lines.append(t_line)
-            # Add scatter for peaks
+            # Add scatter for pre-analyzed peaks (faint red)
             p_indices = list(peak_indices_list[i])
             peak_times = [times[idx] for idx in p_indices]
             peak_vals = [onset_envs[i][idx] for idx in p_indices]
-            ax_transient.scatter(peak_times, peak_vals, color='#e74c3c', marker='x', s=60, alpha=1.0, zorder=10)
+            ax_transient.scatter(peak_times, peak_vals, color='#c0392b', marker='x', s=60, alpha=0.3, zorder=10)
 
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -194,6 +194,12 @@ def generate_video(audio_path, data):
 
         # Pool for 'highest peak' line
         highest_peak_line = ax_buf.axvline(0, visible=False, color='#f1c40f', lw=2, ls='--')
+
+        # Real-time peak scatter (appears as they are identified)
+        live_peaks_x = []
+        live_peaks_y = []
+        live_peaks_scatter = ax_transient.scatter([], [], color='#00ffff', marker='x', s=80, alpha=1.0, zorder=11)
+
         last_frame_processed = -1
         current_snapshot_avg = 0.0
         rolling_window_scores = [] # List of {'frame', 'score', 'band_idx'}
@@ -219,31 +225,9 @@ def generate_video(audio_path, data):
                                    verticalalignment='top', fontsize=10, color='#f1c40f',
                                    fontweight='bold')
 
-        # Instantiate pre-analyzer to get global score range
-        pre_analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
-
-        # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
-        # during animation. This list will be consumed by the update() function.
-        all_processed_peaks = []
-        peaks_params_list = data.get('peaks_params_list', None)
-        for p_idx in tqdm(sorted(all_valid_peak_indices), desc="Pre-processing Peaks", unit="peak"):
-             # Finding which band this peak belongs to
-             band_idx = -1
-             for b in range(4):
-                 if p_idx in peak_indices_list[b]:
-                     band_idx = b
-                     break
-
-             # Process it
-             res_list = pre_analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
-             all_processed_peaks.extend(res_list)
-             pre_analyzer.update_metrics(p_idx)
-
-        global_min_score = pre_analyzer.min_score_seen
-        global_max_score = pre_analyzer.max_score_seen
-
-        # Instantiate fresh analyzer for video buffer accumulation
+        # Instantiate analyzer for real-time video buffer accumulation
         analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak, sr=data.get('sample_rate', 44100))
+        peaks_params_list = data.get('peaks_params_list', None)
 
         def update(frame):
             nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines
@@ -260,21 +244,19 @@ def generate_video(audio_path, data):
             highest_peak_line.set_visible(False)
 
             # Dynamically process peaks to update cumulative buffer as playhead advances
-            analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
-            # Explicitly update metrics to ensure buffer cleanup and rolling stats are current
-            analyzer.update_metrics(frame)
+            # and capture live results for real-time visualization
+            live_peak_results = analyzer.process_new_peaks(frame, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
 
-            # Use pre-processed peaks for this visual frame
-            all_new_peak_data = [p for p in all_processed_peaks if p['p_idx'] > last_frame_processed and p['p_idx'] <= frame]
+            # Update Metrics and Cleanup
+            metrics = analyzer.update_metrics(frame)
 
-            for p in all_new_peak_data:
+            for p in live_peak_results:
                 rolling_window_scores.append({
                     'frame': p['p_idx'],
                     'score': p['total_score'],
                     'band_idx': p['band_idx']
                 })
 
-            analyzer.update_metrics(frame)
             last_frame_processed = frame
 
             # Prune scores to the 39ms sliding window ending at the current playhead frame
@@ -298,7 +280,7 @@ def generate_video(audio_path, data):
                     band_idx = s['band_idx']
                     lane_y = band_idx
 
-                    score_c = get_score_color(score_val, global_min_score, global_max_score)
+                    score_c = get_score_color(score_val, metrics['min_score_seen'], metrics['max_score_seen'])
 
                     segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]])
                     seg_colors.append(colors[band_idx])
@@ -325,8 +307,13 @@ def generate_video(audio_path, data):
             cleanup_time = current_time - 15
             cleanup_transient.set_xdata([cleanup_time, cleanup_time])
 
-            # Process visually appearing Peaks
-            for p_data in all_new_peak_data:
+            # Process visually appearing Peaks (using live results)
+            for p_data in live_peak_results:
+                # Update real-time peak scatter
+                live_peaks_x.append(p_data['time'])
+                live_peaks_y.append(p_data['peak_val'])
+                live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
+
                 # Add to debug console
                 # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
                 q_sum = sum(q['val'] for q in p_data['qualifiers'])
@@ -373,10 +360,7 @@ def generate_video(audio_path, data):
                             active_flashes.append([i, POPUP_LIFETIME])
                             break
 
-            # Update Metrics and Cleanup
-            metrics = analyzer.update_metrics(frame)
-            
-            if metrics['buffer_updated'] or all_new_peak_data:
+            if metrics['buffer_updated'] or live_peak_results:
                 buffer_line.set_ydata(analyzer.accumulated_buffer)
 
             # Dynamic Y-axis scaling for buffer
@@ -387,7 +371,7 @@ def generate_video(audio_path, data):
             metrics_text.set_text(f"Std Dev: {metrics['std_dev']:.3f}\nContrast: {metrics['contrast']:.3f}\nPeak Std: {metrics['peak_std']:.3f}")
             rating_text.set_text(f"Rating: {metrics['rating']:.2f}")
             score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}")
-            score_display_text.set_color(get_score_color(current_snapshot_avg, global_min_score, global_max_score))
+            score_display_text.set_color(get_score_color(current_snapshot_avg, metrics['min_score_seen'], metrics['max_score_seen']))
 
             # Handle Flash and Fade (Object Pool)
             for flash in active_flashes[:]:
@@ -412,7 +396,7 @@ def generate_video(audio_path, data):
                     txt.set_position((p_time, new_y))
                     txt.set_text(f"{val:+.2f}")
                     txt.set_alpha(life / float(POPUP_LIFETIME))
-                    txt.set_color(get_score_color(val, global_min_score, global_max_score))
+                    txt.set_color(get_score_color(val, metrics['min_score_seen'], metrics['max_score_seen']))
                     txt.set_visible(True)
                     score[1] -= 1
                 if score[1] <= 0:
@@ -459,7 +443,7 @@ def generate_video(audio_path, data):
 
             # Optimization: Only return visible artists for blitting
             changed_artists = [playhead_transient, cleanup_transient, buffer_line, mean_line,
-                              metrics_text, rating_text, score_display_text]
+                              metrics_text, rating_text, score_display_text, live_peaks_scatter]
             if highest_peak_line.get_visible(): changed_artists.append(highest_peak_line)
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
 
