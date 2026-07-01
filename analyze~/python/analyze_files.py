@@ -133,7 +133,7 @@ def generate_video(audio_path, data):
 
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}")
         ax_transient.set_ylabel("Onset Strength")
-        ax_transient.legend(loc='upper right')
+        # ax_transient.legend(loc='upper right') # Legend removed per user request
         ax_transient.grid(True, alpha=0.3)
         ax_transient.set_xlim(-20, 5)
 
@@ -200,11 +200,20 @@ def generate_video(audio_path, data):
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
-                                              fontweight='bold')
+                                              fontweight='bold', zorder=10)
 
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes,
                                         verticalalignment='top', fontsize=12, color='#f1c40f',
-                                        fontweight='bold')
+                                        fontweight='bold', zorder=10)
+
+        # Debug console pool
+        MAX_DEBUG_LINES = 10
+        debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes,
+                                               verticalalignment='top', horizontalalignment='right',
+                                               fontsize=12, family='monospace', color='#2ecc71',
+                                               fontweight='bold', visible=False, zorder=10)
+                             for i in range(MAX_DEBUG_LINES)]
+        active_debug_lines = [] # list of {'text', 'lifetime', 'band_idx'}
 
         metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes,
                                    verticalalignment='top', fontsize=10, color='#f1c40f',
@@ -216,6 +225,7 @@ def generate_video(audio_path, data):
         # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
         # during animation. This list will be consumed by the update() function.
         all_processed_peaks = []
+        peaks_params_list = data.get('peaks_params_list', None)
         for p_idx in tqdm(sorted(all_valid_peak_indices), desc="Pre-processing Peaks", unit="peak"):
              # Finding which band this peak belongs to
              band_idx = -1
@@ -225,11 +235,11 @@ def generate_video(audio_path, data):
                      break
 
              # Process it
-             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times)
+             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
              all_processed_peaks.extend(res_list)
 
         def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores
+            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines
 
             # Reset visibility of all pooled artists for blitting safety
             # (Though technically only the ones that were active last frame need reset)
@@ -237,6 +247,7 @@ def generate_video(audio_path, data):
             for l in pool_qualifier_lines: l.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
             for f in pool_snapshots: f.set_visible(False)
+            for d in debug_console_pool: d.set_visible(False)
             pool_snap_lines.set_visible(False)
             for st in pool_snap_texts: st.set_visible(False)
             highest_peak_line.set_visible(False)
@@ -304,6 +315,20 @@ def generate_video(audio_path, data):
 
             # Process visually appearing Peaks
             for p_data in all_new_peak_data:
+                # Add to debug console
+                # Full resonance equation: Flux: {peak} > Thresh: {thresh} & Prom: {prom} >= 0.5 | Score: {score} = Flux * ΣQual
+                q_sum = sum(q['val'] for q in p_data['qualifiers'])
+                # Qualification Equation: (Flux > Thresh & Flux >= 5.0 & Prom >= 0.5) -> Score = Flux * sum(Quals)
+                # Note: detected_peak_val is the flux seen at detection time in the incremental loop
+                f_val = p_data.get('detected_peak_val', p_data['peak_val'])
+                debug_msg = (f"[B{p_data['band_idx']}] (Flux:{f_val:.2f} > Th:{p_data['thresh_val']:.2f} & "
+                             f"Flux >= 5.0 & Pr:{p_data['prominence']:.2f} >= 0.50) | "
+                             f"Score:{p_data['total_score']:+.2f} = {p_data['peak_val']:.2f} * {q_sum:.2f}")
+
+                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p_data['band_idx']})
+                if len(active_debug_lines) > MAX_DEBUG_LINES:
+                    active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
+
                 # Use pools instead of creating artists
                 if p_data['snapshot'] is not None:
                     # Clear existing qualifiers by ending their lifetime or just clearing the list
@@ -408,6 +433,18 @@ def generate_video(audio_path, data):
                 if q[1] <= 0:
                     active_qualifiers.remove(q)
 
+            # Handle Debug Console
+            for i, debug in enumerate(active_debug_lines[:]):
+                if debug['lifetime'] > 0:
+                    txt_artist = debug_console_pool[i]
+                    txt_artist.set_text(debug['text'])
+                    txt_artist.set_color(colors[debug['band_idx']])
+                    txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)) # Quick fade out at the end
+                    txt_artist.set_visible(True)
+                    debug['lifetime'] -= 1
+                else:
+                    active_debug_lines.remove(debug)
+
             # Optimization: Only return visible artists for blitting
             changed_artists = [playhead_transient, cleanup_transient, buffer_line, mean_line,
                               metrics_text, rating_text, score_display_text]
@@ -427,6 +464,8 @@ def generate_video(audio_path, data):
                 if t.get_visible(): changed_artists.append(t)
             for st in pool_snap_texts:
                 if st.get_visible(): changed_artists.append(st)
+            for d in debug_console_pool:
+                if d.get_visible(): changed_artists.append(d)
 
             return changed_artists
 
@@ -556,9 +595,19 @@ def analyze_audio(file_path):
     print(f"Analysis loop finished. Found {len(all_peaks)} peaks. Starting pre-processing for video...")
 
     # Convert all_peaks to the format expected by generate_video
+    # and capture the detailed parameters for synchronization
     peaks_list = [[] for _ in range(4)]
+    peaks_params_list = [{'thresh_vals': [], 'left_mins': [], 'right_mins': [], 'proms': [], 'detected_peak_vals': []} for _ in range(4)]
+
     for p in all_peaks:
-        peaks_list[p['band_idx']].append(p['p_idx'])
+        b = p['band_idx']
+        peaks_list[b].append(p['p_idx'])
+        params = peaks_params_list[b]
+        params['thresh_vals'].append(p.get('thresh_val', 0.0))
+        params['left_mins'].append(p.get('left_min', 0.0))
+        params['right_mins'].append(p.get('right_min', 0.0))
+        params['proms'].append(p.get('prominence', 0.0))
+        params['detected_peak_vals'].append(p.get('detected_peak_val', 0.0))
 
     result = {
         'filename': os.path.basename(file_path),
@@ -567,7 +616,8 @@ def analyze_audio(file_path):
         'max_peak_value': float(analyzer.max_peak if hasattr(analyzer, 'max_peak') else full_res['max_peak_value']),
         'onset_envs': [env.tolist() for env in full_res['onset_envs']],
         'rolling_thresholds': [rt.tolist() for rt in full_res['rolling_thresholds']],
-        'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list]
+        'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list],
+        'peaks_params_list': peaks_params_list
     }
 
     # Add compatibility fields

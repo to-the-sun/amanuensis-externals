@@ -15,6 +15,11 @@ cdef extern from "cumulative_transience.h":
         double time
         double peak_val
         double total_score
+        double detected_peak_val
+        double thresh_val
+        double left_min
+        double right_min
+        double prominence
         int num_qualifiers
         Qualifier qualifiers[256]
         double snapshot[5001]
@@ -53,6 +58,11 @@ cdef extern from "cumulative_transience.h":
                               int env_len,
                               const int* all_valid_peak_indices,
                               int all_valid_count,
+                              double detected_peak_val,
+                              double thresh_val,
+                              double left_min,
+                              double right_min,
+                              double prominence,
                               PeakResult* result_out)
     void analyzer_update_metrics(TransientAnalyzer_c* self, int frame, AnalyzerMetrics* metrics_out)
     double* analyzer_get_buffer(TransientAnalyzer_c* self)
@@ -71,6 +81,10 @@ cdef extern from "cumulative_transience.h":
         float* envelope
         float* rolling_threshold
         int* peaks
+        float* thresh_vals
+        float* left_mins
+        float* right_mins
+        float* proms
         int num_peaks
 
     ctypedef struct FullAnalysisResult:
@@ -114,13 +128,24 @@ cdef class TransientAnalyzer:
         memcpy(res.data, buf_ptr, 5001 * sizeof(double))
         return res
 
-    def process_new_peaks(self, int frame, list peak_indices_list, list onset_envs, object all_valid_peak_indices, object times):
+    def process_new_peaks(self, int frame, list peak_indices_list, list onset_envs, object all_valid_peak_indices, object times, list peak_params_list=None):
         cdef list new_peaks_to_proc = []
         cdef int band_idx, p_idx
         for band_idx in range(4):
-            for p_idx in peak_indices_list[band_idx]:
+            for i, p_idx in enumerate(peak_indices_list[band_idx]):
                 if p_idx > frame - 100 and p_idx <= frame and p_idx not in self._processed_peaks[band_idx]:
-                    new_peaks_to_proc.append((p_idx, band_idx))
+                    params = None
+                    if peak_params_list and band_idx < len(peak_params_list):
+                        p_params = peak_params_list[band_idx]
+                        if i < len(p_params['thresh_vals']):
+                            params = (
+                                p_params['thresh_vals'][i],
+                                p_params['left_mins'][i],
+                                p_params['right_mins'][i],
+                                p_params['proms'][i],
+                                p_params['detected_peak_vals'][i]
+                            )
+                    new_peaks_to_proc.append((p_idx, band_idx, params))
 
         new_peaks_to_proc.sort()
 
@@ -133,14 +158,24 @@ cdef class TransientAnalyzer:
         cdef cnp.ndarray[float, ndim=1] env
         cdef int ret
 
-        for p_idx, band_idx in new_peaks_to_proc:
+        cdef double t_val, l_val, r_val, pr_val, p_val
+        for p_idx, band_idx, params in new_peaks_to_proc:
             self._processed_peaks[band_idx].add(p_idx)
             env = np.ascontiguousarray(onset_envs[band_idx], dtype=np.float32)
+
+            p_val = 0.0
+            t_val = 0.0
+            l_val = 0.0
+            r_val = 0.0
+            pr_val = 0.0
+            if params:
+                t_val, l_val, r_val, pr_val, p_val = params
 
             ret = analyzer_process_peak(
                 self._c_analyzer, p_idx, band_idx, <double>times[p_idx],
                 <float*>env.data, len(env),
-                <int*>all_valid_arr.data, all_valid_count, &res
+                <int*>all_valid_arr.data, all_valid_count,
+                p_val, t_val, l_val, r_val, pr_val, &res
             )
 
             if ret:
@@ -150,6 +185,11 @@ cdef class TransientAnalyzer:
                     'time': res.time,
                     'peak_val': res.peak_val,
                     'total_score': res.total_score,
+                    'detected_peak_val': res.detected_peak_val,
+                    'thresh_val': res.thresh_val,
+                    'left_min': res.left_min,
+                    'right_min': res.right_min,
+                    'prominence': res.prominence,
                     'qualifiers': [],
                     'snapshot': np.zeros(5001, dtype=np.float64)
                 }
@@ -182,6 +222,11 @@ cdef class TransientAnalyzer:
                 'time': pr.time,
                 'peak_val': pr.peak_val,
                 'total_score': pr.total_score,
+                'detected_peak_val': pr.detected_peak_val,
+                'thresh_val': pr.thresh_val,
+                'left_min': pr.left_min,
+                'right_min': pr.right_min,
+                'prominence': pr.prominence,
                 'qualifiers': [],
                 'snapshot': np.zeros(5001, dtype=np.float64)
             }
@@ -248,6 +293,13 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[float, ndim=1] thresh
     cdef cnp.ndarray[int, ndim=1] peaks
 
+    cdef list peaks_params_list = []
+    cdef cnp.ndarray[float, ndim=1] t_vals
+    cdef cnp.ndarray[float, ndim=1] l_mins
+    cdef cnp.ndarray[float, ndim=1] r_mins
+    cdef cnp.ndarray[float, ndim=1] proms
+    cdef cnp.ndarray[float, ndim=1] d_peaks
+
     for i in range(4):
         env = np.zeros(num_frames, dtype=np.float32)
         memcpy(env.data, res.bands[i].envelope, num_frames * sizeof(float))
@@ -260,6 +312,30 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         peaks = np.zeros(res.bands[i].num_peaks, dtype=np.int32)
         memcpy(peaks.data, res.bands[i].peaks, res.bands[i].num_peaks * sizeof(int))
         peaks_list.append(peaks)
+
+        t_vals = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        memcpy(t_vals.data, res.bands[i].thresh_vals, res.bands[i].num_peaks * sizeof(float))
+
+        l_mins = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        memcpy(l_mins.data, res.bands[i].left_mins, res.bands[i].num_peaks * sizeof(float))
+
+        r_mins = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        memcpy(r_mins.data, res.bands[i].right_mins, res.bands[i].num_peaks * sizeof(float))
+
+        proms = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        memcpy(proms.data, res.bands[i].proms, res.bands[i].num_peaks * sizeof(float))
+
+        d_peaks = np.zeros(res.bands[i].num_peaks, dtype=np.float32)
+        for k in range(res.bands[i].num_peaks):
+            d_peaks[k] = env[res.bands[i].peaks[k]]
+
+        peaks_params_list.append({
+            'thresh_vals': t_vals,
+            'left_mins': l_mins,
+            'right_mins': r_mins,
+            'proms': proms,
+            'detected_peak_vals': d_peaks
+        })
 
     cdef cnp.ndarray[double, ndim=1] ratings = np.zeros(num_frames, dtype=np.float64)
     memcpy(ratings.data, res.ratings, num_frames * sizeof(double))
@@ -275,5 +351,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "onset_envs": onset_envs,
         "rolling_thresholds": rolling_thresholds,
         "peaks_list": peaks_list,
+        "peaks_params_list": peaks_params_list,
         "ratings": ratings
     }

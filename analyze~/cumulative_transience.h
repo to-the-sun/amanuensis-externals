@@ -21,6 +21,11 @@ typedef struct {
     double time;
     double peak_val;
     double total_score;
+    double detected_peak_val;   // The EXACT flux value at detection
+    double thresh_val;
+    double left_min;
+    double right_min;
+    double prominence;
     int num_qualifiers;
     Qualifier qualifiers[MAX_QUALIFIERS];
     double snapshot[BUFFER_LEN];
@@ -86,6 +91,10 @@ typedef struct {
     int cache_write_ptr;
     int cache_count;
     int sample_rate;
+    double max_mel_db;          // Rolling max mel energy for clamping
+
+    float* overlap_buffer;      // To store the end of the last audio push for seamless FFT
+    int overlap_len;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value);
@@ -100,6 +109,11 @@ int analyzer_process_peak(TransientAnalyzer* self,
                           int env_len,
                           const int* all_valid_peak_indices,
                           int all_valid_count,
+                          double detected_peak_val,
+                          double thresh_val,
+                          double left_min,
+                          double right_min,
+                          double prominence,
                           PeakResult* result_out);
 
 void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
@@ -120,6 +134,10 @@ typedef struct {
     float* envelope;
     float* rolling_threshold;
     int* peaks;
+    float* thresh_vals;
+    float* left_mins;
+    float* right_mins;
+    float* proms;
     int num_peaks;
 } BandAnalysis;
 

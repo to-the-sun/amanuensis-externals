@@ -58,12 +58,12 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Absolute Flux Floor (1dB Baseline)
+### Strategy 3: Absolute Flux Floor (5dB Baseline)
 
-This strategy implements a fixed **1dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
+This strategy implements a fixed **5dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
 
 #### Implementation Details:
-1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **1.0 dB** to be considered a peak candidate.
+1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **5.0 dB** to be considered a peak candidate.
 2.  **Visual Representation**: Horizontal threshold lines return to showing the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
 
 #### Speculation on Current Issues:
