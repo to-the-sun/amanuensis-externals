@@ -200,11 +200,20 @@ def generate_video(audio_path, data):
 
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes,
                                               verticalalignment='top', fontsize=20, color='#808080',
-                                              fontweight='bold')
+                                              fontweight='bold', zorder=10)
 
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes,
                                         verticalalignment='top', fontsize=12, color='#f1c40f',
-                                        fontweight='bold')
+                                        fontweight='bold', zorder=10)
+
+        # Debug console pool
+        MAX_DEBUG_LINES = 10
+        debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.04), '', transform=ax_transient.transAxes,
+                                               verticalalignment='top', horizontalalignment='right',
+                                               fontsize=8, family='monospace', color='#2ecc71',
+                                               fontweight='bold', visible=False, zorder=10)
+                             for i in range(MAX_DEBUG_LINES)]
+        active_debug_lines = [] # list of {'text', 'lifetime'}
 
         metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes,
                                    verticalalignment='top', fontsize=10, color='#f1c40f',
@@ -216,6 +225,7 @@ def generate_video(audio_path, data):
         # Pre-process all peaks for the entire file to avoid re-running the heavy sliding window
         # during animation. This list will be consumed by the update() function.
         all_processed_peaks = []
+        peaks_params_list = data.get('peaks_params_list', None)
         for p_idx in tqdm(sorted(all_valid_peak_indices), desc="Pre-processing Peaks", unit="peak"):
              # Finding which band this peak belongs to
              band_idx = -1
@@ -225,11 +235,11 @@ def generate_video(audio_path, data):
                      break
 
              # Process it
-             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times)
+             res_list = analyzer.process_new_peaks(p_idx, peak_indices_list, onset_envs, all_valid_peak_indices, times, peaks_params_list)
              all_processed_peaks.extend(res_list)
 
         def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores
+            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines
 
             # Reset visibility of all pooled artists for blitting safety
             # (Though technically only the ones that were active last frame need reset)
@@ -237,6 +247,7 @@ def generate_video(audio_path, data):
             for l in pool_qualifier_lines: l.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
             for f in pool_snapshots: f.set_visible(False)
+            for d in debug_console_pool: d.set_visible(False)
             pool_snap_lines.set_visible(False)
             for st in pool_snap_texts: st.set_visible(False)
             highest_peak_line.set_visible(False)
@@ -304,6 +315,14 @@ def generate_video(audio_path, data):
 
             # Process visually appearing Peaks
             for p_data in all_new_peak_data:
+                # Add to debug console
+                # [Band 0] Flux: 12.34 > Thresh: 4.56 & Prom: 7.78 >= 0.50
+                debug_msg = (f"[Band {p_data['band_idx']}] Flux: {p_data['peak_val']:.2f} > "
+                             f"Thresh: {p_data['thresh_val']:.2f} & Prom: {p_data['prominence']:.2f} >= 0.50")
+                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME})
+                if len(active_debug_lines) > MAX_DEBUG_LINES:
+                    active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
+
                 # Use pools instead of creating artists
                 if p_data['snapshot'] is not None:
                     # Clear existing qualifiers by ending their lifetime or just clearing the list
@@ -408,6 +427,17 @@ def generate_video(audio_path, data):
                 if q[1] <= 0:
                     active_qualifiers.remove(q)
 
+            # Handle Debug Console
+            for i, debug in enumerate(active_debug_lines[:]):
+                if debug['lifetime'] > 0:
+                    txt_artist = debug_console_pool[i]
+                    txt_artist.set_text(debug['text'])
+                    txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)) # Quick fade out at the end
+                    txt_artist.set_visible(True)
+                    debug['lifetime'] -= 1
+                else:
+                    active_debug_lines.remove(debug)
+
             # Optimization: Only return visible artists for blitting
             changed_artists = [playhead_transient, cleanup_transient, buffer_line, mean_line,
                               metrics_text, rating_text, score_display_text]
@@ -427,6 +457,8 @@ def generate_video(audio_path, data):
                 if t.get_visible(): changed_artists.append(t)
             for st in pool_snap_texts:
                 if st.get_visible(): changed_artists.append(st)
+            for d in debug_console_pool:
+                if d.get_visible(): changed_artists.append(d)
 
             return changed_artists
 
@@ -567,7 +599,8 @@ def analyze_audio(file_path):
         'max_peak_value': float(analyzer.max_peak if hasattr(analyzer, 'max_peak') else full_res['max_peak_value']),
         'onset_envs': [env.tolist() for env in full_res['onset_envs']],
         'rolling_thresholds': [rt.tolist() for rt in full_res['rolling_thresholds']],
-        'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list]
+        'peaks_list': [np.array(p, dtype=np.int32) for p in peaks_list],
+        'peaks_params_list': full_res.get('peaks_params_list', None)
     }
 
     # Add compatibility fields
