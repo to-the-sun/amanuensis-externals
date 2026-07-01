@@ -71,7 +71,7 @@ The `max_peak` value is a critical normalization constant representing the maxim
 | Environment | Strategy | Implementation |
 | :--- | :--- | :--- |
 | **Max (`analyze~`)** | **Dynamic Update** | The object initializes `max_peak` at 1.0. During each 100ms background analysis cycle, it checks the `max_peak_value` returned by the FFT/Peak detection pass. If a new peak is found that is higher than the current state, `x->analyzer->max_peak` is updated immediately. |
-| **Python (`analyze_files`)** | **Global Batch** | Before the stateful `TransientAnalyzer` is instantiated, the script performs a "pre-pass" on the entire audio file using `analyzer_analyze_audio`. The absolute maximum flux value found across all bands and peaks in the entire file is captured as `max_peak_value`. |
+| **Python (`analyze_files`)** | **Dynamic Update** | The script initializes `max_peak` at 1.0 (matching Max). During the animation loop, the `TransientAnalyzer` dynamically updates its internal `max_peak` state as new peaks are identified, ensuring strictly real-time emulation without global pre-processing. |
 
 ### **Communication with C Core**
 

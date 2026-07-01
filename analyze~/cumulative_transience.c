@@ -506,8 +506,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self,
         int peak_count = 0;
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 5dB Absolute Floor
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 5.0f) {
+            // Standard criteria + 3dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 3.0f) {
                 bool replaced = false;
                 bool too_close = false;
                 if (peak_count > 0 && f - temp_peaks[peak_count-1] < 200) {
@@ -745,6 +745,8 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
     double* real = (double*)malloc(sizeof(double) * n_fft);
     double* imag = (double*)malloc(sizeof(double) * n_fft);
 
+    double rolling_max_mel_db = -DBL_MAX;
+
     for (int f = 0; f < num_frames; f++) {
         int start = f * hop_length - n_fft / 2;
 
@@ -766,6 +768,7 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
 
         fft(real, imag, n_fft);
 
+        double frame_max_db = -DBL_MAX;
         for (int m = 0; m < n_mels; m++) {
             double mel_val = 0;
             for (int i = 0; i < (n_fft / 2 + 1); i++) {
@@ -773,7 +776,22 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
                 double im = imag[i];
                 mel_val += (re * re + im * im) * mel_filters[m * (n_fft / 2 + 1) + i];
             }
-            mel_spectrogram[m * num_frames + f] = mel_val;
+
+            if (mel_val < 1e-10) mel_val = 1e-10;
+            double db_val = 10.0 * log10(mel_val);
+            mel_spectrogram[m * num_frames + f] = db_val;
+            if (db_val > frame_max_db) frame_max_db = db_val;
+        }
+
+        if (frame_max_db > rolling_max_mel_db) rolling_max_mel_db = frame_max_db;
+
+        // Apply 80dB clamping relative to rolling max to match incremental analyzer
+        double top_db = 80.0;
+        double floor_db = rolling_max_mel_db - top_db;
+        for (int m = 0; m < n_mels; m++) {
+            if (mel_spectrogram[m * num_frames + f] < floor_db) {
+                mel_spectrogram[m * num_frames + f] = floor_db;
+            }
         }
     }
     free(real);
@@ -781,50 +799,19 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
     free(window);
     free(mel_filters);
 
-    for (int i = 0; i < n_mels * num_frames; i++) {
-        double val = mel_spectrogram[i];
-        if (val < 1e-10) val = 1e-10;
-        mel_spectrogram[i] = 10.0 * log10(val);
-    }
-    double max_db = -1e20;
-    for (int i = 0; i < n_mels * num_frames; i++) {
-        if (mel_spectrogram[i] > max_db) max_db = mel_spectrogram[i];
-    }
-    double top_db = 80.0;
-    for (int i = 0; i < n_mels * num_frames; i++) {
-        mel_spectrogram[i] -= max_db;
-        if (mel_spectrogram[i] < -top_db) mel_spectrogram[i] = -top_db;
-    }
-
-    // Capture max mel db for batch analyzer (not really used for incremental, but good for consistency)
-    // Actually analyzer_batch_analyze creates a new analyzer, but analyze_audio is used to get envelopes.
-
-    int padding = n_fft / (2 * hop_length);
-
     for (int b = 0; b < MAX_BANDS; b++) {
         result_out->bands[b].envelope = (float*)malloc(sizeof(float) * num_frames);
         memset(result_out->bands[b].envelope, 0, sizeof(float) * num_frames);
 
-        double* raw_flux = (double*)malloc(sizeof(double) * num_frames);
         for (int f = 1; f < num_frames; f++) {
             double flux = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
                 double diff = mel_spectrogram[m * num_frames + f] - mel_spectrogram[m * num_frames + f - 1];
                 if (diff > 0) flux += diff;
             }
-            raw_flux[f] = flux / 32.0;
+            result_out->bands[b].envelope[f] = (float)(flux / 32.0);
         }
-        raw_flux[0] = 0;
-
-        for (int f = 0; f < num_frames; f++) {
-            int src_f = f - padding + 1;
-            if (src_f < 1 || src_f >= num_frames) {
-                result_out->bands[b].envelope[f] = 0.0f;
-            } else {
-                result_out->bands[b].envelope[f] = (float)raw_flux[src_f];
-            }
-        }
-        free(raw_flux);
+        result_out->bands[b].envelope[0] = 0.0f;
 
         result_out->bands[b].rolling_threshold = (float*)malloc(sizeof(float) * num_frames);
         double current_sum = 0;
@@ -852,8 +839,8 @@ int analyzer_analyze_audio(const float* y, int len, int sr, FullAnalysisResult* 
         float* temp_prom = (float*)malloc(sizeof(float) * num_frames);
 
         for (int f = 1; f < num_frames - 1; f++) {
-            // Standard criteria + 5dB Absolute Floor
-            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 5.0f) {
+            // Standard criteria + 3dB Absolute Floor
+            if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thresh[f] && env[f] >= 3.0f) {
                 // Simplified SciPy-like find_peaks with distance and prominence
                 bool replaced = false;
                 bool too_close = false;
