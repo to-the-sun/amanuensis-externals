@@ -86,7 +86,7 @@ def generate_video(audio_path, data):
         transient_lines = []; threshold_lines = []
         for i in range(4):
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2); transient_lines.append(line)
-            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1); threshold_lines.append(t_line)
+            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}"); ax_transient.set_ylabel("Onset Strength"); ax_transient.grid(True, alpha=0.3); ax_transient.set_xlim(-20, 5)
