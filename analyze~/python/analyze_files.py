@@ -86,7 +86,7 @@ def generate_video(audio_path, data):
         transient_lines = []; threshold_lines = []
         for i in range(4):
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2); transient_lines.append(line)
-            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=1); threshold_lines.append(t_line)
+            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}"); ax_transient.set_ylabel("Onset Strength"); ax_transient.grid(True, alpha=0.3); ax_transient.set_xlim(-20, 5)
@@ -124,7 +124,7 @@ def generate_video(audio_path, data):
             for p in new_peaks:
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
-                debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 1.0 & Pr:{p['prominence']:.2f} >= 0.50) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
+                debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 0.0 & Pr:{p['prominence']:.2f} > MidPt) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
                 active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
                 if len(active_debug_lines) > MAX_DEBUG_LINES: active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
                 active_qualifiers.clear()

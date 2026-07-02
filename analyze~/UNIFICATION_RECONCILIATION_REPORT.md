@@ -58,9 +58,8 @@ This report details the final reconciliation of discrepancies between the Max Ex
 | **Hop Size** | 1ms (precisely calculated per SR) |
 | **Mel Bands** | 128 (4 analysis bands of 32 each) |
 | **Noise Floor** | 80dB below rolling max energy |
-| **Peak Threshold** | 1.0dB above 15s rolling mean |
-| **Min Peak Distance** | 200ms |
-| **Peak Prominence** | 0.50 |
+| **Peak Threshold** | 15s rolling midpoint (0.0dB Absolute Floor) |
+| **Peak Prominence** | > 15s Rolling Midpoint |
 | **Resonance Lookback** | 5.0 seconds |
 
 By implementing these unified standards, the distinction between "Incremental" and "Batch" has been moved from the **algorithm** to the **orchestration**, ensuring that what you see on the graph is exactly what the Max object is hearing.
