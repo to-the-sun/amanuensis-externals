@@ -48,7 +48,7 @@ typedef struct {
     int highest_peak_valid;
     double min_score_seen;
     double max_score_seen;
-    double band_medians[MAX_BANDS];
+    double band_midpoints[MAX_BANDS];
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64

@@ -16,14 +16,14 @@ The Onset Strength is calculated in terms of **average positive change in decibe
 ### A. Candidate Identification
 A frame `f` is considered a peak candidate if it meets three local criteria:
 1.  **Local Maximum**: `env[f] > env[f-1]` and `env[f] > env[f+1]`.
-2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **15-second rolling median** of the flux envelope for that band.
+2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **15-second rolling midpoint** (average of high and low values) of the flux envelope for that band.
 3.  **Minimum Distance**: A new peak must be at least **200ms** (200 frames) away from the previous peak in the same band. If a larger peak is found within the 200ms window, it replaces the smaller one.
 
 ### B. Prominence Check
-Currently, a median-based prominence check is applied:
+Currently, a midpoint-based prominence check is applied:
 -   `prom = env[f] - max(left_min, right_min)`
 -   `left_min` / `right_min`: These represent the "valley" floors on either side of the peak. They are calculated by searching outward from the candidate frame `f` until a value higher than `env[f]` is encountered or the buffer edge is reached. The lowest flux value found during these searches is the local minimum for that side.
--   `if (prom > band_median)`: The peak is accepted.
+-   `if (prom > band_midpoint)`: The peak is accepted.
 
 ## 2. Why Over-detection is Occurring
 
@@ -54,25 +54,25 @@ We should revert to more conservative constants. A true transient should be sign
 -   **Action**: Implement an **absolute flux floor** (e.g., `1.0`). If the flux is below this value, it's noise, regardless of the rolling threshold.
 
 ### Strategy 2: Adaptive Prominence
-The "local threshold" (`thresh[f]`) used here is the **15-second rolling median of the spectral flux**. It represents the expected "activity level" in that frequency band over a long context window.
-Instead of a fixed `0.5`, the prominence should scale with the local median.
--   **Action**: `if (prom > median)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
+The "local threshold" (`thresh[f]`) used here is the **15-second rolling midpoint of the spectral flux**. It represents the expected "activity level" in that frequency band over a long context window.
+Instead of a fixed `0.5`, the prominence should scale with the local midpoint.
+-   **Action**: `if (prom > midpoint)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Median Thresholds and Adaptive Prominence
+### Strategy 3: Midpoint Thresholds and Adaptive Prominence
 
-This strategy replaces the rolling average thresholds and absolute noise floor with a more robust median-based approach.
+This strategy replaces the rolling average thresholds and absolute noise floor with an adaptive midpoint-based approach.
 
 #### Implementation Details:
 1.  **Detection Check**: The absolute flux floor has been set to **0.0 dB**, effectively disabling it.
-2.  **Median Thresholding**: Both the primary detection threshold and the prominence threshold now use the **15-second rolling median** of the spectral flux for each band. Medians are more robust to outliers and provide a cleaner baseline in highly dynamic audio.
-3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling median** of the band's flux (`prom > median`). This ensures that a peak must stand out significantly relative to the typical activity level of that frequency band.
-4.  **Visual Representation**: Horizontal threshold lines show the **15-second rolling flux median**.
+2.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold now use the **15-second rolling midpoint** (average of local min and local max) of the spectral flux for each band. Midpoints track the dynamic range of the flux and provide a balanced baseline.
+3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling midpoint** of the band's flux (`prom > midpoint`). This ensures that a peak must stand out significantly relative to the typical activity level of that frequency band.
+4.  **Visual Representation**: Horizontal threshold lines show the **15-second rolling flux midpoint**.
 
 #### Speculation on Current Issues:
 
 **1. The Barrage of Tiny Peaks (Low-level Jitter)**
 -   **Cause**: In the new incremental model, the spectrogram is normalized but not necessarily "clamped." In the original offline code, `top_db` (80dB) was used to clip the bottom of the spectrogram. If the incremental cache is missing this clipping or if the stable window is preserving low-level noise that was previously lost in window-edge artifacts, the system will detect every tiny fluctuation above the stable (and very low) rolling threshold.
--   **Alleviation**: The adaptive prominence check (`prom > median`) ensures that even at low levels, a spike must be significant relative to the band's median activity to be counted, providing a natural filter against jitter without needing a hard absolute floor.
+-   **Alleviation**: The adaptive prominence check (`prom > midpoint`) ensures that even at low levels, a spike must be significant relative to the band's midpoint activity to be counted, providing a natural filter against jitter without needing a hard absolute floor.
 
 **2. Missing Large Peaks (Threshold Inflation)**
 -   **Cause**: This is likely a side effect of the "Barrage." When thousands of tiny noise-peaks are processed (Stage 1), they contribute to the 15-second rolling average of the flux. This **inflates the threshold** significantly.
@@ -81,7 +81,7 @@ This strategy replaces the rolling average thresholds and absolute noise floor w
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
--   `thresh[f]`: The 15-second rolling median of the spectral flux (used in the primary adaptive thresholding).
+-   `thresh[f]`: The 15-second rolling midpoint of the spectral flux (used in the primary adaptive thresholding).
 -   `max_db`: The peak decibel level found within the 15.2s window, used for STFT normalization.
 
 ## 6. Conclusion
