@@ -5,21 +5,19 @@ This report outlines the boundaries between the core C analysis algorithm and th
 ---
 
 ## 1. The Core Engine: `cumulative_transience.c / .h`
-The "Source of Truth" for all numerical analysis. It is designed to be platform-agnostic and contains no dependencies on Max SDK or Python headers.
+The "Source of Truth" for all numerical analysis. It is platform-agnostic and contains no dependencies on Max SDK or Python headers.
 
 ### **Responsibilities**
 *   **Signal Processing**: Implementation of a Radix-2 FFT and Mel-Filterbank.
 *   **Feature Extraction**: Calculation of Spectral Flux (onset strength) across 4 bands.
-*   **Peak Detection**: Algorithmic identification of transients based on local prominence and rolling thresholds.
-*   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores based on rhythm density.
-*   **State Management**: The `TransientAnalyzer` struct tracks the rolling metrics (Std Dev, Contrast, Rating) and handles the "Cleanup Sweep" (removing old snapshots).
+*   **Peak Detection**: Algorithmic identification of transients based on local prominence and adaptive midpoints.
+*   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores.
+*   **State Management**: The `TransientAnalyzer` struct tracks metrics (Std Dev, Contrast, Rating) and handles the 15-second state cleanup.
 
 ### **Boundary Interface**
-*   **Inputs**: Raw `float*` audio buffers or `float*` envelope buffers, sample rates, and frame indices.
-*   **Outputs**: C structs containing raw numerical data.
-    *   **`PeakResult`**: Provides individual resonance scores (`total_score`) in real-time as peaks are identified.
-    *   **`AnalyzerMetrics`**: Provides persistent metrics (Std Dev, Contrast, Rating).
-*   **Memory**: Caller is responsible for allocating/freeing the audio buffers; the library handles its internal analyzer state.
+*   **Inputs**: Raw `float*` audio buffers, sample rates, and frame indices.
+*   **Outputs**: C structs (`PeakResult`, `AnalyzerMetrics`) containing raw numerical data.
+*   **Memory**: The library handles its internal analyzer state; the caller is responsible for providing audio buffers and managing the analyzer's lifecycle.
 
 ---
 
@@ -27,70 +25,43 @@ The "Source of Truth" for all numerical analysis. It is designed to be platform-
 The real-time bridge for the Cycling '74 Max environment.
 
 ### **Responsibilities**
-*   **Audio Ingestion**: Capturing live signals in the high-priority DSP thread and storing them in a 60-second circular buffer.
-*   **Threading**: Offloading heavy analysis to a background `async_worker` to prevent UI/Audio dropouts.
-*   **Timeline Synchronization**:
-    *   The C core treats every window as starting at index 0.
-    *   `analyze~.c` is responsible for mapping these "local" indices back to "global" song frames so that historical resonance data remains consistent as the window slides.
+*   **Audio Ingestion**: Capturing live signals in the high-priority DSP thread.
+*   **Threading**: Offloading heavy analysis to a background `async_worker`.
+*   **Timeline Synchronization**: Mapping "local" analyzer indices to "global" song frames for consistent resonance history.
 *   **Dynamic Normalization**: Updating the `max_peak` reference in real-time as the song progresses.
-*   **Max Ecosystem Integration**: Managing inlets, outlets, assist messages, and `defer`ing background results to the main thread for output.
+*   **Max Ecosystem Integration**: Managing inlets, outlets, and UI messaging.
 
 ---
 
 ## 3. The Python System: `analyze~/python/`
-The Python implementation is split into three distinct layers of abstraction.
+The Python implementation utilizes a layered abstraction.
 
 ### **Layer A: The Glue (`ct_extension.pyx`)**
-A Cython-based native extension that compiles into `cumulative_transience.pyd` (Windows) or `.so` (Linux).
-*   **Boundary Function**: Maps Python NumPy arrays directly to C pointers (`<float*>env.data`).
-*   **Data Conversion**: Translates fixed-size C structs (like `PeakResult`) into flexible Python dictionaries.
-*   **Lifecycle**: Manages the `analyzer_create` and `analyzer_destroy` calls within a Python class wrapper.
+A Cython-based native extension that compiles into a Python dynamic module.
+*   **Direct Mapping**: Maps NumPy arrays directly to C pointers for zero-overhead data passing.
+*   **Data Conversion**: Translates C structs into flexible Python dictionaries.
 
 ### **Layer B: The Orchestrator (`analyze_files.py`)**
-Handles the "heavy lifting" of file management and visualization.
-*   **File I/O**: Uses `librosa` to load and resample various audio formats (MP3, WAV, FLAC).
-*   **Batch Analysis**: Calls `analyze_audio()` to process entire files at once.
-*   **Rolling Score Calculation**: Maintaining a high-resolution rolling average of resonance scores (calculated over a 39ms window) for real-time visualization.
-*   **Graphing**: Uses `Matplotlib` to render the 4-band transient envelopes and rolling thresholds.
-*   **Video Rendering**: Orchestrates `FFmpeg` and `Matplotlib.animation` to generate the synchronized video reports.
-*   **Logic**: Handles the visual "flash and fade" effects and score animations seen in the videos.
+Handles file management and high-level visualization.
+*   **File I/O**: Uses `librosa` for audio loading and resampling to 44.1kHz.
+*   **Batch Analysis**: Calls the C-core's `analyzer_batch_analyze` to process files.
+*   **Dynamic UI**: Orchestrates Matplotlib and FFmpeg to generate synchronized video reports with rolling average scores.
 
 ### **Layer C: The Automation (`Amanuensis.py`)**
-A Discord bot that serves as a high-level UI.
-*   **Integration**: Monitors file system changes and triggers `analyze_files.py` in a background thread.
-*   **Distribution**: Uploads generated videos and metrics to Discord.
+A Discord bot serving as an automated interface for processing files and distributing reports.
 
 ---
 
 ## 4. Normalization and `max_peak` Management
 
-The `max_peak` value is a critical normalization constant representing the maximum spectral flux value encountered at a detected peak. It is used to scale the 5-second snapshots before they are accumulated into the historical buffer, ensuring that the resulting resonance scores are comparable across different audio signals.
+The `max_peak` value is a critical normalization constant representing the loudest spectral flux encountered. It scales the 5-second snapshots before they are accumulated, ensuring consistent resonance scores.
 
-### **Determination Strategies**
+### **Implementation Strategies**
 
 | Environment | Strategy | Implementation |
 | :--- | :--- | :--- |
-| **Max (`analyze~`)** | **Dynamic Update** | The object initializes `max_peak` at 1.0. During each 100ms background analysis cycle, it checks the `max_peak_value` returned by the FFT/Peak detection pass. If a new peak is found that is higher than the current state, `x->analyzer->max_peak` is updated immediately. |
-| **Python (`analyze_files`)** | **Dynamic Update** | The script initializes `max_peak` at 1.0 (matching Max). During the animation loop, the `TransientAnalyzer` dynamically updates its internal `max_peak` state as new peaks are identified, ensuring strictly real-time emulation without global pre-processing. |
-
-### **Communication with C Core**
-
-The C core maintains the `max_peak` value within the `TransientAnalyzer` struct. The consumers convey this value using different mechanisms:
-
-1.  **Max External**: Since the Max object maintains a long-lived `TransientAnalyzer` instance, it updates the value via direct member access:
-    ```c
-    if (result.max_peak_value > x->analyzer->max_peak) {
-        x->analyzer->max_peak = (double)result.max_peak_value;
-    }
-    ```
-2.  **Python Extension**: The Python wrapper passes the pre-calculated global maximum during instantiation via the Cython bridge, which calls the C constructor:
-    ```python
-    # Python
-    analyzer = cumulative_transience.TransientAnalyzer(max_peak_value=max_peak)
-
-    # Cython/C
-    self._c_analyzer = analyzer_create(max_peak_value)
-    ```
+| **Max (`analyze~`)** | **Dynamic Update** | The object initializes `max_peak` at 1.0 and updates it in real-time within the background analysis cycle as higher peaks are encountered. |
+| **Python (`analyze_files`)** | **Dynamic Update** | The `TransientAnalyzer` dynamically updates its internal `max_peak` state during processing, ensuring consistency with the real-time model. |
 
 ---
 
@@ -101,17 +72,13 @@ The C core maintains the `max_peak` value within the `TransientAnalyzer` struct.
 | **FFT / Mel-Filters** | **Primary** | - | - |
 | **Peak Detection Logic** | **Primary** | - | - |
 | **Resonance Scoring** | **Primary** | - | - |
-| **Rolling Score (39ms Avg)** | - | - | **Primary** |
-| **Audio File Loading** | - | - | **librosa** |
-| **Live Audio Capture** | - | **DSP Thread** | - |
-| **Threading/Async** | - | **Async Worker** | **asyncio/threads** |
-| **Timeline Mapping** | - | **Global Frame Fixup** | **Array Indexing** |
-| **Visualization/UI** | - | **Outlets/Assist** | **Matplotlib/FFmpeg** |
-| **Normalization State** | **Structure Member** | **Dynamic Update** | **Batch Global Max** |
+| **Normalization State** | **Structure Member** | **Dynamic Update** | **Dynamic Update** |
+| **Audio Capture/Loading** | - | **Live DSP** | **librosa** |
+| **Visualization/UI** | - | **Max Outlets** | **Matplotlib/FFmpeg** |
 
 ---
 
 ## Key Interaction Points
-1.  **Normalization**: The C code performs dB normalization *per window*. The Max object and Python script must both manage the `max_peak` value to ensure the relative flux values are scaled correctly across time.
-2.  **Relative vs. Absolute**: The C code is "dumb" regarding time—it only knows about the indices in the buffer it was given. Both Max and Python have custom logic to "offset" these indices to match the actual timeline of the audio file or performance.
-3.  **Static Linking**: The Max external statically links `cumulative_transience.c`. The Python extension compiles it into a module. This ensures they both run identical algorithmic logic while providing completely different user experiences.
+1.  **Normalization**: The C core manages the `max_peak` state, which consumers can update or query to ensure consistent scaling.
+2.  **Relative vs. Absolute**: Both Max and Python map the C-core's relative buffer indices to their respective global timelines.
+3.  **Static Integration**: The system is built for bit-perfect parity; the Max external statically links the C source, while Python compiles it into a native extension.

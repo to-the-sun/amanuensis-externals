@@ -1,26 +1,26 @@
 # Transience Algorithm Integration Report
 
 ## Overview
-The `analyze~` Max object has been updated to integrate the `cumulative_transience` algorithm directly into its binary. Previously, the object relied on an external `libtransience.dll` which was loaded at runtime using the Windows `LoadLibrary` API.
+The `analyze~` Max object has been updated to integrate the `cumulative_transience` algorithm directly into its binary. This transition replaced a previous dependency on an external `libtransience.dll` that was loaded at runtime.
 
-## Changes Made
+## Current State
 
 ### 1. Source Code Integration
-The `analyze~.c` file was modified to:
-- Remove all DLL loading logic, including `HINSTANCE`, `LoadLibrary`, `GetProcAddress`, and `FreeLibrary`.
-- Remove function pointer typedefs and members from the `t_analyze` struct.
-- Call the analysis functions (`analyzer_create`, `analyzer_analyze_audio`, etc.) directly from `cumulative_transience.c`.
+The `analyze~.c` external now statically links the transience algorithm:
+- All DLL loading logic (`LoadLibrary`, etc.) has been removed.
+- Function pointers have been replaced by direct calls to the analysis functions (`analyzer_create`, `analyzer_analyze_chunk`, etc.) defined in `cumulative_transience.c`.
+- The `t_analyze` struct directly manages a `TransientAnalyzer` instance.
 
-### 2. Build System Update
-The `Makefile` in the `analyze~/` directory was updated to include `cumulative_transience.c` in the compilation command for `analyze~.mxe64`. This ensures that the transience algorithm is statically linked into the Max external.
+### 2. Build System
+The `Makefile` in the `analyze~/` directory includes `cumulative_transience.c` as a dependency for the `analyze~.mxe64` build. This ensures the transience logic is an integral part of the Max external.
 
-### 3. File Preservation
-The files `cumulative_transience.h` and `cumulative_transience.c` are preserved in the `analyze~/` directory. These files serve as the source-of-truth for the algorithm and are now directly utilized by the `analyze~` object.
+### 3. Shared Source of Truth
+`cumulative_transience.h` and `cumulative_transience.c` are maintained in the `analyze~/` directory. These files serve as the unified source-of-truth for both the Max external and the Cython-based Python extension.
 
 ## Verification
-- **Compilation:** The object compiles successfully using the updated `Makefile`.
-- **Symbol Check:** Symbol analysis via `nm` confirms that `analyzer_` functions are present as defined symbols (T) in the `analyze~.mxe64` binary.
-- **Functional Testing:** A standalone test harness (`test_analyzer.c`) was used to verify that the integrated algorithm correctly detects peaks and calculates metrics on synthetic audio data.
+- **Compilation**: The object compiles successfully into a single `analyze~.mxe64` binary.
+- **Symbol Integrity**: The binary contains the `analyzer_` symbols, confirming static linkage.
+- **Parity**: Direct integration ensures that the Max object uses the exact same DSP logic as the Python reference visualizer.
 
 ## Conclusion
-This integration simplifies the deployment of the `analyze~` object by removing the external dependency on `libtransience.dll`, while maintaining the same high-performance spectral analysis capabilities.
+This integration simplifies deployment by removing external DLL dependencies and ensures that the core algorithm remains synchronized across all host environments.
