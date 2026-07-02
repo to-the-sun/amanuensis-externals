@@ -16,7 +16,7 @@ The Onset Strength is calculated in terms of **average positive change in decibe
 ### A. Candidate Identification
 A frame `f` is considered a peak candidate if it meets three local criteria:
 1.  **Local Maximum**: `env[f] > env[f-1]` and `env[f] > env[f+1]`.
-2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **15-second rolling midpoint** (average of high and low values) of the flux envelope for that band.
+2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **999-millisecond rolling midpoint** (calculated from a sub-window within the 15s cache) of the flux envelope for that band.
 3.  **Minimum Distance**: A new peak must be at least **200ms** (200 frames) away from the previous peak in the same band. If a larger peak is found within the 200ms window, it replaces the smaller one.
 
 ### B. Prominence Check
@@ -64,9 +64,9 @@ This strategy replaces the rolling average thresholds and absolute noise floor w
 
 #### Implementation Details:
 1.  **Detection Check**: The absolute flux floor has been set to **0.0 dB**, effectively disabling it.
-2.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold now use the **15-second rolling midpoint** (average of local min and local max) of the spectral flux for each band. Midpoints track the dynamic range of the flux and provide a balanced baseline.
+2.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold now use a **999-millisecond rolling midpoint** (calculated from the end of the 15s flux cache) for each band. Midpoints track the local dynamic range of the flux and provide a balanced baseline.
 3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling midpoint** of the band's flux (`prom > midpoint`). This ensures that a peak must stand out significantly relative to the typical activity level of that frequency band.
-4.  **Visual Representation**: Horizontal threshold lines show the **15-second rolling flux midpoint**.
+4.  **Visual Representation**: Horizontal threshold lines show the **999-millisecond rolling flux midpoint**.
 
 #### Speculation on Current Issues:
 
@@ -81,7 +81,7 @@ This strategy replaces the rolling average thresholds and absolute noise floor w
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
--   `thresh[f]`: The 15-second rolling midpoint of the spectral flux (used in the primary adaptive thresholding).
+-   `thresh[f]`: The 999-millisecond rolling midpoint of the spectral flux (used in the primary adaptive thresholding).
 -   `max_db`: The peak decibel level found within the 15.2s window, used for STFT normalization.
 
 ## 6. Conclusion

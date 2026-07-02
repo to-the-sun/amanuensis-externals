@@ -287,12 +287,17 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
     int nf = self->cache_count, rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
     float *envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
     float midpoints[MAX_BANDS];
+    int n_999 = (int)(999.0 / self->frame_duration_ms);
+    if (n_999 > nf) n_999 = nf;
+    if (n_999 <= 0) n_999 = 1;
+
     for (int b = 0; b < MAX_BANDS; b++) {
         envs[b] = (float*)malloc(sizeof(float) * nf); thrs[b] = (float*)malloc(sizeof(float) * nf);
         if (!envs[b] || !thrs[b]) { for(int k=0; k<=b; k++) { free(envs[k]); free(thrs[k]); } return 0; }
         for (int j = 0; j < nf; j++) envs[b][j] = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
 
-        midpoints[b] = calculate_midpoint(envs[b], nf);
+        // Midpoints are now determined by a custom 999ms window (last n_999 frames)
+        midpoints[b] = calculate_midpoint(envs[b] + nf - n_999, n_999);
         for (int j = 0; j < nf; j++) thrs[b][j] = midpoints[b];
     }
     int *bpeaks[MAX_BANDS] = {0}, bpeak_counts[MAX_BANDS] = {0}; float *bth[MAX_BANDS] = {0}, *bl[MAX_BANDS] = {0}, *br[MAX_BANDS] = {0}, *bp[MAX_BANDS] = {0};
