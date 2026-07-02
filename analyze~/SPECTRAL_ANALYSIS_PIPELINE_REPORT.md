@@ -12,7 +12,7 @@ The distinction between "Incremental" and "Batch" analysis has been eliminated w
 2.  **Mel-Filtering**: Aggregates FFT bins into 128 Mel-spaced bands.
 3.  **Spectral Flux**: Calculates the rate of change in energy for each band.
 4.  **Stateful Resonance**: Tracks historical transient energy in a 5-second buffer and calculates resonance qualifiers.
-5.  **Peak Detection**: Identifies transients using a 15-second rolling threshold, 200ms suppression, and an adaptive prominence check (`prom > 0.5 * flux`).
+5.  **Peak Detection**: Identifies transients using a 15-second rolling median threshold, 200ms suppression, and an adaptive median-based prominence check (`prom > median`).
 
 ## 2. Host Orchestration: Max vs. Python
 

@@ -49,6 +49,45 @@ static void fft(double* real, double* imag, int n) {
 typedef struct { int p_idx; int band_idx; } PeakRef;
 static int compare_peaks(const void* a, const void* b) { return ((PeakRef*)a)->p_idx - ((PeakRef*)b)->p_idx; }
 
+static void swap_floats(float* a, float* b) {
+    float t = *a; *a = *b; *b = t;
+}
+
+static float quickselect(float* arr, int n, int k) {
+    int left = 0, right = n - 1;
+    while (left <= right) {
+        if (left == right) return arr[left];
+        int pivotIndex = left + (right - left) / 2;
+        float pivotValue = arr[pivotIndex];
+        swap_floats(&arr[pivotIndex], &arr[right]);
+        int storeIndex = left;
+        for (int i = left; i < right; i++) {
+            if (arr[i] < pivotValue) {
+                swap_floats(&arr[i], &arr[storeIndex]);
+                storeIndex++;
+            }
+        }
+        swap_floats(&arr[storeIndex], &arr[right]);
+        if (k == storeIndex) return arr[k];
+        else if (k < storeIndex) right = storeIndex - 1;
+        else left = storeIndex + 1;
+    }
+    return 0;
+}
+
+static float calculate_median(float* values, int n, float* scratch) {
+    if (n <= 0) return 0;
+    memcpy(scratch, values, n * sizeof(float));
+    if (n % 2 == 0) {
+        float m1 = quickselect(scratch, n, n / 2 - 1);
+        // We need to re-copy or at least be careful because quickselect partially sorts
+        memcpy(scratch, values, n * sizeof(float));
+        float m2 = quickselect(scratch, n, n / 2);
+        return (m1 + m2) / 2.0f;
+    }
+    return quickselect(scratch, n, n / 2);
+}
+
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels);
 
 TransientAnalyzer* analyzer_create(double max_peak_value) {
@@ -276,16 +315,17 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
     analyzer_push_audio(self, y, len, sr);
     int nf = self->cache_count, rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
     float *envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
+    float medians[MAX_BANDS];
+    float* scratch = (float*)malloc(sizeof(float) * nf);
     for (int b = 0; b < MAX_BANDS; b++) {
         envs[b] = (float*)malloc(sizeof(float) * nf); thrs[b] = (float*)malloc(sizeof(float) * nf);
-        if (!envs[b] || !thrs[b]) { for(int k=0; k<=b; k++) { free(envs[k]); free(thrs[k]); } return 0; }
-        double csum = 0; int ws = 15000;
-        for (int j = 0; j < nf; j++) {
-            float fv = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE]; envs[b][j] = fv; csum += (double)fv;
-            if (j >= ws) { csum -= (double)envs[b][j - ws]; thrs[b][j] = (float)(csum / (double)ws); }
-            else thrs[b][j] = (float)(csum / (double)(j + 1));
-        }
+        if (!envs[b] || !thrs[b] || !scratch) { free(scratch); for(int k=0; k<=b; k++) { free(envs[k]); free(thrs[k]); } return 0; }
+        for (int j = 0; j < nf; j++) envs[b][j] = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
+
+        medians[b] = calculate_median(envs[b], nf, scratch);
+        for (int j = 0; j < nf; j++) thrs[b][j] = medians[b];
     }
+    free(scratch);
     int *bpeaks[MAX_BANDS] = {0}, bpeak_counts[MAX_BANDS] = {0}; float *bth[MAX_BANDS] = {0}, *bl[MAX_BANDS] = {0}, *br[MAX_BANDS] = {0}, *bp[MAX_BANDS] = {0};
     for (int b = 0; b < MAX_BANDS; b++) {
         float *env = envs[b], *thr = thrs[b]; int *tp = (int*)malloc(sizeof(int) * nf);
@@ -300,7 +340,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                         float lmin = env[f]; for(int k=f-1; k>=0; k--) { if (env[k] > env[f]) break; if (env[k] < lmin) lmin = env[k]; }
                         float rmin = env[f]; for(int k=f+1; k<nf; k++) { if (env[k] > env[f]) break; if (env[k] < rmin) rmin = env[k]; }
                         float prom = env[f] - (lmin > rmin ? lmin : rmin);
-                        if (prom > 0.5f * env[f]) {
+                        if (prom > medians[b]) {
                             if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom; }
                             else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom; pc++; }
                         }
@@ -343,6 +383,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             }
         }
         analyzer_update_metrics(self, active_start_frame + 100, &result_out->metrics);
+        for (int b = 0; b < MAX_BANDS; b++) result_out->metrics.band_medians[b] = (double)medians[b];
     }
     for (int b = 0; b < MAX_BANDS; b++) {
         free(envs[b]); free(thrs[b]); if (bpeak_counts[b] > 0) { free(bpeaks[b]); free(bth[b]); free(bl[b]); free(br[b]); free(bp[b]); }
@@ -397,7 +438,15 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         }
         analyzer_analyze_chunk(a, push_ptr, step, sr, win_s / hop, act_s / hop, res);
         free(push_ptr);
-        for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) result_out->bands[b].envelope[f] = res->last_flux[b][i]; }
+        for (int b = 0; b < MAX_BANDS; b++) {
+            for (int i = 0; i < 100; i++) {
+                int f = act_s / hop + i;
+                if (f >= 0 && f < num_f) {
+                    result_out->bands[b].envelope[f] = res->last_flux[b][i];
+                    result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_medians[b];
+                }
+            }
+        }
         for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
@@ -410,8 +459,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     for(int b=0; b<MAX_BANDS; b++) {
         int n = result_out->bands[b].num_peaks; result_out->bands[b].peaks = (PeakResult*)malloc(sizeof(PeakResult) * n);
         if(result_out->bands[b].peaks) memcpy(result_out->bands[b].peaks, pband[b], sizeof(PeakResult) * n);
-        free(pband[b]); double csum = 0;
-        for (int f = 0; f < num_f; f++) { csum += (double)result_out->bands[b].envelope[f]; if (f >= 15000) csum -= (double)result_out->bands[b].envelope[f - 15000]; result_out->bands[b].rolling_threshold[f] = (float)(csum / (double)(f >= 15000 ? 15000 : (f + 1))); }
+        free(pband[b]);
     }
     analyzer_destroy(a); return 1;
 }

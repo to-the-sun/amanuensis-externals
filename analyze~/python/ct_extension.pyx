@@ -36,6 +36,7 @@ cdef extern from "cumulative_transience.h":
         bint highest_peak_valid
         double min_score_seen
         double max_score_seen
+        double band_medians[4]
 
     ctypedef struct PeakResultList:
         PeakResult peaks[64]
@@ -264,7 +265,8 @@ cdef class TransientAnalyzer:
                 'buffer_updated': m.buffer_updated,
                 'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
                 'min_score_seen': m.min_score_seen,
-                'max_score_seen': m.max_score_seen
+                'max_score_seen': m.max_score_seen,
+                'band_medians': [m.band_medians[0], m.band_medians[1], m.band_medians[2], m.band_medians[3]]
             }
         }
         free(res)
@@ -285,7 +287,8 @@ cdef class TransientAnalyzer:
             'buffer_updated': m.buffer_updated,
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
             'min_score_seen': m.min_score_seen,
-            'max_score_seen': m.max_score_seen
+            'max_score_seen': m.max_score_seen,
+            'band_medians': [m.band_medians[0], m.band_medians[1], m.band_medians[2], m.band_medians[3]]
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):

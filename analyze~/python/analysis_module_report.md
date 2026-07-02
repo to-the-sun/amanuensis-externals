@@ -97,7 +97,7 @@ Performs full spectral decomposition and feature extraction on raw audio.
 | **Exclusion Zone** | 99ms | Resonance lookback ignores the most recent 99ms. |
 | **State Retention** | 15s | Snapshots persist in the accumulated buffer for 15 seconds. |
 | **Peak Detection Distance** | 200ms | Minimum distance enforced between peaks in the same band. |
-| **Peak Prominence** | > 0.5 * Flux | Minimum prominence required for flux peak detection. |
+| **Peak Prominence** | > Rolling Median | Minimum prominence required for flux peak detection. |
 | **Noise Floor** | 0.0 | Absolute flux floor (dB) for transient identification. |
 
 ---
