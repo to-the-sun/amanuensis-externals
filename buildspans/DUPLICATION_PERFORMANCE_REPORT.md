@@ -7,9 +7,10 @@ In many musical patches, `offset`, `note`, and `bang` messages are delivered via
 
 ## Architectural Improvements
 
-### 1. Robust Async Offloading
-The threading logic has been updated to offload work to a background thread if the call originates from **any** high-priority thread (Audio or Scheduler). 
-- **Recursion Safety:** A new `async_worker_is_worker_thread()` check ensures that the background worker itself doesn't try to re-enqueue its own work, which would lead to infinite loops or deadlocks.
+### 1. Robust Async Offloading (Implemented)
+The threading logic has been updated to offload work to a background thread when `@async` is enabled, regardless of whether the call originates from the **Main**, **Audio**, or **Scheduler** thread. This ensures that the high-priority audio engine is never blocked by expensive duplication or dictionary modification tasks.
+- **Recursion Safety:** A new `async_worker_is_worker_thread()` check ensures that the background worker itself doesn't try to re-enqueue its own work, which prevents infinite loops and deadlocks.
+- **Entry Point Consistency:** All primary entry points (`offset`, `list`, `bang`, `track`, `clear`, `local_bar_length`) have been unified to use this robust offloading strategy.
 
 ### 2. Hierarchical Dictionary Structure
 Previously, `buildSpans` used a "flat" dictionary key structure (e.g., `palette::track::bar::property`). This forced the duplication process to perform linear scans ($O(N^2)$ complexity) to find and copy keys belonging to a specific track.
