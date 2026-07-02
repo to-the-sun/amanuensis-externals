@@ -75,6 +75,7 @@ typedef struct {
     int score_count;
     double last_score_avg;
     double highest_peak_ms;
+    double midpoint_lookback[MAX_BANDS];
 
     // Peak history
     double peak_history[MAX_PEAK_HISTORY];

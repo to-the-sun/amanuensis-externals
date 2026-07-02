@@ -50,9 +50,9 @@ This report documents the hierarchical levels of resolution within the `cumulati
 *   **Purpose**: The internal circular buffer size for the Mel spectrogram and flux envelopes, maintaining history for thresholding and lookahead.
 
 ## 10. Midpoint Sub-Window
-*   **Resolution**: Dynamic (100ms - 5000ms)
-*   **Source**: `cumulative_transience.c` (Based on `highest_peak_ms`)
-*   **Purpose**: The sub-window at the end of the cache used to calculate the rolling midpoint for thresholding.
+*   **Resolution**: Dynamic (100ms - 15000ms)
+*   **Source**: `cumulative_transience.c` (Based on per-band peak density)
+*   **Purpose**: The sub-window at the end of the cache used to calculate the rolling midpoint for thresholding. Calculated as `15000ms - avg_peak_delta`, where `avg_peak_delta` is the average time between peaks found within the *current* lookback window for that frequency band.
 
 ## 11. State Cleanup Threshold
 *   **Resolution**: 15,000ms (15 Seconds)
