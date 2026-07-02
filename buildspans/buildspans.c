@@ -573,11 +573,11 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         defer(x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }
@@ -611,7 +611,7 @@ void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
-    if (x->async && x->worker) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
         async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a);
@@ -621,7 +621,7 @@ void buildspans_offset(t_buildspans *x, double f) {
 }
 
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a[2];
         atom_setfloat(&a[0], f);
         atom_setfloat(&a[1], loop_start);
@@ -629,7 +629,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         return;
     }
 
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a[2];
         atom_setfloat(&a[0], f);
         atom_setfloat(&a[1], loop_start);
@@ -857,13 +857,13 @@ void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom 
 }
 
 void buildspans_track(t_buildspans *x, long n) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
         async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a);
         return;
     }
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
         defer(x, (method)buildspans_track_deferred, NULL, 1, &a);
@@ -883,7 +883,7 @@ void buildspans_do_track(t_buildspans *x, long n) {
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
@@ -894,7 +894,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
         return;
     }
 
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
@@ -961,7 +961,7 @@ void buildspans_float(t_buildspans *x, double f) {
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         if (inlet_num == 1) {
             async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv);
         } else {
@@ -987,7 +987,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         defer(x, (method)buildspans_do_list, s, argc, argv);
         return;
     }
@@ -1761,11 +1761,11 @@ void buildspans_run_cleanup(t_buildspans *x) {
 
 
 void buildspans_bang(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
-    if (x->defer && !systhread_ismainthread()) {
+    if (x->defer && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         defer(x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
@@ -1937,7 +1937,7 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
         async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
