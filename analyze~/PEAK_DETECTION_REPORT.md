@@ -23,7 +23,7 @@ A frame `f` is considered a peak candidate if it meets three local criteria:
 Currently, a very basic prominence check is applied:
 -   `prom = env[f] - max(left_min, right_min)`
 -   `left_min` / `right_min`: These represent the "valley" floors on either side of the peak. They are calculated by searching outward from the candidate frame `f` until a value higher than `env[f]` is encountered or the buffer edge is reached. The lowest flux value found during these searches is the local minimum for that side.
--   `if (prom >= 0.5f)`: The peak is accepted.
+-   `if (prom > 0.5f * env[f])`: The peak is accepted.
 
 ## 2. Why Over-detection is Occurring
 
@@ -58,19 +58,20 @@ The "local threshold" (`thresh[f]`) used here is the **15-second rolling average
 Instead of a fixed `0.5`, the prominence should scale with the local threshold.
 -   **Action**: `if (prom >= thresh[f] * 0.5)`: This ensures that in loud sections, we require a large spike to trigger a peak, while in quiet sections, we are more sensitive (but still limited by the absolute floor).
 
-### Strategy 3: Absolute Flux Floor (3dB Baseline)
+### Strategy 3: Adaptive Prominence and Zero Noise Floor
 
-This strategy implements a fixed **3dB Absolute Baseline** for all transient detection to eliminate the "barrage" of low-level spectral noise.
+This strategy replaces the fixed absolute noise floor and flat prominence check with a more sophisticated, adaptive approach.
 
 #### Implementation Details:
-1.  **Detection Check**: In addition to local maximum and rolling average criteria, a frame must have a Spectral Flux (Onset Strength) of at least **1.0 dB** to be considered a peak candidate.
-2.  **Visual Representation**: Horizontal threshold lines return to showing the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
+1.  **Detection Check**: The absolute flux floor has been set to **0.0 dB**, effectively disabling it to allow detection of very subtle transients in quiet passages.
+2.  **Adaptive Prominence**: Instead of a flat 0.5 prominence, a peak is now only valid if its prominence is **greater than half of the flux** at that moment (`prom > 0.5 * flux`). This ensures that the significance of a peak is relative to its own intensity.
+3.  **Visual Representation**: Horizontal threshold lines show the **15-second rolling flux average**, allowing users to see the adaptive noise floor.
 
 #### Speculation on Current Issues:
 
 **1. The Barrage of Tiny Peaks (Low-level Jitter)**
 -   **Cause**: In the new incremental model, the spectrogram is normalized but not necessarily "clamped." In the original offline code, `top_db` (80dB) was used to clip the bottom of the spectrogram. If the incremental cache is missing this clipping or if the stable window is preserving low-level noise that was previously lost in window-edge artifacts, the system will detect every tiny fluctuation above the stable (and very low) rolling threshold.
--   **Alleviation**: The 3dB absolute floor provides a "sanity check" that ignores any rhythmic activity below a noticeable decibel change.
+-   **Alleviation**: The adaptive prominence check (`prom > 0.5 * flux`) ensures that even at low levels, a spike must be significant relative to itself to be counted, providing a natural filter against jitter without needing a hard absolute floor.
 
 **2. Missing Large Peaks (Threshold Inflation)**
 -   **Cause**: This is likely a side effect of the "Barrage." When thousands of tiny noise-peaks are processed (Stage 1), they contribute to the 15-second rolling average of the flux. This **inflates the threshold** significantly.
