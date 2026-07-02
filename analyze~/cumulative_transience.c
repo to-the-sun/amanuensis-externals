@@ -293,7 +293,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         int pc = 0;
         if (tp && tt && tl && tr && tm) {
             for (int f = 1; f < nf - 1; f++) {
-                if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thr[f] && env[f] >= 1.0f) {
+                if (env[f] > env[f-1] && env[f] > env[f+1] && env[f] > thr[f] && env[f] >= 0.0f) {
                     bool replaced = false, too_close = false;
                     if (pc > 0 && f - tp[pc-1] < 200) { too_close = true; if (env[f] > env[tp[pc-1]]) replaced = true; }
                     if (!too_close || replaced) {
