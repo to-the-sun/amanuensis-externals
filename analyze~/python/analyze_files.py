@@ -95,6 +95,7 @@ def generate_video(audio_path, data):
         ax_transient.xaxis.set_major_formatter(ticker.FuncFormatter(format_time)); ax_transient.set_ylim(0, max_peak * 1.1 if max_peak > 0 else 1)
         buffer_times = np.linspace(-5000, 0, 5001); buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2); mean_line, = ax_buf.plot([-5000, 0], [0, 0], color='#808080', lw=1, ls='--', alpha=0.5, label='Mean Energy')
         ax_buf.set_title("Accumulated 5s Historical Buffer"); ax_buf.set_xlabel("Time Relative to Peak (ms)"); ax_buf.set_ylabel("Accumulated Energy"); ax_buf.grid(True, alpha=0.3); ax_buf.set_xlim(-5000, 0); ax_buf.set_ylim(0, 1)
+        highest_peak_line = ax_buf.axvline(0, color='#f1c40f', lw=2, ls='--', visible=False, zorder=15)
         ax_snapshot.set_xlim(-45, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
         for i in range(3): ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
@@ -107,23 +108,27 @@ def generate_video(audio_path, data):
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=12, color='#f1c40f', fontweight='bold', zorder=20)
         MAX_DEBUG_LINES = 10; debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes, verticalalignment='top', horizontalalignment='right', fontsize=12, family='monospace', color='#2ecc71', fontweight='bold', visible=False, zorder=20) for i in range(MAX_DEBUG_LINES)]; active_debug_lines = []
         metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes, verticalalignment='top', fontsize=10, color='#f1c40f', fontweight='bold')
-        accumulated_buffer = np.zeros(5001); last_frame_processed = -1; peak_search_ptr = 0
+        accumulated_buffer = np.zeros(5001); last_frame_processed = -1; peak_search_ptr = 0; active_buffer_peaks = []
 
         def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display
+            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display, active_buffer_peaks
             for s in pool_scores: s.set_visible(False)
             for l in pool_qualifier_lines: l.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
             for d in debug_console_pool: d.set_visible(False)
             pool_snap_lines.set_visible(False)
             for st in pool_snap_texts: st.set_visible(False)
+            cleanup_frame = frame - 15000
+            while active_buffer_peaks and active_buffer_peaks[0]['p_idx'] <= cleanup_frame:
+                p_old = active_buffer_peaks.pop(0)
+                accumulated_buffer -= p_old['snapshot']
             new_peaks = []
             while peak_search_ptr < len(all_peaks) and all_peaks[peak_search_ptr]['p_idx'] <= frame:
                 if all_peaks[peak_search_ptr]['p_idx'] > last_frame_processed: new_peaks.append(all_peaks[peak_search_ptr])
                 peak_search_ptr += 1
             for p in new_peaks:
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
-                accumulated_buffer += p['snapshot']; q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
+                accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
                 debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 0.0 & Pr:{p['prominence']:.2f} > MidPt) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
                 active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
                 if len(active_debug_lines) > MAX_DEBUG_LINES: active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
@@ -161,7 +166,22 @@ def generate_video(audio_path, data):
                         if m > local_max: local_max = m
             ax_transient.set_ylim(0, max(1.0, local_max * 1.1))
             for i in range(4): threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]]); threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
-            playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer); current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
+            playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
+            # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
+            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
+            if metrics_out := data.get('metrics'): # fallback if not in data directly
+                h_peak_ms = data.get('highest_peaks_ms', [None]*len(times))[frame] # dummy check
+            # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
+            # However, we have access to means, std_devs, etc. We need highest_peak_ms.
+            # Let's check if it's in data.
+            h_peaks = data.get('highest_peaks_ms')
+            if h_peaks is not None:
+                hp = h_peaks[frame]
+                if hp is not None:
+                    highest_peak_line.set_xdata([hp, hp])
+                    highest_peak_line.set_visible(True)
+                else:
+                    highest_peak_line.set_visible(False)
             current_ylim = ax_transient.get_ylim()[1]
             for score in active_scores[:]:
                 idx, life, initial_y, val, p_time = score; txt = pool_scores[idx]
@@ -174,7 +194,7 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)

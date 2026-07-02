@@ -65,6 +65,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     TransientAnalyzer* self = (TransientAnalyzer*)calloc(1, sizeof(TransientAnalyzer));
     if (!self) return NULL;
     self->max_peak = max_peak_value;
+    self->highest_peak_ms = -999.0;
     for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = -5000.0 + i;
     self->frame_duration_ms = 1.0;
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
@@ -117,6 +118,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int band_idx, doub
     double norm = (self->max_peak > 0) ? (result_out->peak_val / self->max_peak) : 1.0;
     for (int i = 0; i < BUFFER_LEN; i++) result_out->snapshot[i] *= norm;
     double q_sum = 0.0; bool found = false;
+    // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = BUFFER_LEN - 99; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
     if (m_len > 0) {
         max_v = self->accumulated_buffer[0]; min_v = self->accumulated_buffer[0];
@@ -128,6 +130,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int band_idx, doub
     double avg = (m_len > 0) ? (sum / (double)m_len) : 0.0;
     for (int i = 0; i < all_valid_count; i++) {
         int s_idx = all_valid_peak_indices[i];
+        // Qualifiers must be at least 99ms in the past to avoid self-reference.
         if (s_idx >= p_idx - 5000 && s_idx <= p_idx - 99) {
             int sp_idx = 5000 - (p_idx - s_idx); double val = self->accumulated_buffer[sp_idx], q = 0.0;
             if (val > avg) { if (max_v > avg) q = (val - avg) / (max_v - avg); }
@@ -153,7 +156,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int band_idx, doub
     return 1;
 }
 
-void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out) {
+static bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame) {
     int cleanup = frame - 15000; bool updated = false;
     for (int b = 0; b < MAX_BANDS; b++) {
         while (self->snapshot_heads[b] && self->snapshot_heads[b]->p_idx <= cleanup) {
@@ -163,6 +166,12 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
             free(e); updated = true;
         }
     }
+    return updated;
+}
+
+void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out) {
+    bool updated = analyzer_cleanup_snapshots(self, frame);
+    // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = BUFFER_LEN - 99; double sum = 0.0, sum_sq = 0.0, max_v = -DBL_MAX;
     if (m_len > 0) {
         max_v = self->accumulated_buffer[0];
@@ -183,6 +192,7 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
         }
         if (hi_idx != -1) {
             metrics_out->highest_peak_ms = self->buffer_times[hi_idx]; metrics_out->highest_peak_valid = true;
+            self->highest_peak_ms = metrics_out->highest_peak_ms;
             if (self->peak_history_count < MAX_PEAK_HISTORY) self->peak_history[self->peak_history_count++] = metrics_out->highest_peak_ms;
         }
     }
@@ -283,21 +293,26 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 }
 
 int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int sr, int buffer_start_frame, int active_start_frame, ChunkAnalysisResult* result_out) {
+    analyzer_cleanup_snapshots(self, active_start_frame);
     analyzer_push_audio(self, y, len, sr);
     int nf = self->cache_count, rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
     float *envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
     float midpoints[MAX_BANDS];
-    int n_999 = (int)(999.0 / self->frame_duration_ms);
-    if (n_999 > nf) n_999 = nf;
-    if (n_999 <= 0) n_999 = 1;
+
+    double sub_window_ms = fabs(self->highest_peak_ms);
+    if (sub_window_ms < 100.0) sub_window_ms = 100.0;
+    if (sub_window_ms > 5000.0) sub_window_ms = 5000.0;
+    int n_dyn = (int)(sub_window_ms / self->frame_duration_ms);
+    if (n_dyn > nf) n_dyn = nf;
+    if (n_dyn <= 0) n_dyn = 1;
 
     for (int b = 0; b < MAX_BANDS; b++) {
         envs[b] = (float*)malloc(sizeof(float) * nf); thrs[b] = (float*)malloc(sizeof(float) * nf);
         if (!envs[b] || !thrs[b]) { for(int k=0; k<=b; k++) { free(envs[k]); free(thrs[k]); } return 0; }
         for (int j = 0; j < nf; j++) envs[b][j] = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
 
-        // Midpoints are now determined by a custom 999ms window (last n_999 frames)
-        midpoints[b] = calculate_midpoint(envs[b] + nf - n_999, n_999);
+        // Midpoints are now determined by a custom dynamic window (last n_dyn frames)
+        midpoints[b] = calculate_midpoint(envs[b] + nf - n_dyn, n_dyn);
         for (int j = 0; j < nf; j++) thrs[b][j] = midpoints[b];
     }
     int *bpeaks[MAX_BANDS] = {0}, bpeak_counts[MAX_BANDS] = {0}; float *bth[MAX_BANDS] = {0}, *bl[MAX_BANDS] = {0}, *br[MAX_BANDS] = {0}, *bp[MAX_BANDS] = {0};
@@ -394,7 +409,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     for (int i = 0; i < num_f; i++) result_out->times[i] = (float)i * (float)hop / (float)sr;
     result_out->ratings = (double*)malloc(sizeof(double) * num_f); result_out->std_devs = (double*)malloc(sizeof(double) * num_f);
     result_out->means = (double*)malloc(sizeof(double) * num_f); result_out->contrasts = (double*)malloc(sizeof(double) * num_f);
-    result_out->peak_stds = (double*)malloc(sizeof(double) * num_f);
+    result_out->peak_stds = (double*)malloc(sizeof(double) * num_f); result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
     for (int b = 0; b < MAX_BANDS; b++) { result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float)); result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float)); result_out->bands[b].peaks = NULL; result_out->bands[b].num_peaks = 0; }
     TransientAnalyzer* a = analyzer_create(1.0); if(!a) return 0;
     analyzer_set_sample_rate(a, sr); int step = hop * 100;
@@ -421,7 +436,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; } }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
@@ -441,7 +456,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
 void analyzer_free_analysis(FullAnalysisResult* result) {
     if (result->times) free(result->times);
     for (int i = 0; i < MAX_BANDS; i++) { free(result->bands[i].envelope); free(result->bands[i].rolling_threshold); free(result->bands[i].peaks); }
-    free(result->ratings); free(result->std_devs); free(result->means); free(result->contrasts); free(result->peak_stds);
+    free(result->ratings); free(result->std_devs); free(result->means); free(result->contrasts); free(result->peak_stds); free(result->highest_peaks_ms);
 }
 
 void analyzer_debug_mel_filters(int sr, int n_fft, int n_mels, double* filters_out) {
