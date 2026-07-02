@@ -97,6 +97,7 @@ cdef extern from "cumulative_transience.h":
         double* means
         double* contrasts
         double* peak_stds
+        double* highest_peaks_ms
         double min_score_seen
         double max_score_seen
 
@@ -357,6 +358,9 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[double, ndim=1] peak_stds = np.zeros(num_frames, dtype=np.float64)
     memcpy(peak_stds.data, res.peak_stds, num_frames * sizeof(double))
 
+    cdef cnp.ndarray[double, ndim=1] highest_peaks_ms = np.zeros(num_frames, dtype=np.float64)
+    memcpy(highest_peaks_ms.data, res.highest_peaks_ms, num_frames * sizeof(double))
+
     cdef float max_peak_value = res.max_peak_value
     cdef double min_score_seen = res.min_score_seen
     cdef double max_score_seen = res.max_score_seen
@@ -376,5 +380,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "std_devs": std_devs,
         "means": means,
         "contrasts": contrasts,
-        "peak_stds": peak_stds
+        "peak_stds": peak_stds,
+        "highest_peaks_ms": highest_peaks_ms
     }

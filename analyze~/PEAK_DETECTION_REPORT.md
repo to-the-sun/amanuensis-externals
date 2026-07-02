@@ -16,7 +16,7 @@ The Onset Strength is calculated in terms of **average positive change in decibe
 ### A. Candidate Identification
 A frame `f` is considered a peak candidate if it meets three local criteria:
 1.  **Local Maximum**: `env[f] > env[f-1]` and `env[f] > env[f+1]`.
-2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **999-millisecond rolling midpoint** (calculated from a sub-window within the 15s cache) of the flux envelope for that band.
+2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **dynamic historical peak-based rolling midpoint** (calculated from a sub-window within the 15s cache) of the flux envelope for that band.
 3.  **Minimum Distance**: A new peak must be at least **200ms** (200 frames) away from the previous peak in the same band. If a larger peak is found within the 200ms window, it replaces the smaller one.
 
 ### B. Prominence Check
@@ -33,7 +33,7 @@ The implementation of the **Unified 15.2s Windowing Model** has introduced sever
 In the previous 6s batch model, the rolling threshold was often "truncated" or volatile due to the shorter window. With a full 15.2s context, the rolling median threshold is much more stable and accurately represents the local noise floor. While this is mathematically superior, it means that even tiny fluctuations in the flux envelope that stay just above the stable noise floor are now being identified as valid transients.
 
 ### B. Low Prominence Floor
-The hardcoded prominence floor of `0.5` flux units is extremely lenient. In clean, high-dynamic-range audio, the flux at a true transient can reach values of 20-50. A fluctuation of 0.5 is effectively background noise or "spectral jitter" that would have been ignored in the previous volatile model.
+The hardcoded prominence floor of `0.5` flux units is extremely lenient. In clean, high-dynamic historical peak-based-range audio, the flux at a true transient can reach values of 20-50. A fluctuation of 0.5 is effectively background noise or "spectral jitter" that would have been ignored in the previous volatile model.
 
 ### C. Interaction with "Spectral Breathing"
 Although the 15.2s window is more stable, the spectrogram is still normalized relative to the loudest frame in that window. In quiet sections of a song, this normalization "boosts" the flux values of low-level noise. Combined with the stable threshold and low prominence floor, the system begins detecting peaks in the silence.
@@ -64,9 +64,9 @@ This strategy replaces the rolling average thresholds and absolute noise floor w
 
 #### Implementation Details:
 1.  **Detection Check**: The absolute flux floor has been set to **0.0 dB**, effectively disabling it.
-2.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold now use a **999-millisecond rolling midpoint** (calculated from the end of the 15s flux cache) for each band. Midpoints track the local dynamic range of the flux and provide a balanced baseline.
+2.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold now use a **dynamic historical peak-based rolling midpoint** (calculated from the end of the 15s flux cache) for each band. Midpoints track the local dynamic historical peak-based range of the flux and provide a balanced baseline.
 3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling midpoint** of the band's flux (`prom > midpoint`). This ensures that a peak must stand out significantly relative to the typical activity level of that frequency band.
-4.  **Visual Representation**: Horizontal threshold lines show the **999-millisecond rolling flux midpoint**.
+4.  **Visual Representation**: Horizontal threshold lines show the **dynamic historical peak-based rolling flux midpoint**.
 
 #### Speculation on Current Issues:
 
@@ -81,7 +81,7 @@ This strategy replaces the rolling average thresholds and absolute noise floor w
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
--   `thresh[f]`: The 999-millisecond rolling midpoint of the spectral flux (used in the primary adaptive thresholding).
+-   `thresh[f]`: The dynamic historical peak-based rolling midpoint of the spectral flux (used in the primary adaptive thresholding).
 -   `max_db`: The peak decibel level found within the 15.2s window, used for STFT normalization.
 
 ## 6. Conclusion

@@ -5,7 +5,7 @@
 	<description>
 		The `analyze~` object performs real-time spectral analysis of an incoming audio signal. It utilizes an STFT-based Mel-spectrogram and Spectral Flux to detect transient peaks and calculate various transience-related metrics. The analysis is performed on a 1ms-hop basis and utilizes a background thread for expensive calculations to maintain audio stability.
 
-		This object uses a unified 15.2-second stateful analysis window, ensuring parity with offline Python-based analysis. Transients are detected across four frequency bands (Sub, Bass/Low-Mid, High-Mid, Treble) and assigned a "Resonance Score" based on their historical relationship with other peaks in a 5-second lookback buffer. The adaptive midpoint threshold for peak detection is calculated using a specialized 999ms sub-window.
+		This object uses a unified 15.2-second stateful analysis window, ensuring parity with offline Python-based analysis. Transients are detected across four frequency bands (Sub, Bass/Low-Mid, High-Mid, Treble) and assigned a "Resonance Score" based on their historical relationship with other peaks in a 5-second lookback buffer. The adaptive midpoint threshold for peak detection is calculated using a specialized dynamic historical peak-based sub-window.
 	</description>
 	<!--METADATA-->
 	<metadatalist>

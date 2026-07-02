@@ -74,6 +74,7 @@ typedef struct {
     double total_score_sum;
     int score_count;
     double last_score_avg;
+    double highest_peak_ms;
 
     // Peak history
     double peak_history[MAX_PEAK_HISTORY];
@@ -159,6 +160,7 @@ typedef struct {
     double* means;
     double* contrasts;
     double* peak_stds;
+    double* highest_peaks_ms;
 
     double min_score_seen;
     double max_score_seen;
