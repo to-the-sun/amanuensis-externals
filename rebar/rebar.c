@@ -14,6 +14,11 @@
 
 // --- Symbol Renaming ---
 
+t_class *rebar_notify_class;
+t_class *rebar_buildspans_class;
+t_class *rebar_crucible_class;
+
+
 #define notify_class rebar_notify_class
 #define note_compare rebar_note_compare
 #define bar_key_compare rebar_bar_key_compare
@@ -410,7 +415,7 @@ void rebar_buildspans_bang(t_buildspans *x) {
     module_buildspans_bang(x);
     t_rebar *rebar = get_rebar(x);
     if (rebar) {
-        if (rebar->async && rebar->worker && !systhread_ismainthread()) {
+        if (rebar->async && rebar->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(rebar->worker)) {
             rebar_do_copy_back(rebar);
         } else if (systhread_ismainthread()) {
             rebar_request_copy_back(rebar);

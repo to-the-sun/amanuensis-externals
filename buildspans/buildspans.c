@@ -343,13 +343,13 @@ void buildspans_visualize_memory(t_buildspans *x) {
             }
         }
 
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{", 
+        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{",
                             palette_sym->s_name);
 
         for (long i = 0; i < unique_track_count; i++) {
             t_symbol *track_sym = unique_tracks[i];
             if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            
+
             offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
 
             // a. Find and sort bars for this track
@@ -471,7 +471,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)buildspans_set_bar_buffer, "set_bar_buffer", A_SYM, 0);
     class_addmethod(c, (method)buildspans_local_bar_length, "ft4", A_FLOAT, 0);
     class_addmethod(c, (method)buildspans_notify, "notify", A_CANT, 0);
-    
+
     CLASS_ATTR_SYM(c, "bind", 0, t_buildspans, bind_name);
     CLASS_ATTR_LABEL(c, "bind", 0, "Bind to Crucible Name");
     CLASS_ATTR_ACCESSORS(c, "bind", NULL, (method)buildspans_attr_set_bind);
@@ -972,7 +972,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (inlet_num == 1) {
         int valid = 0;
-        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
+        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) &&
             (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
             buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
             valid = 1;
@@ -1024,7 +1024,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     // without persisting it to x->current_offset.
     double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
 
-    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f", 
+    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f",
                     x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
@@ -1083,7 +1083,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         strncat(candidates_str, unique_track_syms[i]->s_name, 1024 - strlen(candidates_str) - 1);
         if (i < unique_tracks_count - 1) strncat(candidates_str, ", ", 1024 - strlen(candidates_str) - 1);
     }
-    buildspans_log(x, "Adding note to %ld span(s) on track %ld (palette %s): %s", 
+    buildspans_log(x, "Adding note to %ld span(s) on track %ld (palette %s): %s",
                     unique_tracks_count, x->current_track, x->current_palette->s_name, candidates_str);
 
     for (long i = 0; i < unique_tracks_count; i++) {
@@ -1128,7 +1128,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
         // TIER 2: Effective Global Offset
         // If no offset was found in the dictionary, we use the effective_offset.
-        // This handles both the manual current_offset (high precision) and 
+        // This handles both the manual current_offset (high precision) and
         // the ephemeral auto-initialization (calc_timestamp).
         if (!offset_found) {
             actual_offset = effective_offset;
@@ -1510,7 +1510,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             char temp_bar_str[32]; snprintf(temp_bar_str, 32, "%ld", bar_timestamps[i]);
             t_symbol *temp_bar_sym = gensym(temp_bar_str);
             t_symbol *span_key = generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("span"));
-            
+
             // Create a deep copy for each bar to ensure no shared ownership
             t_atomarray *span_copy = atomarray_deep_copy(new_span_array);
             t_atom span_copy_atom;
@@ -2030,7 +2030,7 @@ void buildspans_bind_resolve(t_buildspans *x) {
                 if (object_classname_compare(obj, gensym("crucible")) ||
                     object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
 
-                    // Ensure the class is actually registered before attaching, 
+                    // Ensure the class is actually registered before attaching,
                     // to avoid the Max SDK console error "object_attach_byptr: ... is not registered"
                     t_symbol *clsname = object_classname(obj);
                     if (!class_findbyname(CLASS_BOX, clsname) && !class_findbyname(CLASS_NOBOX, clsname)) {
@@ -2043,7 +2043,7 @@ void buildspans_bind_resolve(t_buildspans *x) {
 
                     x->bound_crucible = obj;
                     object_attach_byptr(x, x->bound_crucible);
-                    
+
                     if (x->bind_attempt_count > 1) {
                         object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
                     } else {
@@ -2084,7 +2084,7 @@ void buildspans_bind_resolve(t_buildspans *x) {
     } else {
         object_warn((t_object *)x, "Re-attempting bind to crucible '%s': STILL FAILED (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
     }
-    
+
     // If we have a bind name but didn't find the object, retry periodically
     if (x->bind_clock) clock_delay(x->bind_clock, 1000);
 }
@@ -2373,7 +2373,7 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
             sysmem_freeptr(key_prop);
         }
     }
-    
+
     int prune_span = 0;
     if (bar_count > 1) {
         // 2. RATING WITH LAST BAR
@@ -2432,7 +2432,7 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
             }
         }
         double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
-        
+
         if (rating_with < rating_without) {
             buildspans_log(x, "Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
             prune_span = 1;
@@ -2447,7 +2447,7 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
             buildspans_prune_span(x, palette_sym, track_sym, last_bar_timestamp);
         }
     }
-    
+
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
 }
@@ -2512,9 +2512,9 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
         dictionary_getatom(unique_offsets_dict, offset_keys[i], &a);
         offsets[i] = atom_getfloat(&a);
     }
-    
+
     qsort(offsets, num_unique_offsets, sizeof(double), compare_doubles);
-    
+
     double next_offset_time = -1.0;
     for (long i = 0; i < num_unique_offsets; i++) {
         if (offsets[i] > offset_val_to_check) {
@@ -2722,7 +2722,7 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
     double oldest_absolute_time = -1.0;
     t_symbol **keys_to_delete = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
     long delete_count = 0;
-    
+
     for (long i = 0; i < num_keys; i++) {
         char *pal_str, *track_str, *bar_str, *prop_str;
         if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
@@ -2760,7 +2760,7 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
     }
 
     // --- Process Collected Data ---
-    
+
     // 2. Find the next chronological offset from our unique set.
     double next_offset_time = find_next_offset(x, palette_sym, track_num_to_check, offset_val_to_check);
 

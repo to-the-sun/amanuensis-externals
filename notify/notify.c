@@ -46,7 +46,11 @@ typedef struct _notify {
     double bar_length;
 } t_notify;
 
+#ifndef REBAR_INTERNAL_BINDING
+#ifndef REBAR_INTERNAL_BINDING
 t_class *notify_class;
+#endif
+#endif
 
 // Function prototypes
 void *notify_new(t_symbol *s, long argc, t_atom *argv);
@@ -63,6 +67,7 @@ int note_compare(const void *a, const void *b);
 int bar_key_compare(const void *a, const void *b);
 void notify_log(t_notify *x, const char *fmt, ...);
 
+#ifndef NO_EXT_MAIN
 void ext_main(void *r) {
     t_class *c;
 
@@ -90,6 +95,7 @@ void ext_main(void *r) {
     class_register(CLASS_BOX, c);
     notify_class = c;
 }
+#endif
 
 void notify_defer_output(t_notify *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("palette")) {
@@ -190,7 +196,7 @@ int bar_key_compare(const void *a, const void *b) {
 }
 
 void notify_int(t_notify *x, long n) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
         async_worker_enqueue(x->worker, x, (method)notify_do_fill, NULL, 1, &a);
@@ -467,7 +473,7 @@ void notify_do_fill(t_notify *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void notify_bang(t_notify *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)notify_do_bang, NULL, 0, NULL);
         return;
     }
