@@ -47,7 +47,7 @@ This report documents the hierarchical levels of resolution within the `cumulati
 ## 9. Analysis Context Window (Unified 15.2s Model)
 *   Resolution: 15,200ms (15.2 Seconds)
 *   Source: `analyze~.c` (`active_start_frame - 15000`)
-*   Purpose: The amount of historical context maintained by the C core for each analysis hop. This 15.2s window (15s context + 200ms lookahead) ensures that the resonance lookback (5s) and the adaptive threshold (15s) operate with full parity between real-time and offline analysis.
+*   Purpose: The amount of historical context maintained by the C core for each analysis hop. This 15.2s window (15s context + 200ms lookahead) ensures that the resonance lookback (5s) and the adaptive threshold operate with full parity between real-time and offline analysis. Note: The adaptive midpoint threshold is now calculated using a 999ms sub-window within this context.
 
 ## 10. Rolling Threshold & State Cleanup
 *   **Resolution**: 15,000ms (15 Seconds)
@@ -76,5 +76,6 @@ This report documents the hierarchical levels of resolution within the `cumulati
 | **Peak Distance** | 200.0 | Logic | C Core |
 | **Lookback Window**| 5,000.0 | Context | C Core |
 | **Context Window** | 15,200.0| Integration | Max MSP |
-| **Cleanup/Thresh** | 15,000.0 | Management | C Core |
+| **Threshold Sub-Window** | 999.0 | Logic | C Core |
+| **State Cleanup** | 15,000.0 | Management | C Core |
 | **Global Buffer** | 60,000.0 | Storage | Max MSP |

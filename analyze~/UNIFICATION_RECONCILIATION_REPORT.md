@@ -26,8 +26,8 @@ This report details the final reconciliation of discrepancies between the Max Ex
 ## 4. Thresholding and Peak Detection
 - **Previous Discrepancy**: Max used an adaptive rolling threshold; Python used a batch pass.
 - **Root Cause**: Difference in context window sizes.
-- **Unified Version**: **15-Second Rolling Threshold**.
-- **Details**: Both systems now use a 15-second historical context to calculate the moving average of flux. This ensures that the threshold is stable and identical in both environments after the initial 15s warmup.
+- **Unified Version**: **999-Millisecond Sub-Window Threshold**.
+- **Details**: Both systems now use a 999-millisecond sub-window (within the 15s cache) to calculate the rolling midpoint of flux. This ensures that the detection threshold is highly localized and identical in both environments.
 - **Discarded**: The "Batch" thresholding logic (which had access to future data) and short (2s/6s) real-time windows.
 
 ## 5. Resonance Analysis and Inter-band Synchronization
@@ -58,8 +58,8 @@ This report details the final reconciliation of discrepancies between the Max Ex
 | **Hop Size** | 1ms (precisely calculated per SR) |
 | **Mel Bands** | 128 (4 analysis bands of 32 each) |
 | **Noise Floor** | 80dB below rolling max energy |
-| **Peak Threshold** | 15s rolling midpoint (0.0dB Absolute Floor) |
-| **Peak Prominence** | > 15s Rolling Midpoint |
+| **Peak Threshold** | 999ms rolling midpoint (0.0dB Absolute Floor) |
+| **Peak Prominence** | > 999ms Rolling Midpoint |
 | **Resonance Lookback** | 5.0 seconds |
 
 By implementing these unified standards, the distinction between "Incremental" and "Batch" has been moved from the **algorithm** to the **orchestration**, ensuring that what you see on the graph is exactly what the Max object is hearing.
