@@ -285,8 +285,16 @@ def generate_video(audio_path, data):
         ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=True, interval=1000.0/fps)
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp: temp_video_path = tmp.name
         codec = get_best_encoder()
-        print(f"Using H.264 encoder: {codec}")
-        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec)
+        extra_args = ['-pix_fmt', 'yuv420p']
+        if codec == "h264_nvenc":
+            extra_args.extend(['-preset', 'p1', '-tune', 'ull', '-zerolatency', '1'])
+        elif codec == "h264_amf":
+            extra_args.extend(['-quality', 'speed', '-usage', 'ultralowlatency'])
+        else:
+            extra_args.extend(['-preset', 'ultrafast'])
+
+        print(f"Using H.264 encoder: {codec} with args: {' '.join(extra_args)}")
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
         fig.tight_layout(pad=1.5); ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
         pbar.close(); plt.close(fig)
 
