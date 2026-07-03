@@ -124,7 +124,7 @@ def generate_video(audio_path, data):
         for i in range(4):
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2); transient_lines.append(line)
             if rolling_dynamic_smoothings is not None:
-                s_line, = ax_transient.plot(times, rolling_dynamic_smoothings[i], color=colors[i], lw=1.5, ls='--', alpha=0.7, zorder=2.5); smoothing_lines.append(s_line)
+                s_line, = ax_transient.plot(times, rolling_dynamic_smoothings[i], color=colors[i], lw=2.5, ls='-', alpha=1.0, zorder=5); smoothing_lines.append(s_line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -222,7 +222,13 @@ def generate_video(audio_path, data):
                         m = np.max(seg)
                         if m > local_max: local_max = m
             ax_transient.set_ylim(0, max(1.0, local_max * 1.1))
-            for i in range(4): threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]]); threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+            for i in range(4):
+                threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]])
+                threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+                if rolling_dynamic_smoothings is not None:
+                    # Update smoothing lines to only show up to current frame
+                    smoothing_lines[i].set_data(times[:frame+1], rolling_dynamic_smoothings[i][:frame+1])
+
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
             current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
