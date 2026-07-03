@@ -32,8 +32,19 @@ _init_lock = threading.Lock()
 cumulative_transience = None
 _best_encoder = None
 
+def _test_encoder(ffmpeg_bin, encoder):
+    """Attempts a 1-frame test encode to verify if the encoder/driver is actually functional."""
+    if encoder == "libx264": return True
+    try:
+        # Run a tiny test encoding to null: 100ms of 64x64 black video.
+        cmd = [ffmpeg_bin, "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1", "-c:v", encoder, "-f", "null", "-"]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
 def get_best_encoder():
-    """Detects the best available H.264 encoder (NVENC, AMF, or libx264)."""
+    """Detects the best available H.264 encoder (NVENC, AMF, or libx264) with validation."""
     global _best_encoder
     if _best_encoder is not None:
         return _best_encoder
@@ -50,16 +61,22 @@ def get_best_encoder():
         return _best_encoder
 
     try:
-        # Check available encoders
         result = subprocess.run([ffmpeg_bin, "-encoders"], capture_output=True, text=True, check=True)
         encoders = result.stdout
-        if "h264_nvenc" in encoders:
-            _best_encoder = "h264_nvenc"
-        elif "h264_amf" in encoders:
-            _best_encoder = "h264_amf"
-        else:
-            _best_encoder = "libx264"
+
+        candidates = []
+        if "h264_nvenc" in encoders: candidates.append("h264_nvenc")
+        if "h264_amf" in encoders: candidates.append("h264_amf")
+        candidates.append("libx264")
+
+        for c in candidates:
+            if _test_encoder(ffmpeg_bin, c):
+                _best_encoder = c
+                break
     except Exception:
+        pass
+
+    if _best_encoder is None:
         _best_encoder = "libx264"
 
     return _best_encoder

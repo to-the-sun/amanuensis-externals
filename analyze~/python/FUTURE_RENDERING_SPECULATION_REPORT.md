@@ -56,7 +56,7 @@ A simpler optimization is offloading the *compression* of the rendered frames to
 - **Massive Speedup in Finalization**: FFmpeg's `h264_nvenc` can encode 1080p video at hundreds of frames per second.
 
 ### Difficulty & Implementation
-- **Status**: Completed. The `get_best_encoder()` helper function now automatically detects `h264_nvenc` or `h264_amf` and passes it to Matplotlib's `FFMpegWriter`.
+- **Status**: Completed. The `get_best_encoder()` helper function automatically detects and validates `h264_nvenc` or `h264_amf` via a 1-frame smoke test, falling back to `libx264` if drivers are incompatible.
 - **Difficulty**: Low.
 
 ---
