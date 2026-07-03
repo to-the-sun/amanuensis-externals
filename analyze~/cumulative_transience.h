@@ -99,6 +99,7 @@ typedef struct {
     double* mel_spectrogram;    // Mel bands cache
     float* flux_envelopes;      // Flux cache per band
     float* dynamic_smoothings;  // Dynamic smoothing cache per band
+    float smoothing_states[MAX_BANDS];
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
     int cache_write_ptr;
