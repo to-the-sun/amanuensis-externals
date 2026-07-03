@@ -67,6 +67,7 @@ typedef struct {
     AnalyzerMetrics metrics;
     float last_flux[MAX_BANDS][100];
     float last_dynamic_smoothing[MAX_BANDS][100];
+    float last_prominence[MAX_BANDS][100];
 } ChunkAnalysisResult;
 
 typedef struct {
@@ -156,6 +157,7 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 typedef struct {
     float* envelope;
     float* rolling_dynamic_smoothing;
+    float* rolling_prominence;
     float* rolling_threshold;
     float* rolling_lookback;
     float* rolling_avg_delta;

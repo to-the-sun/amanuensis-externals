@@ -9,6 +9,7 @@ The peak detection logic is encapsulated within `analyzer_analyze_chunk` (and mi
 ### Units and Calculation
 The Onset Strength is calculated in terms of **average positive change in decibels (dB) per frame**.
 Additionally, a `dynamic_smoothing` parameter is derived from the flux: if the current flux is greater than the previous smoothing value, it snaps to the current flux; otherwise, it decays by **1/200th** of the distance to the current flux level each frame.
+Per-frame **prominence** values are also calculated, representing the height of the current flux above the higher of the two nearest local minima that are "guarded" by values higher than the current frame.
 
 1.  The Mel spectrogram is converted to log-power (dB).
 2.  The difference between the current frame and the previous frame is calculated for every Mel-band.

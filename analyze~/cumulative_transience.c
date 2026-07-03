@@ -445,6 +445,15 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             long long gf = (long long)active_start_frame + i, lf = gf - gstart;
             result_out->last_flux[b][i] = (lf >= 0 && lf < nf) ? envs[b][lf] : 0;
             result_out->last_dynamic_smoothing[b][i] = (lf >= 0 && lf < nf) ? self->dynamic_smoothings[b * CACHE_SIZE + (rptr + (int)lf) % CACHE_SIZE] : 0;
+
+            float prom = 0;
+            if (lf >= 0 && lf < nf) {
+                float fv = envs[b][lf];
+                float lmin = fv; for(int k=(int)lf-1; k>=0; k--) { if (envs[b][k] > fv) break; if (envs[b][k] < lmin) lmin = envs[b][k]; }
+                float rmin = fv; for(int k=(int)lf+1; k<nf; k++) { if (envs[b][k] > fv) break; if (envs[b][k] < rmin) rmin = envs[b][k]; }
+                prom = fv - (lmin > rmin ? lmin : rmin);
+            }
+            result_out->last_prominence[b][i] = prom;
         }
         for (int i = 0; i < tot; i++) {
             int p_idx = pref[i].p_idx, b = pref[i].band_idx; long long gp = gstart + p_idx;
@@ -505,6 +514,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     for (int b = 0; b < MAX_BANDS; b++) {
         result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_lookback = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_avg_delta = (float*)calloc(num_f, sizeof(float));
@@ -535,6 +545,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 if (f >= 0 && f < num_f) {
                     result_out->bands[b].envelope[f] = res->last_flux[b][i];
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
+                    result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
                     result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_midpoints[b];
                     result_out->bands[b].rolling_lookback[f] = (float)res->metrics.band_lookbacks[b];
                     result_out->bands[b].rolling_avg_delta[f] = (float)res->metrics.band_avg_deltas[b];
@@ -567,6 +578,7 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     for (int i = 0; i < MAX_BANDS; i++) {
         free(result->bands[i].envelope);
         free(result->bands[i].rolling_dynamic_smoothing);
+        free(result->bands[i].rolling_prominence);
         free(result->bands[i].rolling_threshold);
         free(result->bands[i].rolling_lookback);
         free(result->bands[i].rolling_avg_delta);
