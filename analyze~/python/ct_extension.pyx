@@ -37,6 +37,10 @@ cdef extern from "cumulative_transience.h":
         double min_score_seen
         double max_score_seen
         double band_midpoints[4]
+        double band_lookbacks[4]
+        double band_avg_deltas[4]
+        double band_total_deltas[4]
+        int band_p_counts[4]
 
     ctypedef struct PeakResultList:
         PeakResult peaks[64]
@@ -56,6 +60,7 @@ cdef extern from "cumulative_transience.h":
     double analyzer_get_max_peak(TransientAnalyzer_c* self)
     int analyzer_process_peak(TransientAnalyzer_c* self,
                               int p_idx,
+                              int global_p_idx,
                               int band_idx,
                               double time,
                               const float* env_ptr,
@@ -84,6 +89,10 @@ cdef extern from "cumulative_transience.h":
     ctypedef struct BandAnalysis:
         float* envelope
         float* rolling_threshold
+        float* rolling_lookback
+        float* rolling_avg_delta
+        float* rolling_total_delta
+        int* rolling_p_count
         PeakResult* peaks
         int num_peaks
 
@@ -175,7 +184,7 @@ cdef class TransientAnalyzer:
                 t_val, l_val, r_val, pr_val, p_val = params
 
             ret = analyzer_process_peak(
-                self._c_analyzer, p_idx, band_idx, <double>times[p_idx],
+                self._c_analyzer, p_idx, p_idx, band_idx, <double>times[p_idx],
                 <float*>env.data, len(env),
                 <int*>all_valid_arr.data, all_valid_count,
                 p_val, t_val, l_val, r_val, pr_val, &res
@@ -267,7 +276,11 @@ cdef class TransientAnalyzer:
                 'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
                 'min_score_seen': m.min_score_seen,
                 'max_score_seen': m.max_score_seen,
-                'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]]
+                'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]],
+                'band_lookbacks': [m.band_lookbacks[0], m.band_lookbacks[1], m.band_lookbacks[2], m.band_lookbacks[3]],
+                'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
+                'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
+                'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]]
             }
         }
         free(res)
@@ -289,7 +302,11 @@ cdef class TransientAnalyzer:
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
             'min_score_seen': m.min_score_seen,
             'max_score_seen': m.max_score_seen,
-            'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]]
+            'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]],
+            'band_lookbacks': [m.band_lookbacks[0], m.band_lookbacks[1], m.band_lookbacks[2], m.band_lookbacks[3]],
+            'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
+            'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
+            'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]]
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
@@ -305,10 +322,18 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
 
     cdef list onset_envs = []
     cdef list rolling_thresholds = []
+    cdef list rolling_lookbacks = []
+    cdef list rolling_avg_deltas = []
+    cdef list rolling_total_deltas = []
+    cdef list rolling_p_counts = []
     cdef list full_peaks_list = []
 
     cdef cnp.ndarray[float, ndim=1] env
     cdef cnp.ndarray[float, ndim=1] thresh
+    cdef cnp.ndarray[float, ndim=1] lookback
+    cdef cnp.ndarray[float, ndim=1] avg_delta
+    cdef cnp.ndarray[float, ndim=1] total_delta
+    cdef cnp.ndarray[int, ndim=1] p_count
     cdef PeakResult pr
 
     for i in range(4):
@@ -319,6 +344,22 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         thresh = np.zeros(num_frames, dtype=np.float32)
         memcpy(thresh.data, res.bands[i].rolling_threshold, num_frames * sizeof(float))
         rolling_thresholds.append(thresh)
+
+        lookback = np.zeros(num_frames, dtype=np.float32)
+        memcpy(lookback.data, res.bands[i].rolling_lookback, num_frames * sizeof(float))
+        rolling_lookbacks.append(lookback)
+
+        avg_delta = np.zeros(num_frames, dtype=np.float32)
+        memcpy(avg_delta.data, res.bands[i].rolling_avg_delta, num_frames * sizeof(float))
+        rolling_avg_deltas.append(avg_delta)
+
+        total_delta = np.zeros(num_frames, dtype=np.float32)
+        memcpy(total_delta.data, res.bands[i].rolling_total_delta, num_frames * sizeof(float))
+        rolling_total_deltas.append(total_delta)
+
+        p_count = np.zeros(num_frames, dtype=np.int32)
+        memcpy(p_count.data, res.bands[i].rolling_p_count, num_frames * sizeof(int))
+        rolling_p_counts.append(p_count)
 
         band_peaks = []
         for k in range(res.bands[i].num_peaks):
@@ -375,6 +416,10 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "max_score_seen": float(max_score_seen),
         "onset_envs": onset_envs,
         "rolling_thresholds": rolling_thresholds,
+        "rolling_lookbacks": rolling_lookbacks,
+        "rolling_avg_deltas": rolling_avg_deltas,
+        "rolling_total_deltas": rolling_total_deltas,
+        "rolling_p_counts": rolling_p_counts,
         "peaks": full_peaks_list,
         "ratings": ratings,
         "std_devs": std_devs,

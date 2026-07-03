@@ -49,6 +49,10 @@ typedef struct {
     double min_score_seen;
     double max_score_seen;
     double band_midpoints[MAX_BANDS];
+    double band_lookbacks[MAX_BANDS];
+    double band_avg_deltas[MAX_BANDS];
+    double band_total_deltas[MAX_BANDS];
+    int band_p_counts[MAX_BANDS];
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -75,6 +79,10 @@ typedef struct {
     int score_count;
     double last_score_avg;
     double highest_peak_ms;
+    double midpoint_lookback[MAX_BANDS];
+    double lookback_avg_delta[MAX_BANDS];
+    double lookback_total_delta[MAX_BANDS];
+    int lookback_p_count[MAX_BANDS];
 
     // Peak history
     double peak_history[MAX_PEAK_HISTORY];
@@ -114,6 +122,7 @@ double analyzer_get_max_peak(TransientAnalyzer* self);
 
 int analyzer_process_peak(TransientAnalyzer* self,
                           int p_idx,
+                          int global_p_idx,
                           int band_idx,
                           double time,
                           const float* env_ptr,
@@ -144,6 +153,10 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 typedef struct {
     float* envelope;
     float* rolling_threshold;
+    float* rolling_lookback;
+    float* rolling_avg_delta;
+    float* rolling_total_delta;
+    int* rolling_p_count;
     PeakResult* peaks;
     int num_peaks;
 } BandAnalysis;

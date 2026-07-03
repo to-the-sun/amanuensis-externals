@@ -76,6 +76,11 @@ def generate_video(audio_path, data):
     print(f"Generating video for {audio_path}...")
     try:
         times = data['times']; onset_envs = data['onset_envs']; rolling_thresholds = data['rolling_thresholds']
+        rolling_lookbacks = data.get('rolling_lookbacks')
+        rolling_avg_deltas = data.get('rolling_avg_deltas')
+        rolling_total_deltas = data.get('rolling_total_deltas')
+        rolling_p_counts = data.get('rolling_p_counts')
+
         all_peaks = []
         for b_peaks in data['peaks']: all_peaks.extend(b_peaks)
         all_peaks.sort(key=lambda x: x['p_idx'])
@@ -109,9 +114,10 @@ def generate_video(audio_path, data):
         MAX_DEBUG_LINES = 10; debug_console_pool = [ax_transient.text(0.98, 0.98 - (i * 0.05), '', transform=ax_transient.transAxes, verticalalignment='top', horizontalalignment='right', fontsize=12, family='monospace', color='#2ecc71', fontweight='bold', visible=False, zorder=20) for i in range(MAX_DEBUG_LINES)]; active_debug_lines = []
         metrics_text = ax_buf.text(0.02, 0.95, '', transform=ax_buf.transAxes, verticalalignment='top', fontsize=10, color='#f1c40f', fontweight='bold')
         accumulated_buffer = np.zeros(5001); last_frame_processed = -1; peak_search_ptr = 0; active_buffer_peaks = []
+        last_lookbacks = [None] * 4
 
         def update(frame):
-            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display, active_buffer_peaks
+            nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display, active_buffer_peaks, last_lookbacks
             for s in pool_scores: s.set_visible(False)
             for l in pool_qualifier_lines: l.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
@@ -129,9 +135,6 @@ def generate_video(audio_path, data):
             for p in new_peaks:
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
-                debug_msg = (f"[B{p['band_idx']}] (Flux:{f_val:.2f} > Th:{p['thresh_val']:.2f} & Flux >= 0.0 & Pr:{p['prominence']:.2f} > MidPt) | Score:{p['total_score']:+.2f} = {p['peak_val']:.2f} * {q_sum:.2f}")
-                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
-                if len(active_debug_lines) > MAX_DEBUG_LINES: active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
                 active_qualifiers.clear()
                 for q_info in p['qualifiers']:
                     if len(active_qualifiers) < MAX_POOL: active_qualifiers.append([len(active_qualifiers), POPUP_LIFETIME, q_info['ms'], q_info['val']])
@@ -140,6 +143,26 @@ def generate_video(audio_path, data):
                 snapshot_line.set_ydata(p['snapshot'])
                 live_peaks_x.append(p['time']); live_peaks_y.append(p['peak_val']); live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
             last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
+            if rolling_lookbacks is not None:
+                for b in range(4):
+                    lb = rolling_lookbacks[b][frame]
+                    if lb != last_lookbacks[b]:
+                        avg_d = rolling_avg_deltas[b][frame]
+                        tot_d = rolling_total_deltas[b][frame]
+                        cnt = rolling_p_counts[b][frame]
+
+                        # [B#] Lb: [val]ms = 15000 - (15000 / [cnt])
+                        if cnt > 1:
+                            eq = f"(15000 / {cnt})"
+                        else:
+                            eq = "0 (sparse peaks)"
+
+                        debug_msg = f"[B{b}] Lb: {lb:.0f}ms = 15000 - {eq}"
+                        active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': b})
+                        if len(active_debug_lines) > MAX_DEBUG_LINES:
+                            active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
+                        last_lookbacks[b] = lb
+
             if rolling_window_scores:
                 current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores); latest_p_frame = max(s['frame'] for s in rolling_window_scores); segments = []; seg_colors = []; snap_data = []
                 for i, s in enumerate(rolling_window_scores[:MAX_SNAPSHOT_POOL]):

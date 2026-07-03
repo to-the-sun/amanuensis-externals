@@ -16,7 +16,7 @@ The Onset Strength is calculated in terms of **average positive change in decibe
 ### A. Candidate Identification
 A frame `f` is considered a peak candidate if it meets four local criteria:
 1.  **Local Maximum**: `env[f] > env[f-1]` and `env[f] > env[f+1]`.
-2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **dynamic historical peak-based rolling midpoint**.
+2.  **Above Threshold**: `env[f] > thresh[f]`. The threshold is the **dynamic historical peak-based rolling half-max**.
 3.  **Absolute Floor**: `env[f] >= 0.0`. (Note: This is currently set to 0.0, effectively allowing all positive flux).
 4.  **Minimum Distance**: A new peak must be at least **200ms** (200 frames) away from the previous peak in the same band. If a larger peak is found within the 200ms window, it replaces the smaller one.
 
@@ -24,7 +24,7 @@ A frame `f` is considered a peak candidate if it meets four local criteria:
 An adaptive midpoint-based prominence check is applied:
 -   `prom = env[f] - max(left_min, right_min)`
 -   `left_min` / `right_min`: These represent the "valley" floors on either side of the peak.
--   **Decision**: `if (prom > band_midpoint)`: The peak is accepted.
+-   **Decision**: `if (prom > half_max)`: The peak is accepted.
 
 ## 2. Historical Over-detection Issues
 
@@ -39,15 +39,15 @@ Previously, a hardcoded prominence floor of `0.5` flux units was used. In clean 
 ### C. Interaction with "Spectral Breathing"
 The spectrogram is normalized relative to the loudest frame in the 15.2s window. In quiet sections, this normalization "boosts" low-level noise. Without adaptive prominence, the system detected peaks in the silence.
 
-## 3. The Midpoint Strategy (Currently Implemented)
+## 3. The Half-Max Strategy (Currently Implemented)
 
-The system now utilizes an adaptive midpoint-based approach to replace the historical rolling average thresholds and fixed prominence floors.
+The system now utilizes an adaptive half-max-based approach to replace the historical rolling average thresholds and fixed prominence floors.
 
 ### Implementation Details:
-1.  **Midpoint Thresholding**: Both the primary detection threshold and the prominence threshold use a **dynamic historical peak-based rolling midpoint**.
-2.  **Dynamic Sub-Window**: The midpoint is calculated from a sub-window at the end of the 15s flux cache. The size of this sub-window is determined by the absolute time of the highest peak in the 5s resonance buffer (clamped between 100ms and 5000ms).
-3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling midpoint** of the band's flux (`prom > midpoint`). This ensures that a peak must stand out significantly relative to the typical activity level of that band.
-4.  **Visual Representation**: In the visualizer, horizontal threshold lines show this **dynamic historical peak-based rolling flux midpoint**.
+1.  **Half-Max Thresholding**: Both the primary detection threshold and the prominence threshold use a **dynamic historical peak-based rolling half-max**.
+2.  **Dynamic Sub-Window**: The threshold is calculated from a sub-window at the end of the 15s flux cache. The size of this sub-window (`midpoint_lookback`) is dynamic per frequency band, calculated as `15000.0 - (15000.0 / current_quantity_in_previous_lookback)`. If peaks are sparse (0 or 1), the window expands to the full 15,000ms.
+3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling half-max** of the band's flux (`prom > half_max`). This ensures that a peak must stand out significantly relative to the typical activity level of that band.
+4.  **Visual Representation**: In the visualizer, horizontal threshold lines show this **dynamic historical peak-based rolling flux half-max**.
 
 ## 4. Resolved Historical Challenges
 
@@ -56,7 +56,7 @@ The following challenges were identified and addressed during development:
 **1. The Barrage of Tiny Peaks (Low-level Jitter)**
 -   **Status**: **RESOLVED**.
 -   **Historical Cause**: Spectrogram normalization without sufficient prominence constraints caused the system to detect tiny fluctuations in noise.
--   **Resolution**: The adaptive prominence check (`prom > midpoint`) ensures that a spike must be significant relative to the band's activity, providing a natural filter against jitter.
+-   **Resolution**: The adaptive prominence check (`prom > half_max`) ensures that a spike must be significant relative to the band's activity, providing a natural filter against jitter.
 
 **2. Missing Large Peaks (Threshold Inflation)**
 -   **Status**: **RESOLVED**.
@@ -65,9 +65,9 @@ The following challenges were identified and addressed during development:
 
 ## 5. Summary of Technical Definitions
 -   `left_min` / `right_min`: The lowest flux values encountered when searching outward from a peak candidate until a higher value is found.
--   `thresh[f]`: The dynamic historical peak-based rolling midpoint of the spectral flux.
+-   `thresh[f]`: The dynamic historical peak-based rolling half-max of the spectral flux.
 -   `max_db`: The peak decibel level found within the 15.2s window, used for STFT normalization.
 
 ## 6. Conclusion
 
-The transition to full orchestration and stable windowing revealed a "leniency bug" in the historical detection constants. The current implementation of **Dynamic Midpoint Thresholds and Adaptive Prominence** has restored selective and accurate peak detection across both real-time and offline environments.
+The transition to full orchestration and stable windowing revealed a "leniency bug" in the historical detection constants. The current implementation of **Dynamic Half-Max Thresholds and Adaptive Prominence** has restored selective and accurate peak detection across both real-time and offline environments.
