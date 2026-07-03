@@ -14,6 +14,8 @@ The threading logic has been updated to offload work to a background thread when
 
 ## Speculative Future Work
 
+Detailed implementation steps for the following items can be found in [HIERARCHICAL_MIGRATION_STRATEGY.md](HIERARCHICAL_MIGRATION_STRATEGY.md).
+
 ### 2. Hierarchical Dictionary Structure (Not Yet Implemented)
 Previously, `buildSpans` used a "flat" dictionary key structure (e.g., `palette::track::bar::property`). This forced the duplication process to perform linear scans ($O(N^2)$ complexity) to find and copy keys belonging to a specific track.
 
