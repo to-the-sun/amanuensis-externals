@@ -30,6 +30,38 @@ except ImportError:
 _initialized = False
 _init_lock = threading.Lock()
 cumulative_transience = None
+_best_encoder = None
+
+def get_best_encoder():
+    """Detects the best available H.264 encoder (NVENC, AMF, or libx264)."""
+    global _best_encoder
+    if _best_encoder is not None:
+        return _best_encoder
+
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except ImportError:
+        pass
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        _best_encoder = "libx264"
+        return _best_encoder
+
+    try:
+        result = subprocess.run([ffmpeg_bin, "-encoders"], capture_output=True, text=True, check=True)
+        encoders = result.stdout
+        if "h264_nvenc" in encoders:
+            _best_encoder = "h264_nvenc"
+        elif "h264_amf" in encoders:
+            _best_encoder = "h264_amf"
+        else:
+            _best_encoder = "libx264"
+    except Exception:
+        _best_encoder = "libx264"
+
+    return _best_encoder
 
 def ensure_initialized():
     """Ensures that the extension is built and imported."""
@@ -234,8 +266,33 @@ def generate_video(audio_path, data):
         duration = times[-1]; fps = 30; num_video_frames = int(duration * fps); video_frame_times = np.arange(num_video_frames) / float(fps); frame_indices = np.searchsorted(np.array(times), video_frame_times)
         ani = animation.FuncAnimation(fig, update, frames=frame_indices, blit=True, interval=1000.0/fps)
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp: temp_video_path = tmp.name
-        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000)
-        fig.tight_layout(pad=1.5); ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+        codec = get_best_encoder()
+        extra_args = ['-pix_fmt', 'yuv420p']
+        if codec == "h264_nvenc":
+            extra_args.extend(['-preset', 'p1', '-tune', 'ull', '-delay', '0'])
+        elif codec == "h264_amf":
+            extra_args.extend(['-quality', 'speed', '-usage', 'ultralowlatency'])
+        else:
+            extra_args.extend(['-preset', 'ultrafast'])
+
+        print(f"Using H.264 encoder: {codec} with args: {' '.join(extra_args)}")
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
+        fig.tight_layout(pad=1.5)
+        try:
+            ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+        except Exception as e:
+            pbar.close()
+            if codec != "libx264":
+                print(f"\nWARNING: GPU encoding with {codec} failed. Falling back to CPU (libx264). Error: {e}")
+                global _best_encoder
+                _best_encoder = "libx264"
+                codec = "libx264"
+                extra_args = ['-pix_fmt', 'yuv420p', '-preset', 'ultrafast']
+                pbar = tqdm(total=len(frame_indices), desc="Rendering Video (CPU Fallback)", unit="frame")
+                writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
+                ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+            else:
+                raise e
         pbar.close(); plt.close(fig)
 
         # Recording metrics to [audio_file]_ratings.txt in same folder
