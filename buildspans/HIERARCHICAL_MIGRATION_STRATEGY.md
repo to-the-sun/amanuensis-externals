@@ -16,6 +16,18 @@ By marking new functions as `static`, we make them "Local symbols." They are omi
 
 `rebar` can remain unaffected and its coordination logic deferred until `buildspans` is fully migrated. At the conclusion of Phase 5, the `static` keywords can be removed and the necessary `#define` redirects added to `rebar` to finalize the integration across the entire object suite.
 
+### Navigation of `@bind` with `crucible`
+The `buildspans` object often uses an `@bind` attribute to direct its output to a `crucible` object via direct C-method calls (e.g., `crucible_do_anything`). This tight coupling presents a challenge for hierarchical migration:
+
+**Current State:** `buildspans` sends flat keys to `crucible` (e.g., `track::bar::property`). `crucible` expects this format for its internal manifest tracking.
+
+**Migration Navigation:**
+- **Phase 1 & 2:** These phases are "Interface Abstractions" and are structurally neutral. Output to `crucible` remains flat and fully compatible.
+- **Phase 3, 4, & 5:** As `buildspans` moves to internal nesting, it has two choices for `@bind` output:
+    1.  **Translation Layer:** `buildspans` can continue to "flatten" its output for `crucible` at the final outlet stage. This keeps the migration isolated to `buildspans`.
+    2.  **Synchronized Migration:** `crucible` can be updated simultaneously to accept hierarchical dictionary pointers. This is more efficient but violates the "small steps" isolation.
+- **Recommendation:** Use a Translation Layer within `buildspans_output_span_data` to maintain flat output for `crucible` until the `buildspans` migration is complete. Once `buildspans` is stable, a separate migration strategy for `crucible` can be initiated to utilize the new hierarchy.
+
 ## Phase 1: The Active Registry (Preparation)
 **Goal:** Replace linear scans for "discovery" with a dedicated, lightweight registry.
 

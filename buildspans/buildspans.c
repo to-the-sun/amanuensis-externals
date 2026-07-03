@@ -11,7 +11,7 @@
 #include <string.h> // For isdigit
 
 // Helper function to generate a hierarchical key symbol
-t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *key) {
+static t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *key) {
     char key_str[512];
     snprintf(key_str, 512, "%s::%s::%s::%s", palette->s_name, track->s_name, bar->s_name, key->s_name);
     return gensym(key_str);
@@ -21,7 +21,7 @@ t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol
 // Returns 1 on success, 0 on failure.
 // Pointers passed for palette, track, bar, and key will be set to newly allocated char buffers.
 // The caller is responsible for freeing these buffers.
-int parse_hierarchical_key(t_symbol *hierarchical_key, char **palette, char **track, char **bar, char **key) {
+static int parse_hierarchical_key(t_symbol *hierarchical_key, char **palette, char **track, char **bar, char **key) {
     const char *key_str = hierarchical_key->s_name;
     const char *first_delim = strstr(key_str, "::");
     if (!first_delim) return 0;
@@ -54,7 +54,7 @@ int parse_hierarchical_key(t_symbol *hierarchical_key, char **palette, char **tr
 }
 
 // Registry management helpers
-void buildspans_registry_add(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+static void buildspans_registry_add(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
     t_atom a;
@@ -76,7 +76,7 @@ void buildspans_registry_add(t_buildspans *x, t_symbol *palette, t_symbol *track
     }
 }
 
-void buildspans_registry_remove_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+static void buildspans_registry_remove_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
 
@@ -93,7 +93,7 @@ void buildspans_registry_remove_bar(t_buildspans *x, t_symbol *palette, t_symbol
     }
 }
 
-void buildspans_registry_remove_track(t_buildspans *x, t_symbol *palette, t_symbol *track) {
+static void buildspans_registry_remove_track(t_buildspans *x, t_symbol *palette, t_symbol *track) {
     t_dictionary *palette_dict = NULL;
 
     if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) == MAX_ERR_NONE && palette_dict) {
@@ -143,11 +143,9 @@ static t_max_err buildspans_get_bar_atomarray(t_buildspans *x, t_symbol *palette
 }
 
 static t_max_err buildspans_set_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atomarray *atomarray) {
-    t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
-    if (dictionary_hasentry(x->building, key)) dictionary_deleteentry(x->building, key);
     t_atom a;
     atom_setobj(&a, (t_object *)atomarray);
-    return dictionary_appendatom(x->building, key, &a);
+    return buildspans_set_bar_atom(x, palette, track, bar, property, &a);
 }
 
 static t_max_err buildspans_delete_bar_property(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property) {
@@ -170,7 +168,7 @@ static long buildspans_has_bar_property(t_buildspans *x, t_symbol *palette, t_sy
 }
 
 // Helper function to convert an atomarray to a string for buildspans_loging
-char* atomarray_to_string(t_atomarray *arr) {
+static char* atomarray_to_string(t_atomarray *arr) {
     if (!arr) return NULL;
 
     long count = atomarray_getsize(arr);
@@ -217,7 +215,7 @@ char* atomarray_to_string(t_atomarray *arr) {
 
 
 // Helper function to create a deep copy of a t_atomarray
-t_atomarray* atomarray_deep_copy(t_atomarray *src) {
+static t_atomarray* atomarray_deep_copy(t_atomarray *src) {
     if (!src) {
         return NULL;
     }
@@ -232,7 +230,7 @@ t_atomarray* atomarray_deep_copy(t_atomarray *src) {
 
 
 // Comparison function for qsort
-int compare_longs(const void *a, const void *b) {
+static int compare_longs(const void *a, const void *b) {
     long la = *(const long *)a;
     long lb = *(const long *)b;
     return (la > lb) - (la < lb);
@@ -242,7 +240,7 @@ int compare_longs(const void *a, const void *b) {
 typedef struct { double timestamp; double score; } NotePair;
 
 // Comparison function for qsort to sort NotePairs
-int compare_notepairs(const void *a, const void *b) {
+static int compare_notepairs(const void *a, const void *b) {
     NotePair *pa = (NotePair *)a;
     NotePair *pb = (NotePair *)b;
     if (pa->timestamp < pb->timestamp) return -1;
@@ -258,7 +256,7 @@ typedef struct {
 } t_duplication_manifest_item;
 
 // Comparison function for qsort to sort t_duplication_manifest_item by timestamp
-int compare_manifest_items(const void *a, const void *b) {
+static int compare_manifest_items(const void *a, const void *b) {
     t_duplication_manifest_item *pa = (t_duplication_manifest_item *)a;
     t_duplication_manifest_item *pb = (t_duplication_manifest_item *)b;
     if (pa->timestamp < pb->timestamp) return -1;
@@ -286,40 +284,40 @@ void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_at
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
-void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
-void buildspans_flush_track(t_buildspans *x, long track_num);
-void buildspans_run_cleanup(t_buildspans *x);
-void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym);
-void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep);
-void buildspans_visualize_memory(t_buildspans *x);
-void buildspans_log(t_buildspans *x, const char *fmt, ...);
-void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
-void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
-void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
-void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
-void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
-void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
-void buildspans_registry_add(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
-void buildspans_registry_remove_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
-void buildspans_registry_remove_track(t_buildspans *x, t_symbol *palette, t_symbol *track);
-double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
-int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output);
-void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array);
-long buildspans_get_bar_length(t_buildspans *x);
-void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
-void buildspans_local_bar_length(t_buildspans *x, double f);
+static void buildspans_flush(t_buildspans *x, t_symbol *palette_sym);
+static void buildspans_flush_track(t_buildspans *x, long track_num);
+static void buildspans_run_cleanup(t_buildspans *x);
+static void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym);
+static void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep);
+static void buildspans_visualize_memory(t_buildspans *x);
+static void buildspans_log(t_buildspans *x, const char *fmt, ...);
+static void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
+static void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
+static void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
+static void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
+static void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
+static void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
+static void buildspans_registry_add(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
+static void buildspans_registry_remove_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
+static void buildspans_registry_remove_track(t_buildspans *x, t_symbol *palette, t_symbol *track);
+static double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
+static int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output);
+static void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array);
+static long buildspans_get_bar_length(t_buildspans *x);
+static void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s);
+static void buildspans_local_bar_length(t_buildspans *x, double f);
 void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
-void buildspans_bind_resolve(t_buildspans *x);
-void buildspans_bind_clock_cb(t_buildspans *x);
-void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
-t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
-t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
-t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
-t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
+static void buildspans_bind_resolve(t_buildspans *x);
+static void buildspans_bind_clock_cb(t_buildspans *x);
+static void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
+static t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av);
+static t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av);
+static t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
+static t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
 
 
 // Helper function to send verbose log messages
-void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+static void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("track")) {
         outlet_anything(x->track_outlet, s, argc, argv);
     } else if (s == gensym("span")) {
@@ -331,7 +329,7 @@ void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *a
     }
 }
 
-void buildspans_log(t_buildspans *x, const char *fmt, ...) {
+static void buildspans_log(t_buildspans *x, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     vcommon_log(x->log_outlet, x->log, "buildspans", fmt, args);
@@ -343,7 +341,7 @@ t_class *buildspans_class;
 // A single, consolidated function to get the bar length from the buffer.
 // It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
 // It does not post any messages to the console. The caller is responsible for that.
-long buildspans_get_bar_length(t_buildspans *x) {
+static long buildspans_get_bar_length(t_buildspans *x) {
     if (x->local_bar_length > 0) {
         return (long)x->local_bar_length;
     }
@@ -393,7 +391,7 @@ long buildspans_get_bar_length(t_buildspans *x) {
     return bar_length;
 }
 
-void buildspans_visualize_memory(t_buildspans *x) {
+static void buildspans_visualize_memory(t_buildspans *x) {
     if (!x->visualize) return;
 
     long num_palettes = 0;
@@ -401,10 +399,19 @@ void buildspans_visualize_memory(t_buildspans *x) {
     dictionary_getkeys(x->registry, &num_palettes, &palette_keys);
 
     // 2. Generate JSON
-    long buffer_size = 65536;
+    long buffer_size = 1048576; // 1MB buffer to avoid overflow
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     long offset = 0;
-    offset += snprintf(json_buffer + offset, buffer_size, "{\"palettes\":{");
+    int res;
+
+    #define SAFE_SNPRINTF(fmt, ...) \
+    res = snprintf(json_buffer + offset, buffer_size - offset, fmt, ##__VA_ARGS__); \
+    if (res > 0) { \
+        offset += res; \
+        if (offset >= buffer_size) offset = buffer_size - 1; \
+    }
+
+    SAFE_SNPRINTF("{\"palettes\":{");
 
     for (long p = 0; p < num_palettes; p++) {
         t_symbol *palette_sym = palette_keys[p];
@@ -412,14 +419,13 @@ void buildspans_visualize_memory(t_buildspans *x) {
         dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
         if (!palette_dict) continue;
 
-        if (p > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+        if (p > 0) SAFE_SNPRINTF(",");
 
         long num_tracks = 0;
         t_symbol **track_keys = NULL;
         dictionary_getkeys(palette_dict, &num_tracks, &track_keys);
 
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{", 
-                            palette_sym->s_name);
+        SAFE_SNPRINTF("\"%s\":{\"building\":{", palette_sym->s_name);
 
         for (long i = 0; i < num_tracks; i++) {
             t_symbol *track_sym = track_keys[i];
@@ -427,9 +433,9 @@ void buildspans_visualize_memory(t_buildspans *x) {
             dictionary_getdictionary(palette_dict, track_sym, (t_object **)&track_dict);
             if (!track_dict) continue;
 
-            if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            if (i > 0) SAFE_SNPRINTF(",");
             
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
+            SAFE_SNPRINTF("\"%s\":{\"absolutes\":[", track_sym->s_name);
 
             // a. Find and sort bars for this track
             long bar_count = 0;
@@ -457,26 +463,26 @@ void buildspans_visualize_memory(t_buildspans *x) {
                     ac = 1;
                 }
                 for (long k = 0; k < ac; k++) {
-                    if (!first_absolute) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    if (!first_absolute) SAFE_SNPRINTF(",");
                     first_absolute = 0;
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
+                    SAFE_SNPRINTF("%.2f", atom_getfloat(av+k));
                 }
             }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
+            SAFE_SNPRINTF("],\"offsets\":[");
 
             // c. Append offsets
             int first_offset = 1;
             for (long j = 0; j < bar_count; j++) {
                 t_symbol *bar_sym = buildspans_get_bar_sym(bar_timestamps[j]);
                  if (buildspans_has_bar_property(x, palette_sym, track_sym, bar_sym, gensym("offset"))) {
-                     if (!first_offset) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                     if (!first_offset) SAFE_SNPRINTF(",");
                      first_offset = 0;
                      t_atom a;
                      buildspans_get_bar_atom(x, palette_sym, track_sym, bar_sym, gensym("offset"), &a);
-                     offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&a));
+                     SAFE_SNPRINTF("%.2f", atom_getfloat(&a));
                  }
             }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"span\":[");
+            SAFE_SNPRINTF("],\"span\":[");
 
             // d. Append span data
             int first_span = 1;
@@ -496,22 +502,20 @@ void buildspans_visualize_memory(t_buildspans *x) {
                 }
 
                 for (long k = 0; k < span_count; k++) {
-                    if (!first_span) {
-                        offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                    }
+                    if (!first_span) SAFE_SNPRINTF(",");
                     first_span = 0;
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%ld", atom_getlong(span_atoms + k));
+                    SAFE_SNPRINTF("%ld", atom_getlong(span_atoms + k));
                 }
             }
 
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
+            SAFE_SNPRINTF("]}");
             sysmem_freeptr(bar_timestamps);
         }
-        offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
+        SAFE_SNPRINTF("}}");
         if (track_keys) sysmem_freeptr(track_keys);
     }
     long bar_length = buildspans_get_bar_length(x);
-    offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
+    SAFE_SNPRINTF("},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
 
     visualize((t_object *)x, json_buffer);
 
@@ -1197,7 +1201,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     buildspans_run_cleanup(x);
 }
 
-void buildspans_flush_track(t_buildspans *x, long track_num) {
+static void buildspans_flush_track(t_buildspans *x, long track_num) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
 
@@ -1254,7 +1258,7 @@ void buildspans_flush_track(t_buildspans *x, long track_num) {
 }
 
 
-void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val) {
+static void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val) {
     long bar_length = buildspans_get_bar_length(x);
     if (bar_length <= 0) return;
 
@@ -1306,7 +1310,7 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
     }
 }
 
-void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+static void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
     if (offset == 0.0) {
         object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
@@ -1426,16 +1430,20 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     }
 
     // Update offset
-    t_atom offset_atom;
-    atom_setfloat(&offset_atom, offset);
-    buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("offset"), &offset_atom);
-    buildspans_log(x, "%s %.2f", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"))->s_name, offset);
+    if (!buildspans_has_bar_property(x, x->current_palette, track_sym, bar_sym, gensym("offset"))) {
+        t_atom offset_atom;
+        atom_setfloat(&offset_atom, offset);
+        buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("offset"), &offset_atom);
+        if (x->log) buildspans_log(x, "%s %.2f", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"))->s_name, offset);
+    }
 
     // Update palette
-    t_atom palette_atom;
-    atom_setsym(&palette_atom, x->current_palette);
-    buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("palette"), &palette_atom);
-    buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("palette"))->s_name, x->current_palette->s_name);
+    if (!buildspans_has_bar_property(x, x->current_palette, track_sym, bar_sym, gensym("palette"))) {
+        t_atom palette_atom;
+        atom_setsym(&palette_atom, x->current_palette);
+        buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("palette"), &palette_atom);
+        if (x->log) buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("palette"))->s_name, x->current_palette->s_name);
+    }
 
     // Update absolutes array
     t_atomarray *absolutes_array = NULL;
@@ -1450,10 +1458,12 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
-    char *abs_str = atomarray_to_string(absolutes_array);
-    if (abs_str) {
-        buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("absolutes"))->s_name, abs_str);
-        sysmem_freeptr(abs_str);
+    if (x->log) {
+        char *abs_str = atomarray_to_string(absolutes_array);
+        if (abs_str) {
+            buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("absolutes"))->s_name, abs_str);
+            sysmem_freeptr(abs_str);
+        }
     }
 
     // Update scores array
@@ -1469,10 +1479,12 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
-    char *scores_str = atomarray_to_string(scores_array);
-    if (scores_str) {
-        buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("scores"))->s_name, scores_str);
-        sysmem_freeptr(scores_str);
+    if (x->log) {
+        char *scores_str = atomarray_to_string(scores_array);
+        if (scores_str) {
+            buildspans_log(x, "%s %s", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("scores"))->s_name, scores_str);
+            sysmem_freeptr(scores_str);
+        }
     }
 
     // Update mean
@@ -1555,38 +1567,27 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     }
     if (final_lowest_mean != -1.0) {
         double final_rating = final_lowest_mean * bar_timestamps_count;
-
-        // Only back-propagate rating if it's a new bar or if the rating has changed significantly
-        // (This is a simplified check for performance)
         t_atom rating_atom;
         atom_setfloat(&rating_atom, final_rating);
 
-        for (long i = 0; i < bar_timestamps_count; i++) {
-            t_symbol *temp_bar_sym = buildspans_get_bar_sym(bar_timestamps[i]);
-
-            // For existing bars, we check if the rating actually needs updating
-            if (!is_new_bar) {
-                t_atom current_rating_atom;
-                if (buildspans_get_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("rating"), &current_rating_atom) == MAX_ERR_NONE) {
-                    if (fabs(atom_getfloat(&current_rating_atom) - final_rating) < 0.001) {
-                        continue; // Skip update
-                    }
-                }
-            }
-
-            buildspans_set_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("rating"), &rating_atom);
-            // buildspans_log(x, "%s %.2f", generate_hierarchical_key(x->current_palette, track_sym, temp_bar_sym, gensym("rating"))->s_name, final_rating);
-        }
         if (is_new_bar) {
-            buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
+            // New bar: Full back-propagation required to update all bars in the track
+            for (long i = 0; i < bar_timestamps_count; i++) {
+                t_symbol *temp_bar_sym = buildspans_get_bar_sym(bar_timestamps[i]);
+                buildspans_set_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("rating"), &rating_atom);
+            }
+            if (x->log) buildspans_log(x, "Final rating for new span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
+        } else {
+            // Existing bar: Only update the current bar (fast path)
+            buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("rating"), &rating_atom);
         }
     }
 
     sysmem_freeptr(bar_timestamps);
-    buildspans_visualize_memory(x);
+    if (x->visualize) buildspans_visualize_memory(x);
 }
 
-void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
+static void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
     dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
@@ -1725,7 +1726,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
     dictionary_appendsym(x->tracks_ended_in_current_event, gensym(deferred_key), 0);
 }
 
-void buildspans_run_cleanup(t_buildspans *x) {
+static void buildspans_run_cleanup(t_buildspans *x) {
     long num_ended_tracks;
     t_symbol **ended_track_keys;
     dictionary_getkeys(x->tracks_ended_in_current_event, &num_ended_tracks, &ended_track_keys);
@@ -1785,7 +1786,7 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     buildspans_log(x, "Bar length reset to zero after flush.");
 }
 
-void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
+static void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_flush: utilizing bar_length %ld", bar_length);
 
@@ -1857,7 +1858,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
     }
 }
 
-void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
+static void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     if (s && s->s_name) {
         x->s_buffer_name = s;
         if (x->buffer_ref) {
@@ -1874,7 +1875,7 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
     }
 }
 
-void buildspans_local_bar_length(t_buildspans *x, double f) {
+static void buildspans_local_bar_length(t_buildspans *x, double f) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
@@ -1903,7 +1904,7 @@ void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_a
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
 }
 
-t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) {
+static t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->async = atom_getlong(av);
         if (x->async) {
@@ -1926,7 +1927,7 @@ t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom
     return MAX_ERR_NONE;
 }
 
-t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) {
+static t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->log = atom_getlong(av);
         buildspans_log(x, "log attribute set to %ld", x->log);
@@ -1934,7 +1935,7 @@ t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *
     return MAX_ERR_NONE;
 }
 
-void buildspans_bind_resolve(t_buildspans *x) {
+static void buildspans_bind_resolve(t_buildspans *x) {
     t_object *patcher = NULL;
     t_object *box = NULL;
     t_object *obj = NULL;
@@ -2027,20 +2028,20 @@ void buildspans_bind_resolve(t_buildspans *x) {
     if (x->bind_clock) clock_delay(x->bind_clock, 1000);
 }
 
-void buildspans_bind_clock_cb(t_buildspans *x) {
+static void buildspans_bind_clock_cb(t_buildspans *x) {
     if (x->bind_name != _sym_nothing && x->bind_name != gensym("") && !x->bound_crucible) {
         buildspans_bind_resolve(x);
     }
 }
 
-void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
+static void buildspans_notify(t_buildspans *x, t_symbol *s, t_symbol *msg, void *sender, void *data) {
     if (msg == gensym("free") && sender == x->bound_crucible) {
         x->bound_crucible = NULL;
         buildspans_log(x, "Bound crucible freed, unbinding.");
     }
 }
 
-t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) {
+static t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->bind_name = atom_getsym(av);
         x->bind_attempt_count = 0; // Reset for new name
@@ -2050,7 +2051,7 @@ t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom 
     return MAX_ERR_NONE;
 }
 
-t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av) {
+static t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->visualize = atom_getlong(av);
         buildspans_log(x, "visualize attribute set to %ld", x->visualize);
@@ -2058,7 +2059,7 @@ t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_
     return MAX_ERR_NONE;
 }
 
-void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
+static void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
     dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
@@ -2167,7 +2168,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
 }
 
 
-void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym) {
+static void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym) {
     // Update rating to mean
     t_atom *m_atoms = NULL;
     long m_count = 0;
@@ -2204,7 +2205,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 }
 
 
-void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array) {
+static void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array) {
     if (!span_array) return;
 
     long span_size = 0;
@@ -2260,7 +2261,7 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
 }
 
 
-void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
+static void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
     // 1. Get all bars for the track AND PALETTE from registry
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
@@ -2357,13 +2358,13 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
 }
 
 // New comparison function for doubles
-int compare_doubles(const void *a, const void *b) {
+static int compare_doubles(const void *a, const void *b) {
     double da = *(const double *)a;
     double db = *(const double *)b;
     return (da > db) - (da < db);
 }
 
-double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check) {
+static double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check) {
     t_dictionary *palette_dict = NULL;
     dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
     if (!palette_dict) return -1.0;
@@ -2433,7 +2434,7 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
     return next_offset_time;
 }
 
-int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
+static int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
     long track_num;
     double offset_val = 0.0;
 
@@ -2513,7 +2514,7 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
     return 1;
 }
 
-void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array) {
+static void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array) {
     if (!span_atom_array) return;
 
     long track_num_to_output;
@@ -2574,7 +2575,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
 }
 
 
-void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym) {
+static void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym) {
     // 1. Parse the track and offset from the input symbol.
     long track_num_to_check;
     double offset_val_to_check = 0.0;
