@@ -50,6 +50,7 @@ cdef extern from "cumulative_transience.h":
         PeakResultList peak_list
         AnalyzerMetrics metrics
         float last_flux[4][100]
+        float last_dynamic_smoothing[4][100]
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
         pass
@@ -88,6 +89,7 @@ cdef extern from "cumulative_transience.h":
 
     ctypedef struct BandAnalysis:
         float* envelope
+        float* rolling_dynamic_smoothing
         float* rolling_threshold
         float* rolling_lookback
         float* rolling_avg_delta
@@ -257,15 +259,22 @@ cdef class TransientAnalyzer:
         self.max_peak = analyzer_get_max_peak(self._c_analyzer)
 
         cdef list flux_list = []
+        cdef list smoothing_list = []
         cdef cnp.ndarray[float, ndim=1] f_arr
+        cdef cnp.ndarray[float, ndim=1] s_arr
         for b in range(4):
             f_arr = np.zeros(100, dtype=np.float32)
             memcpy(f_arr.data, res.last_flux[b], 100 * sizeof(float))
             flux_list.append(f_arr)
 
+            s_arr = np.zeros(100, dtype=np.float32)
+            memcpy(s_arr.data, res.last_dynamic_smoothing[b], 100 * sizeof(float))
+            smoothing_list.append(s_arr)
+
         result = {
             'peaks': peaks,
             'flux': flux_list,
+            'dynamic_smoothing': smoothing_list,
             'metrics': {
                 'std_dev': m.std_dev,
                 'mean': m.mean,
@@ -321,6 +330,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     memcpy(times.data, res.times, num_frames * sizeof(float))
 
     cdef list onset_envs = []
+    cdef list rolling_dynamic_smoothings = []
     cdef list rolling_thresholds = []
     cdef list rolling_lookbacks = []
     cdef list rolling_avg_deltas = []
@@ -329,6 +339,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef list full_peaks_list = []
 
     cdef cnp.ndarray[float, ndim=1] env
+    cdef cnp.ndarray[float, ndim=1] smooth
     cdef cnp.ndarray[float, ndim=1] thresh
     cdef cnp.ndarray[float, ndim=1] lookback
     cdef cnp.ndarray[float, ndim=1] avg_delta
@@ -340,6 +351,10 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         env = np.zeros(num_frames, dtype=np.float32)
         memcpy(env.data, res.bands[i].envelope, num_frames * sizeof(float))
         onset_envs.append(env)
+
+        smooth = np.zeros(num_frames, dtype=np.float32)
+        memcpy(smooth.data, res.bands[i].rolling_dynamic_smoothing, num_frames * sizeof(float))
+        rolling_dynamic_smoothings.append(smooth)
 
         thresh = np.zeros(num_frames, dtype=np.float32)
         memcpy(thresh.data, res.bands[i].rolling_threshold, num_frames * sizeof(float))
@@ -415,6 +430,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "min_score_seen": float(min_score_seen),
         "max_score_seen": float(max_score_seen),
         "onset_envs": onset_envs,
+        "rolling_dynamic_smoothings": rolling_dynamic_smoothings,
         "rolling_thresholds": rolling_thresholds,
         "rolling_lookbacks": rolling_lookbacks,
         "rolling_avg_deltas": rolling_avg_deltas,

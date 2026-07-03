@@ -66,6 +66,7 @@ typedef struct {
     PeakResultList peak_list;
     AnalyzerMetrics metrics;
     float last_flux[MAX_BANDS][100];
+    float last_dynamic_smoothing[MAX_BANDS][100];
 } ChunkAnalysisResult;
 
 typedef struct {
@@ -97,6 +98,7 @@ typedef struct {
     // Incremental Cache State
     double* mel_spectrogram;    // Mel bands cache
     float* flux_envelopes;      // Flux cache per band
+    float* dynamic_smoothings;  // Dynamic smoothing cache per band
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
     int cache_write_ptr;
@@ -152,6 +154,7 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 // Full analysis structures
 typedef struct {
     float* envelope;
+    float* rolling_dynamic_smoothing;
     float* rolling_threshold;
     float* rolling_lookback;
     float* rolling_avg_delta;

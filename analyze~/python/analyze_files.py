@@ -107,7 +107,7 @@ def generate_video(audio_path, data):
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
     print(f"Generating video for {audio_path}...")
     try:
-        times = data['times']; onset_envs = data['onset_envs']; rolling_thresholds = data['rolling_thresholds']
+        times = data['times']; onset_envs = data['onset_envs']; rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings'); rolling_thresholds = data['rolling_thresholds']
         rolling_lookbacks = data.get('rolling_lookbacks')
         rolling_avg_deltas = data.get('rolling_avg_deltas')
         rolling_total_deltas = data.get('rolling_total_deltas')
@@ -120,9 +120,11 @@ def generate_video(audio_path, data):
         ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; peak_stds = data['peak_stds']
         fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
-        transient_lines = []; threshold_lines = []
+        transient_lines = []; smoothing_lines = []; threshold_lines = []
         for i in range(4):
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2); transient_lines.append(line)
+            if rolling_dynamic_smoothings is not None:
+                s_line, = ax_transient.plot(times, rolling_dynamic_smoothings[i], color=colors[i], lw=1.5, ls='--', alpha=0.7, zorder=2.5); smoothing_lines.append(s_line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -249,7 +251,7 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)
