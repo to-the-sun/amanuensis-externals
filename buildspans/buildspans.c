@@ -103,35 +103,35 @@ void buildspans_registry_remove_track(t_buildspans *x, t_symbol *palette, t_symb
 }
 
 // Abstraction helpers for centralized key and dictionary access
-t_symbol* buildspans_get_track_sym(long track_num, double offset) {
+static t_symbol* buildspans_get_track_sym(long track_num, double offset) {
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", track_num, (long)round(offset));
     return gensym(track_str);
 }
 
-t_symbol* buildspans_get_bar_sym(long bar_timestamp) {
+static t_symbol* buildspans_get_bar_sym(long bar_timestamp) {
     char bar_str[32];
     snprintf(bar_str, 32, "%ld", bar_timestamp);
     return gensym(bar_str);
 }
 
-t_max_err buildspans_get_bar_atom(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atom *atom) {
+static t_max_err buildspans_get_bar_atom(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atom *atom) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     return dictionary_getatom(x->building, key, atom);
 }
 
-t_max_err buildspans_set_bar_atom(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atom *atom) {
+static t_max_err buildspans_set_bar_atom(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atom *atom) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     if (dictionary_hasentry(x->building, key)) dictionary_deleteentry(x->building, key);
     return dictionary_appendatom(x->building, key, atom);
 }
 
-t_max_err buildspans_get_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_object **atomarray) {
+static t_max_err buildspans_get_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_object **atomarray) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     return dictionary_getatomarray(x->building, key, atomarray);
 }
 
-t_max_err buildspans_set_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atomarray *atomarray) {
+static t_max_err buildspans_set_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atomarray *atomarray) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     if (dictionary_hasentry(x->building, key)) dictionary_deleteentry(x->building, key);
     t_atom a;
@@ -139,12 +139,12 @@ t_max_err buildspans_set_bar_atomarray(t_buildspans *x, t_symbol *palette, t_sym
     return dictionary_appendatom(x->building, key, &a);
 }
 
-t_max_err buildspans_delete_bar_property(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property) {
+static t_max_err buildspans_delete_bar_property(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     return dictionary_deleteentry(x->building, key);
 }
 
-long buildspans_has_bar_property(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property) {
+static long buildspans_has_bar_property(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
     return dictionary_hasentry(x->building, key);
 }

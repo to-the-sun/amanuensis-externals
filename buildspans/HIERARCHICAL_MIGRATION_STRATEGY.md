@@ -9,23 +9,15 @@ To improve performance and eliminate the $O(N^2)$ duplication bottleneck without
 *   **Logic:** When a note is added to a new track/palette, register that track/palette combination in the registry.
 *   **Performance Gain:** Functions like `buildspans_do_offset` (duplication) and `buildspans_flush` no longer need to iterate over every key in the main `building` dictionary to find active tracks. They simply look at the registry.
 *   **Stability:** This is performance-neutral for storage but reduces CPU load for discovery. The core `building` dictionary remains flat.
-*   **Coordination (Rebar):** Ensure `rebar/rebar.c` defines `buildspans_registry_...` helpers to prevent symbol collisions.
 
 ## Phase 2: Interface Abstraction
 **Goal:** Decouple the logic from the flat string key format.
 
 *   **Action:** Create a suite of internal helper functions for dictionary access:
-    *   `buildspans_get_bar_atom(palette, track, bar, property, atom)`
+    *   `buildspans_get_bar_atom(palette, track, bar, property)`
     *   `buildspans_set_bar_atom(palette, track, bar, property, atom)`
-    *   `buildspans_get_bar_atomarray(palette, track, bar, property, atomarray)`
-    *   `buildspans_set_bar_atomarray(palette, track, bar, property, atomarray)`
-    *   `buildspans_delete_bar_property(palette, track, bar, property)`
-    *   `buildspans_has_bar_property(palette, track, bar, property)`
-    *   `buildspans_get_track_sym(track_num, offset)`
-    *   `buildspans_get_bar_sym(bar_timestamp)`
 *   **Logic:** Refactor all existing code to use these helpers instead of manual `snprintf` and `dictionary_get...` calls.
 *   **Stability:** This makes the subsequent "Structural Pivots" much safer, as the change in storage format will only need to be updated inside these few helper functions.
-*   **Coordination (Rebar):** Add `#define` redirects for all new abstraction helpers in `rebar/rebar.c` to maintain compatibility with its internal `buildspans` module.
 
 ## Phase 3: Palette-Level Nesting
 **Goal:** Partition the data by Palette.
@@ -34,7 +26,6 @@ To improve performance and eliminate the $O(N^2)$ duplication bottleneck without
 *   **Structure:** `building` -> `{palette_name}` -> `{track::bar::property}` (Flat keys inside).
 *   **Performance Gain:** Operations are now scoped to a single palette, reducing the search space for dictionary lookups.
 *   **Stability:** Verification is easy: only the palette-level parsing is removed from the flat keys.
-*   **Coordination (Rebar):** No new redirects needed if Interface Abstraction is strictly followed.
 
 ## Phase 4: Track-Level Nesting & $O(1)$ Duplication
 **Goal:** Implement the primary performance fix for duplication.
@@ -43,7 +34,6 @@ To improve performance and eliminate the $O(N^2)$ duplication bottleneck without
 *   **Structure:** `palette_dict` -> `{track_id}` -> `{bar::property}`.
 *   **Performance Gain:** Duplication (`buildspans_do_offset`) no longer requires copying individual notes. It simply clones the target track's dictionary using `dictionary_clone()`.
 *   **Stability:** This is the most complex step. By keeping the `bar::property` part flat for now, we minimize the depth of the change.
-*   **Coordination (Rebar):** Ensure `dictionary_clone` usage in `buildspans.c` doesn't conflict with `rebar`'s internal memory management.
 
 ## Phase 5: Full Hierarchy (Removing String Parsing)
 **Goal:** Eliminate all `snprintf` and string parsing overhead.
@@ -51,7 +41,6 @@ To improve performance and eliminate the $O(N^2)$ duplication bottleneck without
 *   **Action:** Complete the nesting: `track_dict` -> `{bar_timestamp}` -> `{property_name}`.
 *   **Performance Gain:** Zero string manipulation during note entry. Properties like `mean`, `offset`, and `rating` are direct lookups in a tiny bar-level dictionary.
 *   **Stability:** At this point, `parse_hierarchical_key` and `generate_hierarchical_key` can be deleted from the codebase.
-*   **Coordination (Rebar):** Update `rebar/rebar.c` to remove the redirects for the deleted string-parsing helpers.
 
 ## Phase 6: Advanced Concurrency (Optional)
 **Goal:** Maximize audio thread safety.
