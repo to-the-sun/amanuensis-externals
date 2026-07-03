@@ -290,9 +290,6 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
         double floor = self->max_mel_db - 80.0;
         for (int m = 0; m < N_MELS; m++) if (self->mel_spectrogram[m * CACHE_SIZE + f_idx] < floor) self->mel_spectrogram[m * CACHE_SIZE + f_idx] = floor;
         int prev = (f_idx - 1 + CACHE_SIZE) % CACHE_SIZE;
-        int interval_frames = (int)(200.0 / self->frame_duration_ms);
-        if (interval_frames <= 0) interval_frames = 1;
-
         for (int b = 0; b < MAX_BANDS; b++) {
             double fsum = 0;
             for (int m = b * 32; m < (b + 1) * 32; m++) {
@@ -302,14 +299,12 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
             float flux = (float)(fsum / 32.0);
             self->flux_envelopes[b * CACHE_SIZE + f_idx] = flux;
 
-            // Only update the state every 200ms
-            if (self->total_frames_pushed % interval_frames == 0) {
-                float prev_smooth = self->smoothing_states[b];
-                if (flux < prev_smooth) {
-                    self->smoothing_states[b] = (prev_smooth + flux) / 2.0f;
-                } else {
-                    self->smoothing_states[b] = flux;
-                }
+            float prev_smooth = self->smoothing_states[b];
+            if (flux > prev_smooth) {
+                self->smoothing_states[b] = flux;
+            } else {
+                // Decay by 1/200th of the distance to the flux per 1ms frame
+                self->smoothing_states[b] = prev_smooth - (prev_smooth - flux) / 200.0f;
             }
             self->dynamic_smoothings[b * CACHE_SIZE + f_idx] = self->smoothing_states[b];
         }
