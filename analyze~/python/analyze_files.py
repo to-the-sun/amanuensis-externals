@@ -151,11 +151,9 @@ def generate_video(audio_path, data):
                         tot_d = rolling_total_deltas[b][frame]
                         cnt = rolling_p_counts[b][frame]
 
-                        # [B#] Lookback: [val]ms = 15000 - [avg_delta] ([total_delta] / [p_count-1])
-                        if cnt > 1:
-                            eq = f"{avg_d:.0f} ({tot_d:.0f} / {cnt - 1})"
-                        elif cnt == 1:
-                            eq = f"{avg_d:.0f} (total_delta)"
+                        # [B#] Lb: [val]ms = 15000 - ([prev_lb] / [cnt])
+                        if cnt > 0:
+                            eq = f"{avg_d:.0f} ({tot_d:.0f} / {cnt})"
                         else:
                             eq = "15000 (no peaks)"
 

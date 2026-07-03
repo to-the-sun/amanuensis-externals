@@ -352,27 +352,19 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         double avg_delta_ms = 0;
         double total_delta_ms = 0;
         int p_count = 0;
-        long long first_p = -1, last_p = -1;
         int lookback_frames = (int)(self->midpoint_lookback[b] / self->frame_duration_ms);
         int cutoff = active_start_frame - lookback_frames;
 
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) {
             if (curr->p_idx >= cutoff) {
-                if (first_p == -1) {
-                    first_p = curr->p_idx;
-                }
-                last_p = curr->p_idx;
                 p_count++;
             }
             curr = curr->next;
         }
-        if (p_count > 1) {
-            total_delta_ms = (double)(last_p - first_p) * self->frame_duration_ms;
-            avg_delta_ms = total_delta_ms / (double)(p_count - 1);
-        } else if (p_count == 1) {
-            total_delta_ms = (double)(last_p - cutoff) * self->frame_duration_ms;
-            avg_delta_ms = total_delta_ms;
+        if (p_count > 0) {
+            total_delta_ms = self->midpoint_lookback[b];
+            avg_delta_ms = total_delta_ms / (double)p_count;
         } else {
             total_delta_ms = 15000.0;
             avg_delta_ms = 15000.0;

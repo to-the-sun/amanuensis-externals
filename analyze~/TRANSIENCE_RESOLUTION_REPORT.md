@@ -52,7 +52,7 @@ This report documents the hierarchical levels of resolution within the `cumulati
 ## 10. Midpoint Sub-Window
 *   **Resolution**: Dynamic (100ms - 15000ms)
 *   **Source**: `cumulative_transience.c` (Based on per-band peak density)
-*   **Purpose**: The sub-window at the end of the cache used to calculate the rolling midpoint for thresholding. Calculated as `15000ms - avg_peak_delta`, where `avg_peak_delta` is the average time between peaks found within the *current* lookback window for that frequency band.
+*   **Purpose**: The sub-window at the end of the cache used to calculate the rolling midpoint for thresholding. Calculated as `15000ms - (previous_lookback_ms / quantity_in_previous_lookback)` per frequency band.
 
 ## 11. State Cleanup Threshold
 *   **Resolution**: 15,000ms (15 Seconds)
