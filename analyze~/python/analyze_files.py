@@ -120,11 +120,14 @@ def generate_video(audio_path, data):
         ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; peak_stds = data['peak_stds']
         fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
+        smoothing_colors = ['#FF0000', '#FF4500', '#FF6347', '#CD5C5C'] # Highly distinguishable reds/oranges
         transient_lines = []; smoothing_lines = []; threshold_lines = []
         for i in range(4):
-            line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=2, alpha=alphas[i], label=labels[i], zorder=2); transient_lines.append(line)
+            # Make raw flux lines thinner and more transparent
+            line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
             if rolling_dynamic_smoothings is not None:
-                s_line, = ax_transient.plot(times, rolling_dynamic_smoothings[i], color=colors[i], lw=2.5, ls='-', alpha=1.0, zorder=5); smoothing_lines.append(s_line)
+                # Initialize smoothing line with bright red shades and high zorder
+                s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=3, ls='-', alpha=1.0, label=f'{labels[i]} Smooth', zorder=10); smoothing_lines.append(s_line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
