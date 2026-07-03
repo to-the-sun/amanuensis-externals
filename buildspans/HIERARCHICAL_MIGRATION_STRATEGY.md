@@ -28,6 +28,19 @@ The `buildspans` object often uses an `@bind` attribute to direct its output to 
     2.  **Synchronized Migration:** `crucible` can be updated simultaneously to accept hierarchical dictionary pointers. This is more efficient but violates the "small steps" isolation.
 - **Recommendation:** Use a Translation Layer within `buildspans_output_span_data` to maintain flat output for `crucible` until the `buildspans` migration is complete. Once `buildspans` is stable, a separate migration strategy for `crucible` can be initiated to utilize the new hierarchy.
 
+### Re-entrancy and Shared Memory Risks
+Because `rebar` physically includes the `buildspans.c` source code, both objects share identical logic but maintain independent state.
+
+**TECHNICAL SPECULATION:**
+If a `rebar` object and a standalone `buildspans` object (both using the same version of the code) are used in a patch with `@bind`, there is a high risk of **re-entrancy issues**. If `buildspans` triggers a `crucible` update that in turn causes a dictionary modification back in the `buildspans` memory space while a process is still active, crashes can occur.
+
+The "bad object" errors observed in the Max console indicate that memory is being freed while still in use. This can happen if one object modifies a dictionary that another object is currently iterating over.
+
+**Rules for @bind Navigation:**
+1.  **Strict Isolation:** Never mark internal logic as global (keep everything `static`).
+2.  **Explicit Ownership:** Let the Max dictionary own the lifetime of objects (like `t_atomarray`). Manual `object_free` calls on embedded objects should be avoided to prevent double-frees when the dictionary is cleared.
+3.  **Boundary Protection:** When passing data via `@bind`, consider using a "Deep Copy" approach at the boundary if the receiving object needs to maintain the data longer than the immediate call cycle.
+
 ## Phase 1: The Active Registry (Preparation)
 **Goal:** Replace linear scans for "discovery" with a dedicated, lightweight registry.
 
