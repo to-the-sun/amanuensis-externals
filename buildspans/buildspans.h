@@ -13,6 +13,7 @@ struct _buildspans;
 typedef struct _buildspans {
     t_object s_obj;
     t_dictionary *building;
+    t_dictionary *registry;
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
     double current_offset;
