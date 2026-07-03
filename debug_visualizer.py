@@ -15,7 +15,8 @@ if os.environ.get('HEADLESS'):
 
 # Configuration
 TCP_PORT = 8999
-WINDOW_SIZE = (1200, 1000)
+SCALE = 0.8
+WINDOW_SIZE = (int(1200 * SCALE), int(1000 * SCALE))
 FPS = 60
 
 # State (shared between threads; guarded by lock)
@@ -184,10 +185,10 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
         return
 
     num_palettes = len(palettes)
-    palette_h = (h - 60) / num_palettes # margin for labels
+    palette_h = (h - int(60 * SCALE)) / num_palettes # margin for labels
 
-    grid_left = 60
-    grid_right = w - 40
+    grid_left = int(60 * SCALE)
+    grid_right = w - int(40 * SCALE)
     grid_w = grid_right - grid_left
 
     sorted_palettes = sorted(palettes.keys())
@@ -196,16 +197,16 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
         p_data = palettes[p_name]
         working_memory = p_data.get("building", {})
 
-        p_top = 40 + p_idx * palette_h
+        p_top = int(40 * SCALE) + p_idx * palette_h
         p_timeline_h = palette_h * 0.8
 
         # Palette Label
         p_label = fonts["building_large"].render(f"Palette: {p_name}", True, (255, 255, 255))
-        surface.blit(p_label, (grid_left, p_top - 25))
+        surface.blit(p_label, (grid_left, p_top - int(25 * SCALE)))
 
         # Display loop_start in the corner
         ls_label = fonts["building_normal"].render(f"loop_start: {loop_start:.2f}", True, (150, 150, 150))
-        surface.blit(ls_label, (w - ls_label.get_width() - 10, p_top - 25))
+        surface.blit(ls_label, (w - ls_label.get_width() - int(10 * SCALE), p_top - int(25 * SCALE)))
 
         # draw working_memory timeline
         all_ts = [
@@ -228,8 +229,8 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
             # Draw min and max labels for the timeline
             min_label = fonts["building_small"].render(f"{min_ts:.2f}", True, (204, 204, 204))
             max_label = fonts["building_small"].render(f"{max_ts:.2f}", True, (204, 204, 204))
-            surface.blit(min_label, (grid_left, p_top + p_timeline_h + 5))
-            surface.blit(max_label, (grid_right - max_label.get_width(), p_top + p_timeline_h + 5))
+            surface.blit(min_label, (grid_left, p_top + p_timeline_h + int(5 * SCALE)))
+            surface.blit(max_label, (grid_right - max_label.get_width(), p_top + p_timeline_h + int(5 * SCALE)))
 
             if working_memory:
                 # Each unique track-offset identifier gets its own row
@@ -242,7 +243,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
 
                     # Draw track label
                     track_label = fonts["building_normal"].render(f"T {track_id}", True, (204, 204, 204))
-                    surface.blit(track_label, (5, track_y + track_h / 2 - track_label.get_height() / 2))
+                    surface.blit(track_label, (int(5 * SCALE), track_y + track_h / 2 - track_label.get_height() / 2))
 
                     # Draw horizontal bars for spans (drawn first, in the background)
                     span_data = track_data.get("span", [])
@@ -276,7 +277,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 # Display relative value modified by loop_start subtraction
                                 label_text = f"{(bar_relative_ts - loop_start):.0f}"
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
-                                surface.blit(label, (bar_start_x + 2, bar_y - bar_height / 2 - 15))
+                                surface.blit(label, (bar_start_x + int(2 * SCALE), bar_y - bar_height / 2 - int(15 * SCALE)))
 
                         except (ValueError, IndexError): pass
 
@@ -285,7 +286,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                         x = grid_left + grid_w * (ts - min_ts) / span_ts
                         pygame.draw.line(surface, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
                         label = fonts["building_small"].render(f"{ts:.2f}", True, (100, 200, 100))
-                        surface.blit(label, (x + 2, track_y + 5))
+                        surface.blit(label, (x + int(2 * SCALE), track_y + int(5 * SCALE)))
 
                 palette_offsets = set()
                 for track_data in working_memory.values():
@@ -298,7 +299,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                         pygame.draw.line(surface, (200, 100, 100), (x, track_y), (x, track_y + track_h), 2)
                         if i == 0:
                             label = fonts["building_small"].render(f"{ts:.0f}", True, (200, 100, 100))
-                            surface.blit(label, (x + 2, p_top - 15))
+                            surface.blit(label, (x + int(2 * SCALE), p_top - int(15 * SCALE)))
 
 def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width_ms, fonts):
     w, h = surface.get_size()
@@ -306,13 +307,13 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
 
     total_points = sum(len(pts) for pts in points_dict.values())
     status_text = fonts["weaver_status"].render(f"Tracks: {len(tracks)} Points: {total_points} Duration: {view_width_ms:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
-    surface.blit(status_text, (w - status_text.get_width() - 20, 20))
+    surface.blit(status_text, (w - status_text.get_width() - int(20 * SCALE), int(20 * SCALE)))
 
     if not tracks:
         return
 
-    left_pad, right_pad, top_pad, bottom_pad = 80, 50, 60, 60
-    row_spacing = 20
+    left_pad, right_pad, top_pad, bottom_pad = int(80 * SCALE), int(50 * SCALE), int(60 * SCALE), int(60 * SCALE)
+    row_spacing = int(20 * SCALE)
     graph_w = w - left_pad - right_pad
     graph_h = h - top_pad - bottom_pad
 
@@ -380,11 +381,11 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
                 txt_bar = fonts["weaver_tiny"].render(f"{l.get('bar', '')}", True, (220, 220, 255))
                 txt_label = fonts["weaver_tiny"].render(l["text"], True, (180, 180, 200))
                 if l.get("pos_idx", 0) == 0:
-                    ty1, ty2 = row_top + 2, row_top + 13
+                    ty1, ty2 = row_top + int(2 * SCALE), row_top + int(13 * SCALE)
                 else:
-                    ty2, ty1 = row_bottom - 12, row_bottom - 23
-                surface.blit(txt_bar, (int(lx) + 3, ty1))
-                surface.blit(txt_label, (int(lx) + 3, ty2))
+                    ty2, ty1 = row_bottom - int(12 * SCALE), row_bottom - int(23 * SCALE)
+                surface.blit(txt_bar, (int(lx) + int(3 * SCALE), ty1))
+                surface.blit(txt_label, (int(lx) + int(3 * SCALE), ty2))
 
     for t in range(1, num_rows + 1):
         i = t - 1
@@ -396,26 +397,27 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
         t_len = state["track_lengths"].get(t, 0)
 
         if is_busy:
-            pygame.draw.rect(surface, (255, 255, 255), (5, y_graph + row_graph_h/2 - 15, 70, 30))
+            pygame.draw.rect(surface, (255, 255, 255), (int(5 * SCALE), y_graph + row_graph_h/2 - int(15 * SCALE), int(70 * SCALE), int(30 * SCALE)))
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (0, 0, 0))
             lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (0, 0, 0))
         else:
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (200, 200, 200))
             lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (150, 150, 150))
 
-        surface.blit(lbl, (10, y_graph + row_graph_h/2 - 12))
-        surface.blit(lbl_len, (10, y_graph + row_graph_h/2 + 3))
+        surface.blit(lbl, (int(10 * SCALE), y_graph + row_graph_h/2 - int(12 * SCALE)))
+        surface.blit(lbl_len, (int(10 * SCALE), y_graph + row_graph_h/2 + int(3 * SCALE)))
 
     axis_y = top_pad + graph_h
     pygame.draw.line(surface, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)
     for i in range(11):
         tick_ms = (i / 10) * view_width_ms
         tick_x = left_pad + (i / 10) * graph_w
-        pygame.draw.line(surface, (200, 200, 200), (int(tick_x), axis_y), (int(tick_x), axis_y + 5), 2)
+        pygame.draw.line(surface, (200, 200, 200), (int(tick_x), axis_y), (int(tick_x), axis_y + int(5 * SCALE)), 2)
         tick_label = fonts["weaver_tiny"].render(f"{tick_ms:.0f} ms", True, (200, 200, 200))
-        surface.blit(tick_label, (int(tick_x) - tick_label.get_width()/2, axis_y + 10))
+        surface.blit(tick_label, (int(tick_x) - tick_label.get_width()/2, axis_y + int(10 * SCALE)))
 
 def run_gui():
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "960,0"
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE)
     pygame.display.set_caption("Combined Visualizer")
@@ -423,15 +425,15 @@ def run_gui():
 
     try:
         fonts = {
-            "building_normal": pygame.font.SysFont("Arial", 16),
-            "building_large": pygame.font.SysFont("Arial", 20),
-            "building_small": pygame.font.SysFont("Arial", 12),
-            "weaver_tiny": pygame.font.SysFont("Arial", 10),
-            "weaver_label": pygame.font.SysFont("Arial", 14),
-            "weaver_status": pygame.font.SysFont("Arial", 16)
+            "building_normal": pygame.font.SysFont("Arial", int(16 * SCALE)),
+            "building_large": pygame.font.SysFont("Arial", int(20 * SCALE)),
+            "building_small": pygame.font.SysFont("Arial", int(12 * SCALE)),
+            "weaver_tiny": pygame.font.SysFont("Arial", int(10 * SCALE)),
+            "weaver_label": pygame.font.SysFont("Arial", int(14 * SCALE)),
+            "weaver_status": pygame.font.SysFont("Arial", int(16 * SCALE))
         }
     except:
-        default_font = pygame.font.Font(None, 20)
+        default_font = pygame.font.Font(None, int(20 * SCALE))
         fonts = {k: default_font for k in ["building_normal", "building_large", "building_small", "weaver_tiny", "weaver_label", "weaver_status"]}
 
     while True:
@@ -459,10 +461,10 @@ def run_gui():
             p_max_ms = state["global_max_ms"]
             p_ramp_dur = state["main_ramp_duration"]
 
-        building_surf = screen.subsurface((0, 0, 1200, 400))
+        building_surf = screen.subsurface((0, 0, int(1200 * SCALE), int(400 * SCALE)))
         draw_building(building_surf, p_palettes, p_bar_len, p_offset, p_loop_start, fonts)
 
-        weaver_surf = screen.subsurface((0, 400, 1200, 600))
+        weaver_surf = screen.subsurface((0, int(400 * SCALE), int(1200 * SCALE), int(600 * SCALE)))
         view_width_ms = max(p_ramp_dur, p_max_ms)
         draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_width_ms, fonts)
 
