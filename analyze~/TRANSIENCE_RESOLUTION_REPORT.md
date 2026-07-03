@@ -52,7 +52,7 @@ This report documents the hierarchical levels of resolution within the `cumulati
 ## 10. Half-Max Sub-Window
 *   **Resolution**: Dynamic (100ms - 15000ms)
 *   **Source**: `cumulative_transience.c` (Based on per-band peak density)
-*   **Purpose**: The sub-window at the end of the cache used to calculate the dynamic half-max threshold. Calculated as `15000ms - (15000ms / current_quantity_in_previous_lookback)` per frequency band.
+*   **Purpose**: The sub-window at the end of the cache used to calculate the dynamic half-max threshold. Calculated as `15000ms - (15000ms / current_quantity_in_previous_lookback)` per frequency band. If only 0 or 1 peak is present, the window expands to the full 15,000ms. All peaks are globally indexed to ensure accurate context.
 
 ## 11. State Cleanup Threshold
 *   **Resolution**: 15,000ms (15 Seconds)

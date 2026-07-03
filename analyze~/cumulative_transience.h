@@ -122,6 +122,7 @@ double analyzer_get_max_peak(TransientAnalyzer* self);
 
 int analyzer_process_peak(TransientAnalyzer* self,
                           int p_idx,
+                          int global_p_idx,
                           int band_idx,
                           double time,
                           const float* env_ptr,

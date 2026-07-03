@@ -60,6 +60,7 @@ cdef extern from "cumulative_transience.h":
     double analyzer_get_max_peak(TransientAnalyzer_c* self)
     int analyzer_process_peak(TransientAnalyzer_c* self,
                               int p_idx,
+                              int global_p_idx,
                               int band_idx,
                               double time,
                               const float* env_ptr,
@@ -183,7 +184,7 @@ cdef class TransientAnalyzer:
                 t_val, l_val, r_val, pr_val, p_val = params
 
             ret = analyzer_process_peak(
-                self._c_analyzer, p_idx, band_idx, <double>times[p_idx],
+                self._c_analyzer, p_idx, p_idx, band_idx, <double>times[p_idx],
                 <float*>env.data, len(env),
                 <int*>all_valid_arr.data, all_valid_count,
                 p_val, t_val, l_val, r_val, pr_val, &res

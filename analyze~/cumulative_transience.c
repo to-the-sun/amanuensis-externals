@@ -109,7 +109,7 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
 
 double analyzer_get_max_peak(TransientAnalyzer* self) { return self->max_peak; }
 
-int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int band_idx, double time, const float* env_ptr, int env_len, const int* all_valid_peak_indices, int all_valid_count, double detected_peak_val, double thresh_val, double left_min, double right_min, double prominence, PeakResult* result_out) {
+int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, int band_idx, double time, const float* env_ptr, int env_len, const int* all_valid_peak_indices, int all_valid_count, double detected_peak_val, double thresh_val, double left_min, double right_min, double prominence, PeakResult* result_out) {
     result_out->p_idx = p_idx; result_out->band_idx = band_idx; result_out->time = time;
     result_out->peak_val = (double)env_ptr[p_idx]; result_out->total_score = 0;
     result_out->detected_peak_val = detected_peak_val; result_out->thresh_val = thresh_val;
@@ -172,7 +172,9 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int band_idx, doub
     for (int i = 0; i < BUFFER_LEN; i++) self->accumulated_buffer[i] += result_out->snapshot[i];
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
     if (entry) {
-        entry->p_idx = p_idx; memcpy(entry->snapshot, result_out->snapshot, sizeof(double) * BUFFER_LEN); entry->next = NULL;
+        entry->p_idx = global_p_idx;
+        memcpy(entry->snapshot, result_out->snapshot, sizeof(double) * BUFFER_LEN);
+        entry->next = NULL;
         if (self->snapshot_tails[band_idx]) { self->snapshot_tails[band_idx]->next = entry; self->snapshot_tails[band_idx] = entry; }
         else { self->snapshot_heads[band_idx] = entry; self->snapshot_tails[band_idx] = entry; }
     }
@@ -361,12 +363,13 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             }
             curr = curr->next;
         }
-        if (p_count > 0) {
+        if (p_count > 1) {
             total_delta_ms = 15000.0;
             avg_delta_ms = total_delta_ms / (double)p_count;
         } else {
-            total_delta_ms = 15000.0;
-            avg_delta_ms = 15000.0;
+            // Expansion Case: If 0 or 1 peak, set delta to 0 to expand window to 15s
+            total_delta_ms = 0.0;
+            avg_delta_ms = 0.0;
         }
 
         self->lookback_avg_delta[b] = avg_delta_ms;
@@ -437,9 +440,11 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                 double pv = 0, tv = 0, lv = 0, rv = 0, prv = 0;
                 for (int k = 0; k < bpeak_counts[b]; k++) if (bpeaks[b][k] == p_idx) { pv = envs[b][p_idx]; tv = bth[b][k]; lv = bl[b][k]; rv = br[b][k]; prv = bp[b][k]; break; }
                 PeakResult pr; double time = (double)gp * self->frame_duration_ms / 1000.0;
-                if (analyzer_process_peak(self, p_idx, b, time, envs[b], nf, aind, tot, pv, tv, lv, rv, prv, &pr)) {
-                    if (self->snapshot_tails[b]) self->snapshot_tails[b]->p_idx = (int)gp;
-                    if (result_out->peak_list.num_peaks < MAX_PEAKS_PER_CHUNK) { pr.p_idx = (int)gp; result_out->peak_list.peaks[result_out->peak_list.num_peaks++] = pr; }
+                if (analyzer_process_peak(self, p_idx, (int)gp, b, time, envs[b], nf, aind, tot, pv, tv, lv, rv, prv, &pr)) {
+                    if (result_out->peak_list.num_peaks < MAX_PEAKS_PER_CHUNK) {
+                        pr.p_idx = (int)gp;
+                        result_out->peak_list.peaks[result_out->peak_list.num_peaks++] = pr;
+                    }
                 }
             }
         }

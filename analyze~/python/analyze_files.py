@@ -152,10 +152,10 @@ def generate_video(audio_path, data):
                         cnt = rolling_p_counts[b][frame]
 
                         # [B#] Lb: [val]ms = 15000 - (15000 / [cnt])
-                        if cnt > 0:
-                            eq = f"{avg_d:.0f} (15000 / {cnt})"
+                        if cnt > 1:
+                            eq = f"(15000 / {cnt})"
                         else:
-                            eq = "15000 (no peaks)"
+                            eq = "0 (sparse peaks)"
 
                         debug_msg = f"[B{b}] Lb: {lb:.0f}ms = 15000 - {eq}"
                         active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': b})
