@@ -332,13 +332,18 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
     analyzer_cleanup_snapshots(self, active_start_frame);
     analyzer_push_audio(self, y, len, sr);
     int nf = self->cache_count, rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
-    float *envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
+    float *envs[MAX_BANDS] = {0}, *sm_envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
     float half_maxes[MAX_BANDS];
 
     for (int b = 0; b < MAX_BANDS; b++) {
-        envs[b] = (float*)malloc(sizeof(float) * nf); thrs[b] = (float*)malloc(sizeof(float) * nf);
-        if (!envs[b] || !thrs[b]) { for(int k=0; k<=b; k++) { free(envs[k]); free(thrs[k]); } return 0; }
-        for (int j = 0; j < nf; j++) envs[b][j] = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
+        envs[b] = (float*)malloc(sizeof(float) * nf);
+        sm_envs[b] = (float*)malloc(sizeof(float) * nf);
+        thrs[b] = (float*)malloc(sizeof(float) * nf);
+        if (!envs[b] || !sm_envs[b] || !thrs[b]) { for(int k=0; k<=b; k++) { free(envs[k]); free(sm_envs[k]); free(thrs[k]); } return 0; }
+        for (int j = 0; j < nf; j++) {
+            envs[b][j] = self->flux_envelopes[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
+            sm_envs[b][j] = self->dynamic_smoothings[b * CACHE_SIZE + (rptr + j) % CACHE_SIZE];
+        }
 
         // Use current lookback parameters for this chunk
         int n_dyn_b = (int)(self->midpoint_lookback[b] / self->frame_duration_ms);
@@ -448,9 +453,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
 
             float prom = 0;
             if (lf >= 0 && lf < nf) {
-                float fv = envs[b][lf];
-                float lmin = fv; for(int k=(int)lf-1; k>=0; k--) { if (envs[b][k] > fv) break; if (envs[b][k] < lmin) lmin = envs[b][k]; }
-                float rmin = fv; for(int k=(int)lf+1; k<nf; k++) { if (envs[b][k] > fv) break; if (envs[b][k] < rmin) rmin = envs[b][k]; }
+                float fv = sm_envs[b][lf];
+                float lmin = fv; for(int k=(int)lf-1; k>=0; k--) { if (sm_envs[b][k] > fv) break; if (sm_envs[b][k] < lmin) lmin = sm_envs[b][k]; }
+                float rmin = fv; for(int k=(int)lf+1; k<nf; k++) { if (sm_envs[b][k] > fv) break; if (sm_envs[b][k] < rmin) rmin = sm_envs[b][k]; }
                 prom = fv - (lmin > rmin ? lmin : rmin);
             }
             result_out->last_prominence[b][i] = prom;
@@ -473,7 +478,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         for (int b = 0; b < MAX_BANDS; b++) result_out->metrics.band_midpoints[b] = (double)half_maxes[b];
     }
     for (int b = 0; b < MAX_BANDS; b++) {
-        free(envs[b]); free(thrs[b]); if (bpeak_counts[b] > 0) { free(bpeaks[b]); free(bth[b]); free(bl[b]); free(br[b]); free(bp[b]); }
+        free(envs[b]); free(sm_envs[b]); free(thrs[b]); if (bpeak_counts[b] > 0) { free(bpeaks[b]); free(bth[b]); free(bl[b]); free(br[b]); free(bp[b]); }
     }
     free(pref); free(aind); return 1;
 }
