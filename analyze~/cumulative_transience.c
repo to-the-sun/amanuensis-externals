@@ -362,7 +362,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             curr = curr->next;
         }
         if (p_count > 0) {
-            total_delta_ms = self->midpoint_lookback[b];
+            total_delta_ms = 15000.0;
             avg_delta_ms = total_delta_ms / (double)p_count;
         } else {
             total_delta_ms = 15000.0;
