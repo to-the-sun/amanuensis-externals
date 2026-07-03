@@ -47,7 +47,7 @@ The "holy grail" of visualization is offloading the drawing of lines, text, and 
 
 ---
 
-## 3. GPU-Accelerated Encoding (FFmpeg NVENC/AMF)
+## 3. GPU-Accelerated Encoding (FFmpeg NVENC/AMF) [IMPLEMENTED]
 
 A simpler optimization is offloading the *compression* of the rendered frames to the GPU.
 
@@ -56,7 +56,7 @@ A simpler optimization is offloading the *compression* of the rendered frames to
 - **Massive Speedup in Finalization**: FFmpeg's `h264_nvenc` can encode 1080p video at hundreds of frames per second.
 
 ### Difficulty & Implementation
-- **Ease**: Very Easy. This only requires changing a few flags in the `subprocess` call to FFmpeg.
+- **Status**: Completed. The `get_best_encoder()` helper function now automatically detects `h264_nvenc` or `h264_amf` and passes it to Matplotlib's `FFMpegWriter`.
 - **Difficulty**: Low.
 
 ---
