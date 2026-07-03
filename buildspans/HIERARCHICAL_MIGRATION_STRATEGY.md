@@ -2,6 +2,20 @@
 
 To improve performance and eliminate the $O(N^2)$ duplication bottleneck without causing the crashes observed in previous attempts, this migration will follow a strict "small steps" approach. Each phase results in a fully functional object.
 
+### Static Isolation Strategy
+To prevent crashes caused by symbol collisions with the `rebar` object, all new internal helper functions introduced during this migration must be marked as `static`.
+
+**Why this is necessary:**
+Max loads all external objects (like `buildspans.mxe64` and `rebar.mxe64`) into a single, shared memory space. Even though an object like `rebar.mxe64` is already compiled and "contains" its own copy of the `buildspans` logic, it doesn't exist in a vacuum.
+
+When a binary (DLL/MXE64) is loaded, any function that isn't marked `static` is entered into a global "phonebook" (the export table). If two different binaries (`rebar` and `buildspans`) both try to register a function with the same name (e.g., `buildspans_get_bar_atom`) in Max's global memory, a **symbol collision** occurs. The operating system's loader or Max's internal linker gets confused about which version of the function to call, often leading to immediate crashes.
+
+It's important to understand that `rebar` isn't looking for the `buildspans.h` *file* at runtime; rather, the *compiled metadata* inside the two binaries is clashing because they share the same names for their internal logic.
+
+By marking new functions as `static`, we make them "Local symbols." They are omitted from the global export table, effectively making them private to the specific binary they were compiled into. This allows a new version of `buildspans` to coexist perfectly with an older, stable version of `rebar` without any risk of interference.
+
+`rebar` can remain unaffected and its coordination logic deferred until `buildspans` is fully migrated. At the conclusion of Phase 5, the `static` keywords can be removed and the necessary `#define` redirects added to `rebar` to finalize the integration across the entire object suite.
+
 ## Phase 1: The Active Registry (Preparation)
 **Goal:** Replace linear scans for "discovery" with a dedicated, lightweight registry.
 
