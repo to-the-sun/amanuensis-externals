@@ -49,14 +49,13 @@ static void fft(double* real, double* imag, int n) {
 typedef struct { int p_idx; int band_idx; } PeakRef;
 static int compare_peaks(const void* a, const void* b) { return ((PeakRef*)a)->p_idx - ((PeakRef*)b)->p_idx; }
 
-static float calculate_midpoint(float* values, int n) {
+static float calculate_half_max(float* values, int n) {
     if (n <= 0) return 0;
-    float min_v = values[0], max_v = values[0];
+    float max_v = values[0];
     for (int i = 1; i < n; i++) {
-        if (values[i] < min_v) min_v = values[i];
         if (values[i] > max_v) max_v = values[i];
     }
-    return (min_v + max_v) / 2.0f;
+    return max_v / 2.0f;
 }
 
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels);
@@ -321,7 +320,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
     analyzer_push_audio(self, y, len, sr);
     int nf = self->cache_count, rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
     float *envs[MAX_BANDS] = {0}, *thrs[MAX_BANDS] = {0};
-    float midpoints[MAX_BANDS];
+    float half_maxes[MAX_BANDS];
 
     for (int b = 0; b < MAX_BANDS; b++) {
         envs[b] = (float*)malloc(sizeof(float) * nf); thrs[b] = (float*)malloc(sizeof(float) * nf);
@@ -337,9 +336,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             n_dyn_b = 1;
         }
 
-        midpoints[b] = calculate_midpoint(envs[b] + nf - n_dyn_b, n_dyn_b);
+        half_maxes[b] = calculate_half_max(envs[b] + nf - n_dyn_b, n_dyn_b);
         for (int j = 0; j < nf; j++) {
-            thrs[b][j] = midpoints[b];
+            thrs[b][j] = half_maxes[b];
         }
 
         // Report the parameters that derived the lookback used for this chunk
@@ -395,7 +394,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                         float lmin = env[f]; for(int k=f-1; k>=0; k--) { if (env[k] > env[f]) break; if (env[k] < lmin) lmin = env[k]; }
                         float rmin = env[f]; for(int k=f+1; k<nf; k++) { if (env[k] > env[f]) break; if (env[k] < rmin) rmin = env[k]; }
                         float prom = env[f] - (lmin > rmin ? lmin : rmin);
-                        if (prom > midpoints[b]) {
+                        if (prom > half_maxes[b]) {
                             if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom; }
                             else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom; pc++; }
                         }
@@ -445,7 +444,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             }
         }
         analyzer_update_metrics(self, active_start_frame + 100, &result_out->metrics);
-        for (int b = 0; b < MAX_BANDS; b++) result_out->metrics.band_midpoints[b] = (double)midpoints[b];
+        for (int b = 0; b < MAX_BANDS; b++) result_out->metrics.band_midpoints[b] = (double)half_maxes[b];
     }
     for (int b = 0; b < MAX_BANDS; b++) {
         free(envs[b]); free(thrs[b]); if (bpeak_counts[b] > 0) { free(bpeaks[b]); free(bth[b]); free(bl[b]); free(br[b]); free(bp[b]); }
