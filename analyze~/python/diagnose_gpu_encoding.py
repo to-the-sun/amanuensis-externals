@@ -37,7 +37,7 @@ def run_diagnostic():
     test_duration = 30  # seconds
     output_file = "gpu_test_output.mp4"
 
-    # We'll try NVENC if present, otherwise AMF, otherwise libx264
+    # Prioritize hardware encoders
     codec = "libx264"
     if "h264_nvenc" in result.stdout:
         codec = "h264_nvenc"
@@ -47,16 +47,15 @@ def run_diagnostic():
     print(f"\nAttempting a {test_duration}s test encode (1080p @ 30fps) using: {codec}")
     print("While this is running, check Windows Task Manager!")
     print("Go to the 'Performance' tab, select your GPU, and look for 'Video Encode' or 'Encoder'.")
-    print("If you don't see it, click the arrow next to '3D' or 'Copy' and select it from the dropdown.")
     print("-" * 50)
 
-    extra_args = []
+    extra_args = ['-pix_fmt', 'yuv420p']
     if codec == "h264_nvenc":
-        extra_args = ['-preset', 'p1', '-tune', 'ull', '-delay', '0']
+        extra_args.extend(['-preset', 'p1', '-tune', 'ull', '-delay', '0'])
     elif codec == "h264_amf":
-        extra_args = ['-quality', 'speed', '-usage', 'ultralowlatency']
+        extra_args.extend(['-quality', 'speed', '-usage', 'ultralowlatency'])
     else:
-        extra_args = ['-preset', 'ultrafast']
+        extra_args.extend(['-preset', 'ultrafast'])
 
     # Generate 1080p test pattern
     cmd = [
@@ -64,7 +63,6 @@ def run_diagnostic():
         "-f", "lavfi", "-i", f"testsrc=size=1920x1080:rate=30:duration={test_duration}",
         "-c:v", codec,
         *extra_args,
-        "-pix_fmt", "yuv420p",
         output_file
     ]
 
@@ -72,7 +70,6 @@ def run_diagnostic():
 
     start_time = time.time()
     try:
-        # We run this and pipe stderr to see what ffmpeg is doing
         process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
 
         while True:
@@ -88,7 +85,6 @@ def run_diagnostic():
         if process.returncode == 0:
             print("-" * 50)
             print(f"\nSUCCESS: Test encode completed in {end_time - start_time:.2f} seconds.")
-            print(f"Output saved to: {os.path.abspath(output_file)}")
         else:
             print("-" * 50)
             print(f"\nFAILURE: FFmpeg exited with code {process.returncode}.")

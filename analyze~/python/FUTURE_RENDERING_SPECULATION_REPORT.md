@@ -56,7 +56,7 @@ A simpler optimization is offloading the *compression* of the rendered frames to
 - **Massive Speedup in Finalization**: FFmpeg's `h264_nvenc` can encode 1080p video at hundreds of frames per second.
 
 ### Difficulty & Implementation
-- **Status**: Completed. The `get_best_encoder()` helper function automatically detects and validates `h264_nvenc` or `h264_amf` via a 1-frame smoke test, falling back to `libx264` if drivers are incompatible.
+- **Status**: Completed. The `get_best_encoder()` helper function automatically detects `h264_nvenc` or `h264_amf`, with a graceful automatic fallback to `libx264` if hardware encoding fails at runtime.
 - **Note on GPU Monitoring**: Users may not see high GPU usage in Task Manager if the bottleneck is the CPU (rasterization). In `analyze_files.py`, Matplotlib generates frames at ~5-10 FPS, while hardware encoders (NVENC) are capable of 500+ FPS. This means the GPU spends most of its time waiting for the CPU, resulting in low visible "utilization" even when hardware encoding is active.
 - **Difficulty**: Low.
 

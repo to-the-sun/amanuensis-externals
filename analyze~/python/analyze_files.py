@@ -32,19 +32,8 @@ _init_lock = threading.Lock()
 cumulative_transience = None
 _best_encoder = None
 
-def _test_encoder(ffmpeg_bin, encoder):
-    """Attempts a 1-frame test encode to verify if the encoder/driver is actually functional."""
-    if encoder == "libx264": return True
-    try:
-        # Run a tiny test encoding to null: 100ms of 64x64 black video.
-        cmd = [ffmpeg_bin, "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1", "-c:v", encoder, "-f", "null", "-"]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=5)
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False
-
 def get_best_encoder():
-    """Detects the best available H.264 encoder (NVENC, AMF, or libx264) with validation."""
+    """Detects the best available H.264 encoder (NVENC, AMF, or libx264)."""
     global _best_encoder
     if _best_encoder is not None:
         return _best_encoder
@@ -63,20 +52,13 @@ def get_best_encoder():
     try:
         result = subprocess.run([ffmpeg_bin, "-encoders"], capture_output=True, text=True, check=True)
         encoders = result.stdout
-
-        candidates = []
-        if "h264_nvenc" in encoders: candidates.append("h264_nvenc")
-        if "h264_amf" in encoders: candidates.append("h264_amf")
-        candidates.append("libx264")
-
-        for c in candidates:
-            if _test_encoder(ffmpeg_bin, c):
-                _best_encoder = c
-                break
+        if "h264_nvenc" in encoders:
+            _best_encoder = "h264_nvenc"
+        elif "h264_amf" in encoders:
+            _best_encoder = "h264_amf"
+        else:
+            _best_encoder = "libx264"
     except Exception:
-        pass
-
-    if _best_encoder is None:
         _best_encoder = "libx264"
 
     return _best_encoder
@@ -295,7 +277,22 @@ def generate_video(audio_path, data):
 
         print(f"Using H.264 encoder: {codec} with args: {' '.join(extra_args)}")
         pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
-        fig.tight_layout(pad=1.5); ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+        fig.tight_layout(pad=1.5)
+        try:
+            ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+        except Exception as e:
+            pbar.close()
+            if codec != "libx264":
+                print(f"\nWARNING: GPU encoding with {codec} failed. Falling back to CPU (libx264). Error: {e}")
+                global _best_encoder
+                _best_encoder = "libx264"
+                codec = "libx264"
+                extra_args = ['-pix_fmt', 'yuv420p', '-preset', 'ultrafast']
+                pbar = tqdm(total=len(frame_indices), desc="Rendering Video (CPU Fallback)", unit="frame")
+                writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
+                ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
+            else:
+                raise e
         pbar.close(); plt.close(fig)
 
         # Recording metrics to [audio_file]_ratings.txt in same folder
