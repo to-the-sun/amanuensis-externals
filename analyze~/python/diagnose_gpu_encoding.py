@@ -52,7 +52,7 @@ def run_diagnostic():
 
     extra_args = []
     if codec == "h264_nvenc":
-        extra_args = ['-preset', 'p1', '-tune', 'ull', '-zerolatency', '1']
+        extra_args = ['-preset', 'p1', '-tune', 'ull', '-delay', '0']
     elif codec == "h264_amf":
         extra_args = ['-quality', 'speed', '-usage', 'ultralowlatency']
     else:

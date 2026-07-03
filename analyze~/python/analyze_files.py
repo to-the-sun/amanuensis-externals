@@ -136,7 +136,7 @@ def generate_video(audio_path, data):
         all_peaks.sort(key=lambda x: x['p_idx'])
         max_peak = data['max_peak_value']; min_score_seen = data['min_score_seen']; max_score_seen = data['max_score_seen']
         ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; peak_stds = data['peak_stds']
-        fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), dpi=100, gridspec_kw={'height_ratios': [1, 0.4, 1]})
+        fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
         transient_lines = []; threshold_lines = []
         for i in range(4):
@@ -287,15 +287,14 @@ def generate_video(audio_path, data):
         codec = get_best_encoder()
         extra_args = ['-pix_fmt', 'yuv420p']
         if codec == "h264_nvenc":
-            # high-quality VBR settings to ensure the hardware encoder has work to do
-            extra_args.extend(['-preset', 'p4', '-rc', 'vbr', '-cq', '24', '-profile:v', 'high'])
+            extra_args.extend(['-preset', 'p1', '-tune', 'ull', '-delay', '0'])
         elif codec == "h264_amf":
-            extra_args.extend(['-quality', 'speed', '-usage', 'transcoding'])
+            extra_args.extend(['-quality', 'speed', '-usage', 'ultralowlatency'])
         else:
             extra_args.extend(['-preset', 'ultrafast'])
 
         print(f"Using H.264 encoder: {codec} with args: {' '.join(extra_args)}")
-        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=None, codec=codec, extra_args=extra_args)
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
         fig.tight_layout(pad=1.5); ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
         pbar.close(); plt.close(fig)
 
