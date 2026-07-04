@@ -131,7 +131,7 @@ def generate_video(audio_path, data):
                 s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
             if rolling_prominences is not None:
                 # Initialize prominence line with purple shades and high zorder
-                p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
+                p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
