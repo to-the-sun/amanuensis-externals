@@ -450,9 +450,20 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                         
                         // New Peak Detection Logic:
                         // Use prominence of SMOOTHED flux vs running average of SMOOTHED flux
+                        // Characterize prominence by the first valley in either direction.
                         float fv_s = sm_envs[b][f];
-                        float lmin_s = fv_s; for(int k=f-1; k>=0; k--) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < lmin_s) lmin_s = sm_envs[b][k]; }
-                        float rmin_s = fv_s; for(int k=f+1; k<nf; k++) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < rmin_s) rmin_s = sm_envs[b][k]; }
+                        float lmin_s = fv_s;
+                        for(int k=f-1; k>=0; k--) {
+                            if (sm_envs[b][k] > fv_s) break; // Met higher ground
+                            if (sm_envs[b][k] > sm_envs[b][k+1]) break; // Met a valley and started rising again
+                            if (sm_envs[b][k] < lmin_s) lmin_s = sm_envs[b][k];
+                        }
+                        float rmin_s = fv_s;
+                        for(int k=f+1; k<nf; k++) {
+                            if (sm_envs[b][k] > fv_s) break; // Met higher ground
+                            if (sm_envs[b][k] > sm_envs[b][k-1]) break; // Met a valley and started rising again
+                            if (sm_envs[b][k] < rmin_s) rmin_s = sm_envs[b][k];
+                        }
                         float prom_s = fv_s - (lmin_s > rmin_s ? lmin_s : rmin_s);
 
                         if (prom_s > self->smoothing_avgs[b]) {
@@ -500,19 +511,25 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
 
                 float fv = smooth;
                 float lmin = fv;
-                // Search backwards in the global circular buffer
-                for (int k = 1; k < nf + 15000; k++) {
+                // Search backwards in the global circular buffer (stop at first valley)
+                for (int k = 1; k < self->cache_count; k++) {
                     int idx = (cache_idx - k + CACHE_SIZE) % CACHE_SIZE;
                     float val = self->dynamic_smoothings[b * CACHE_SIZE + idx];
-                    if (val > fv) break;
+                    if (val > fv) break; // Met higher ground
+                    int next_idx = (idx + 1) % CACHE_SIZE;
+                    if (val > self->dynamic_smoothings[b * CACHE_SIZE + next_idx]) break; // Met a valley and started rising again
                     if (val < lmin) lmin = val;
                 }
                 float rmin = fv;
-                // Search forwards in the global circular buffer
-                for (int k = 1; k < nf; k++) {
+                // Search forwards in the global circular buffer (stop at first valley)
+                for (int k = 1; k < self->cache_count; k++) {
+                    // Check if searching past nf (the frames available in this batch analysis context)
+                    if (lf + k >= nf) break;
                     int idx = (cache_idx + k) % CACHE_SIZE;
                     float val = self->dynamic_smoothings[b * CACHE_SIZE + idx];
-                    if (val > fv) break;
+                    if (val > fv) break; // Met higher ground
+                    int prev_idx = (idx - 1 + CACHE_SIZE) % CACHE_SIZE;
+                    if (val > self->dynamic_smoothings[b * CACHE_SIZE + prev_idx]) break; // Met a valley and started rising again
                     if (val < rmin) rmin = val;
                 }
                 prom = fv - (lmin > rmin ? lmin : rmin);
