@@ -169,7 +169,7 @@ def generate_video(audio_path, data):
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
         pool_scores = [ax_transient.text(0, 0, '', visible=False) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; snapshot_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#2ecc71', lw=2, label='Current Snapshot', zorder=10)
         MAX_SNAPSHOT_POOL = 32; from matplotlib.collections import LineCollection; pool_snap_lines = LineCollection([], colors=[], linewidths=3, visible=False); ax_snapshot.add_collection(pool_snap_lines); pool_snap_texts = [ax_snapshot.text(0, 0, '', visible=False, fontsize=13, va='center', ha='right', fontweight='bold') for _ in range(MAX_SNAPSHOT_POOL)]
-        active_flashes = []; active_scores = []; active_qualifiers = []; live_peaks_x = []; live_peaks_y = []
+        active_scores = []; active_qualifiers = []; live_peaks_x = []; live_peaks_y = []
         live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=11)
         current_snapshot_avg = 0.0; rolling_window_scores = []; last_snapshot_display = None
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=20, color='#808080', fontweight='bold', zorder=20)
@@ -261,8 +261,6 @@ def generate_video(audio_path, data):
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
             current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
-            if metrics_out := data.get('metrics'): # fallback if not in data directly
-                h_peak_ms = data.get('highest_peaks_ms', [None]*len(times))[frame] # dummy check
             # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
             # However, we have access to means, std_devs, etc. We need highest_peak_ms.
             # Let's check if it's in data.

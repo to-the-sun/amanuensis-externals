@@ -447,7 +447,6 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                     if (!too_close || replaced) {
                         float lmin = env[f]; for(int k=f-1; k>=0; k--) { if (env[k] > env[f]) break; if (env[k] < lmin) lmin = env[k]; }
                         float rmin = env[f]; for(int k=f+1; k<nf; k++) { if (env[k] > env[f]) break; if (env[k] < rmin) rmin = env[k]; }
-                        float prom = env[f] - (lmin > rmin ? lmin : rmin);
                         
                         // New Peak Detection Logic:
                         // Use prominence of SMOOTHED flux vs running average of SMOOTHED flux
@@ -677,9 +676,4 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     free(result->contrasts);
     free(result->peak_stds);
     free(result->highest_peaks_ms);
-}
-
-void analyzer_debug_mel_filters(int sr, int n_fft, int n_mels, double* filters_out) {
-    double* filters = create_mel_filterbank(sr, n_fft, n_mels);
-    if(filters) { memcpy(filters_out, filters, sizeof(double) * n_mels * (n_fft / 2 + 1)); free(filters); }
 }
