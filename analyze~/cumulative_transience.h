@@ -54,8 +54,10 @@ typedef struct {
     double band_total_deltas[MAX_BANDS];
     int band_p_counts[MAX_BANDS];
     double band_prominence_avgs[MAX_BANDS];
+    double band_prominence_half_maxes[MAX_BANDS];
     double band_smoothing_avgs[MAX_BANDS];
     double band_flux_avgs[MAX_BANDS];
+    double global_flux_avg;
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -163,6 +165,7 @@ typedef struct {
     float* rolling_dynamic_smoothing;
     float* rolling_prominence;
     float* rolling_prominence_avg;
+    float* rolling_prominence_half_max;
     float* rolling_smoothing_avg;
     float* rolling_flux_avg;
     float* rolling_threshold;
@@ -190,6 +193,7 @@ typedef struct {
 
     double min_score_seen;
     double max_score_seen;
+    float* rolling_global_flux_avg;
 } FullAnalysisResult;
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);

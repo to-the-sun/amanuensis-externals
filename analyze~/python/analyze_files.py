@@ -111,8 +111,10 @@ def generate_video(audio_path, data):
         rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings')
         rolling_prominences = data.get('rolling_prominences')
         rolling_prominence_avgs = data.get('rolling_prominence_avgs')
+        rolling_prominence_half_maxes = data.get('rolling_prominence_half_maxes')
         rolling_smoothing_avgs = data.get('rolling_smoothing_avgs')
         rolling_flux_avgs = data.get('rolling_flux_avgs')
+        rolling_global_flux_avgs = data.get('rolling_global_flux_avgs')
         rolling_thresholds = data['rolling_thresholds']
         rolling_lookbacks = data.get('rolling_lookbacks')
         rolling_avg_deltas = data.get('rolling_avg_deltas')
@@ -133,6 +135,12 @@ def generate_video(audio_path, data):
         prominence_avg_texts = []; smoothing_avg_texts = []; flux_avg_texts = []
         threshold_lines = []
 
+        global_flux_avg_line = None
+        global_flux_avg_text = None
+        if rolling_global_flux_avgs is not None:
+             global_flux_avg_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color='black', lw=2, ls='-', alpha=1.0, label='Global Flux Avg', zorder=16)
+             global_flux_avg_text = ax_transient.text(1.28, 0, '', color='black', transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+
         for i in range(4):
             # Make raw flux lines thinner and more transparent
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
@@ -145,9 +153,9 @@ def generate_video(audio_path, data):
                 # Initialize prominence line with purple shades and high zorder
                 p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
 
-            if rolling_prominence_avgs is not None:
-                # Initialize prominence average line (horizontal purple solid)
-                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom Avg', zorder=14); prominence_avg_lines.append(pa_line)
+            if rolling_prominence_half_maxes is not None:
+                # Initialize prominence half-max line (horizontal purple solid)
+                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom HM', zorder=14); prominence_avg_lines.append(pa_line)
                 pa_text = ax_transient.text(1.01, 0, '', color=prominence_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 prominence_avg_texts.append(pa_text)
 
@@ -157,13 +165,12 @@ def generate_video(audio_path, data):
                 sa_text = ax_transient.text(1.10, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 smoothing_avg_texts.append(sa_text)
 
+            # Re-initialize midpoint track as F: flux average
             if rolling_flux_avgs is not None:
-                # Initialize flux average line (replacing midpoint tracking)
                 fa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Flux Avg', zorder=3); threshold_lines.append(fa_line)
                 fa_text = ax_transient.text(1.19, 0, '', color=colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 flux_avg_texts.append(fa_text)
-            else:
-                t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
+
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}"); ax_transient.set_ylabel("Onset Strength"); ax_transient.grid(True, alpha=0.3); ax_transient.set_xlim(-20, 5)
@@ -277,9 +284,9 @@ def generate_video(audio_path, data):
                 if rolling_prominences is not None:
                     # Update prominence lines to only show up to current frame
                     prominence_lines[i].set_data(times[:frame+1], rolling_prominences[i][:frame+1])
-                if rolling_prominence_avgs is not None:
-                    # Update horizontal average prominence lines
-                    p_avg_val = rolling_prominence_avgs[i][frame]
+                if rolling_prominence_half_maxes is not None:
+                    # Update horizontal half-max prominence lines
+                    p_avg_val = rolling_prominence_half_maxes[i][frame]
                     prominence_avg_lines[i].set_ydata([p_avg_val, p_avg_val])
                     prominence_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
                     prominence_avg_texts[i].set_position((1.01, p_avg_val))
@@ -293,6 +300,13 @@ def generate_video(audio_path, data):
                     smoothing_avg_texts[i].set_position((1.10, s_avg_val))
                     smoothing_avg_texts[i].set_text(f"S:{s_avg_val:.2f}")
 
+            if global_flux_avg_line:
+                gf_val = rolling_global_flux_avgs[frame]
+                global_flux_avg_line.set_ydata([gf_val, gf_val])
+                global_flux_avg_line.set_xdata([current_time - 20, current_time + 5])
+                global_flux_avg_text.set_position((1.28, gf_val))
+                global_flux_avg_text.set_text(f"G:{gf_val:.2f}")
+
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
             current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
@@ -304,7 +318,7 @@ def generate_video(audio_path, data):
             h_peaks = data.get('highest_peaks_ms')
             if h_peaks is not None:
                 hp = h_peaks[frame]
-                if hp is not None:
+                if hp is not None and hp > -900: # -999.0 is sentinel
                     highest_peak_line.set_xdata([hp, hp])
                     highest_peak_line.set_visible(True)
                 else:
@@ -322,6 +336,8 @@ def generate_video(audio_path, data):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
             changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines + smoothing_avg_lines + prominence_avg_texts + smoothing_avg_texts + flux_avg_texts
+            if global_flux_avg_line: changed_artists.append(global_flux_avg_line)
+            if global_flux_avg_text: changed_artists.append(global_flux_avg_text)
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)

@@ -42,8 +42,10 @@ cdef extern from "cumulative_transience.h":
         double band_total_deltas[4]
         int band_p_counts[4]
         double band_prominence_avgs[4]
+        double band_prominence_half_maxes[4]
         double band_smoothing_avgs[4]
         double band_flux_avgs[4]
+        double global_flux_avg
 
     ctypedef struct PeakResultList:
         PeakResult peaks[64]
@@ -96,6 +98,7 @@ cdef extern from "cumulative_transience.h":
         float* rolling_dynamic_smoothing
         float* rolling_prominence
         float* rolling_prominence_avg
+        float* rolling_prominence_half_max
         float* rolling_smoothing_avg
         float* rolling_flux_avg
         float* rolling_threshold
@@ -119,6 +122,7 @@ cdef extern from "cumulative_transience.h":
         double* highest_peaks_ms
         double min_score_seen
         double max_score_seen
+        float* rolling_global_flux_avg
 
     int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
@@ -306,8 +310,10 @@ cdef class TransientAnalyzer:
                 'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
                 'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]],
                 'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]],
+                'band_prominence_half_maxes': [m.band_prominence_half_maxes[0], m.band_prominence_half_maxes[1], m.band_prominence_half_maxes[2], m.band_prominence_half_maxes[3]],
                 'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]],
-                'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]]
+                'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]],
+                'global_flux_avg': m.global_flux_avg
             }
         }
         free(res)
@@ -335,8 +341,10 @@ cdef class TransientAnalyzer:
             'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
             'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]],
             'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]],
+            'band_prominence_half_maxes': [m.band_prominence_half_maxes[0], m.band_prominence_half_maxes[1], m.band_prominence_half_maxes[2], m.band_prominence_half_maxes[3]],
             'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]],
-            'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]]
+            'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]],
+            'global_flux_avg': m.global_flux_avg
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
@@ -354,6 +362,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef list rolling_dynamic_smoothings = []
     cdef list rolling_prominences = []
     cdef list rolling_prominence_avgs = []
+    cdef list rolling_prominence_half_maxes = []
     cdef list rolling_smoothing_avgs = []
     cdef list rolling_flux_avgs = []
     cdef list rolling_thresholds = []
@@ -367,6 +376,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[float, ndim=1] smooth
     cdef cnp.ndarray[float, ndim=1] prom
     cdef cnp.ndarray[float, ndim=1] prom_avg
+    cdef cnp.ndarray[float, ndim=1] prom_hm
     cdef cnp.ndarray[float, ndim=1] smooth_avg
     cdef cnp.ndarray[float, ndim=1] flux_avg
     cdef cnp.ndarray[float, ndim=1] thresh
@@ -392,6 +402,10 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         prom_avg = np.zeros(num_frames, dtype=np.float32)
         memcpy(prom_avg.data, res.bands[i].rolling_prominence_avg, num_frames * sizeof(float))
         rolling_prominence_avgs.append(prom_avg)
+
+        prom_hm = np.zeros(num_frames, dtype=np.float32)
+        memcpy(prom_hm.data, res.bands[i].rolling_prominence_half_max, num_frames * sizeof(float))
+        rolling_prominence_half_maxes.append(prom_hm)
 
         smooth_avg = np.zeros(num_frames, dtype=np.float32)
         memcpy(smooth_avg.data, res.bands[i].rolling_smoothing_avg, num_frames * sizeof(float))
@@ -462,6 +476,9 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[double, ndim=1] highest_peaks_ms = np.zeros(num_frames, dtype=np.float64)
     memcpy(highest_peaks_ms.data, res.highest_peaks_ms, num_frames * sizeof(double))
 
+    cdef cnp.ndarray[float, ndim=1] rolling_global_flux_avgs = np.zeros(num_frames, dtype=np.float32)
+    memcpy(rolling_global_flux_avgs.data, res.rolling_global_flux_avg, num_frames * sizeof(float))
+
     cdef float max_peak_value = res.max_peak_value
     cdef double min_score_seen = res.min_score_seen
     cdef double max_score_seen = res.max_score_seen
@@ -478,8 +495,10 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "rolling_dynamic_smoothings": rolling_dynamic_smoothings,
         "rolling_prominences": rolling_prominences,
         "rolling_prominence_avgs": rolling_prominence_avgs,
+        "rolling_prominence_half_maxes": rolling_prominence_half_maxes,
         "rolling_smoothing_avgs": rolling_smoothing_avgs,
         "rolling_flux_avgs": rolling_flux_avgs,
+        "rolling_global_flux_avgs": rolling_global_flux_avgs,
         "rolling_thresholds": rolling_thresholds,
         "rolling_lookbacks": rolling_lookbacks,
         "rolling_avg_deltas": rolling_avg_deltas,

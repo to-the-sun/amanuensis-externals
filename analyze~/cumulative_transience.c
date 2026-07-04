@@ -236,20 +236,27 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     if (win <= 0) win = 1;
 
     int wptr = self->cache_write_ptr;
+    double g_fsum = 0;
     for (int b = 0; b < MAX_BANDS; b++) {
         double psum = 0;
         double ssum = 0;
         double fsum = 0;
+        float pmax = 0;
         for (int j = 0; j < win; j++) {
             int idx = (wptr - 1 - j + CACHE_SIZE) % CACHE_SIZE;
-            psum += (double)self->prominence_envelopes[b * CACHE_SIZE + idx];
+            float pv = self->prominence_envelopes[b * CACHE_SIZE + idx];
+            psum += (double)pv;
+            if (pv > pmax) pmax = pv;
             ssum += (double)self->dynamic_smoothings[b * CACHE_SIZE + idx];
             fsum += (double)self->flux_envelopes[b * CACHE_SIZE + idx];
         }
         metrics_out->band_prominence_avgs[b] = psum / (double)win;
+        metrics_out->band_prominence_half_maxes[b] = (double)pmax / 2.0;
         metrics_out->band_smoothing_avgs[b] = ssum / (double)win;
         metrics_out->band_flux_avgs[b] = fsum / (double)win;
+        g_fsum += metrics_out->band_flux_avgs[b];
     }
+    metrics_out->global_flux_avg = g_fsum / (double)MAX_BANDS;
 }
 
 double* analyzer_get_buffer(TransientAnalyzer* self) { return self->accumulated_buffer; }
@@ -546,11 +553,13 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->contrasts = (double*)malloc(sizeof(double) * num_f);
     result_out->peak_stds = (double*)malloc(sizeof(double) * num_f);
     result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
+    result_out->rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
     for (int b = 0; b < MAX_BANDS; b++) {
         result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_prominence_avg = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence_half_max = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_smoothing_avg = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_flux_avg = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
@@ -585,6 +594,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
                     result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
                     result_out->bands[b].rolling_prominence_avg[f] = (float)res->metrics.band_prominence_avgs[b];
+                    result_out->bands[b].rolling_prominence_half_max[f] = (float)res->metrics.band_prominence_half_maxes[b];
                     result_out->bands[b].rolling_smoothing_avg[f] = (float)res->metrics.band_smoothing_avgs[b];
                     result_out->bands[b].rolling_flux_avg[f] = (float)res->metrics.band_flux_avgs[b];
                     result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_midpoints[b];
@@ -595,7 +605,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; } }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
@@ -616,11 +626,13 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     if (result->times) {
         free(result->times);
     }
+    free(result->rolling_global_flux_avg);
     for (int i = 0; i < MAX_BANDS; i++) {
         free(result->bands[i].envelope);
         free(result->bands[i].rolling_dynamic_smoothing);
         free(result->bands[i].rolling_prominence);
         free(result->bands[i].rolling_prominence_avg);
+        free(result->bands[i].rolling_prominence_half_max);
         free(result->bands[i].rolling_smoothing_avg);
         free(result->bands[i].rolling_flux_avg);
         free(result->bands[i].rolling_threshold);
