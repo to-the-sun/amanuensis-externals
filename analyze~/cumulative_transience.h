@@ -53,6 +53,12 @@ typedef struct {
     double band_avg_deltas[MAX_BANDS];
     double band_total_deltas[MAX_BANDS];
     int band_p_counts[MAX_BANDS];
+    double band_prominence_avgs[MAX_BANDS];
+    double band_prominence_half_maxes[MAX_BANDS];
+    double band_smoothing_avgs[MAX_BANDS];
+    double band_flux_avgs[MAX_BANDS];
+    double global_flux_avg;
+    double global_smoothing_avg;
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -66,6 +72,8 @@ typedef struct {
     PeakResultList peak_list;
     AnalyzerMetrics metrics;
     float last_flux[MAX_BANDS][100];
+    float last_dynamic_smoothing[MAX_BANDS][100];
+    float last_prominence[MAX_BANDS][100];
 } ChunkAnalysisResult;
 
 typedef struct {
@@ -97,6 +105,10 @@ typedef struct {
     // Incremental Cache State
     double* mel_spectrogram;    // Mel bands cache
     float* flux_envelopes;      // Flux cache per band
+    float* dynamic_smoothings;  // Dynamic smoothing cache per band
+    float* prominence_envelopes; // Prominence cache per band
+    float smoothing_states[MAX_BANDS];
+    double smoothing_avgs[MAX_BANDS];
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
     int cache_write_ptr;
@@ -152,6 +164,12 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
 // Full analysis structures
 typedef struct {
     float* envelope;
+    float* rolling_dynamic_smoothing;
+    float* rolling_prominence;
+    float* rolling_prominence_avg;
+    float* rolling_prominence_half_max;
+    float* rolling_smoothing_avg;
+    float* rolling_flux_avg;
     float* rolling_threshold;
     float* rolling_lookback;
     float* rolling_avg_delta;
@@ -177,6 +195,8 @@ typedef struct {
 
     double min_score_seen;
     double max_score_seen;
+    float* rolling_global_flux_avg;
+    float* rolling_global_smoothing_avg;
 } FullAnalysisResult;
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);

@@ -19,6 +19,7 @@ typedef struct _analyze {
 
     // Outlets
     void* outlet_list;      // Band, Score
+    void* outlet_barlen;
     void* outlet_rating;
     void* outlet_stddev;
     void* outlet_contrast;
@@ -81,6 +82,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->outlet_contrast = floatout(x);
         x->outlet_stddev = floatout(x);
         x->outlet_rating = floatout(x);
+        x->outlet_barlen = floatout(x);
         x->outlet_list = listout(x);
 
         critical_new(&x->lock);
@@ -130,10 +132,11 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
     } else {
         switch (a) {
             case 0: sprintf(s, "(list) Band, Score"); break;
-            case 1: sprintf(s, "(float) Rating Score"); break;
-            case 2: sprintf(s, "(float) Standard Deviation"); break;
-            case 3: sprintf(s, "(float) Contrast Score"); break;
-            case 4: sprintf(s, "(float) Highest Peak Deviation"); break;
+            case 1: sprintf(s, "(float) Bar Length (ms)"); break;
+            case 2: sprintf(s, "(float) Rating Score"); break;
+            case 3: sprintf(s, "(float) Standard Deviation"); break;
+            case 4: sprintf(s, "(float) Contrast Score"); break;
+            case 5: sprintf(s, "(float) Highest Peak Deviation"); break;
         }
     }
 }
@@ -224,12 +227,13 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             defer(x, (method)analyze_output_peak, NULL, 2, out_args);
         }
 
-        t_atom out_args[4];
+        t_atom out_args[5];
         atom_setfloat(out_args, x->result_buffer->metrics.rating);
         atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
         atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
         atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
-        defer(x, (method)analyze_output_metrics, NULL, 4, out_args);
+        atom_setfloat(out_args + 4, x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0);
+        defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
     }
 
     free(hop_audio);
@@ -245,4 +249,5 @@ void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv) 
     outlet_float(x->outlet_contrast, atom_getfloat(argv + 2));
     outlet_float(x->outlet_stddev, atom_getfloat(argv + 1));
     outlet_float(x->outlet_rating, atom_getfloat(argv));
+    outlet_float(x->outlet_barlen, atom_getfloat(argv + 4));
 }
