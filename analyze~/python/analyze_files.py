@@ -140,11 +140,11 @@ def generate_video(audio_path, data):
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
 
             if rolling_dynamic_smoothings is not None:
-                # Initialize smoothing line with same color as straight flux
+                # Initialize moving smoothing line with same color as straight flux
                 s_line, = ax_transient.plot([], [], color=colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
 
             if rolling_prominences is not None:
-                # Initialize prominence line with red shades and high zorder
+                # Initialize moving prominence line with red shades and high zorder
                 p_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
 
             if rolling_smoothing_avgs is not None:

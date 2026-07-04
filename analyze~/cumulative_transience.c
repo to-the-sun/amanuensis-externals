@@ -457,8 +457,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                         float prom_s = fv_s - (lmin_s > rmin_s ? lmin_s : rmin_s);
 
                         if (prom_s > self->smoothing_avgs[b]) {
-                            if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom; }
-                            else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom; pc++; }
+                            if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom_s; }
+                            else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom_s; pc++; }
                         }
                     }
                 }
