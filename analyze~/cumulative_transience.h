@@ -58,6 +58,7 @@ typedef struct {
     double band_smoothing_avgs[MAX_BANDS];
     double band_flux_avgs[MAX_BANDS];
     double global_flux_avg;
+    double global_smoothing_avg;
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -107,6 +108,7 @@ typedef struct {
     float* dynamic_smoothings;  // Dynamic smoothing cache per band
     float* prominence_envelopes; // Prominence cache per band
     float smoothing_states[MAX_BANDS];
+    double smoothing_avgs[MAX_BANDS];
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
     int cache_write_ptr;
@@ -194,6 +196,7 @@ typedef struct {
     double min_score_seen;
     double max_score_seen;
     float* rolling_global_flux_avg;
+    float* rolling_global_smoothing_avg;
 } FullAnalysisResult;
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);

@@ -113,6 +113,7 @@ def generate_video(audio_path, data):
         rolling_prominence_avgs = data.get('rolling_prominence_avgs')
         rolling_prominence_half_maxes = data.get('rolling_prominence_half_maxes')
         rolling_smoothing_avgs = data.get('rolling_smoothing_avgs')
+        rolling_global_smoothing_avgs = data.get('rolling_global_smoothing_avgs')
         rolling_flux_avgs = data.get('rolling_flux_avgs')
         rolling_global_flux_avgs = data.get('rolling_global_flux_avgs')
         rolling_thresholds = data['rolling_thresholds']
@@ -131,45 +132,32 @@ def generate_video(audio_path, data):
         smoothing_colors = ['#FF0000', '#FF4500', '#FF6347', '#CD5C5C'] # Highly distinguishable reds/oranges
         prominence_colors = ['#4B0082', '#8A2BE2', '#9932CC', '#BA55D3'] # Shades of purple
         transient_lines = []; smoothing_lines = []; prominence_lines = []
-        prominence_avg_lines = []; smoothing_avg_lines = []; flux_avg_lines = []
-        prominence_avg_texts = []; smoothing_avg_texts = []; flux_avg_texts = []
-        threshold_lines = []
-
-        global_flux_avg_line = None
-        global_flux_avg_text = None
-        if rolling_global_flux_avgs is not None:
-             global_flux_avg_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color='black', lw=2, ls='-', alpha=1.0, label='Global Flux Avg', zorder=16)
-             global_flux_avg_text = ax_transient.text(1.28, 0, '', color='black', transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+        smoothing_avg_lines = []
+        smoothing_avg_texts = []
 
         for i in range(4):
             # Make raw flux lines thinner and more transparent
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
 
             if rolling_dynamic_smoothings is not None:
-                # Initialize smoothing line with bright red shades and low zorder
-                s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
+                # Initialize smoothing line with same color as straight flux
+                s_line, = ax_transient.plot([], [], color=colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
 
             if rolling_prominences is not None:
-                # Initialize prominence line with purple shades and high zorder
-                p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
-
-            if rolling_prominence_half_maxes is not None:
-                # Initialize prominence half-max line (horizontal purple solid)
-                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom HM', zorder=14); prominence_avg_lines.append(pa_line)
-                pa_text = ax_transient.text(1.01, 0, '', color=prominence_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
-                prominence_avg_texts.append(pa_text)
+                # Initialize prominence line with red shades and high zorder
+                p_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
 
             if rolling_smoothing_avgs is not None:
-                # Initialize smoothing average line (horizontal red solid)
-                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=smoothing_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
-                sa_text = ax_transient.text(1.10, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
+                # Initialize smoothing average line (horizontal matching flux color solid)
+                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
+                sa_text = ax_transient.text(1.01, 0, '', color=colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 smoothing_avg_texts.append(sa_text)
 
-            # Re-initialize midpoint track as F: flux average
-            if rolling_flux_avgs is not None:
-                fa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Flux Avg', zorder=3); threshold_lines.append(fa_line)
-                fa_text = ax_transient.text(1.19, 0, '', color=colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
-                flux_avg_texts.append(fa_text)
+        global_smoothing_avg_line = None
+        global_smoothing_avg_text = None
+        if rolling_global_smoothing_avgs is not None:
+             global_smoothing_avg_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color='black', lw=1.5, ls='-', alpha=1.0, label='Global Smooth Avg', zorder=16)
+             global_smoothing_avg_text = ax_transient.text(1.20, 0, '', color='black', transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
 
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -268,44 +256,27 @@ def generate_video(audio_path, data):
                         if m > local_max: local_max = m
             ax_transient.set_ylim(0, max(1.0, local_max * 1.1))
             for i in range(4):
-                if rolling_flux_avgs is not None:
-                    f_avg_val = rolling_flux_avgs[i][frame]
-                    threshold_lines[i].set_ydata([f_avg_val, f_avg_val])
-                    threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
-                    flux_avg_texts[i].set_position((1.19, f_avg_val))
-                    flux_avg_texts[i].set_text(f"F:{f_avg_val:.2f}")
-                else:
-                    threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]])
-                    threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
-
                 if rolling_dynamic_smoothings is not None:
                     # Update smoothing lines to only show up to current frame
                     smoothing_lines[i].set_data(times[:frame+1], rolling_dynamic_smoothings[i][:frame+1])
                 if rolling_prominences is not None:
                     # Update prominence lines to only show up to current frame
                     prominence_lines[i].set_data(times[:frame+1], rolling_prominences[i][:frame+1])
-                if rolling_prominence_half_maxes is not None:
-                    # Update horizontal half-max prominence lines
-                    p_avg_val = rolling_prominence_half_maxes[i][frame]
-                    prominence_avg_lines[i].set_ydata([p_avg_val, p_avg_val])
-                    prominence_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
-                    prominence_avg_texts[i].set_position((1.01, p_avg_val))
-                    prominence_avg_texts[i].set_text(f"P:{p_avg_val:.2f}")
 
                 if rolling_smoothing_avgs is not None:
                     # Update horizontal average smoothing lines
                     s_avg_val = rolling_smoothing_avgs[i][frame]
                     smoothing_avg_lines[i].set_ydata([s_avg_val, s_avg_val])
                     smoothing_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
-                    smoothing_avg_texts[i].set_position((1.10, s_avg_val))
+                    smoothing_avg_texts[i].set_position((1.01, s_avg_val))
                     smoothing_avg_texts[i].set_text(f"S:{s_avg_val:.2f}")
 
-            if global_flux_avg_line:
-                gf_val = rolling_global_flux_avgs[frame]
-                global_flux_avg_line.set_ydata([gf_val, gf_val])
-                global_flux_avg_line.set_xdata([current_time - 20, current_time + 5])
-                global_flux_avg_text.set_position((1.28, gf_val))
-                global_flux_avg_text.set_text(f"G:{gf_val:.2f}")
+            if global_smoothing_avg_line:
+                gs_val = rolling_global_smoothing_avgs[frame]
+                global_smoothing_avg_line.set_ydata([gs_val, gs_val])
+                global_smoothing_avg_line.set_xdata([current_time - 20, current_time + 5])
+                global_smoothing_avg_text.set_position((1.10, gs_val))
+                global_smoothing_avg_text.set_text(f"G:{gs_val:.2f}")
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
@@ -335,9 +306,9 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines + smoothing_avg_lines + prominence_avg_texts + smoothing_avg_texts + flux_avg_texts
-            if global_flux_avg_line: changed_artists.append(global_flux_avg_line)
-            if global_flux_avg_text: changed_artists.append(global_flux_avg_text)
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + transient_lines + smoothing_lines + prominence_lines + smoothing_avg_lines + smoothing_avg_texts
+            if global_smoothing_avg_line: changed_artists.append(global_smoothing_avg_line)
+            if global_smoothing_avg_text: changed_artists.append(global_smoothing_avg_text)
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)
