@@ -8,7 +8,6 @@
 #define MAX_BANDS 4
 #define MAX_QUALIFIERS 256
 #define MAX_PEAK_HISTORY 8192
-#define MAX_EVENTS 32768
 
 typedef struct {
     double ms;
@@ -85,7 +84,6 @@ typedef struct {
     double max_score_seen;
     double total_score_sum;
     int score_count;
-    double last_score_avg;
     double highest_peak_ms;
     double midpoint_lookback[MAX_BANDS];
     double lookback_avg_delta[MAX_BANDS];
@@ -201,6 +199,5 @@ typedef struct {
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
-void analyzer_debug_mel_filters(int sr, int n_fft, int n_mels, double* filters_out);
 
 #endif
