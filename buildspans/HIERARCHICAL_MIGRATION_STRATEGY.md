@@ -38,8 +38,8 @@ The "bad object" errors observed in the Max console indicate that memory is bein
 
 **Rules for @bind Navigation:**
 1.  **Strict Isolation:** Never mark internal logic as global (keep everything `static`).
-2.  **Explicit Ownership:** Let the Max dictionary own the lifetime of objects (like `t_atomarray`). Manual `object_free` calls on embedded objects should be avoided to prevent double-frees when the dictionary is cleared.
-3.  **Boundary Protection:** When passing data via `@bind`, consider using a "Deep Copy" approach at the boundary if the receiving object needs to maintain the data longer than the immediate call cycle.
+2.  **Explicit Ownership & Double-Free Prevention:** While the dictionary "owns" its contents, updates via `dictionary_deleteentry` or replacement do **not** automatically call `object_free` on embedded pointers. We must manually free existing objects before replacement, but we must use `if (old_obj && old_obj != new_obj)` checks to prevent double-frees if an object is accidentally replaced by itself.
+3.  **Re-entrancy Protection (The Stack Boundary):** Max objects often communicate synchronously. If `buildspans` sends an atomarray to a bound `crucible`, and that `crucible` immediately triggers a message that causes `buildspans` to modify that same atomarray (e.g., via `atomarray_appendatom`), the underlying memory can be reallocated while the stack is still using the old pointer. To mitigate this, **always copy atoms to a local stack/heap buffer** before passing them through an outlet or to a bound object.
 
 ## Phase 1: The Active Registry (Preparation)
 **Goal:** Replace linear scans for "discovery" with a dedicated, lightweight registry.

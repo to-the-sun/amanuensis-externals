@@ -124,8 +124,42 @@ static t_max_err buildspans_get_bar_atom(t_buildspans *x, t_symbol *palette, t_s
 
 static t_max_err buildspans_set_bar_atom(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_atom *atom) {
     t_symbol *key = generate_hierarchical_key(palette, track, bar, property);
-    if (dictionary_hasentry(x->building, key)) dictionary_deleteentry(x->building, key);
     return dictionary_appendatom(x->building, key, atom);
+}
+
+static t_max_err buildspans_get_bar_atoms_copy(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, long *argc, t_atom **argv) {
+    t_atom a;
+    if (buildspans_get_bar_atom(x, palette, track, bar, property, &a) != MAX_ERR_NONE) {
+        *argc = 0;
+        *argv = NULL;
+        return MAX_ERR_GENERIC;
+    }
+
+    if (atom_gettype(&a) == A_OBJ) {
+        t_atomarray *aa = (t_atomarray *)atom_getobj(&a);
+        if (aa) {
+            long count;
+            t_atom *atoms;
+            atomarray_getatoms(aa, &count, &atoms);
+            *argc = count;
+            *argv = (t_atom *)sysmem_newptr(count * sizeof(t_atom));
+            if (*argv) {
+                for (long i = 0; i < count; i++) (*argv)[i] = atoms[i];
+                return MAX_ERR_NONE;
+            }
+        }
+    }
+
+    // Fallback: Single atom
+    *argc = 1;
+    *argv = (t_atom *)sysmem_newptr(sizeof(t_atom));
+    if (*argv) {
+        (*argv)[0] = a;
+        return MAX_ERR_NONE;
+    }
+
+    *argc = 0;
+    return MAX_ERR_GENERIC;
 }
 
 static t_max_err buildspans_get_bar_atomarray(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *property, t_object **atomarray) {
@@ -381,7 +415,7 @@ static void buildspans_visualize_memory(t_buildspans *x) {
     dictionary_getkeys(x->registry, &num_palettes, &palette_keys);
 
     // 2. Generate JSON
-    long buffer_size = 1048576; // 1MB buffer to avoid overflow
+    long buffer_size = 262144; // 256KB buffer for safer memory usage
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     long offset = 0;
     int res;
@@ -1452,7 +1486,7 @@ static void buildspans_process_and_add_note(t_buildspans *x, double calc_timesta
         t_atom mean_atom;
         atom_setfloat(&mean_atom, mean);
         buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("mean"), &mean_atom);
-        // buildspans_log(x, "%s %.2f", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("mean"))->s_name, mean);
+        if (x->log && x->log_outlet) buildspans_log(x, "%s %.2f", generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("mean"))->s_name, mean);
     }
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
@@ -1502,19 +1536,12 @@ static void buildspans_process_and_add_note(t_buildspans *x, double calc_timesta
         t_symbol *temp_bar_sym = buildspans_get_bar_sym(bar_timestamps[i]);
         t_atom *m_atoms = NULL;
         long m_count = 0;
-        t_atomarray *m_aa = NULL;
-        t_atom m_atom;
-        if (buildspans_get_bar_atomarray(x, x->current_palette, track_sym, temp_bar_sym, gensym("mean"), (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
-            atomarray_getatoms(m_aa, &m_count, &m_atoms);
-        } else if (buildspans_get_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("mean"), &m_atom) == MAX_ERR_NONE) {
-            m_atoms = &m_atom;
-            m_count = 1;
-        }
-        if (m_count > 0) {
+        if (buildspans_get_bar_atoms_copy(x, x->current_palette, track_sym, temp_bar_sym, gensym("mean"), &m_count, &m_atoms) == MAX_ERR_NONE && m_atoms) {
             double current_bar_mean = atom_getfloat(m_atoms);
             if (final_lowest_mean == -1.0 || current_bar_mean < final_lowest_mean) {
                 final_lowest_mean = current_bar_mean;
             }
+            sysmem_freeptr(m_atoms);
         }
     }
     if (final_lowest_mean != -1.0) {
@@ -1522,21 +1549,20 @@ static void buildspans_process_and_add_note(t_buildspans *x, double calc_timesta
         t_atom rating_atom;
         atom_setfloat(&rating_atom, final_rating);
 
-        if (is_new_bar) {
-            // New bar: Full back-propagation required to update all bars in the track
-            for (long i = 0; i < bar_timestamps_count; i++) {
-                t_symbol *temp_bar_sym = buildspans_get_bar_sym(bar_timestamps[i]);
-                buildspans_set_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("rating"), &rating_atom);
-            }
-            if (x->log && x->log_outlet) buildspans_log(x, "Final rating for new span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
-        } else {
-            // Existing bar: Only update the current bar (fast path)
-            buildspans_set_bar_atom(x, x->current_palette, track_sym, bar_sym, gensym("rating"), &rating_atom);
+        // Always back-propagate the unified span rating to all bars in the track
+        // to maintain data consistency.
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            t_symbol *temp_bar_sym = buildspans_get_bar_sym(bar_timestamps[i]);
+            buildspans_set_bar_atom(x, x->current_palette, track_sym, temp_bar_sym, gensym("rating"), &rating_atom);
+        }
+
+        if (is_new_bar && x->log && x->log_outlet) {
+            buildspans_log(x, "Final rating for new span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
         }
     }
 
     sysmem_freeptr(bar_timestamps);
-    if (x->visualize && x->log_outlet) buildspans_visualize_memory(x);
+    if (is_new_bar && x->visualize && x->log_outlet) buildspans_visualize_memory(x);
 }
 
 static void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
@@ -1550,29 +1576,27 @@ static void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_
 
     // 1. Find the first 'span' atomarray for the track.
     t_atomarray *span_to_output = NULL;
-    t_atomarray *span_aa = NULL;
-    t_atom span_atom;
     int span_found_robustly = 0;
 
     long num_bars = 0;
     t_symbol **bar_keys = NULL;
     dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
+    int local_span_created = 0;
     if (bar_keys) {
         for (long i = 0; i < num_bars; i++) {
-            if (buildspans_get_bar_atomarray(x, palette_sym, track_sym, bar_keys[i], gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                span_to_output = span_aa;
+            long ac; t_atom *av;
+            if (buildspans_get_bar_atoms_copy(x, palette_sym, track_sym, bar_keys[i], gensym("span"), &ac, &av) == MAX_ERR_NONE && av) {
+                span_to_output = atomarray_new(ac, av);
                 span_found_robustly = 1;
-            } else if (buildspans_get_bar_atom(x, palette_sym, track_sym, bar_keys[i], gensym("span"), &span_atom) == MAX_ERR_NONE) {
-                span_to_output = atomarray_new(1, &span_atom);
-                span_found_robustly = 1;
+                local_span_created = 1;
+                sysmem_freeptr(av);
             }
             if (span_found_robustly) break;
         }
     }
 
     // 2. If no span was found (e.g., single bar), create one locally.
-    int local_span_created = 0;
     if (!span_to_output && bar_keys) {
         local_span_created = 1;
         span_to_output = atomarray_new(0, NULL);
@@ -1653,7 +1677,7 @@ static void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_
             }
         }
 
-        if (local_span_created || (span_found_robustly && span_to_output != span_aa)) {
+        if (local_span_created) {
             object_free(span_to_output);
         }
     }
@@ -2506,20 +2530,30 @@ static void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, 
                 char output_key_str[256];
                 snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
                 t_symbol *output_key_sym = gensym(output_key_str);
-                if (x->bound_crucible) {
-                    crucible_do_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
-                } else {
-                    if (!x->async || systhread_ismainthread()) {
-                        outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
+
+                // RE-ENTRANCY PROTECTION: Copy atoms to local buffer before output.
+                // This prevents crashes if downstream objects trigger re-entrant modifications
+                // to the building dictionary (e.g. through @bind feedback).
+                t_atom *local_atoms = (t_atom *)sysmem_newptr(ac * sizeof(t_atom));
+                if (local_atoms) {
+                    for (int k = 0; k < ac; k++) local_atoms[k] = av[k];
+
+                    if (x->bound_crucible) {
+                        crucible_do_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, local_atoms);
                     } else {
-                        t_atom *new_argv = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom));
-                        if (new_argv) {
-                            atom_setsym(new_argv, output_key_sym);
-                            for (int k = 0; k < ac; k++) new_argv[k+1] = av[k];
-                            defer(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
-                            sysmem_freeptr(new_argv);
+                        if (!x->async || systhread_ismainthread()) {
+                            outlet_anything(x->out_bar_data, output_key_sym, (short)ac, local_atoms);
+                        } else {
+                            t_atom *new_argv = (t_atom *)sysmem_newptr((ac + 1) * sizeof(t_atom));
+                            if (new_argv) {
+                                atom_setsym(new_argv, output_key_sym);
+                                for (int k = 0; k < ac; k++) new_argv[k+1] = local_atoms[k];
+                                defer(x, (method)buildspans_defer_output, gensym("bar_data"), (short)(ac + 1), new_argv);
+                                sysmem_freeptr(new_argv);
+                            }
                         }
                     }
+                    sysmem_freeptr(local_atoms);
                 }
             }
         }
