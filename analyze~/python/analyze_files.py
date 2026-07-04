@@ -144,9 +144,9 @@ def generate_video(audio_path, data):
                 p_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
             
             if rolling_smoothing_avgs is not None:
-                # Initialize smoothing average line (horizontal matching flux color solid)
-                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
-                sa_text = ax_transient.text(1.01, 0, '', color=colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
+                # Initialize smoothing average line (horizontal matching flux color dashed)
+                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=smoothing_colors[i], lw=1.5, ls='--', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
+                sa_text = ax_transient.text(1.01, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 smoothing_avg_texts.append(sa_text)
 
         global_smoothing_avg_line = None
@@ -167,10 +167,10 @@ def generate_video(audio_path, data):
         ax_snapshot.set_xlim(-45, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
         for i in range(3): ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
-        pool_scores = [ax_transient.text(0, 0, '', visible=False) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; snapshot_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#2ecc71', lw=2, label='Current Snapshot', zorder=10)
+        pool_scores = [ax_transient.text(0, 0, '', visible=False, zorder=22) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; snapshot_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#2ecc71', lw=2, label='Current Snapshot', zorder=10)
         MAX_SNAPSHOT_POOL = 32; from matplotlib.collections import LineCollection; pool_snap_lines = LineCollection([], colors=[], linewidths=3, visible=False); ax_snapshot.add_collection(pool_snap_lines); pool_snap_texts = [ax_snapshot.text(0, 0, '', visible=False, fontsize=13, va='center', ha='right', fontweight='bold') for _ in range(MAX_SNAPSHOT_POOL)]
         active_scores = []; active_qualifiers = []; live_peaks_x = []; live_peaks_y = []
-        live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=11)
+        live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=25)
         current_snapshot_avg = 0.0; rolling_window_scores = []; last_snapshot_display = None
         score_display_text = ax_transient.text(0.02, 0.98, 'Score: +0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=20, color='#808080', fontweight='bold', zorder=20)
         rating_text = ax_transient.text(0.02, 0.90, 'Rating: 0.00', transform=ax_transient.transAxes, verticalalignment='top', fontsize=12, color='#f1c40f', fontweight='bold', zorder=20)
