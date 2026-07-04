@@ -42,6 +42,7 @@ cdef extern from "cumulative_transience.h":
         double band_total_deltas[4]
         int band_p_counts[4]
         double band_prominence_avgs[4]
+        double band_smoothing_avgs[4]
 
     ctypedef struct PeakResultList:
         PeakResult peaks[64]
@@ -94,6 +95,7 @@ cdef extern from "cumulative_transience.h":
         float* rolling_dynamic_smoothing
         float* rolling_prominence
         float* rolling_prominence_avg
+        float* rolling_smoothing_avg
         float* rolling_threshold
         float* rolling_lookback
         float* rolling_avg_delta
@@ -301,7 +303,8 @@ cdef class TransientAnalyzer:
                 'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
                 'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
                 'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]],
-                'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]]
+                'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]],
+                'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]]
             }
         }
         free(res)
@@ -328,7 +331,8 @@ cdef class TransientAnalyzer:
             'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
             'band_total_deltas': [m.band_total_deltas[0], m.band_total_deltas[1], m.band_total_deltas[2], m.band_total_deltas[3]],
             'band_p_counts': [m.band_p_counts[0], m.band_p_counts[1], m.band_p_counts[2], m.band_p_counts[3]],
-            'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]]
+            'band_prominence_avgs': [m.band_prominence_avgs[0], m.band_prominence_avgs[1], m.band_prominence_avgs[2], m.band_prominence_avgs[3]],
+            'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]]
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
@@ -346,6 +350,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef list rolling_dynamic_smoothings = []
     cdef list rolling_prominences = []
     cdef list rolling_prominence_avgs = []
+    cdef list rolling_smoothing_avgs = []
     cdef list rolling_thresholds = []
     cdef list rolling_lookbacks = []
     cdef list rolling_avg_deltas = []
@@ -357,6 +362,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[float, ndim=1] smooth
     cdef cnp.ndarray[float, ndim=1] prom
     cdef cnp.ndarray[float, ndim=1] prom_avg
+    cdef cnp.ndarray[float, ndim=1] smooth_avg
     cdef cnp.ndarray[float, ndim=1] thresh
     cdef cnp.ndarray[float, ndim=1] lookback
     cdef cnp.ndarray[float, ndim=1] avg_delta
@@ -380,6 +386,10 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         prom_avg = np.zeros(num_frames, dtype=np.float32)
         memcpy(prom_avg.data, res.bands[i].rolling_prominence_avg, num_frames * sizeof(float))
         rolling_prominence_avgs.append(prom_avg)
+
+        smooth_avg = np.zeros(num_frames, dtype=np.float32)
+        memcpy(smooth_avg.data, res.bands[i].rolling_smoothing_avg, num_frames * sizeof(float))
+        rolling_smoothing_avgs.append(smooth_avg)
 
         thresh = np.zeros(num_frames, dtype=np.float32)
         memcpy(thresh.data, res.bands[i].rolling_threshold, num_frames * sizeof(float))
@@ -458,6 +468,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "rolling_dynamic_smoothings": rolling_dynamic_smoothings,
         "rolling_prominences": rolling_prominences,
         "rolling_prominence_avgs": rolling_prominence_avgs,
+        "rolling_smoothing_avgs": rolling_smoothing_avgs,
         "rolling_thresholds": rolling_thresholds,
         "rolling_lookbacks": rolling_lookbacks,
         "rolling_avg_deltas": rolling_avg_deltas,

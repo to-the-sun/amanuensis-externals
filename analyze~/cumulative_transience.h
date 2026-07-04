@@ -54,6 +54,7 @@ typedef struct {
     double band_total_deltas[MAX_BANDS];
     int band_p_counts[MAX_BANDS];
     double band_prominence_avgs[MAX_BANDS];
+    double band_smoothing_avgs[MAX_BANDS];
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -161,6 +162,7 @@ typedef struct {
     float* rolling_dynamic_smoothing;
     float* rolling_prominence;
     float* rolling_prominence_avg;
+    float* rolling_smoothing_avg;
     float* rolling_threshold;
     float* rolling_lookback;
     float* rolling_avg_delta;

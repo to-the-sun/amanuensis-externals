@@ -107,7 +107,12 @@ def generate_video(audio_path, data):
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
     print(f"Generating video for {audio_path}...")
     try:
-        times = data['times']; onset_envs = data['onset_envs']; rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings'); rolling_prominences = data.get('rolling_prominences'); rolling_prominence_avgs = data.get('rolling_prominence_avgs'); rolling_thresholds = data['rolling_thresholds']
+        times = data['times']; onset_envs = data['onset_envs']
+        rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings')
+        rolling_prominences = data.get('rolling_prominences')
+        rolling_prominence_avgs = data.get('rolling_prominence_avgs')
+        rolling_smoothing_avgs = data.get('rolling_smoothing_avgs')
+        rolling_thresholds = data['rolling_thresholds']
         rolling_lookbacks = data.get('rolling_lookbacks')
         rolling_avg_deltas = data.get('rolling_avg_deltas')
         rolling_total_deltas = data.get('rolling_total_deltas')
@@ -122,19 +127,35 @@ def generate_video(audio_path, data):
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
         smoothing_colors = ['#FF0000', '#FF4500', '#FF6347', '#CD5C5C'] # Highly distinguishable reds/oranges
         prominence_colors = ['#4B0082', '#8A2BE2', '#9932CC', '#BA55D3'] # Shades of purple
-        transient_lines = []; smoothing_lines = []; prominence_lines = []; prominence_avg_lines = []; threshold_lines = []
+        transient_lines = []; smoothing_lines = []; prominence_lines = []
+        prominence_avg_lines = []; smoothing_avg_lines = []
+        prominence_avg_texts = []; smoothing_avg_texts = []
+        threshold_lines = []
+
         for i in range(4):
             # Make raw flux lines thinner and more transparent
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
+
             if rolling_dynamic_smoothings is not None:
                 # Initialize smoothing line with bright red shades and low zorder
                 s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
+
             if rolling_prominences is not None:
                 # Initialize prominence line with purple shades and high zorder
                 p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
+
             if rolling_prominence_avgs is not None:
-                # Initialize prominence average line (horizontal purple dashed)
-                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=1, ls='--', alpha=0.8, label=f'{labels[i]} Prom Avg', zorder=11); prominence_avg_lines.append(pa_line)
+                # Initialize prominence average line (horizontal purple bold opaque)
+                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=2.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom Avg', zorder=14); prominence_avg_lines.append(pa_line)
+                pa_text = ax_transient.text(1.01, 0, '', color=prominence_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+                prominence_avg_texts.append(pa_text)
+
+            if rolling_smoothing_avgs is not None:
+                # Initialize smoothing average line (horizontal red bold opaque)
+                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=smoothing_colors[i], lw=2.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
+                sa_text = ax_transient.text(1.10, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+                smoothing_avg_texts.append(sa_text)
+
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
@@ -243,8 +264,19 @@ def generate_video(audio_path, data):
                     prominence_lines[i].set_data(times[:frame+1], rolling_prominences[i][:frame+1])
                 if rolling_prominence_avgs is not None:
                     # Update horizontal average prominence lines
-                    prominence_avg_lines[i].set_ydata([rolling_prominence_avgs[i][frame], rolling_prominence_avgs[i][frame]])
+                    p_avg_val = rolling_prominence_avgs[i][frame]
+                    prominence_avg_lines[i].set_ydata([p_avg_val, p_avg_val])
                     prominence_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
+                    prominence_avg_texts[i].set_position((1.01, p_avg_val))
+                    prominence_avg_texts[i].set_text(f"P:{p_avg_val:.2f}")
+
+                if rolling_smoothing_avgs is not None:
+                    # Update horizontal average smoothing lines
+                    s_avg_val = rolling_smoothing_avgs[i][frame]
+                    smoothing_avg_lines[i].set_ydata([s_avg_val, s_avg_val])
+                    smoothing_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
+                    smoothing_avg_texts[i].set_position((1.08, s_avg_val))
+                    smoothing_avg_texts[i].set_text(f"S:{s_avg_val:.2f}")
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
@@ -274,7 +306,7 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines + smoothing_avg_lines + prominence_avg_texts + smoothing_avg_texts
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)

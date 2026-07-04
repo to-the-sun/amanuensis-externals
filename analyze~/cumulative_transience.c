@@ -238,11 +238,14 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     int wptr = self->cache_write_ptr;
     for (int b = 0; b < MAX_BANDS; b++) {
         double psum = 0;
+        double ssum = 0;
         for (int j = 0; j < win; j++) {
             int idx = (wptr - 1 - j + CACHE_SIZE) % CACHE_SIZE;
             psum += (double)self->prominence_envelopes[b * CACHE_SIZE + idx];
+            ssum += (double)self->dynamic_smoothings[b * CACHE_SIZE + idx];
         }
         metrics_out->band_prominence_avgs[b] = psum / (double)win;
+        metrics_out->band_smoothing_avgs[b] = ssum / (double)win;
     }
 }
 
@@ -545,6 +548,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_prominence_avg = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_smoothing_avg = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_lookback = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_avg_delta = (float*)calloc(num_f, sizeof(float));
@@ -577,6 +581,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
                     result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
                     result_out->bands[b].rolling_prominence_avg[f] = (float)res->metrics.band_prominence_avgs[b];
+                    result_out->bands[b].rolling_smoothing_avg[f] = (float)res->metrics.band_smoothing_avgs[b];
                     result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_midpoints[b];
                     result_out->bands[b].rolling_lookback[f] = (float)res->metrics.band_lookbacks[b];
                     result_out->bands[b].rolling_avg_delta[f] = (float)res->metrics.band_avg_deltas[b];
@@ -611,6 +616,7 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
         free(result->bands[i].rolling_dynamic_smoothing);
         free(result->bands[i].rolling_prominence);
         free(result->bands[i].rolling_prominence_avg);
+        free(result->bands[i].rolling_smoothing_avg);
         free(result->bands[i].rolling_threshold);
         free(result->bands[i].rolling_lookback);
         free(result->bands[i].rolling_avg_delta);
