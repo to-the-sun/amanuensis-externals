@@ -391,7 +391,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
 
         half_maxes[b] = calculate_half_max(envs[b] + nf - n_dyn_b, n_dyn_b);
         for (int j = 0; j < nf; j++) {
-            thrs[b][j] = half_maxes[b];
+            thrs[b][j] = (float)self->smoothing_avgs[b];
         }
 
         // Report the parameters that derived the lookback used for this chunk

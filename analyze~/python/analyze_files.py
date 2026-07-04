@@ -200,6 +200,7 @@ def generate_video(audio_path, data):
                 if all_peaks[peak_search_ptr]['p_idx'] > last_frame_processed: new_peaks.append(all_peaks[peak_search_ptr])
                 peak_search_ptr += 1
             for p in new_peaks:
+                print(f"[B{p['band_idx']}] Peak Triggered: {p['prominence']:.4f} > {p['thresh_val']:.4f} at {p['time']:.2f}s")
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
                 active_qualifiers.clear()
