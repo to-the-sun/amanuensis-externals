@@ -127,11 +127,11 @@ def generate_video(audio_path, data):
             # Make raw flux lines thinner and more transparent
             line, = ax_transient.plot(times, onset_envs[i], color=colors[i], lw=1, alpha=0.3, label=labels[i], zorder=2); transient_lines.append(line)
             if rolling_dynamic_smoothings is not None:
-                # Initialize smoothing line with bright red shades and high zorder
-                s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=10); smoothing_lines.append(s_line)
+                # Initialize smoothing line with bright red shades and low zorder
+                s_line, = ax_transient.plot([], [], color=smoothing_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Smooth', zorder=1); smoothing_lines.append(s_line)
             if rolling_prominences is not None:
-                # Initialize prominence line with purple shades
-                p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Prominence', zorder=9); prominence_lines.append(p_line)
+                # Initialize prominence line with purple shades and high zorder
+                p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=0.5, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
             t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
