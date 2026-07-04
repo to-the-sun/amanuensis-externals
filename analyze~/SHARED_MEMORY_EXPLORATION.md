@@ -70,6 +70,40 @@ analyze~ @group drums
 - Objects with the same `@group` name share a buffer.
 - Objects with no group name (or unique names) behave as they do now (private buffers).
 
+## Speculative Scoring Dynamics
+
+In a shared memory environment, the `total_score` calculation (`peak_val * q_sum`) evolves from a measure of self-resonance to a measure of **inter-stream coherence**.
+
+### 1. Global Resonance vs. Local Novelty
+In the current local-only model, a high score indicates that a sound is repeating its own rhythmic patterns. In a shared model, the `q_sum` reflects how "resonant" the current peak's timing is relative to the **entire group's history**.
+- If a Kick and Snare share a buffer, the Snare's score will be boosted if it lands at an offset (e.g., 200ms) that has been established as a recurring pattern by *either* the Kick or the Snare.
+- This allows for **rhythmic reinforcement** metrics across the whole mix, identifying "locked-in" elements.
+
+### 2. Additive vs. Inhibitory Scoring Models
+A shared buffer allows for two distinct philosophical approaches to transience "value":
+
+- **The Reinforcement Model (Additive)**:
+  - This is the current logic: the score is proportional to `q_sum`.
+  - High scores mean the peak is contributing to an established global groove.
+  - **Benefit**: Identifying which elements are most central to the rhythmic foundation.
+
+- **The Masking Model (Inhibitory)**:
+  - We could speculate on an inverse scoring logic: `score = peak_val / (1.0 + q_sum)`.
+  - In this model, a peak's score is penalized if it lands on a "hot spot" where many other transients have already occurred in the 15-second history.
+  - **Benefit**: This simulates **Temporal Masking**. It identifies "novel" transients that land in unoccupied rhythmic space, making it a powerful tool for intelligent mixing or generative arrangement where sounds are selected based on their distinctness.
+
+### 3. Global Transience Density and Salience
+The `avg`, `max_v`, and `min_v` metrics of the shared `accumulated_buffer` represent the **Global Transience Density**.
+- In a shared space, a peak's salience is calculated against the backdrop of all other streams.
+- If the shared buffer is "saturated" (high global density), the "contrast" required for a high qualifier value becomes much harder to achieve.
+- This creates a **competitive environment** where different streams vie for prominence, allowing the system to automatically identify the most "salient" stream at any given moment.
+
+### 4. Cross-Stream Pattern Discovery ("Self vs Other")
+Since each `TransientAnalyzer` instance still maintains its own local queue of contributions, we can speculate on a dual-score output:
+- **Self-Coherence**: How well the stream aligns with its own past.
+- **Group-Coherence**: How well the stream aligns with the rest of the group.
+- **Novelty Ratio**: A comparison of the two, indicating whether a sound is leading the groove or following it.
+
 ## Conclusion
 
-Sharing the cumulative history buffer is technically feasible and provides a powerful mechanism for multi-stream transience analysis. The main challenges are robust thread synchronization and ensuring that the normalization logic remains musically meaningful when streams of different intensities are mixed in the shared memory space.
+Sharing the cumulative history buffer is technically feasible and provides a powerful mechanism for multi-stream transience analysis. Beyond the memory efficiency, the primary advantage lies in the evolution of the scoring system from a solo observation to an ensemble awareness. The main challenges remain robust thread synchronization and ensuring that the normalization logic provides a musically useful weighting when streams of different intensities interact in the shared memory space.
