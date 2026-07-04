@@ -53,6 +53,7 @@ typedef struct {
     double band_avg_deltas[MAX_BANDS];
     double band_total_deltas[MAX_BANDS];
     int band_p_counts[MAX_BANDS];
+    double band_prominence_avgs[MAX_BANDS];
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -100,6 +101,7 @@ typedef struct {
     double* mel_spectrogram;    // Mel bands cache
     float* flux_envelopes;      // Flux cache per band
     float* dynamic_smoothings;  // Dynamic smoothing cache per band
+    float* prominence_envelopes; // Prominence cache per band
     float smoothing_states[MAX_BANDS];
     double* mel_filters;        // Pre-calculated filters
     double* fft_window;         // Pre-calculated window
@@ -158,6 +160,7 @@ typedef struct {
     float* envelope;
     float* rolling_dynamic_smoothing;
     float* rolling_prominence;
+    float* rolling_prominence_avg;
     float* rolling_threshold;
     float* rolling_lookback;
     float* rolling_avg_delta;

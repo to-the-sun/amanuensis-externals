@@ -76,6 +76,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
     self->flux_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
     self->dynamic_smoothings = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
+    self->prominence_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
     self->fft_window = (double*)malloc(sizeof(double) * N_FFT);
     if (self->fft_window) for (int i = 0; i < N_FFT; i++) self->fft_window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (double)N_FFT));
     self->sample_rate = 44100;
@@ -83,7 +84,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     self->overlap_buffer = (float*)calloc(N_FFT * 4, sizeof(float));
     self->fft_real = (double*)malloc(sizeof(double) * N_FFT);
     self->fft_imag = (double*)malloc(sizeof(double) * N_FFT);
-    if (!self->mel_spectrogram || !self->flux_envelopes || !self->dynamic_smoothings || !self->fft_window || !self->mel_filters || !self->overlap_buffer || !self->fft_real || !self->fft_imag) {
+    if (!self->mel_spectrogram || !self->flux_envelopes || !self->dynamic_smoothings || !self->prominence_envelopes || !self->fft_window || !self->mel_filters || !self->overlap_buffer || !self->fft_real || !self->fft_imag) {
         analyzer_destroy(self); return NULL;
     }
     return self;
@@ -96,7 +97,7 @@ void analyzer_destroy(TransientAnalyzer* self) {
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) { SnapshotEntry* next = curr->next; free(curr); curr = next; }
     }
-    free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->fft_window); free(self->mel_filters); free(self);
+    free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters); free(self);
 }
 
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
@@ -227,6 +228,22 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     double ph_mean = (self->peak_history_count > 0) ? (ph_sum / self->peak_history_count) : 0;
     double ph_var = (self->peak_history_count > 0) ? (ph_sum_sq / self->peak_history_count - ph_mean * ph_mean) : 0;
     metrics_out->peak_std = ph_var > 0 ? sqrt(ph_var) : 0;
+
+    // Calculate prominence averages over 15 seconds
+    int nf = self->cache_count;
+    int win = (int)(15000.0 / self->frame_duration_ms);
+    if (win > nf) win = nf;
+    if (win <= 0) win = 1;
+
+    int wptr = self->cache_write_ptr;
+    for (int b = 0; b < MAX_BANDS; b++) {
+        double psum = 0;
+        for (int j = 0; j < win; j++) {
+            int idx = (wptr - 1 - j + CACHE_SIZE) % CACHE_SIZE;
+            psum += (double)self->prominence_envelopes[b * CACHE_SIZE + idx];
+        }
+        metrics_out->band_prominence_avgs[b] = psum / (double)win;
+    }
 }
 
 double* analyzer_get_buffer(TransientAnalyzer* self) { return self->accumulated_buffer; }
@@ -449,15 +466,22 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) {
             long long gf = (long long)active_start_frame + i, lf = gf - gstart;
             result_out->last_flux[b][i] = (lf >= 0 && lf < nf) ? envs[b][lf] : 0;
-            result_out->last_dynamic_smoothing[b][i] = (lf >= 0 && lf < nf) ? self->dynamic_smoothings[b * CACHE_SIZE + (rptr + (int)lf) % CACHE_SIZE] : 0;
 
+            float smooth = 0;
             float prom = 0;
             if (lf >= 0 && lf < nf) {
+                int cache_idx = (rptr + (int)lf) % CACHE_SIZE;
+                smooth = self->dynamic_smoothings[b * CACHE_SIZE + cache_idx];
+
                 float fv = sm_envs[b][lf];
                 float lmin = fv; for(int k=(int)lf-1; k>=0; k--) { if (sm_envs[b][k] > fv) break; if (sm_envs[b][k] < lmin) lmin = sm_envs[b][k]; }
                 float rmin = fv; for(int k=(int)lf+1; k<nf; k++) { if (sm_envs[b][k] > fv) break; if (sm_envs[b][k] < rmin) rmin = sm_envs[b][k]; }
                 prom = fv - (lmin > rmin ? lmin : rmin);
+
+                // Store calculated prominence in the persistent cache
+                self->prominence_envelopes[b * CACHE_SIZE + cache_idx] = prom;
             }
+            result_out->last_dynamic_smoothing[b][i] = smooth;
             result_out->last_prominence[b][i] = prom;
         }
         for (int i = 0; i < tot; i++) {
@@ -520,6 +544,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence_avg = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_lookback = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_avg_delta = (float*)calloc(num_f, sizeof(float));
@@ -551,6 +576,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                     result_out->bands[b].envelope[f] = res->last_flux[b][i];
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
                     result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
+                    result_out->bands[b].rolling_prominence_avg[f] = (float)res->metrics.band_prominence_avgs[b];
                     result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_midpoints[b];
                     result_out->bands[b].rolling_lookback[f] = (float)res->metrics.band_lookbacks[b];
                     result_out->bands[b].rolling_avg_delta[f] = (float)res->metrics.band_avg_deltas[b];
@@ -584,6 +610,7 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
         free(result->bands[i].envelope);
         free(result->bands[i].rolling_dynamic_smoothing);
         free(result->bands[i].rolling_prominence);
+        free(result->bands[i].rolling_prominence_avg);
         free(result->bands[i].rolling_threshold);
         free(result->bands[i].rolling_lookback);
         free(result->bands[i].rolling_avg_delta);
