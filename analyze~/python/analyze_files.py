@@ -112,6 +112,7 @@ def generate_video(audio_path, data):
         rolling_prominences = data.get('rolling_prominences')
         rolling_prominence_avgs = data.get('rolling_prominence_avgs')
         rolling_smoothing_avgs = data.get('rolling_smoothing_avgs')
+        rolling_flux_avgs = data.get('rolling_flux_avgs')
         rolling_thresholds = data['rolling_thresholds']
         rolling_lookbacks = data.get('rolling_lookbacks')
         rolling_avg_deltas = data.get('rolling_avg_deltas')
@@ -128,8 +129,8 @@ def generate_video(audio_path, data):
         smoothing_colors = ['#FF0000', '#FF4500', '#FF6347', '#CD5C5C'] # Highly distinguishable reds/oranges
         prominence_colors = ['#4B0082', '#8A2BE2', '#9932CC', '#BA55D3'] # Shades of purple
         transient_lines = []; smoothing_lines = []; prominence_lines = []
-        prominence_avg_lines = []; smoothing_avg_lines = []
-        prominence_avg_texts = []; smoothing_avg_texts = []
+        prominence_avg_lines = []; smoothing_avg_lines = []; flux_avg_lines = []
+        prominence_avg_texts = []; smoothing_avg_texts = []; flux_avg_texts = []
         threshold_lines = []
 
         for i in range(4):
@@ -145,18 +146,24 @@ def generate_video(audio_path, data):
                 p_line, = ax_transient.plot([], [], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prominence', zorder=12); prominence_lines.append(p_line)
 
             if rolling_prominence_avgs is not None:
-                # Initialize prominence average line (horizontal purple bold opaque)
-                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=2.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom Avg', zorder=14); prominence_avg_lines.append(pa_line)
-                pa_text = ax_transient.text(1.01, 0, '', color=prominence_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+                # Initialize prominence average line (horizontal purple solid)
+                pa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=prominence_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Prom Avg', zorder=14); prominence_avg_lines.append(pa_line)
+                pa_text = ax_transient.text(1.01, 0, '', color=prominence_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 prominence_avg_texts.append(pa_text)
 
             if rolling_smoothing_avgs is not None:
-                # Initialize smoothing average line (horizontal red bold opaque)
-                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=smoothing_colors[i], lw=2.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
-                sa_text = ax_transient.text(1.10, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, fontweight='bold', va='center')
+                # Initialize smoothing average line (horizontal red solid)
+                sa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=smoothing_colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Smooth Avg', zorder=13); smoothing_avg_lines.append(sa_line)
+                sa_text = ax_transient.text(1.10, 0, '', color=smoothing_colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
                 smoothing_avg_texts.append(sa_text)
 
-            t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
+            if rolling_flux_avgs is not None:
+                # Initialize flux average line (replacing midpoint tracking)
+                fa_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1.5, ls='-', alpha=1.0, label=f'{labels[i]} Flux Avg', zorder=3); threshold_lines.append(fa_line)
+                fa_text = ax_transient.text(1.19, 0, '', color=colors[i], transform=ax_transient.get_yaxis_transform(), fontsize=10, va='center')
+                flux_avg_texts.append(fa_text)
+            else:
+                t_line, = ax_transient.plot([times[0], times[-1]], [0, 0], color=colors[i], lw=1, ls='--', alpha=0.5, zorder=3); threshold_lines.append(t_line)
         playhead_transient = ax_transient.axvline(x=0, color='#e67e22', lw=2, ls='--', label='Playhead', zorder=15)
         cleanup_transient = ax_transient.axvline(x=-15, color='#9b59b6', lw=2, ls=':', label='Cleanup Sweep', zorder=15)
         ax_transient.set_title(f"4-Band Transient Analysis - {os.path.basename(audio_path)}"); ax_transient.set_ylabel("Onset Strength"); ax_transient.grid(True, alpha=0.3); ax_transient.set_xlim(-20, 5)
@@ -254,8 +261,16 @@ def generate_video(audio_path, data):
                         if m > local_max: local_max = m
             ax_transient.set_ylim(0, max(1.0, local_max * 1.1))
             for i in range(4):
-                threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]])
-                threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+                if rolling_flux_avgs is not None:
+                    f_avg_val = rolling_flux_avgs[i][frame]
+                    threshold_lines[i].set_ydata([f_avg_val, f_avg_val])
+                    threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+                    flux_avg_texts[i].set_position((1.19, f_avg_val))
+                    flux_avg_texts[i].set_text(f"F:{f_avg_val:.2f}")
+                else:
+                    threshold_lines[i].set_ydata([rolling_thresholds[i][frame], rolling_thresholds[i][frame]])
+                    threshold_lines[i].set_xdata([current_time - 20, current_time + 5])
+
                 if rolling_dynamic_smoothings is not None:
                     # Update smoothing lines to only show up to current frame
                     smoothing_lines[i].set_data(times[:frame+1], rolling_dynamic_smoothings[i][:frame+1])
@@ -275,7 +290,7 @@ def generate_video(audio_path, data):
                     s_avg_val = rolling_smoothing_avgs[i][frame]
                     smoothing_avg_lines[i].set_ydata([s_avg_val, s_avg_val])
                     smoothing_avg_lines[i].set_xdata([current_time - 20, current_time + 5])
-                    smoothing_avg_texts[i].set_position((1.08, s_avg_val))
+                    smoothing_avg_texts[i].set_position((1.10, s_avg_val))
                     smoothing_avg_texts[i].set_text(f"S:{s_avg_val:.2f}")
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
@@ -306,7 +321,7 @@ def generate_video(audio_path, data):
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
-            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines + smoothing_avg_lines + prominence_avg_texts + smoothing_avg_texts
+            changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + threshold_lines + transient_lines + smoothing_lines + prominence_lines + prominence_avg_lines + smoothing_avg_lines + prominence_avg_texts + smoothing_avg_texts + flux_avg_texts
             if pool_snap_lines.get_visible(): changed_artists.append(pool_snap_lines)
             for s in pool_scores:
                 if s.get_visible(): changed_artists.append(s)
