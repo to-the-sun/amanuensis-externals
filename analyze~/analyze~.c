@@ -132,7 +132,7 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
     } else {
         switch (a) {
             case 0: sprintf(s, "(list) Band, Score"); break;
-            case 1: sprintf(s, "(float) Bar Length (ms)"); break;
+            case 1: sprintf(s, "(float) bar_length"); break;
             case 2: sprintf(s, "(float) Rating Score"); break;
             case 3: sprintf(s, "(float) Standard Deviation"); break;
             case 4: sprintf(s, "(float) Contrast Score"); break;
@@ -228,11 +228,11 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         }
 
         t_atom out_args[5];
-        atom_setfloat(out_args, x->result_buffer->metrics.rating);
-        atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
-        atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
-        atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
-        atom_setfloat(out_args + 4, x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0);
+        atom_setfloat(out_args + 0, x->result_buffer->metrics.highest_peak_valid ? fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0);
+        atom_setfloat(out_args + 1, x->result_buffer->metrics.rating);
+        atom_setfloat(out_args + 2, x->result_buffer->metrics.std_dev);
+        atom_setfloat(out_args + 3, x->result_buffer->metrics.contrast);
+        atom_setfloat(out_args + 4, x->result_buffer->metrics.peak_std);
         defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
     }
 
@@ -245,9 +245,9 @@ void analyze_output_peak(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 }
 
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    outlet_float(x->outlet_peakstd, atom_getfloat(argv + 3));
-    outlet_float(x->outlet_contrast, atom_getfloat(argv + 2));
-    outlet_float(x->outlet_stddev, atom_getfloat(argv + 1));
-    outlet_float(x->outlet_rating, atom_getfloat(argv));
-    outlet_float(x->outlet_barlen, atom_getfloat(argv + 4));
+    outlet_float(x->outlet_peakstd, atom_getfloat(argv + 4));
+    outlet_float(x->outlet_contrast, atom_getfloat(argv + 3));
+    outlet_float(x->outlet_stddev, atom_getfloat(argv + 2));
+    outlet_float(x->outlet_rating, atom_getfloat(argv + 1));
+    outlet_float(x->outlet_barlen, atom_getfloat(argv + 0));
 }

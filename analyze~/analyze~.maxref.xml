@@ -21,9 +21,13 @@
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
-		<outlet id="1" type="list">
+		<outlet id="0" type="list">
 			<digest>Peak Scores [band, score]</digest>
 			<description>Outputs a two-part list whenever a transient peak is detected. The first element is the frequency band index (0:Sub, 1:Bass, 2:Mid, 3:Hi) and the second is the calculated transience score (Flux * Resonance Qualifier sum).</description>
+		</outlet>
+		<outlet id="1" type="float">
+			<digest>bar_length</digest>
+			<description>Outputs the high point (x value) in the cumulative history graph in ms.</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Rating Score</digest>
