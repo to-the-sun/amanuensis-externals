@@ -200,7 +200,12 @@ def generate_video(audio_path, data):
                 if all_peaks[peak_search_ptr]['p_idx'] > last_frame_processed: new_peaks.append(all_peaks[peak_search_ptr])
                 peak_search_ptr += 1
             for p in new_peaks:
-                print(f"[B{p['band_idx']}] Peak Triggered: {p['prominence']:.4f} > {p['thresh_val']:.4f} at {p['time']:.2f}s")
+                # [B#] prom > half_max
+                debug_msg = f"[B{p['band_idx']}] {p['prominence']:.4f} > {p['thresh_val']:.4f}"
+                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx'], 'color': colors[p['band_idx']]})
+                if len(active_debug_lines) > MAX_DEBUG_LINES:
+                    active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
+
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
                 active_qualifiers.clear()
@@ -305,8 +310,17 @@ def generate_video(audio_path, data):
                 if life > 0: alpha = life / float(POPUP_LIFETIME); qc = get_score_color(val, -1.0, 1.0); line.set_xdata([ms, ms]); line.set_color(qc); line.set_alpha(alpha * 0.8); line.set_visible(True); label.set_position((ms, (val + 1) / 2)); label.set_text(f"{val:+.2f}"); label.set_color(qc); label.set_alpha(alpha); label.set_visible(True); q[1] -= 1
                 else: active_qualifiers.remove(q)
             for i, debug in enumerate(active_debug_lines[:]):
-                if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
-                else: active_debug_lines.remove(debug)
+                if debug['lifetime'] > 0:
+                    txt_artist = debug_console_pool[i]
+                    txt_artist.set_text(debug['text'])
+                    # Use specific color if provided, else band color
+                    msg_color = debug.get('color', colors[debug['band_idx']])
+                    txt_artist.set_color(msg_color)
+                    txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0))
+                    txt_artist.set_visible(True)
+                    debug['lifetime'] -= 1
+                else:
+                    active_debug_lines.remove(debug)
             changed_artists = [playhead_transient, cleanup_transient, buffer_line, snapshot_line, mean_line, highest_peak_line, metrics_text, rating_text, score_display_text, live_peaks_scatter] + transient_lines + smoothing_lines + prominence_lines + smoothing_avg_lines + smoothing_avg_texts
             if global_smoothing_avg_line: changed_artists.append(global_smoothing_avg_line)
             if global_smoothing_avg_text: changed_artists.append(global_smoothing_avg_text)

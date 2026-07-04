@@ -65,6 +65,8 @@ TransientAnalyzer* analyzer_create(double max_peak_value) {
     if (!self) return NULL;
     self->max_peak = max_peak_value;
     self->highest_peak_ms = -999.0;
+    memset(self->smoothing_states, 0, sizeof(float) * MAX_BANDS);
+    memset(self->smoothing_avgs, 0, sizeof(double) * MAX_BANDS);
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
         self->lookback_avg_delta[b] = 0.0;
@@ -449,16 +451,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                         float rmin = env[f]; for(int k=f+1; k<nf; k++) { if (env[k] > env[f]) break; if (env[k] < rmin) rmin = env[k]; }
                         float prom = env[f] - (lmin > rmin ? lmin : rmin);
 
-                        // New Peak Detection Logic:
-                        // Use prominence of SMOOTHED flux vs running average of SMOOTHED flux
-                        float fv_s = sm_envs[b][f];
-                        float lmin_s = fv_s; for(int k=f-1; k>=0; k--) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < lmin_s) lmin_s = sm_envs[b][k]; }
-                        float rmin_s = fv_s; for(int k=f+1; k<nf; k++) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < rmin_s) rmin_s = sm_envs[b][k]; }
-                        float prom_s = fv_s - (lmin_s > rmin_s ? lmin_s : rmin_s);
-
-                        if (prom_s > self->smoothing_avgs[b]) {
-                            if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom_s; }
-                            else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom_s; pc++; }
+                        if (prom > half_maxes[b]) {
+                            if (replaced) { tp[pc-1] = f; tt[pc-1] = half_maxes[b]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom; }
+                            else { tp[pc] = f; tt[pc] = half_maxes[b]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom; pc++; }
                         }
                     }
                 }

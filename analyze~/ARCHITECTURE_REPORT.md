@@ -9,8 +9,8 @@ The "Source of Truth" for all numerical analysis. It is platform-agnostic and co
 
 ### **Responsibilities**
 *   **Signal Processing**: Implementation of a Radix-2 FFT and Mel-Filterbank.
-*   **Feature Extraction**: Calculation of Spectral Flux (onset strength), a `dynamic_smoothing` parameter, and per-frame `prominence` values across 4 bands with 80dB noise floor clamping.
-*   **Peak Detection**: Algorithmic identification of transients based on dynamic historical peak-based rolling midpoints and adaptive prominence checks.
+*   **Feature Extraction**: Calculation of Spectral Flux (onset strength), a `dynamic_smoothing` parameter (1ms snap-up/slow-decay), and per-frame `prominence` values of the smoothed signal.
+*   **Peak Detection**: Algorithmic identification of transients based on smoothed prominence exceeding 15-second running averages of the smoothed signal.
 *   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores using a 99ms exclusion zone.
 *   **State Management**: The `TransientAnalyzer` struct tracks rolling metrics and handles the 15-second state cleanup.
 
