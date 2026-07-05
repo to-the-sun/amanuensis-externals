@@ -264,7 +264,7 @@ void visualize(void *x, const char *message) {
     item->vs = vs;
     item->type = (char *)sysmem_newptr(strlen(type_static) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
-
+    
     if (!item->type || !item->message) {
         if (item->type) sysmem_freeptr(item->type);
         if (item->message) sysmem_freeptr(item->message);
@@ -298,7 +298,7 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
 
     int received = -1;
     systhread_mutex_lock(vs->mutex);
-
+    
     if (perform_send(vs, type, message) == 0) {
         fd_set read_fds;
         struct timeval tv;
