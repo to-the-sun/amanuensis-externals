@@ -66,10 +66,17 @@ static float calculate_prominence_global(TransientAnalyzer* self, int band_idx, 
         return 0;
     }
 
+    int rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
+    // Find how many steps we can go back from cache_idx to reach rptr
+    int steps_back = (cache_idx - rptr + CACHE_SIZE) % CACHE_SIZE;
+    // Find how many steps we can go forward from cache_idx to reach the latest frame (write_ptr - 1)
+    int latest_idx = (self->cache_write_ptr - 1 + CACHE_SIZE) % CACHE_SIZE;
+    int steps_forward = (latest_idx - cache_idx + CACHE_SIZE) % CACHE_SIZE;
+
     float val = self->dynamic_smoothings[band_idx * CACHE_SIZE + cache_idx];
     float lmin = val;
-    // Search backwards in the global circular buffer for up to nf frames
-    for (int k = 1; k < nf; k++) {
+    // Search backwards in the global circular buffer until rptr (oldest valid frame)
+    for (int k = 1; k <= steps_back; k++) {
         int idx = (cache_idx - k + CACHE_SIZE) % CACHE_SIZE;
         float v = self->dynamic_smoothings[band_idx * CACHE_SIZE + idx];
         if (v > val) break;
@@ -77,8 +84,8 @@ static float calculate_prominence_global(TransientAnalyzer* self, int band_idx, 
     }
 
     float rmin = val;
-    // Search forwards in the global circular buffer for up to nf frames
-    for (int k = 1; k < nf; k++) {
+    // Search forwards in the global circular buffer until latest_idx (newest valid frame)
+    for (int k = 1; k <= steps_forward; k++) {
         int idx = (cache_idx + k) % CACHE_SIZE;
         float v = self->dynamic_smoothings[band_idx * CACHE_SIZE + idx];
         if (v > val) break;

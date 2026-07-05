@@ -232,7 +232,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
         atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
         atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
-        atom_setfloat(out_args + 4, x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0);
+        float barlen = x->result_buffer->metrics.highest_peak_valid ? (float)fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0f;
+        atom_setfloat(out_args + 4, barlen);
         defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
     }
 
