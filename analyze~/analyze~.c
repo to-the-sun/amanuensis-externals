@@ -6,6 +6,7 @@
 #include "cumulative_transience.h"
 #include "../shared/async_worker.h"
 #include <windows.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,10 @@ typedef struct _analyze {
     void* outlet_stddev;
     void* outlet_contrast;
     void* outlet_peakstd;
+    void* outlet_log;
+
+    // Attributes
+    long log_enabled;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -35,8 +40,8 @@ typedef struct _analyze {
     int audio_buffer_write_ptr;
 
     // Processing State
-    int current_sample_count;
-    int last_analysis_frame;
+    volatile long long current_sample_count;
+    volatile long long last_analysis_frame;
     int last_peak_frame[MAX_BANDS];
 
     // Async Worker
@@ -54,6 +59,8 @@ void analyze_free(t_analyze* x);
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_peak(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
+void analyze_output_log(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
+void analyze_log(t_analyze* x, const char* fmt, ...);
 void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags);
 void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam);
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s);
@@ -62,6 +69,10 @@ static t_class* analyze_class;
 
 void ext_main(void* r) {
     t_class* c = class_new("analyze~", (method)analyze_new, (method)analyze_free, sizeof(t_analyze), 0L, A_GIMME, 0);
+
+    CLASS_ATTR_LONG(c, "log", 0, t_analyze, log_enabled);
+    CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
+    CLASS_ATTR_STYLE_LABEL(c, "log", 0, "checkbox", "Log Diagnostics");
 
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
@@ -77,13 +88,22 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
     if (x) {
         dsp_setup((t_pxobject*)x, 1);
 
-        // Outlets (Right-to-Left)
-        x->outlet_peakstd = floatout(x);
-        x->outlet_contrast = floatout(x);
-        x->outlet_stddev = floatout(x);
-        x->outlet_rating = floatout(x);
-        x->outlet_barlen = floatout(x);
-        x->outlet_list = listout(x);
+        // Outlets (Right-to-Left order of creation means Left-to-Right in Max)
+        // 0: List (Leftmost)
+        // 1: Bar Length
+        // 2: Rating
+        // 3: StdDev
+        // 4: Contrast
+        // 5: PeakStd
+        // 6: Log (Rightmost)
+
+        x->outlet_log = outlet_new(x, NULL);        // Outlet 6
+        x->outlet_peakstd = floatout(x);           // Outlet 5
+        x->outlet_contrast = floatout(x);          // Outlet 4
+        x->outlet_stddev = floatout(x);            // Outlet 3
+        x->outlet_rating = floatout(x);            // Outlet 2
+        x->outlet_barlen = floatout(x);            // Outlet 1
+        x->outlet_list = listout(x);               // Outlet 0
 
         critical_new(&x->lock);
 
@@ -99,8 +119,11 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         x->invalidated = 0;
         x->pending_analysis = 0;
+        x->log_enabled = 0;
         x->sample_rate = 44100.0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+
+        attr_args_process(x, argc, argv);
     }
     return x;
 }
@@ -137,7 +160,28 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
             case 3: sprintf(s, "(float) Standard Deviation"); break;
             case 4: sprintf(s, "(float) Contrast Score"); break;
             case 5: sprintf(s, "(float) Highest Peak Deviation"); break;
+            case 6: sprintf(s, "(symbol) Log Diagnostics"); break;
         }
+    }
+}
+
+void analyze_log(t_analyze* x, const char* fmt, ...) {
+    if (x->log_enabled && x->outlet_log) {
+        char buf[4096];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, 4096, fmt, args);
+        va_end(args);
+
+        t_atom a;
+        atom_setsym(&a, gensym(buf));
+        defer(x, (method)analyze_output_log, NULL, 1, &a);
+    }
+}
+
+void analyze_output_log(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
+    if (!x->invalidated && x->outlet_log) {
+        outlet_anything(x->outlet_log, atom_getsym(argv), 0, NULL);
     }
 }
 
@@ -147,11 +191,13 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
 
     int new_size = (int)(samplerate * MAX_AUDIO_SECONDS);
     if (x->audio_buffer_size != new_size) {
+        analyze_log(x, "reallocating audio buffer: %d samples (%.1f seconds at %.1f Hz)", new_size, MAX_AUDIO_SECONDS, samplerate);
         free(x->audio_buffer);
         x->audio_buffer = (float*)calloc(new_size, sizeof(float));
         x->audio_buffer_size = new_size;
         x->audio_buffer_write_ptr = 0;
         x->current_sample_count = 0;
+        x->last_analysis_frame = 0;
     }
 
     dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)analyze_perform64, 0, NULL);
@@ -170,8 +216,8 @@ void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins,
     if (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
         if (!x->pending_analysis) {
             x->pending_analysis = 1;
+            analyze_log(x, "triggering worker task, current_sample_count: %lld, last_analysis_frame: %lld", x->current_sample_count, x->last_analysis_frame);
             async_worker_enqueue(x->worker, x, (method)analyze_worker_task, gensym("analyze"), 0, NULL);
-            x->last_analysis_frame = x->current_sample_count;
         }
     }
 }
@@ -182,62 +228,66 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         return;
     }
 
-    // Incremental Model: We send only the NEW 100ms hop to the C core.
     int hop_samples = (int)(x->sample_rate * 0.1);
-
-    // The "current" 100ms hop we just filled in the circular buffer
-    int hop_start_samples = x->last_analysis_frame - hop_samples;
-    if (hop_start_samples < 0) {
-        x->pending_analysis = 0;
-        return;
-    }
-
-    float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
-    if (!hop_audio) {
-        x->pending_analysis = 0;
-        return;
-    }
-
-    int read_ptr = (x->audio_buffer_write_ptr - (x->current_sample_count - hop_start_samples) + x->audio_buffer_size) % x->audio_buffer_size;
-    for (int i = 0; i < hop_samples; i++) {
-        hop_audio[i] = x->audio_buffer[read_ptr];
-        read_ptr = (read_ptr + 1) % x->audio_buffer_size;
-    }
-
-    // Calculation of global frames for the C core's internal alignment
     int ms_samples = (int)(x->sample_rate * 0.001);
 
-    // Buffer start frame in the C core's internal 15.2s cache.
-    // If the cache is full, it's (active_start_frame - 15000).
-    int active_start_samples = x->last_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2);
-    int active_start_frame = active_start_samples / ms_samples;
+    int hops_processed = 0;
+    // We process all hops that have accumulated since last_analysis_frame
+    while (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
+        if (x->invalidated) break;
 
-    int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
-    if (window_start_samples < 0) window_start_samples = 0;
-    int buffer_start_frame = window_start_samples / ms_samples;
+        long long target_analysis_frame = x->last_analysis_frame + hop_samples;
+        int hop_start_samples = (int)(target_analysis_frame - hop_samples);
 
-    if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
+        float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
+        if (!hop_audio) break;
 
-        for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
-            PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
+        // Calculate read pointer relative to current write pointer
+        // We need the data that was at [hop_start_samples, target_analysis_frame]
+        long long samples_ago = x->current_sample_count - hop_start_samples;
+        int read_ptr = (int)((x->audio_buffer_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
 
-            t_atom out_args[2];
-            atom_setlong(out_args, pr->band_idx);
-            atom_setfloat(out_args + 1, pr->total_score);
-            defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+        for (int i = 0; i < hop_samples; i++) {
+            hop_audio[i] = x->audio_buffer[read_ptr];
+            read_ptr = (read_ptr + 1) % x->audio_buffer_size;
         }
 
-        t_atom out_args[5];
-        atom_setfloat(out_args, x->result_buffer->metrics.rating);
-        atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
-        atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
-        atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
-        float barlen = x->result_buffer->metrics.highest_peak_valid ? (float)fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0f;
-        atom_setfloat(out_args + 4, barlen);
-        defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
+        int active_start_samples = (int)(target_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2));
+        int active_start_frame = active_start_samples / ms_samples;
+
+        int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
+        if (window_start_samples < 0) window_start_samples = 0;
+        int buffer_start_frame = window_start_samples / ms_samples;
+
+        if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
+            hops_processed++;
+            for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+                PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
+                t_atom out_args[2];
+                atom_setlong(out_args, pr->band_idx);
+                atom_setfloat(out_args + 1, pr->total_score);
+                defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+            }
+
+            t_atom out_args[5];
+            atom_setfloat(out_args, x->result_buffer->metrics.rating);
+            atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
+            atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
+            atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
+            float barlen = x->result_buffer->metrics.highest_peak_valid ? (float)fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0f;
+            atom_setfloat(out_args + 4, barlen);
+            defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
+        }
+
+        free(hop_audio);
+        x->last_analysis_frame = target_analysis_frame;
+        analyze_log(x, "processed chunk at %lld samples, num_peaks: %d", target_analysis_frame, x->result_buffer->peak_list.num_peaks);
     }
 
-    free(hop_audio);
+    if (hops_processed > 1) {
+        analyze_log(x, "catch-up complete: processed %d hops", hops_processed);
+    }
+
     x->pending_analysis = 0;
 }
 
