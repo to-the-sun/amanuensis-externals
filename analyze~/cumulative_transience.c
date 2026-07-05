@@ -152,14 +152,21 @@ double analyzer_get_max_peak(TransientAnalyzer* self) { return self->max_peak; }
 
 int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, int band_idx, double time, const float* env_ptr, int env_len, const int* all_valid_peak_indices, int all_valid_count, double detected_peak_val, double thresh_val, double left_min, double right_min, double prominence, PeakResult* result_out) {
     result_out->p_idx = p_idx; result_out->band_idx = band_idx; result_out->time = time;
-    result_out->peak_val = (double)env_ptr[p_idx]; result_out->total_score = 0;
+    result_out->peak_val = prominence; result_out->total_score = 0;
     result_out->detected_peak_val = detected_peak_val; result_out->thresh_val = thresh_val;
     result_out->left_min = left_min; result_out->right_min = right_min; result_out->prominence = prominence;
     result_out->num_qualifiers = 0;
     int start = p_idx - 5000;
+    int nf = self->cache_count;
+    int rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
     for (int i = 0; i < BUFFER_LEN; i++) {
         int idx = start + i;
-        result_out->snapshot[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
+        if (idx < 0 || idx >= env_len) {
+            result_out->snapshot[i] = 0.0;
+        } else {
+            int cache_idx = (rptr + idx) % CACHE_SIZE;
+            result_out->snapshot[i] = (double)calculate_prominence_global(self, band_idx, cache_idx, NULL, NULL);
+        }
     }
     double norm = (self->max_peak > 0) ? (result_out->peak_val / self->max_peak) : 1.0;
     for (int i = 0; i < BUFFER_LEN; i++) result_out->snapshot[i] *= norm;
@@ -510,7 +517,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         free(tp); free(tt); free(tl); free(tr); free(tm);
     }
     float gmax = 0; bool any = false;
-    for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < bpeak_counts[b]; i++) { float v = envs[b][bpeaks[b][i]]; if (!any || v > gmax) { gmax = v; any = true; } }
+    for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < bpeak_counts[b]; i++) { float v = bp[b][i]; if (!any || v > gmax) { gmax = v; any = true; } }
     if (any && gmax > (float)self->max_peak) {
         self->max_peak = (double)gmax;
     }

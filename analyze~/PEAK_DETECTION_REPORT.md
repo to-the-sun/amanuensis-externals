@@ -50,7 +50,8 @@ The system now utilizes an adaptive half-max-based approach to replace the histo
 1.  **Half-Max Thresholding**: Both the primary detection threshold and the prominence threshold use a **dynamic historical peak-based rolling half-max**.
 2.  **Dynamic Sub-Window**: The threshold is calculated from a sub-window at the end of the 15s flux cache. The size of this sub-window (`midpoint_lookback`) is dynamic per frequency band, calculated as `15000.0 - (15000.0 / current_quantity_in_previous_lookback)`. If peaks are sparse (0 or 1), the window expands to the full 15,000ms.
 3.  **Adaptive Prominence**: A peak is only valid if its prominence is **greater than the rolling half-max** of the band's flux (`prom > half_max`). This ensures that a peak must stand out significantly relative to the typical activity level of that band.
-4.  **Visual Representation**: In the visualizer, horizontal threshold lines show this **dynamic historical peak-based rolling flux half-max**.
+4.  **Prominence-Based Snapshots**: The cumulative history buffer and scoring mechanism now utilize **prominence** instead of raw spectral flux. Each peak's 5-second snapshot represents the prominence of the smoothed flux at each frame, normalized by the maximum peak prominence seen in the 15.2s window.
+5.  **Visual Representation**: In the visualizer, horizontal threshold lines show this **dynamic historical peak-based rolling flux half-max**.
 
 ## 4. Resolved Historical Challenges
 
