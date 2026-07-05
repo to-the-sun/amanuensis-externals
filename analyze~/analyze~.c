@@ -11,9 +11,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 
 #define MAX_AUDIO_SECONDS 60
 #define ANALYSIS_HOP_MS 100
+
+typedef struct _shared_buffer_entry {
+    t_symbol* name;
+    SharedTransientBuffer* buffer;
+    t_critical lock;
+    int ref_count;
+    struct _shared_buffer_entry* next;
+} t_shared_buffer_entry;
+
+static t_shared_buffer_entry* g_shared_buffers = NULL;
+static t_critical g_shared_buffers_lock;
 
 typedef struct _analyze {
     t_pxobject obj;
@@ -29,6 +41,7 @@ typedef struct _analyze {
 
     // Attributes
     long log_enabled;
+    t_symbol* group_name;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -56,6 +69,7 @@ typedef struct _analyze {
 
 void* analyze_new(t_symbol* s, long argc, t_atom* argv);
 void analyze_free(t_analyze* x);
+void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv);
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_peak(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -70,9 +84,15 @@ static t_class* analyze_class;
 void ext_main(void* r) {
     t_class* c = class_new("analyze~", (method)analyze_new, (method)analyze_free, sizeof(t_analyze), 0L, A_GIMME, 0);
 
+    critical_new(&g_shared_buffers_lock);
+
     CLASS_ATTR_LONG(c, "log", 0, t_analyze, log_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
     CLASS_ATTR_STYLE_LABEL(c, "log", 0, "checkbox", "Log Diagnostics");
+
+    CLASS_ATTR_SYM(c, "group", 0, t_analyze, group_name);
+    CLASS_ATTR_ACCESSORS(c, "group", NULL, (method)analyze_group_settor);
+    CLASS_ATTR_LABEL(c, "group", 0, "Shared Group Name");
 
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
@@ -88,15 +108,6 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
     if (x) {
         dsp_setup((t_pxobject*)x, 1);
 
-        // Outlets (Right-to-Left order of creation means Left-to-Right in Max)
-        // 0: List (Leftmost)
-        // 1: Bar Length
-        // 2: Rating
-        // 3: StdDev
-        // 4: Contrast
-        // 5: PeakStd
-        // 6: Log (Rightmost)
-
         x->outlet_log = outlet_new(x, NULL);        // Outlet 6
         x->outlet_peakstd = floatout(x);           // Outlet 5
         x->outlet_contrast = floatout(x);          // Outlet 4
@@ -107,7 +118,8 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         critical_new(&x->lock);
 
-        x->analyzer = analyzer_create(1.0);
+        x->group_name = gensym("");
+        x->analyzer = NULL;
         x->worker = async_worker_create();
 
         x->audio_buffer = NULL;
@@ -124,6 +136,10 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         attr_args_process(x, argc, argv);
+
+        if (!x->analyzer) {
+            x->analyzer = analyzer_create(1.0, NULL, x->lock, (ct_lock_func)critical_enter, (ct_lock_func)critical_exit);
+        }
     }
     return x;
 }
@@ -143,10 +159,71 @@ void analyze_free(t_analyze* x) {
         analyzer_destroy(x->analyzer);
     }
 
+    if (x->group_name && x->group_name != gensym("")) {
+        critical_enter(g_shared_buffers_lock);
+        t_shared_buffer_entry* curr = g_shared_buffers;
+        t_shared_buffer_entry* prev = NULL;
+        while (curr) {
+            if (curr->name == x->group_name) {
+                curr->ref_count--;
+                if (curr->ref_count <= 0) {
+                    if (prev) prev->next = curr->next;
+                    else g_shared_buffers = curr->next;
+                    critical_free(curr->lock);
+                    free(curr->buffer);
+                    free(curr);
+                }
+                break;
+            }
+            prev = curr;
+            curr = curr->next;
+        }
+        critical_exit(g_shared_buffers_lock);
+    }
+
     if (x->result_buffer) free(x->result_buffer);
 
     free(x->audio_buffer);
     critical_free(x->lock);
+}
+
+void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv) {
+    if (argc > 0 && atom_gettype(argv) == A_SYM) {
+        t_symbol* name = atom_getsym(argv);
+        if (name != x->group_name) {
+            if (x->analyzer) {
+                object_error((t_object*)x, "cannot change @group after initialization");
+                return;
+            }
+            x->group_name = name;
+            if (x->group_name != gensym("")) {
+                critical_enter(g_shared_buffers_lock);
+                t_shared_buffer_entry* curr = g_shared_buffers;
+                while (curr) {
+                    if (curr->name == x->group_name) {
+                        curr->ref_count++;
+                        x->analyzer = analyzer_create(1.0, curr->buffer, curr->lock, (ct_lock_func)critical_enter, (ct_lock_func)critical_exit);
+                        break;
+                    }
+                    curr = curr->next;
+                }
+                if (!curr) {
+                    t_shared_buffer_entry* entry = (t_shared_buffer_entry*)malloc(sizeof(t_shared_buffer_entry));
+                    entry->name = x->group_name;
+                    entry->buffer = (SharedTransientBuffer*)calloc(1, sizeof(SharedTransientBuffer));
+                    entry->buffer->min_score_seen = DBL_MAX;
+                    entry->buffer->max_score_seen = -DBL_MAX;
+                    entry->buffer->max_peak = 1.0;
+                    critical_new(&entry->lock);
+                    entry->ref_count = 1;
+                    entry->next = g_shared_buffers;
+                    g_shared_buffers = entry;
+                    x->analyzer = analyzer_create(1.0, entry->buffer, entry->lock, (ct_lock_func)critical_enter, (ct_lock_func)critical_exit);
+                }
+                critical_exit(g_shared_buffers_lock);
+            }
+        }
+    }
 }
 
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {

@@ -57,6 +57,12 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="group" get="1" set="1" type="symbol" size="1">
+			<digest>Shared Group Name</digest>
+			<description>
+				Sets the name of the shared memory group. Objects with the same group name will share a cumulative history buffer, allowing their transience analysis to be context-aware of each other. This enables inter-stream rhythmic reinforcement and global transience density calculations. If no group is specified, the object uses a private buffer. Note: This attribute can only be set during object instantiation.
+			</description>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

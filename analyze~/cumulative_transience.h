@@ -62,6 +62,17 @@ typedef struct {
 
 #define MAX_PEAKS_PER_CHUNK 64
 
+typedef void (*ct_lock_func)(void* lock_obj);
+
+typedef struct {
+    double accumulated_buffer[BUFFER_LEN];
+    double max_peak;
+    double min_score_seen;
+    double max_score_seen;
+    double total_score_sum;
+    int score_count;
+} SharedTransientBuffer;
+
 typedef struct {
     PeakResult peaks[MAX_PEAKS_PER_CHUNK];
     int num_peaks;
@@ -76,14 +87,20 @@ typedef struct {
 } ChunkAnalysisResult;
 
 typedef struct {
-    double accumulated_buffer[BUFFER_LEN];
-    double buffer_times[BUFFER_LEN];
-    double max_peak;
+    SharedTransientBuffer* shared_buffer;
+    void* lock_obj;
+    ct_lock_func lock_func;
+    ct_lock_func unlock_func;
 
-    double min_score_seen;
-    double max_score_seen;
-    double total_score_sum;
-    int score_count;
+    double private_accumulated_buffer[BUFFER_LEN];
+    double buffer_times[BUFFER_LEN];
+    double private_max_peak;
+
+    double private_min_score_seen;
+    double private_max_score_seen;
+    double private_total_score_sum;
+    int private_score_count;
+
     double highest_peak_ms;
     double midpoint_lookback[MAX_BANDS];
     double lookback_avg_delta[MAX_BANDS];
@@ -125,7 +142,7 @@ typedef struct {
     long long total_samples_received;
 } TransientAnalyzer;
 
-TransientAnalyzer* analyzer_create(double max_peak_value);
+TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func);
 void analyzer_destroy(TransientAnalyzer* self);
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr);
 double analyzer_get_max_peak(TransientAnalyzer* self);
