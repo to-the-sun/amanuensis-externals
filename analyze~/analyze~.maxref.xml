@@ -63,6 +63,12 @@
 				Sets the name of the shared memory group. Objects with the same group name will share a cumulative history buffer, allowing their transience analysis to be context-aware of each other. This enables inter-stream rhythmic reinforcement and global transience density calculations. If no group is specified, the object uses a private buffer. Note: This attribute can only be set during object instantiation.
 			</description>
 		</attribute>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Log Diagnostics</digest>
+			<description>
+				Enables or disables detailed diagnostic logging. When enabled (1), internal analysis states, peak detection events, and performance metrics are sent to the rightmost outlet. This is useful for debugging and fine-tuning the analyzer's behavior.
+			</description>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
