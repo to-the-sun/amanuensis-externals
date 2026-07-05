@@ -358,7 +358,7 @@ def generate_video(audio_path, data):
         else: print("Error: ffmpeg not found."); return None
     except Exception as e: traceback.print_exc(); return None
 
-def analyze_audio_unified(file_path):
+def analyze_audio(file_path):
     ensure_initialized()
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
     print(f"Analyzing {file_path}...")
@@ -376,7 +376,7 @@ def main():
     audio_files.sort()
     for f in audio_files:
         if not os.path.exists(f): continue
-        result = analyze_audio_unified(f)
+        result = analyze_audio(f)
         if result: generate_video(f, result)
 
 if __name__ == "__main__":
