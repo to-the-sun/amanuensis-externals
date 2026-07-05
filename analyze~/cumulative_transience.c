@@ -58,6 +58,45 @@ static float calculate_half_max(float* values, int n) {
     return max_v / 2.0f;
 }
 
+static float calculate_prominence_global(TransientAnalyzer* self, int band_idx, int cache_idx, float* lmin_out, float* rmin_out) {
+    int nf = self->cache_count;
+    if (nf <= 0) {
+        if (lmin_out) *lmin_out = 0;
+        if (rmin_out) *rmin_out = 0;
+        return 0;
+    }
+
+    int rptr = (self->cache_write_ptr - nf + CACHE_SIZE) % CACHE_SIZE;
+    // Find how many steps we can go back from cache_idx to reach rptr
+    int steps_back = (cache_idx - rptr + CACHE_SIZE) % CACHE_SIZE;
+    // Find how many steps we can go forward from cache_idx to reach the latest frame (write_ptr - 1)
+    int latest_idx = (self->cache_write_ptr - 1 + CACHE_SIZE) % CACHE_SIZE;
+    int steps_forward = (latest_idx - cache_idx + CACHE_SIZE) % CACHE_SIZE;
+
+    float val = self->dynamic_smoothings[band_idx * CACHE_SIZE + cache_idx];
+    float lmin = val;
+    // Search backwards in the global circular buffer until rptr (oldest valid frame)
+    for (int k = 1; k <= steps_back; k++) {
+        int idx = (cache_idx - k + CACHE_SIZE) % CACHE_SIZE;
+        float v = self->dynamic_smoothings[band_idx * CACHE_SIZE + idx];
+        if (v > val) break;
+        if (v < lmin) lmin = v;
+    }
+
+    float rmin = val;
+    // Search forwards in the global circular buffer until latest_idx (newest valid frame)
+    for (int k = 1; k <= steps_forward; k++) {
+        int idx = (cache_idx + k) % CACHE_SIZE;
+        float v = self->dynamic_smoothings[band_idx * CACHE_SIZE + idx];
+        if (v > val) break;
+        if (v < rmin) rmin = v;
+    }
+
+    if (lmin_out) *lmin_out = lmin;
+    if (rmin_out) *rmin_out = rmin;
+    return val - (lmin > rmin ? lmin : rmin);
+}
+
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels);
 
 TransientAnalyzer* analyzer_create(double max_peak_value) {
@@ -445,19 +484,13 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
                     bool replaced = false, too_close = false;
                     if (pc > 0 && f - tp[pc-1] < 200) { too_close = true; if (env[f] > env[tp[pc-1]]) replaced = true; }
                     if (!too_close || replaced) {
-                        float lmin = env[f]; for(int k=f-1; k>=0; k--) { if (env[k] > env[f]) break; if (env[k] < lmin) lmin = env[k]; }
-                        float rmin = env[f]; for(int k=f+1; k<nf; k++) { if (env[k] > env[f]) break; if (env[k] < rmin) rmin = env[k]; }
-                        
-                        // New Peak Detection Logic:
-                        // Use prominence of SMOOTHED flux vs running average of SMOOTHED flux
-                        float fv_s = sm_envs[b][f];
-                        float lmin_s = fv_s; for(int k=f-1; k>=0; k--) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < lmin_s) lmin_s = sm_envs[b][k]; }
-                        float rmin_s = fv_s; for(int k=f+1; k<nf; k++) { if (sm_envs[b][k] > fv_s) break; if (sm_envs[b][k] < rmin_s) rmin_s = sm_envs[b][k]; }
-                        float prom_s = fv_s - (lmin_s > rmin_s ? lmin_s : rmin_s);
+                        float lmin_s, rmin_s;
+                        int cache_idx_f = (rptr + f) % CACHE_SIZE;
+                        float prom_s = calculate_prominence_global(self, b, cache_idx_f, &lmin_s, &rmin_s);
 
                         if (prom_s > self->smoothing_avgs[b]) {
-                            if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin; tr[pc-1] = rmin; tm[pc-1] = prom_s; }
-                            else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin; tr[pc] = rmin; tm[pc] = prom_s; pc++; }
+                            if (replaced) { tp[pc-1] = f; tt[pc-1] = thr[f]; tl[pc-1] = lmin_s; tr[pc-1] = rmin_s; tm[pc-1] = prom_s; }
+                            else { tp[pc] = f; tt[pc] = thr[f]; tl[pc] = lmin_s; tr[pc] = rmin_s; tm[pc] = prom_s; pc++; }
                         }
                     }
                 }
@@ -497,25 +530,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             if (lf >= 0 && lf < nf) {
                 int cache_idx = (rptr + (int)lf) % CACHE_SIZE;
                 smooth = self->dynamic_smoothings[b * CACHE_SIZE + cache_idx];
-
-                float fv = smooth;
-                float lmin = fv;
-                // Search backwards in the global circular buffer
-                for (int k = 1; k < nf + 15000; k++) {
-                    int idx = (cache_idx - k + CACHE_SIZE) % CACHE_SIZE;
-                    float val = self->dynamic_smoothings[b * CACHE_SIZE + idx];
-                    if (val > fv) break;
-                    if (val < lmin) lmin = val;
-                }
-                float rmin = fv;
-                // Search forwards in the global circular buffer
-                for (int k = 1; k < nf; k++) {
-                    int idx = (cache_idx + k) % CACHE_SIZE;
-                    float val = self->dynamic_smoothings[b * CACHE_SIZE + idx];
-                    if (val > fv) break;
-                    if (val < rmin) rmin = val;
-                }
-                prom = fv - (lmin > rmin ? lmin : rmin);
+                prom = calculate_prominence_global(self, b, cache_idx, NULL, NULL);
                 
                 // Store calculated prominence in the persistent cache
                 self->prominence_envelopes[b * CACHE_SIZE + cache_idx] = prom;
