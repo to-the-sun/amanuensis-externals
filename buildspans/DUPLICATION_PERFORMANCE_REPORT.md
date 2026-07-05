@@ -7,14 +7,18 @@ In many musical patches, `offset`, `note`, and `bang` messages are delivered via
 
 ## Architectural Improvements
 
-### 1. Robust Async Offloading (Implemented)
-The threading logic has been updated to offload work to a background thread when `@async` is enabled, regardless of whether the call originates from the **Main**, **Audio**, or **Scheduler** thread. This ensures that the high-priority audio engine is never blocked by expensive duplication or dictionary modification tasks.
-- **Recursion Safety:** A new `async_worker_is_worker_thread()` check ensures that the background worker itself doesn't try to re-enqueue its own work, which prevents infinite loops and deadlocks.
-- **Entry Point Consistency:** All primary entry points (`offset`, `list`, `bang`, `track`, `clear`, `local_bar_length`) have been unified to use this robust offloading strategy.
+*Currently focused on structural integrity and preparatory work for hierarchical migration.*
 
 ## Speculative Future Work
 
 Detailed implementation steps for the following items can be found in [HIERARCHICAL_MIGRATION_STRATEGY.md](HIERARCHICAL_MIGRATION_STRATEGY.md).
+
+### 1. Robust Async Offloading (Pending Re-implementation)
+This feature was previously implemented to offload work regardless of the originating thread (Main, Audio, or Scheduler), but was **rolled back** due to instability in future versions.
+The threading logic should be updated to offload work to a background thread when `@async` is enabled, regardless of whether the call originates from the **Main**, **Audio**, or **Scheduler** thread. This ensures that the high-priority audio engine is never blocked by expensive duplication or dictionary modification tasks.
+- **Recursion Safety:** Re-implementing the `async_worker_is_worker_thread()` check to prevent infinite loops.
+- **Entry Point Consistency:** Unifying all entry points (`offset`, `list`, `bang`, `track`, `clear`, `local_bar_length`) under a single offloading strategy.
+- **Ecosystem Coordination:** In a complex patch involving `rebar` and `@bind`, the re-implementation must ensure that all objects share a single `t_async_worker` context where appropriate, and that pointer handoffs between `buildspans` and `crucible` are thread-safe and non-blocking.
 
 ### 2. Hierarchical Dictionary Structure (Not Yet Implemented)
 Previously, `buildSpans` used a "flat" dictionary key structure (e.g., `palette::track::bar::property`). This forced the duplication process to perform linear scans ($O(N^2)$ complexity) to find and copy keys belonging to a specific track.
