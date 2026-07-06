@@ -20,14 +20,14 @@
 		</inlet>
 		<inlet id="1" type="signal">
 			<digest>Transport Clock Input (signal)</digest>
-			<description>Accepts a signal representing the current transport clock time. This value is buffered and used to provide compensated timestamps for detected peaks.</description>
+			<description>Accepts a signal representing the current transport clock time. This value is buffered and used to provide compensated timestamps for detected peaks. If no signal is connected to this inlet, the object maintains backwards compatibility and omits the clock value from its output.</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="0" type="list">
-			<digest>Peak Scores [band, clock, score]</digest>
-			<description>Outputs a three-part list whenever a transient peak is detected. The first element is the frequency band index (0:Sub, 1:Bass, 2:Mid, 3:Hi), the second is the compensated transport clock value at the exact moment of the peak, and the third is the calculated transience score (Flux * Resonance Qualifier sum).</description>
+			<digest>Peak Scores [band, (clock), score]</digest>
+			<description>Outputs a list whenever a transient peak is detected. If a signal is connected to the second inlet, the list contains three elements: [band index, compensated clock value, transience score]. If no signal is connected, it outputs the legacy two-element list: [band index, transience score].</description>
 		</outlet>
 		<outlet id="1" type="float">
 			<digest>Bar Length (ms)</digest>

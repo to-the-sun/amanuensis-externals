@@ -57,6 +57,7 @@ typedef struct _analyze {
     volatile long long current_sample_count;
     volatile long long last_analysis_frame;
     int last_peak_frame[MAX_BANDS];
+    long clock_connected;
 
     // Async Worker
     t_async_worker* worker;
@@ -270,6 +271,7 @@ void analyze_output_log(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
 void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
     x->sample_rate = samplerate;
+    x->clock_connected = count[1];
     analyzer_set_sample_rate(x->analyzer, (int)samplerate);
 
     int new_size = (int)(samplerate * MAX_AUDIO_SECONDS);
@@ -355,16 +357,23 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
                 PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
-                long long peak_sample = (long long)pr->p_idx * ms_samples;
-                long long samples_ago = cur_samples - peak_sample;
-                int clock_idx = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
-                double clock_val = x->clock_buffer[clock_idx];
+                if (x->clock_connected) {
+                    long long peak_sample = (long long)pr->p_idx * ms_samples;
+                    long long samples_ago = cur_samples - peak_sample;
+                    int clock_idx = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
+                    double clock_val = x->clock_buffer[clock_idx];
 
-                t_atom out_args[3];
-                atom_setlong(out_args, pr->band_idx);
-                atom_setfloat(out_args + 1, clock_val);
-                atom_setfloat(out_args + 2, pr->total_score);
-                defer(x, (method)analyze_output_peak, NULL, 3, out_args);
+                    t_atom out_args[3];
+                    atom_setlong(out_args, pr->band_idx);
+                    atom_setfloat(out_args + 1, clock_val);
+                    atom_setfloat(out_args + 2, pr->total_score);
+                    defer(x, (method)analyze_output_peak, NULL, 3, out_args);
+                } else {
+                    t_atom out_args[2];
+                    atom_setlong(out_args, pr->band_idx);
+                    atom_setfloat(out_args + 1, pr->total_score);
+                    defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+                }
             }
 
             t_atom out_args[5];
