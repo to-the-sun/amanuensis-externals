@@ -117,7 +117,6 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
 
     self->highest_peak_ms = -999.0;
     memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
-    self->max_stability = 0;
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
         self->lookback_avg_delta[b] = 0.0;
@@ -333,12 +332,18 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
         int bar_length = (int)round(fabs(metrics_out->highest_peak_ms));
         if (bar_length >= 0 && bar_length <= 5000) {
             self->bar_length_counts[bar_length]++;
-            if (self->bar_length_counts[bar_length] > self->max_stability) {
-                self->max_stability = self->bar_length_counts[bar_length];
-            }
         }
     }
-    metrics_out->stability_score = (double)self->max_stability;
+
+    double stability_sum = 0;
+    int stability_count = 0;
+    for (int i = 0; i <= 5000; i++) {
+        if (self->bar_length_counts[i] > 0) {
+            stability_sum += (double)self->bar_length_counts[i];
+            stability_count++;
+        }
+    }
+    metrics_out->stability_score = (stability_count > 0) ? (stability_sum / (double)stability_count) : 0.0;
 
     // Calculate prominence averages over 15 seconds
     int nf = self->cache_count;

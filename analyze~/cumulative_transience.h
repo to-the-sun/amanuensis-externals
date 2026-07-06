@@ -108,7 +108,6 @@ typedef struct {
 
     // Bar Length History for Stability
     int bar_length_counts[5001];
-    int max_stability;
 
     // Snapshots tracking (queue per band)
     SnapshotEntry* snapshot_heads[MAX_BANDS];

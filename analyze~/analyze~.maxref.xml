@@ -47,7 +47,7 @@
 		</outlet>
 		<outlet id="5" type="float">
 			<digest>Bar Length Stability</digest>
-			<description>Outputs a score representing the stability of the rhythmic center. It maintains a histogram of the most frequent "highest peak" positions (Bar Lengths). The output value is the count of the most frequent Bar Length integer observed during the current analysis session. A higher value indicates a more stable rhythmic center.</description>
+			<description>Outputs a score representing the stability of the rhythmic center. It maintains a histogram of the frequency of "highest peak" positions (Bar Lengths). The output value is the average of the counts for all Bar Length integers observed during the current analysis session. A higher value indicates a more stable rhythmic center.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
