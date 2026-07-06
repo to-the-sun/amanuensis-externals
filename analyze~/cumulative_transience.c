@@ -116,6 +116,8 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
     }
 
     self->highest_peak_ms = -999.0;
+    memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
+    self->max_stability = 0;
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
         self->lookback_avg_delta[b] = 0.0;
@@ -143,6 +145,21 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
 
 void analyzer_destroy(TransientAnalyzer* self) {
     if (!self) return;
+
+    // Fix Ghost Peak Bug: Subtract all remaining active snapshots from shared/private buffer before destruction
+    if (self->lock_func) self->lock_func(self->lock_obj);
+    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
+    for (int b = 0; b < MAX_BANDS; b++) {
+        SnapshotEntry* curr = self->snapshot_heads[b];
+        while (curr) {
+            for (int j = 0; j < BUFFER_LEN; j++) {
+                acc_buf[j] -= curr->snapshot[j];
+            }
+            curr = curr->next;
+        }
+    }
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+
     free(self->overlap_buffer); free(self->combined_scratch); free(self->fft_real); free(self->fft_imag);
     for (int b = 0; b < MAX_BANDS; b++) {
         SnapshotEntry* curr = self->snapshot_heads[b];
@@ -307,16 +324,21 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
         if (hi_idx != -1) {
             metrics_out->highest_peak_ms = self->buffer_times[hi_idx]; metrics_out->highest_peak_valid = true;
             self->highest_peak_ms = metrics_out->highest_peak_ms;
-            if (self->peak_history_count < MAX_PEAK_HISTORY) self->peak_history[self->peak_history_count++] = metrics_out->highest_peak_ms;
         }
     }
 
     if (self->unlock_func) self->unlock_func(self->lock_obj);
-    double ph_sum = 0, ph_sum_sq = 0;
-    for (int i = 0; i < self->peak_history_count; i++) { ph_sum += self->peak_history[i]; ph_sum_sq += self->peak_history[i] * self->peak_history[i]; }
-    double ph_mean = (self->peak_history_count > 0) ? (ph_sum / self->peak_history_count) : 0;
-    double ph_var = (self->peak_history_count > 0) ? (ph_sum_sq / self->peak_history_count - ph_mean * ph_mean) : 0;
-    metrics_out->peak_std = ph_var > 0 ? sqrt(ph_var) : 0;
+
+    if (metrics_out->highest_peak_valid) {
+        int bar_length = (int)round(fabs(metrics_out->highest_peak_ms));
+        if (bar_length >= 0 && bar_length <= 5000) {
+            self->bar_length_counts[bar_length]++;
+            if (self->bar_length_counts[bar_length] > self->max_stability) {
+                self->max_stability = self->bar_length_counts[bar_length];
+            }
+        }
+    }
+    metrics_out->stability_score = (double)self->max_stability;
 
     // Calculate prominence averages over 15 seconds
     int nf = self->cache_count;
@@ -651,7 +673,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->std_devs = (double*)malloc(sizeof(double) * num_f);
     result_out->means = (double*)malloc(sizeof(double) * num_f);
     result_out->contrasts = (double*)malloc(sizeof(double) * num_f);
-    result_out->peak_stds = (double*)malloc(sizeof(double) * num_f);
+    result_out->stability_scores = (double*)malloc(sizeof(double) * num_f);
     result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
     result_out->rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
     result_out->rolling_global_smoothing_avg = (float*)calloc(num_f, sizeof(float));
@@ -706,7 +728,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->peak_stds[f] = res->metrics.peak_std; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
@@ -750,6 +772,6 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     free(result->std_devs);
     free(result->means);
     free(result->contrasts);
-    free(result->peak_stds);
+    free(result->stability_scores);
     free(result->highest_peaks_ms);
 }

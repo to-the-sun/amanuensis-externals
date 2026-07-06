@@ -7,7 +7,6 @@
 #define BUFFER_LEN 5001
 #define MAX_BANDS 4
 #define MAX_QUALIFIERS 256
-#define MAX_PEAK_HISTORY 8192
 
 typedef struct {
     double ms;
@@ -40,7 +39,7 @@ typedef struct {
     double std_dev;
     double mean;
     double contrast;
-    double peak_std;
+    double stability_score;
     double rating;
     int buffer_updated;
     double highest_peak_ms;
@@ -107,9 +106,9 @@ typedef struct {
     double lookback_total_delta[MAX_BANDS];
     int lookback_p_count[MAX_BANDS];
 
-    // Peak history
-    double peak_history[MAX_PEAK_HISTORY];
-    int peak_history_count;
+    // Bar Length History for Stability
+    int bar_length_counts[5001];
+    int max_stability;
 
     // Snapshots tracking (queue per band)
     SnapshotEntry* snapshot_heads[MAX_BANDS];
@@ -205,7 +204,7 @@ typedef struct {
     double* std_devs;
     double* means;
     double* contrasts;
-    double* peak_stds;
+    double* stability_scores;
     double* highest_peaks_ms;
 
     double min_score_seen;

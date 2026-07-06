@@ -122,7 +122,7 @@ def generate_video(audio_path, data):
         for b_peaks in data['peaks']: all_peaks.extend(b_peaks)
         all_peaks.sort(key=lambda x: x['p_idx'])
         max_peak = data['max_peak_value']; min_score_seen = data['min_score_seen']; max_score_seen = data['max_score_seen']
-        ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; peak_stds = data['peak_stds']
+        ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; stability_scores = data['stability_scores']
         fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
         smoothing_colors = ['#FF0000', '#FF4500', '#FF6347', '#CD5C5C'] # Highly distinguishable reds/oranges
@@ -260,7 +260,7 @@ def generate_video(audio_path, data):
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
-            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nPeak Std: {peak_stds[frame]:.3f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
+            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
             # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
             # However, we have access to means, std_devs, etc. We need highest_peak_ms.
             # Let's check if it's in data.
@@ -342,7 +342,7 @@ def generate_video(audio_path, data):
                     f.write(f"Rating: {ratings[-1]:.2f}\n")
                     f.write(f"Standard Deviation: {std_devs[-1]:.3f}\n")
                     f.write(f"Contrast: {contrasts[-1]:.3f}\n")
-                    f.write(f"Bar Length Deviation: {peak_stds[-1]:.3f}\n")
+                    f.write(f"Bar Length Stability: {stability_scores[-1]:.0f}\n")
                 print(f"Metrics recorded to {ratings_file}")
             else:
                 print(f"Skipping recording metrics: {project_dir} does not exist.")

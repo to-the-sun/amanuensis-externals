@@ -111,7 +111,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         dsp_setup((t_pxobject*)x, 2);
 
         x->outlet_log = outlet_new(x, NULL);        // Outlet 6
-        x->outlet_peakstd = floatout(x);           // Outlet 5
+        x->outlet_peakstd = floatout(x);           // Outlet 5 (Stability)
         x->outlet_contrast = floatout(x);          // Outlet 4
         x->outlet_stddev = floatout(x);            // Outlet 3
         x->outlet_rating = floatout(x);            // Outlet 2
@@ -243,7 +243,7 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
             case 2: sprintf(s, "(float) Rating Score"); break;
             case 3: sprintf(s, "(float) Standard Deviation"); break;
             case 4: sprintf(s, "(float) Contrast Score"); break;
-            case 5: sprintf(s, "(float) Highest Peak Deviation"); break;
+            case 5: sprintf(s, "(float) Bar Length Stability"); break;
             case 6: sprintf(s, "(symbol) Log Diagnostics"); break;
         }
     }
@@ -380,7 +380,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             atom_setfloat(out_args, x->result_buffer->metrics.rating);
             atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
             atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
-            atom_setfloat(out_args + 3, x->result_buffer->metrics.peak_std);
+            atom_setfloat(out_args + 3, x->result_buffer->metrics.stability_score);
             float barlen = x->result_buffer->metrics.highest_peak_valid ? (float)fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0f;
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
