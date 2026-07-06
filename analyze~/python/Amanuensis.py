@@ -8,6 +8,7 @@ def run_bot():
     import asyncio
     import re
     import shutil
+    import threading
     from datetime import datetime, timezone, timedelta
     from pydub import AudioSegment
 
@@ -42,6 +43,39 @@ def run_bot():
     UPLOADS_DIR = r'D:\[Library]\[Audio]\[Works]'
     PROJECTS_DIR = r'D:\[Library]\[Audio]\[Works]\[Projects]'
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    RENDERING_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rendering_log.txt')
+    log_lock = threading.Lock()
+
+    def get_rendering_log():
+        with log_lock:
+            if not os.path.exists(RENDERING_LOG):
+                return []
+            with open(RENDERING_LOG, 'r', encoding='utf-8') as f:
+                return [line.strip() for line in f if line.strip()]
+
+    def add_to_rendering_log(file_path):
+        with log_lock:
+            log = []
+            if os.path.exists(RENDERING_LOG):
+                with open(RENDERING_LOG, 'r', encoding='utf-8') as f:
+                    log = [line.strip() for line in f if line.strip()]
+            if file_path not in log:
+                with open(RENDERING_LOG, 'a', encoding='utf-8') as f:
+                    f.write(f"{file_path}\n")
+                print(f"Added to rendering log: {file_path}")
+
+    def remove_from_rendering_log(file_path):
+        with log_lock:
+            if not os.path.exists(RENDERING_LOG):
+                return
+            with open(RENDERING_LOG, 'r', encoding='utf-8') as f:
+                log = [line.strip() for line in f if line.strip()]
+            if file_path in log:
+                log.remove(file_path)
+                with open(RENDERING_LOG, 'w', encoding='utf-8') as f:
+                    for path in log:
+                        f.write(f"{path}\n")
+                print(f"Removed from rendering log: {file_path}")
 
     def filename_segments(filename):
         return [segment.lower() for segment in re.split(r'[\W_]+', filename) if segment]
@@ -92,6 +126,7 @@ def run_bot():
         Synchronous helper to perform CPU-intensive transient analysis and video generation.
         Designed to be run in a separate thread.
         """
+        add_to_rendering_log(file_path)
         try:
             print(f"Performing transient analysis for {os.path.basename(file_path)}...")
             analysis_data = analyze_files.analyze_audio(file_path)
@@ -105,6 +140,8 @@ def run_bot():
                     print(f"Moved video to {dest_path}")
         except Exception as e:
             print(f"Error during transient analysis processing for {file_path}: {e}")
+        finally:
+            remove_from_rendering_log(file_path)
 
     async def periodic_task():
         await client.wait_until_ready()
@@ -112,6 +149,18 @@ def run_bot():
         if not channel:
             print(f"Channel {DEFAULT_CHANNEL} not found!")
             return
+
+        # Resume interrupted renders
+        log = get_rendering_log()
+        if log:
+            print(f"Found {len(log)} interrupted renders. Resuming...")
+            for file_path in log:
+                if os.path.exists(file_path):
+                    print(f"Resuming render for {file_path}")
+                    asyncio.create_task(asyncio.to_thread(process_transient_analysis, file_path))
+                else:
+                    print(f"File {file_path} no longer exists. Removing from rendering log.")
+                    remove_from_rendering_log(file_path)
 
         while not client.is_closed():
             try:
