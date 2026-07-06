@@ -238,7 +238,7 @@ void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
         }
     } else {
         switch (a) {
-            case 0: sprintf(s, "(list) Band, Clock, Score"); break;
+            case 0: sprintf(s, "(list) Clock, Band, Score"); break;
             case 1: sprintf(s, "(float) Bar Length (ms)"); break;
             case 2: sprintf(s, "(float) Rating Score"); break;
             case 3: sprintf(s, "(float) Standard Deviation"); break;
@@ -364,8 +364,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     double clock_val = x->clock_buffer[clock_idx];
 
                     t_atom out_args[3];
-                    atom_setlong(out_args, pr->band_idx);
-                    atom_setfloat(out_args + 1, clock_val);
+                    atom_setfloat(out_args, clock_val);
+                    atom_setlong(out_args + 1, pr->band_idx);
                     atom_setfloat(out_args + 2, pr->total_score);
                     defer(x, (method)analyze_output_peak, NULL, 3, out_args);
                 } else {
