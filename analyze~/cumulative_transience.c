@@ -99,10 +99,22 @@ static float calculate_prominence_global(TransientAnalyzer* self, int band_idx, 
 
 static double* create_mel_filterbank(int sr, int n_fft, int n_mels);
 
-TransientAnalyzer* analyzer_create(double max_peak_value) {
+TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func) {
     TransientAnalyzer* self = (TransientAnalyzer*)calloc(1, sizeof(TransientAnalyzer));
     if (!self) return NULL;
-    self->max_peak = max_peak_value;
+    self->shared_buffer = shared_buffer;
+    self->lock_obj = lock_obj;
+    self->lock_func = lock_func;
+    self->unlock_func = unlock_func;
+
+    if (!self->shared_buffer) {
+        self->private_max_peak = max_peak_value;
+        self->private_min_score_seen = DBL_MAX;
+        self->private_max_score_seen = -DBL_MAX;
+        self->private_total_score_sum = 0;
+        self->private_score_count = 0;
+    }
+
     self->highest_peak_ms = -999.0;
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
@@ -148,7 +160,10 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
     for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - 5000) * self->frame_duration_ms;
 }
 
-double analyzer_get_max_peak(TransientAnalyzer* self) { return self->max_peak; }
+double analyzer_get_max_peak(TransientAnalyzer* self) {
+    if (self->shared_buffer) return self->shared_buffer->max_peak;
+    return self->private_max_peak;
+}
 
 int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, int band_idx, double time, const float* env_ptr, int env_len, const int* all_valid_peak_indices, int all_valid_count, double detected_peak_val, double thresh_val, double left_min, double right_min, double prominence, PeakResult* result_out) {
     result_out->p_idx = p_idx; result_out->band_idx = band_idx; result_out->time = time;
@@ -161,23 +176,25 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         int idx = start + i;
         result_out->snapshot[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
     }
-    double norm = (self->max_peak > 0) ? (result_out->peak_val / self->max_peak) : 1.0;
+
+    if (self->lock_func) self->lock_func(self->lock_obj);
+
+    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
+    double max_peak = self->shared_buffer ? self->shared_buffer->max_peak : self->private_max_peak;
+
+    double norm = (max_peak > 0) ? (result_out->peak_val / max_peak) : 1.0;
     for (int i = 0; i < BUFFER_LEN; i++) result_out->snapshot[i] *= norm;
     double q_sum = 0.0; bool found = false;
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = BUFFER_LEN - 99; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
     if (m_len > 0) {
-        max_v = self->accumulated_buffer[0];
-        min_v = self->accumulated_buffer[0];
+        max_v = acc_buf[0];
+        min_v = acc_buf[0];
         for (int i = 0; i < m_len; i++) {
-            double v = self->accumulated_buffer[i];
+            double v = acc_buf[i];
             sum += v;
-            if (v > max_v) {
-                max_v = v;
-            }
-            if (v < min_v) {
-                min_v = v;
-            }
+            if (v > max_v) max_v = v;
+            if (v < min_v) min_v = v;
         }
     }
     double avg = (m_len > 0) ? (sum / (double)m_len) : 0.0;
@@ -186,7 +203,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         // Qualifiers must be at least 99ms in the past to avoid self-reference.
         if (s_idx >= p_idx - 5000 && s_idx <= p_idx - 99) {
             int sp_idx = 5000 - (p_idx - s_idx);
-            double val = self->accumulated_buffer[sp_idx];
+            double val = acc_buf[sp_idx];
             double q = 0.0;
             if (val > avg) {
                 if (max_v > avg) {
@@ -207,10 +224,21 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         }
     }
     if (found) result_out->total_score = result_out->peak_val * q_sum;
-    if (result_out->total_score < self->min_score_seen) self->min_score_seen = result_out->total_score;
-    if (result_out->total_score > self->max_score_seen) self->max_score_seen = result_out->total_score;
-    self->total_score_sum += result_out->total_score; self->score_count++;
-    for (int i = 0; i < BUFFER_LEN; i++) self->accumulated_buffer[i] += result_out->snapshot[i];
+
+    if (self->shared_buffer) {
+        if (result_out->total_score < self->shared_buffer->min_score_seen) self->shared_buffer->min_score_seen = result_out->total_score;
+        if (result_out->total_score > self->shared_buffer->max_score_seen) self->shared_buffer->max_score_seen = result_out->total_score;
+        self->shared_buffer->total_score_sum += result_out->total_score; self->shared_buffer->score_count++;
+    } else {
+        if (result_out->total_score < self->private_min_score_seen) self->private_min_score_seen = result_out->total_score;
+        if (result_out->total_score > self->private_max_score_seen) self->private_max_score_seen = result_out->total_score;
+        self->private_total_score_sum += result_out->total_score; self->private_score_count++;
+    }
+
+    for (int i = 0; i < BUFFER_LEN; i++) acc_buf[i] += result_out->snapshot[i];
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
     if (entry) {
         entry->p_idx = global_p_idx;
@@ -224,37 +252,57 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
 
 static bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame) {
     int cleanup = frame - 15000; bool updated = false;
+
+    if (self->lock_func) self->lock_func(self->lock_obj);
+    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
+
     for (int b = 0; b < MAX_BANDS; b++) {
         while (self->snapshot_heads[b] && self->snapshot_heads[b]->p_idx <= cleanup) {
             SnapshotEntry* e = self->snapshot_heads[b];
-            for (int j = 0; j < BUFFER_LEN; j++) self->accumulated_buffer[j] -= e->snapshot[j];
+            for (int j = 0; j < BUFFER_LEN; j++) acc_buf[j] -= e->snapshot[j];
             self->snapshot_heads[b] = e->next; if (!self->snapshot_heads[b]) self->snapshot_tails[b] = NULL;
             free(e); updated = true;
         }
     }
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+
     return updated;
 }
 
 void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out) {
     bool updated = analyzer_cleanup_snapshots(self, frame);
+
+    if (self->lock_func) self->lock_func(self->lock_obj);
+    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
+
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = BUFFER_LEN - 99; double sum = 0.0, sum_sq = 0.0, max_v = -DBL_MAX;
     if (m_len > 0) {
-        max_v = self->accumulated_buffer[0];
+        max_v = acc_buf[0];
         for (int i = 0; i < m_len; i++) {
-            double v = self->accumulated_buffer[i]; sum += v; sum_sq += v * v; if (v > max_v) max_v = v;
+            double v = acc_buf[i]; sum += v; sum_sq += v * v; if (v > max_v) max_v = v;
         }
     }
     double mean = (m_len > 0) ? (sum / (double)m_len) : 0.0;
     double var = (m_len > 0) ? (sum_sq / (double)m_len - mean * mean) : 0.0; if (var < 0) var = 0;
     metrics_out->std_dev = sqrt(var); metrics_out->mean = mean; metrics_out->contrast = (mean > 0) ? (max_v / mean) : 0;
-    metrics_out->rating = (self->score_count > 0) ? (self->total_score_sum / self->score_count) : 0;
-    metrics_out->buffer_updated = updated; metrics_out->min_score_seen = self->min_score_seen;
-    metrics_out->max_score_seen = self->max_score_seen; metrics_out->highest_peak_valid = false;
+
+    if (self->shared_buffer) {
+        metrics_out->rating = (self->shared_buffer->score_count > 0) ? (self->shared_buffer->total_score_sum / self->shared_buffer->score_count) : 0;
+        metrics_out->min_score_seen = self->shared_buffer->min_score_seen;
+        metrics_out->max_score_seen = self->shared_buffer->max_score_seen;
+    } else {
+        metrics_out->rating = (self->private_score_count > 0) ? (self->private_total_score_sum / self->private_score_count) : 0;
+        metrics_out->min_score_seen = self->private_min_score_seen;
+        metrics_out->max_score_seen = self->private_max_score_seen;
+    }
+
+    metrics_out->buffer_updated = updated; metrics_out->highest_peak_valid = false;
     if (max_v > 0.1) {
         int hi_idx = -1; double hi_val = -DBL_MAX;
         for (int i = 0; i < m_len; i++) {
-            double v = self->accumulated_buffer[i]; if (v > mean && v > hi_val) { hi_val = v; hi_idx = i; }
+            double v = acc_buf[i]; if (v > mean && v > hi_val) { hi_val = v; hi_idx = i; }
         }
         if (hi_idx != -1) {
             metrics_out->highest_peak_ms = self->buffer_times[hi_idx]; metrics_out->highest_peak_valid = true;
@@ -262,6 +310,8 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
             if (self->peak_history_count < MAX_PEAK_HISTORY) self->peak_history[self->peak_history_count++] = metrics_out->highest_peak_ms;
         }
     }
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
     double ph_sum = 0, ph_sum_sq = 0;
     for (int i = 0; i < self->peak_history_count; i++) { ph_sum += self->peak_history[i]; ph_sum_sq += self->peak_history[i] * self->peak_history[i]; }
     double ph_mean = (self->peak_history_count > 0) ? (ph_sum / self->peak_history_count) : 0;
@@ -303,7 +353,10 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     metrics_out->global_smoothing_avg = g_ssum / (double)MAX_BANDS;
 }
 
-double* analyzer_get_buffer(TransientAnalyzer* self) { return self->accumulated_buffer; }
+double* analyzer_get_buffer(TransientAnalyzer* self) {
+    if (self->shared_buffer) return self->shared_buffer->accumulated_buffer;
+    return self->private_accumulated_buffer;
+}
 
 void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int sr) {
     if (self->sample_rate != sr) {
@@ -511,8 +564,14 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
     }
     float gmax = 0; bool any = false;
     for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < bpeak_counts[b]; i++) { float v = envs[b][bpeaks[b][i]]; if (!any || v > gmax) { gmax = v; any = true; } }
-    if (any && gmax > (float)self->max_peak) {
-        self->max_peak = (double)gmax;
+    if (any) {
+        if (self->lock_func) self->lock_func(self->lock_obj);
+        if (self->shared_buffer) {
+            if (gmax > (float)self->shared_buffer->max_peak) self->shared_buffer->max_peak = (double)gmax;
+        } else {
+            if (gmax > (float)self->private_max_peak) self->private_max_peak = (double)gmax;
+        }
+        if (self->unlock_func) self->unlock_func(self->lock_obj);
     }
     int tot = 0; for (int b = 0; b < MAX_BANDS; b++) tot += bpeak_counts[b];
     PeakRef* pref = (PeakRef*)malloc(sizeof(PeakRef) * (tot + 1)); int* aind = (int*)malloc(sizeof(int) * (tot + 1));
@@ -612,7 +671,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         result_out->bands[b].peaks = NULL;
         result_out->bands[b].num_peaks = 0;
     }
-    TransientAnalyzer* a = analyzer_create(1.0); if(!a) return 0;
+    TransientAnalyzer* a = analyzer_create(1.0, NULL, NULL, NULL, NULL); if(!a) return 0;
     analyzer_set_sample_rate(a, sr); int step = hop * 100;
     PeakResult* pband[MAX_BANDS]; int pcap[MAX_BANDS];
     for(int b=0; b<MAX_BANDS; b++) { pcap[b] = 1024; pband[b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[b]); }
@@ -655,7 +714,9 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         }
         free(res);
     }
-    result_out->max_peak_value = (float)analyzer_get_max_peak(a); result_out->min_score_seen = a->min_score_seen; result_out->max_score_seen = a->max_score_seen;
+    result_out->max_peak_value = (float)analyzer_get_max_peak(a);
+    result_out->min_score_seen = a->private_min_score_seen;
+    result_out->max_score_seen = a->private_max_score_seen;
     for(int b=0; b<MAX_BANDS; b++) {
         int n = result_out->bands[b].num_peaks; result_out->bands[b].peaks = (PeakResult*)malloc(sizeof(PeakResult) * n);
         if(result_out->bands[b].peaks) memcpy(result_out->bands[b].peaks, pband[b], sizeof(PeakResult) * n);

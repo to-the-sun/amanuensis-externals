@@ -6,6 +6,16 @@ from libc.stdlib cimport malloc, free
 cnp.import_array()
 
 cdef extern from "cumulative_transience.h":
+    ctypedef void (*ct_lock_func)(void* lock_obj)
+
+    ctypedef struct SharedTransientBuffer:
+        double accumulated_buffer[5001]
+        double max_peak
+        double min_score_seen
+        double max_score_seen
+        double total_score_sum
+        int score_count
+
     ctypedef struct Qualifier:
         double ms
         double val
@@ -62,7 +72,7 @@ cdef extern from "cumulative_transience.h":
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
         pass
 
-    TransientAnalyzer_c* analyzer_create(double max_peak_value)
+    TransientAnalyzer_c* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func)
     void analyzer_destroy(TransientAnalyzer_c* self)
     void analyzer_set_sample_rate(TransientAnalyzer_c* self, int sr)
     double analyzer_get_max_peak(TransientAnalyzer_c* self)
@@ -129,6 +139,9 @@ cdef extern from "cumulative_transience.h":
     int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
 
+cdef void dummy_lock(void* lock_obj) noexcept:
+    pass
+
 cdef class TransientAnalyzer:
     cdef TransientAnalyzer_c* _c_analyzer
     cdef public double min_score_seen
@@ -137,7 +150,7 @@ cdef class TransientAnalyzer:
     cdef object _processed_peaks
 
     def __cinit__(self, double max_peak_value=1.0, int sr=44100):
-        self._c_analyzer = analyzer_create(max_peak_value)
+        self._c_analyzer = analyzer_create(max_peak_value, NULL, NULL, dummy_lock, dummy_lock)
         if self._c_analyzer == NULL:
             raise MemoryError()
         analyzer_set_sample_rate(self._c_analyzer, sr)
