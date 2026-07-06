@@ -47,8 +47,9 @@ typedef struct _analyze {
     TransientAnalyzer* analyzer;
     double sample_rate;
 
-    // Circular Buffer for Audio
+    // Circular Buffer for Audio and Clock
     float* audio_buffer;
+    double* clock_buffer;
     int audio_buffer_size;
     int audio_buffer_write_ptr;
 
@@ -106,7 +107,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
     t_analyze* x = (t_analyze*)object_alloc(analyze_class);
 
     if (x) {
-        dsp_setup((t_pxobject*)x, 1);
+        dsp_setup((t_pxobject*)x, 2);
 
         x->outlet_log = outlet_new(x, NULL);        // Outlet 6
         x->outlet_peakstd = floatout(x);           // Outlet 5
@@ -123,6 +124,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->worker = async_worker_create();
 
         x->audio_buffer = NULL;
+        x->clock_buffer = NULL;
         x->audio_buffer_size = 0;
         x->audio_buffer_write_ptr = 0;
         x->current_sample_count = 0;
@@ -184,6 +186,7 @@ void analyze_free(t_analyze* x) {
     if (x->result_buffer) free(x->result_buffer);
 
     free(x->audio_buffer);
+    free(x->clock_buffer);
     critical_free(x->lock);
 }
 
@@ -228,10 +231,13 @@ void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv) {
 
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "(signal) Audio Input");
+        switch (a) {
+            case 0: sprintf(s, "(signal) Audio Input"); break;
+            case 1: sprintf(s, "(signal) Transport Clock Input"); break;
+        }
     } else {
         switch (a) {
-            case 0: sprintf(s, "(list) Band, Score"); break;
+            case 0: sprintf(s, "(list) Band, Clock, Score"); break;
             case 1: sprintf(s, "(float) Bar Length (ms)"); break;
             case 2: sprintf(s, "(float) Rating Score"); break;
             case 3: sprintf(s, "(float) Standard Deviation"); break;
@@ -268,9 +274,11 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
 
     int new_size = (int)(samplerate * MAX_AUDIO_SECONDS);
     if (x->audio_buffer_size != new_size) {
-        analyze_log(x, "reallocating audio buffer: %d samples (%.1f seconds at %.1f Hz)", new_size, MAX_AUDIO_SECONDS, samplerate);
+        analyze_log(x, "reallocating audio and clock buffers: %d samples (%.1f seconds at %.1f Hz)", new_size, MAX_AUDIO_SECONDS, samplerate);
         free(x->audio_buffer);
+        free(x->clock_buffer);
         x->audio_buffer = (float*)calloc(new_size, sizeof(float));
+        x->clock_buffer = (double*)calloc(new_size, sizeof(double));
         x->audio_buffer_size = new_size;
         x->audio_buffer_write_ptr = 0;
         x->current_sample_count = 0;
@@ -282,9 +290,11 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
 
 void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam) {
     double* in = ins[0];
+    double* clock_in = ins[1];
 
     for (int i = 0; i < sampleframes; i++) {
         x->audio_buffer[x->audio_buffer_write_ptr] = (float)in[i];
+        x->clock_buffer[x->audio_buffer_write_ptr] = clock_in[i];
         x->audio_buffer_write_ptr = (x->audio_buffer_write_ptr + 1) % x->audio_buffer_size;
         x->current_sample_count++;
     }
@@ -311,6 +321,10 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     int hops_processed = 0;
     // We process all hops that have accumulated since last_analysis_frame
     while (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
+        // Capture current state for consistent indexing within this hop
+        long long cur_samples = x->current_sample_count;
+        int cur_write_ptr = x->audio_buffer_write_ptr;
+
         if (x->invalidated) break;
 
         long long target_analysis_frame = x->last_analysis_frame + hop_samples;
@@ -340,10 +354,17 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             hops_processed++;
             for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
                 PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
-                t_atom out_args[2];
+
+                long long peak_sample = (long long)pr->p_idx * ms_samples;
+                long long samples_ago = cur_samples - peak_sample;
+                int clock_idx = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
+                double clock_val = x->clock_buffer[clock_idx];
+
+                t_atom out_args[3];
                 atom_setlong(out_args, pr->band_idx);
-                atom_setfloat(out_args + 1, pr->total_score);
-                defer(x, (method)analyze_output_peak, NULL, 2, out_args);
+                atom_setfloat(out_args + 1, clock_val);
+                atom_setfloat(out_args + 2, pr->total_score);
+                defer(x, (method)analyze_output_peak, NULL, 3, out_args);
             }
 
             t_atom out_args[5];
