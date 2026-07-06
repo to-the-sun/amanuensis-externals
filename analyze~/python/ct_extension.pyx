@@ -39,7 +39,7 @@ cdef extern from "cumulative_transience.h":
         double std_dev
         double mean
         double contrast
-        double peak_std
+        double stability_score
         double rating
         bint buffer_updated
         double highest_peak_ms
@@ -129,7 +129,7 @@ cdef extern from "cumulative_transience.h":
         double* std_devs
         double* means
         double* contrasts
-        double* peak_stds
+        double* stability_scores
         double* highest_peaks_ms
         double min_score_seen
         double max_score_seen
@@ -239,7 +239,7 @@ cdef class TransientAnalyzer:
                 'std_dev': m.std_dev,
                 'mean': m.mean,
                 'contrast': m.contrast,
-                'peak_std': m.peak_std,
+                'stability_score': m.stability_score,
                 'rating': m.rating,
                 'buffer_updated': m.buffer_updated,
                 'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
@@ -271,7 +271,7 @@ cdef class TransientAnalyzer:
             'std_dev': m.std_dev,
             'mean': m.mean,
             'contrast': m.contrast,
-            'peak_std': m.peak_std,
+            'stability_score': m.stability_score,
             'rating': m.rating,
             'buffer_updated': m.buffer_updated,
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
@@ -413,8 +413,8 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[double, ndim=1] contrasts = np.zeros(num_frames, dtype=np.float64)
     memcpy(contrasts.data, res.contrasts, num_frames * sizeof(double))
 
-    cdef cnp.ndarray[double, ndim=1] peak_stds = np.zeros(num_frames, dtype=np.float64)
-    memcpy(peak_stds.data, res.peak_stds, num_frames * sizeof(double))
+    cdef cnp.ndarray[double, ndim=1] stability_scores = np.zeros(num_frames, dtype=np.float64)
+    memcpy(stability_scores.data, res.stability_scores, num_frames * sizeof(double))
 
     cdef cnp.ndarray[double, ndim=1] highest_peaks_ms = np.zeros(num_frames, dtype=np.float64)
     memcpy(highest_peaks_ms.data, res.highest_peaks_ms, num_frames * sizeof(double))
@@ -456,6 +456,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "std_devs": std_devs,
         "means": means,
         "contrasts": contrasts,
-        "peak_stds": peak_stds,
+        "stability_scores": stability_scores,
         "highest_peaks_ms": highest_peaks_ms
     }

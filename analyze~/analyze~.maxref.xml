@@ -46,8 +46,8 @@
 			<description>Outputs a score representing the spectral contrast detected in the signal.</description>
 		</outlet>
 		<outlet id="5" type="float">
-			<digest>Highest Peak Deviation</digest>
-			<description>Outputs the highest peak deviation currently observed in the analyzed signal.</description>
+			<digest>Bar Length Stability</digest>
+			<description>Outputs a score representing the stability of the rhythmic center. It maintains a histogram of the frequency of "highest peak" positions (Bar Lengths). The output value is the average of the counts for all Bar Length integers observed during the current analysis session. A higher value indicates a more stable rhythmic center.</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
