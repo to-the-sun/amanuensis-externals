@@ -31,9 +31,7 @@ t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom
 
 
 #ifndef REBAR_INTERNAL_BINDING
-#ifndef REBAR_INTERNAL_BINDING
 t_class *crucible_class;
-#endif
 #endif
 
 void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
@@ -720,10 +718,16 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
 }
 
 void crucible_local_bar_length(t_crucible *x, double f) {
-    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
         async_worker_enqueue(x->worker, x, (method)crucible_do_local_bar_length, NULL, 1, &a);
+        return;
+    }
+    if (x->defer && !systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        defer(x, (method)crucible_do_local_bar_length, NULL, 1, &a);
         return;
     }
     t_atom a;
@@ -942,13 +946,13 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
-    if (x->async && x->worker && !systhread_ismainthread() && !async_worker_is_worker_thread(x->worker)) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
         return;
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)crucible_anything, s, argc, argv);
+        defer(x, (method)crucible_do_anything, s, (short)argc, argv);
         return;
     }
 

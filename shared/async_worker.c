@@ -143,3 +143,12 @@ void async_worker_enqueue(t_async_worker *worker, void *x, method m, t_symbol *s
     systhread_cond_signal(worker->cond);
     systhread_mutex_unlock(worker->mutex);
 }
+
+int async_worker_is_worker_thread(t_async_worker *worker) {
+    if (!worker) return 0;
+#ifndef STANDALONE_TEST
+    return (systhread_self() == worker->thread);
+#else
+    return 0; // Not easily testable in standalone without more mocks
+#endif
+}

@@ -163,11 +163,11 @@ void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
 void buildspans_track(t_buildspans *x, long n);
-void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
-void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
-void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv);
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s);
 void buildspans_bang(t_buildspans *x);
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
@@ -220,7 +220,9 @@ void buildspans_log(t_buildspans *x, const char *fmt, ...) {
     va_end(args);
 }
 
+#ifndef REBAR_INTERNAL_BINDING
 t_class *buildspans_class;
+#endif
 
 // A single, consolidated function to get the bar length from the buffer.
 // It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
@@ -573,7 +575,7 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }
@@ -605,37 +607,28 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 }
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
-void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
     else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0);
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
-    if (x->async && x->worker) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
         async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a);
+        return;
+    }
+    if (x->defer && !systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        defer(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
     buildspans_do_offset(x, f, 0.0);
 }
 
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
-    if (x->async && x->worker && systhread_ismainthread()) {
-        t_atom a[2];
-        atom_setfloat(&a[0], f);
-        atom_setfloat(&a[1], loop_start);
-        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 2, a);
-        return;
-    }
-
-    if (x->defer && !systhread_ismainthread()) {
-        t_atom a[2];
-        atom_setfloat(&a[0], f);
-        atom_setfloat(&a[1], loop_start);
-        defer(x, (method)buildspans_offset_deferred, NULL, 2, a);
-        return;
-    }
 
     buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
 
@@ -852,12 +845,12 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 }
 
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
-void buildspans_track_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+void buildspans_track_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc > 0) buildspans_do_track(x, atom_getlong(argv));
 }
 
 void buildspans_track(t_buildspans *x, long n) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
         async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a);
@@ -883,7 +876,7 @@ void buildspans_do_track(t_buildspans *x, long n) {
 void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom *new_argv = (t_atom *)sysmem_newptr((argc + 1) * sizeof(t_atom));
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
@@ -908,7 +901,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     buildspans_do_anything(x, s, argc, argv, inlet_num);
 }
 
-void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
+void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc > 0) {
         long inlet_num = atom_getlong(argv);
         buildspans_do_anything(x, s, argc - 1, argv + 1, inlet_num);
@@ -944,7 +937,7 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
 void buildspans_float(t_buildspans *x, double f) {
     long inlet_num = proxy_getinlet((t_object *)x);
     if (inlet_num == 1) {
-        buildspans_do_offset(x, f, 0.0);
+        buildspans_offset(x, f);
     } else {
         // Fallback for other inlets if they are not already handled by specialized methods
         if (inlet_num == 0) {
@@ -961,11 +954,20 @@ void buildspans_float(t_buildspans *x, double f) {
 void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet_num = proxy_getinlet((t_object *)x);
 
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         if (inlet_num == 1) {
             async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv);
         } else {
             async_worker_enqueue(x->worker, x, (method)buildspans_do_list, s, argc, argv);
+        }
+        return;
+    }
+
+    if (x->defer && !systhread_ismainthread()) {
+        if (inlet_num == 1) {
+            defer(x, (method)buildspans_offset_deferred, s, (short)argc, argv);
+        } else {
+            defer(x, (method)buildspans_do_list, s, (short)argc, argv);
         }
         return;
     }
@@ -984,11 +986,6 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         if (!valid) {
             object_error((t_object *)x, "Offset inlet expects list [offset, loop_start] or float offset.");
         }
-        return;
-    }
-
-    if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)buildspans_do_list, s, argc, argv);
         return;
     }
 
@@ -1761,7 +1758,7 @@ void buildspans_run_cleanup(t_buildspans *x) {
 
 
 void buildspans_bang(t_buildspans *x) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
@@ -1937,10 +1934,16 @@ void buildspans_set_bar_buffer(t_buildspans *x, t_symbol *s) {
 }
 
 void buildspans_local_bar_length(t_buildspans *x, double f) {
-    if (x->async && x->worker && systhread_ismainthread()) {
+    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
         async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
+        return;
+    }
+    if (x->defer && !systhread_ismainthread()) {
+        t_atom a;
+        atom_setfloat(&a, f);
+        defer(x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
         return;
     }
     t_atom a;

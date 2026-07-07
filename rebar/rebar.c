@@ -106,6 +106,10 @@
 #define buildspans_attr_set_async rebar_buildspans_attr_set_async
 #define crucible_attr_set_async rebar_crucible_attr_set_async
 
+static t_class *rebar_notify_class;
+static t_class *rebar_buildspans_class;
+static t_class *rebar_crucible_class;
+
 // Forward declarations of the modules' structs
 struct _notify;
 
