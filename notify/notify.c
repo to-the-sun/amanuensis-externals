@@ -47,9 +47,7 @@ typedef struct _notify {
 } t_notify;
 
 #ifndef REBAR_INTERNAL_BINDING
-#ifndef REBAR_INTERNAL_BINDING
 t_class *notify_class;
-#endif
 #endif
 
 // Function prototypes

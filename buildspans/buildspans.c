@@ -220,7 +220,9 @@ void buildspans_log(t_buildspans *x, const char *fmt, ...) {
     va_end(args);
 }
 
+#ifndef REBAR_INTERNAL_BINDING
 t_class *buildspans_class;
+#endif
 
 // A single, consolidated function to get the bar length from the buffer.
 // It returns -1 on any failure (buffer not set, not found, empty, or value <= 0).
