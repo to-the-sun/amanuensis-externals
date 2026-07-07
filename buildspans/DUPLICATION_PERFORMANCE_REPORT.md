@@ -7,18 +7,17 @@ In many musical patches, `offset`, `note`, and `bang` messages are delivered via
 
 ## Architectural Improvements
 
-*Currently focused on structural integrity and preparatory work for hierarchical migration.*
+### 1. Robust Async Offloading (Implemented)
+The asynchronous offloading logic has been fully re-implemented to ensure stability and thread-agnostic performance. Previously, tasks were only offloaded if they originated from the Max Main thread, which caused high-priority **Audio** or **Scheduler** threads to block during expensive dictionary operations.
+
+The updated logic now offloads work to the background worker thread whenever `@async` is enabled, regardless of the source thread.
+- **Recursion Safety:** Utilizes the `async_worker_is_worker_thread()` check in the shared `async_worker` module to prevent infinite loops by ensuring the worker thread executes tasks synchronously while other threads enqueue them.
+- **Entry Point Consistency:** All primary entry points (`offset`, `list`, `bang`, `track`, `clear`, `local_bar_length`) have been unified under this robust offloading strategy.
+- **Ecosystem Coordination:** In complex environments (e.g., using `rebar` or `@bind`), objects now correctly share `t_async_worker` contexts where appropriate, and pointer handoffs between `buildspans` and `crucible` are thread-safe and non-blocking.
 
 ## Speculative Future Work
 
 Detailed implementation steps for the following items can be found in [HIERARCHICAL_MIGRATION_STRATEGY.md](HIERARCHICAL_MIGRATION_STRATEGY.md).
-
-### 1. Robust Async Offloading (Pending Re-implementation)
-This feature was previously implemented to offload work regardless of the originating thread (Main, Audio, or Scheduler), but was **rolled back** due to instability in future versions.
-The threading logic should be updated to offload work to a background thread when `@async` is enabled, regardless of whether the call originates from the **Main**, **Audio**, or **Scheduler** thread. This ensures that the high-priority audio engine is never blocked by expensive duplication or dictionary modification tasks.
-- **Recursion Safety:** Re-implementing the `async_worker_is_worker_thread()` check to prevent infinite loops.
-- **Entry Point Consistency:** Unifying all entry points (`offset`, `list`, `bang`, `track`, `clear`, `local_bar_length`) under a single offloading strategy.
-- **Ecosystem Coordination:** In a complex patch involving `rebar` and `@bind`, the re-implementation must ensure that all objects share a single `t_async_worker` context where appropriate, and that pointer handoffs between `buildspans` and `crucible` are thread-safe and non-blocking.
 
 ### 2. Hierarchical Dictionary Structure (Not Yet Implemented)
 Previously, `buildSpans` used a "flat" dictionary key structure (e.g., `palette::track::bar::property`). This forced the duplication process to perform linear scans ($O(N^2)$ complexity) to find and copy keys belonging to a specific track.
