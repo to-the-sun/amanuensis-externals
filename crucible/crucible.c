@@ -520,10 +520,12 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         // Get or create incumbent track dictionary
         if (!dictionary_hasentry(incumbent_dict, track_sym)) {
             incumbent_track_dict = dictionary_new();
-            dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
-            object_release((t_object *)incumbent_track_dict);
-            // Re-retrieve to ensure we have the internal pointer
-            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+            if (incumbent_track_dict) {
+                dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
+                object_release((t_object *)incumbent_track_dict);
+                // Re-retrieve to ensure we have the internal pointer
+                dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+            }
         } else {
             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
         }
@@ -599,9 +601,11 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                      dictionary_deleteentry(incumbent_track_dict, bar_sym);
                 }
                 t_dictionary *copy = dictionary_deep_copy(challenger_bar_dict);
-                dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copy);
-                object_release((t_object *)copy);
-                crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
+                if (copy) {
+                    dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)copy);
+                    object_release((t_object *)copy);
+                    crucible_log(x, "  -> Wrote bar %s to incumbent track %s", bar_sym->s_name, track_sym->s_name);
+                }
             }
         }
 
@@ -1101,28 +1105,38 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_dictionary *track_dict = NULL;
         if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
             track_dict = dictionary_new();
-            dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
-            object_release((t_object *)track_dict);
-            dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
+            if (track_dict) {
+                dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
+                object_release((t_object *)track_dict);
+                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
+            }
         } else {
             dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
         }
 
-        // Get or create bar dictionary
-        t_dictionary *bar_dict = NULL;
-        if (!dictionary_hasentry(track_dict, bar_sym)) {
-            bar_dict = dictionary_new();
-            dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
-            object_release((t_object *)bar_dict);
-            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-        } else {
-            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-        }
+        if (track_dict) {
+            // Get or create bar dictionary
+            t_dictionary *bar_dict = NULL;
+            if (!dictionary_hasentry(track_dict, bar_sym)) {
+                bar_dict = dictionary_new();
+                if (bar_dict) {
+                    dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
+                    object_release((t_object *)bar_dict);
+                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                }
+            } else {
+                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+            }
 
-        // Add data to bar dictionary
-        t_atomarray *aa = atomarray_new(argc, argv);
-        dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
-        object_release((t_object *)aa);
+            // Add data to bar dictionary
+            if (bar_dict) {
+                t_atomarray *aa = atomarray_new(argc, argv);
+                if (aa) {
+                    dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
+                    object_release((t_object *)aa);
+                }
+            }
+        }
 
         sysmem_freeptr(track_str);
         sysmem_freeptr(bar_str);
