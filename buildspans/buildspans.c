@@ -1421,6 +1421,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
         if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
         dictionary_appendatom(x->building, absolutes_key, &a);
+        object_release((t_object *)absolutes_array);
     }
     t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
@@ -1444,6 +1445,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         t_atom a; atom_setobj(&a, (t_object *)scores_array);
         if (dictionary_hasentry(x->building, scores_key)) dictionary_deleteentry(x->building, scores_key);
         dictionary_appendatom(x->building, scores_key, &a);
+        object_release((t_object *)scores_array);
     }
     t_atom new_score; atom_setfloat(&new_score, score);
     atomarray_appendatom(scores_array, &new_score);
@@ -1513,6 +1515,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             t_atom span_copy_atom;
             atom_setobj(&span_copy_atom, (t_object *)span_copy);
             dictionary_appendatom(x->building, span_key, &span_copy_atom);
+            object_release((t_object *)span_copy);
 
             // Logging
             char log_buffer[512];
@@ -2281,6 +2284,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 
     t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
     dictionary_appendatom(x->building, span_key, &new_span_atom);
+    object_release((t_object *)new_span_array);
 
     char *span_str = atomarray_to_string(new_span_array);
     if (span_str) {
@@ -2346,6 +2350,7 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
         t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
         if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
         dictionary_appendatom(x->building, span_key, &span_copy_atom);
+        object_release((t_object *)span_copy);
 
         if (span_str) {
             buildspans_log(x, "%s %s", span_key->s_name, span_str);
