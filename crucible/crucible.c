@@ -1092,22 +1092,35 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_dictionary *track_dict = NULL;
         if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
             track_dict = dictionary_new();
-            dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
+            if (track_dict) {
+                dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
+                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
+            }
         } else {
             dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
         }
 
-        // Get or create bar dictionary
-        t_dictionary *bar_dict = NULL;
-        if (!dictionary_hasentry(track_dict, bar_sym)) {
-            bar_dict = dictionary_new();
-            dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
-        } else {
-            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-        }
+        if (track_dict) {
+            // Get or create bar dictionary
+            t_dictionary *bar_dict = NULL;
+            if (!dictionary_hasentry(track_dict, bar_sym)) {
+                bar_dict = dictionary_new();
+                if (bar_dict) {
+                    dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
+                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                }
+            } else {
+                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+            }
 
-        // Add data to bar dictionary
-        dictionary_appendatomarray(bar_dict, key_sym, (t_object *)atomarray_new(argc, argv));
+            // Add data to bar dictionary
+            if (bar_dict) {
+                t_atomarray *aa = atomarray_new(argc, argv);
+                if (aa) {
+                    dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
+                }
+            }
+        }
 
         sysmem_freeptr(track_str);
         sysmem_freeptr(bar_str);
