@@ -1410,7 +1410,6 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     // Update absolutes array
     t_symbol *absolutes_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("absolutes"));
     t_atomarray *absolutes_array = NULL;
-    int release_absolutes = 0;
     if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&absolutes_array) != MAX_ERR_NONE || !absolutes_array) {
         // If not found or if it was a single atom, create a new atomarray
         t_atom existing_atom;
@@ -1419,17 +1418,12 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         } else {
             absolutes_array = atomarray_new(0, NULL);
         }
-        if (absolutes_array) {
-            t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
-            if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
-            dictionary_appendatom(x->building, absolutes_key, &a);
-            release_absolutes = 1;
-        }
+        t_atom a; atom_setobj(&a, (t_object *)absolutes_array);
+        if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
+        dictionary_appendatom(x->building, absolutes_key, &a);
     }
-    if (absolutes_array) {
-        t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
-        atomarray_appendatom(absolutes_array, &new_absolute);
-    }
+    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
+    atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {
         buildspans_log(x, "%s %s", absolutes_key->s_name, abs_str);
@@ -1439,7 +1433,6 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     // Update scores array
     t_symbol *scores_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("scores"));
     t_atomarray *scores_array = NULL;
-    int release_scores = 0;
     if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_array) != MAX_ERR_NONE || !scores_array) {
         // If not found or if it was a single atom, create a new atomarray
         t_atom existing_atom;
@@ -1448,17 +1441,12 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         } else {
             scores_array = atomarray_new(0, NULL);
         }
-        if (scores_array) {
-            t_atom a; atom_setobj(&a, (t_object *)scores_array);
-            if (dictionary_hasentry(x->building, scores_key)) dictionary_deleteentry(x->building, scores_key);
-            dictionary_appendatom(x->building, scores_key, &a);
-            release_scores = 1;
-        }
+        t_atom a; atom_setobj(&a, (t_object *)scores_array);
+        if (dictionary_hasentry(x->building, scores_key)) dictionary_deleteentry(x->building, scores_key);
+        dictionary_appendatom(x->building, scores_key, &a);
     }
-    if (scores_array) {
-        t_atom new_score; atom_setfloat(&new_score, score);
-        atomarray_appendatom(scores_array, &new_score);
-    }
+    t_atom new_score; atom_setfloat(&new_score, score);
+    atomarray_appendatom(scores_array, &new_score);
     char *scores_str = atomarray_to_string(scores_array);
     if (scores_str) {
         buildspans_log(x, "%s %s", scores_key->s_name, scores_str);
@@ -1522,12 +1510,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             
             // Create a deep copy for each bar to ensure no shared ownership
             t_atomarray *span_copy = atomarray_deep_copy(new_span_array);
-            if (span_copy) {
-                t_atom span_copy_atom;
-                atom_setobj(&span_copy_atom, (t_object *)span_copy);
-                dictionary_appendatom(x->building, span_key, &span_copy_atom);
-                object_release((t_object *)span_copy);
-            }
+            t_atom span_copy_atom;
+            atom_setobj(&span_copy_atom, (t_object *)span_copy);
+            dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
             // Logging
             char log_buffer[512];
@@ -1573,9 +1558,6 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         }
         buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
     }
-
-    if (release_absolutes && absolutes_array) object_release((t_object *)absolutes_array);
-    if (release_scores && scores_array) object_release((t_object *)scores_array);
 
     sysmem_freeptr(bar_timestamps);
     buildspans_visualize_memory(x);
@@ -2290,23 +2272,20 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 
     // Update span to be only itself
     t_atomarray *new_span_array = atomarray_new(0, NULL);
-    if (new_span_array) {
-        t_atom new_bar_atom;
-        atom_setlong(&new_bar_atom, atol(bar_sym->s_name));
-        atomarray_appendatom(new_span_array, &new_bar_atom);
+    t_atom new_bar_atom;
+    atom_setlong(&new_bar_atom, atol(bar_sym->s_name));
+    atomarray_appendatom(new_span_array, &new_bar_atom);
 
-        t_atom new_span_atom;
-        atom_setobj(&new_span_atom, (t_object *)new_span_array);
+    t_atom new_span_atom;
+    atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
-        t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
-        dictionary_appendatom(x->building, span_key, &new_span_atom);
+    t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
+    dictionary_appendatom(x->building, span_key, &new_span_atom);
 
-        char *span_str = atomarray_to_string(new_span_array);
-        if (span_str) {
-            buildspans_log(x, "%s %s", span_key->s_name, span_str);
-            sysmem_freeptr(span_str);
-        }
-        object_release((t_object *)new_span_array);
+    char *span_str = atomarray_to_string(new_span_array);
+    if (span_str) {
+        buildspans_log(x, "%s %s", span_key->s_name, span_str);
+        sysmem_freeptr(span_str);
     }
 }
 
@@ -2360,17 +2339,13 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
         dictionary_appendatom(x->building, rating_key, &rating_atom);
         buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
 
-        t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
-
         // Create a deep copy for each bar to ensure no shared ownership
         t_atomarray *span_copy = atomarray_deep_copy(span_array);
-        if (span_copy) {
-            t_atom span_copy_atom;
-            atom_setobj(&span_copy_atom, (t_object *)span_copy);
-            if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
-            dictionary_appendatom(x->building, span_key, &span_copy_atom);
-            object_release((t_object *)span_copy);
-        }
+        t_atom span_copy_atom;
+        atom_setobj(&span_copy_atom, (t_object *)span_copy);
+        t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
+        if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
+        dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
         if (span_str) {
             buildspans_log(x, "%s %s", span_key->s_name, span_str);
