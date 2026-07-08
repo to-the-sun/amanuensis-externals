@@ -48,3 +48,12 @@ To improve performance and eliminate the $O(N^2)$ duplication bottleneck without
 *   **Action:** Implement double-buffering for the hierarchical dictionaries.
 *   **Logic:** The background thread builds a new "frozen" version of the hierarchy and swaps the pointer with the main thread in a single atomic operation.
 *   **Performance Gain:** Zero mutex contention for the high-priority thread.
+
+## Stability & Ownership Guardrails (Lessons from Phase 0)
+
+During initial leak-fixing attempts, it was discovered that the Max SDK ownership model for dictionaries is particularly treacherous. To avoid crashes during the hierarchical transition, the following rules must be enforced:
+
+1.  **Container Ownership Hand-off:** Functions like `dictionary_appenddictionary` and `dictionary_appendatom` (with `A_OBJ`) typically assume ownership of the reference passed to them *without* necessarily incrementing the reference count in all SDK versions. When moving to Phase 3 and 4, never `object_release` a sub-dictionary immediately after appending it unless the specific SDK documentation for that function confirms a retain.
+2.  **Weak vs. Strong Retrieval:** `dictionary_getdictionary` and `dictionary_getatomarray` return "weak" pointers (borrowed references). Releasing these pointers will cause immediate crashes during playback. The migration must use a "retain-on-get" strategy only if the object needs to outlive the parent dictionary's immediate scope.
+3.  **NULL-Safe Traversal:** Hierarchical lookups (e.g., `building -> palette -> track -> bar`) are prone to deep NULL dereferences. Every level of the nesting must be checked before proceeding to the next. Phase 2 (Interface Abstraction) is critical for centralizing these checks.
+4.  **The "Release-at-End" Pattern:** For objects that are genuinely owned (created with `_new` or `_clone`), use boolean flags to track ownership and perform `object_release` at the very end of the function, after all logging and back-propagation are complete. This prevents the "use-after-free" crashes experienced during the initial audit.
