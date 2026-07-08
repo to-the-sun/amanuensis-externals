@@ -668,20 +668,23 @@ def run_gui():
             row = track_to_row[tid]
 
             # Flashing/Bright Boxes
-            # Flash for 0.5s then stay bright, only for new_span
-            is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
-            color = (255, 255, 255) if is_flashing else (150, 150, 220)
-
             valid_bars = []
             for bar_ts in e["bars"]:
                 try:
                     b_ts = int(bar_ts)
                     valid_bars.append(b_ts)
                 except (ValueError, TypeError): continue
+
                 if bar_length <= 0: continue
-                col = b_ts // bar_length
-                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                pygame.draw.rect(screen, color, rect)
+
+                # Only draw highlight/flash for non-replace events
+                if e.get("type") != "replace":
+                    # Flash for 0.5s then stay bright
+                    is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
+                    color = (255, 255, 255) if is_flashing else (150, 150, 220)
+                    col = b_ts // bar_length
+                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+                    pygame.draw.rect(screen, color, rect)
 
             # Floating Rating
             if valid_bars and bar_length > 0:
