@@ -148,8 +148,8 @@ def perform_smartloop_analysis():
         state["min_rating"] = mi
         state["max_rating"] = ma
         state["song_bar_ratings"] = song_bar_ratings
-        state["smartloop_start"] = sl_start
-        state["smartloop_end"] = sl_end
+        # state["smartloop_start"] = sl_start
+        # state["smartloop_end"] = sl_end
 
 def cleanup_obsolete_bars(new_bl):
     """Purges all bar-related data when bar_length changes."""
@@ -306,8 +306,8 @@ def process_packet(text, client_sock=None):
                             for b_ts, rating in bars.items():
                                 snapped_ts = snap_to_bar(b_ts, bar_length)
                                 state["bar_ratings"][tid][str(float(snapped_ts))] = rating
-                    if "smartloop_start" in pkt: state["smartloop_start"] = pkt["smartloop_start"]
-                    if "smartloop_end" in pkt: state["smartloop_end"] = pkt["smartloop_end"]
+                    if "smartloop_start" in pkt: pass # state["smartloop_start"] = pkt["smartloop_start"]
+                    if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
             if pkt_type != "crucible":
@@ -403,6 +403,15 @@ def process_packet(text, client_sock=None):
                             state["bar_ratings"][t_str] = {}
                         state["bar_ratings"][t_str][b_str] = rating
                         print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating}")
+
+                        state["events"].append({
+                            "type": "replace",
+                            "track": t_str,
+                            "bars": [snapped_ts],
+                            "rating": rating,
+                            "start_time": time.time(),
+                            "duration": 3.0
+                        })
 
                 if dirty:
                     recalculate_reach()
@@ -538,7 +547,7 @@ def run_gui():
             avg = state["average_rating"]
             mi = state["min_rating"]
             ma = state["max_rating"]
-            song_bar_ratings = state.get("song_bar_ratings", {}).copy()
+            bar_ratings = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
 
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
@@ -552,8 +561,8 @@ def run_gui():
 
                 # Determine color tint
                 color = [80, 80, 100]
-                # Use averaged song-level rating for consistency with smartloop analysis
-                rating = song_bar_ratings.get(str(float(b_ts)))
+                # Use individual track's rating for the color gradient
+                rating = bar_ratings.get(tid, {}).get(str(float(b_ts)))
                 if rating is not None:
                     if rating > avg:
                         # Tint green
@@ -642,7 +651,7 @@ def run_gui():
             sl_s = state["smartloop_start"]
             sl_e = state["smartloop_end"]
 
-        if sl_s >= 0 and sl_e > sl_s:
+        if False and sl_s >= 0 and sl_e > sl_s:
             x_s = margin_left + (sl_s / bar_length) * cell_w
             x_e = margin_left + (sl_e / bar_length) * cell_w
             box_rect = pygame.Rect(x_s, margin_top, x_e - x_s, num_tracks * cell_h)
@@ -659,20 +668,23 @@ def run_gui():
             row = track_to_row[tid]
 
             # Flashing/Bright Boxes
-            # Flash for 0.5s then stay bright
-            is_flashing = elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
-            color = (255, 255, 255) if is_flashing else (150, 150, 220)
-
             valid_bars = []
             for bar_ts in e["bars"]:
                 try:
                     b_ts = int(bar_ts)
                     valid_bars.append(b_ts)
                 except (ValueError, TypeError): continue
+
                 if bar_length <= 0: continue
-                col = b_ts // bar_length
-                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                pygame.draw.rect(screen, color, rect)
+
+                # Only draw highlight/flash for non-replace events
+                if e.get("type") != "replace":
+                    # Flash for 0.5s then stay bright
+                    is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
+                    color = (255, 255, 255) if is_flashing else (150, 150, 220)
+                    col = b_ts // bar_length
+                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+                    pygame.draw.rect(screen, color, rect)
 
             # Floating Rating
             if valid_bars and bar_length > 0:
@@ -681,7 +693,8 @@ def run_gui():
                 float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
                 alpha = int(255 * (1.0 - t))
-                rating_text = big_font.render(f"{e['rating']:.2f}", True, (255, 255, 100))
+                text_color = (200, 200, 200) if e.get("type") == "replace" else (255, 255, 100)
+                rating_text = big_font.render(f"{e['rating']:.2f}", True, text_color)
                 rating_text.set_alpha(alpha)
                 screen.blit(rating_text, (float_x, float_y))
 
