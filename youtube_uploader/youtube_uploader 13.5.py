@@ -87,7 +87,7 @@ def debug(*args, **kwargs):
 
 
 class UploadBot:
-    API_KEY = ""  # <-- Replace with your actual API key
+    API_KEY = ""
 
     def run(self):
         ''' Start bot, setup variables, api, and database, then start main loop. '''
@@ -107,6 +107,20 @@ class UploadBot:
         self.like_titleId = ['','']
         self.comment_titleIdBody = ['','','']
         self.func = 'setup'
+
+        # Load API key from credentials.json
+        credentials_file = os.path.join(CWD, 'credentials.json')
+        if os.path.exists(credentials_file):
+            try:
+                with open(credentials_file, 'r') as f:
+                    creds = json.load(f)
+                    self.API_KEY = creds.get('api_key', '')
+            except Exception as e:
+                print(f'Error loading credentials.json: {e}')
+                self.API_KEY = ''
+        else:
+            print(f'credentials.json not found in {CWD}')
+            self.API_KEY = ''
 
         # Disable OAuthlib's HTTPS verification when running locally.
         os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "0"
