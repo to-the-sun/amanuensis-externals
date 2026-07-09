@@ -167,6 +167,69 @@ void analyzer_destroy(TransientAnalyzer* self) {
     free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters); free(self);
 }
 
+void analyzer_clear(TransientAnalyzer* self) {
+    if (!self) return;
+
+    if (self->lock_func) self->lock_func(self->lock_obj);
+
+    // 1. Clear Snapshots
+    for (int b = 0; b < MAX_BANDS; b++) {
+        SnapshotEntry* curr = self->snapshot_heads[b];
+        while (curr) {
+            SnapshotEntry* next = curr->next;
+            free(curr);
+            curr = next;
+        }
+        self->snapshot_heads[b] = NULL;
+        self->snapshot_tails[b] = NULL;
+    }
+
+    // 2. Reset Metrics
+    self->private_max_peak = 1.0;
+    self->private_min_score_seen = DBL_MAX;
+    self->private_max_score_seen = -DBL_MAX;
+    self->private_total_score_sum = 0.0;
+    self->private_score_count = 0;
+    memset(self->private_accumulated_buffer, 0, sizeof(double) * BUFFER_LEN);
+
+    if (self->shared_buffer) {
+        self->shared_buffer->max_peak = 1.0;
+        self->shared_buffer->min_score_seen = DBL_MAX;
+        self->shared_buffer->max_score_seen = -DBL_MAX;
+        self->shared_buffer->total_score_sum = 0.0;
+        self->shared_buffer->score_count = 0;
+        memset(self->shared_buffer->accumulated_buffer, 0, sizeof(double) * BUFFER_LEN);
+    }
+
+    self->highest_peak_ms = -999.0;
+    memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
+    for (int b = 0; b < MAX_BANDS; b++) {
+        self->midpoint_lookback[b] = 15000.0;
+        self->lookback_avg_delta[b] = 0.0;
+        self->lookback_total_delta[b] = 0.0;
+        self->lookback_p_count[b] = 0;
+        self->smoothing_states[b] = 0.0f;
+        self->smoothing_avgs[b] = 0.0;
+    }
+
+    // 3. Reset Caches and Pointers
+    if (self->mel_spectrogram) memset(self->mel_spectrogram, 0, sizeof(double) * N_MELS * CACHE_SIZE);
+    if (self->flux_envelopes) memset(self->flux_envelopes, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+    if (self->dynamic_smoothings) memset(self->dynamic_smoothings, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+    if (self->prominence_envelopes) memset(self->prominence_envelopes, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+
+    self->cache_write_ptr = 0;
+    self->cache_count = 0;
+    self->max_mel_db = 0.0;
+
+    if (self->overlap_buffer) memset(self->overlap_buffer, 0, sizeof(float) * N_FFT * 4);
+    self->overlap_len = 0;
+    self->total_frames_pushed = 0;
+    self->total_samples_received = 0;
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+}
+
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
     if (self->sample_rate != sr) {
         self->sample_rate = sr; free(self->mel_filters);

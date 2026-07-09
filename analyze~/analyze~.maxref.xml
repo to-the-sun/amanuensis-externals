@@ -58,6 +58,12 @@
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
+		<method name="clear">
+			<digest>Clears the analysis history</digest>
+			<description>
+				Resets the internal cumulative history buffer, peak scores, and rhythmic stability metrics. This effectively restarts the analysis from a clean state. If the object is part of a shared group, the shared buffer for that group is also cleared.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
