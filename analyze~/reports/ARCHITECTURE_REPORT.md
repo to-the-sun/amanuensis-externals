@@ -11,7 +11,7 @@ The "Source of Truth" for all numerical analysis. It is platform-agnostic and co
 *   **Signal Processing**: Implementation of a Radix-2 FFT and Mel-Filterbank.
 *   **Feature Extraction**: Calculation of Spectral Flux (onset strength), a `dynamic_smoothing` parameter, and per-frame `prominence` values across 4 bands with 80dB noise floor clamping.
 *   **Peak Detection**: Algorithmic identification of transients based on dynamic historical peak-based rolling midpoints and adaptive prominence checks.
-*   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores using a 99ms exclusion zone.
+*   **Resonance Scoring**: Maintaining a 5-second historical buffer (`accumulated_buffer`) and calculating "qualifier" scores. Assessment for a peak occurs **before** its snapshot is added to the history, ensuring resonance is measured against the pre-existing rhythmic context.
 *   **State Management**: The `TransientAnalyzer` struct tracks rolling metrics and handles the 15-second state cleanup.
 
 ### **Boundary Interface**
