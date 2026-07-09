@@ -58,6 +58,12 @@
 		<method name="dsp64">
 			<digest>DSP method</digest>
 		</method>
+		<method name="clear">
+			<digest>Clear internal state</digest>
+			<description>
+				Clears the internal historical buffers, including the cumulative transience history and the audio/clock buffers. All calculated metrics (Rating, Standard Deviation, etc.) are reset to their initialized values. If the object is part of a shared group, the shared group's buffer is also cleared.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>

@@ -167,6 +167,66 @@ void analyzer_destroy(TransientAnalyzer* self) {
     free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters); free(self);
 }
 
+void analyzer_clear(TransientAnalyzer* self) {
+    if (!self) return;
+
+    if (self->lock_func) self->lock_func(self->lock_obj);
+
+    if (self->shared_buffer) {
+        memset(self->shared_buffer->accumulated_buffer, 0, sizeof(double) * BUFFER_LEN);
+        self->shared_buffer->max_peak = 1.0;
+        self->shared_buffer->min_score_seen = DBL_MAX;
+        self->shared_buffer->max_score_seen = -DBL_MAX;
+        self->shared_buffer->total_score_sum = 0;
+        self->shared_buffer->score_count = 0;
+    }
+
+    memset(self->private_accumulated_buffer, 0, sizeof(double) * BUFFER_LEN);
+    self->private_max_peak = 1.0;
+    self->private_min_score_seen = DBL_MAX;
+    self->private_max_score_seen = -DBL_MAX;
+    self->private_total_score_sum = 0;
+    self->private_score_count = 0;
+
+    for (int b = 0; b < MAX_BANDS; b++) {
+        SnapshotEntry* curr = self->snapshot_heads[b];
+        while (curr) {
+            SnapshotEntry* next = curr->next;
+            free(curr);
+            curr = next;
+        }
+        self->snapshot_heads[b] = NULL;
+        self->snapshot_tails[b] = NULL;
+
+        self->midpoint_lookback[b] = 15000.0;
+        self->lookback_avg_delta[b] = 0.0;
+        self->lookback_total_delta[b] = 0.0;
+        self->lookback_p_count[b] = 0;
+        self->smoothing_states[b] = 0.0f;
+        self->smoothing_avgs[b] = 0.0;
+    }
+
+    self->highest_peak_ms = -999.0;
+    memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
+
+    if (self->mel_spectrogram) memset(self->mel_spectrogram, 0, sizeof(double) * N_MELS * CACHE_SIZE);
+    if (self->flux_envelopes) memset(self->flux_envelopes, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+    if (self->dynamic_smoothings) memset(self->dynamic_smoothings, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+    if (self->prominence_envelopes) memset(self->prominence_envelopes, 0, sizeof(float) * MAX_BANDS * CACHE_SIZE);
+
+    self->cache_write_ptr = 0;
+    self->cache_count = 0;
+    self->max_mel_db = 0.0;
+
+    if (self->overlap_buffer) memset(self->overlap_buffer, 0, sizeof(float) * N_FFT * 4);
+    self->overlap_len = 0;
+
+    self->total_frames_pushed = 0;
+    self->total_samples_received = 0;
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+}
+
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
     if (self->sample_rate != sr) {
         self->sample_rate = sr; free(self->mel_filters);
@@ -253,8 +313,6 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
 
     for (int i = 0; i < BUFFER_LEN; i++) acc_buf[i] += result_out->snapshot[i];
 
-    if (self->unlock_func) self->unlock_func(self->lock_obj);
-
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
     if (entry) {
         entry->p_idx = global_p_idx;
@@ -263,6 +321,9 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         if (self->snapshot_tails[band_idx]) { self->snapshot_tails[band_idx]->next = entry; self->snapshot_tails[band_idx] = entry; }
         else { self->snapshot_heads[band_idx] = entry; self->snapshot_tails[band_idx] = entry; }
     }
+
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+
     return 1;
 }
 
@@ -526,6 +587,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         int lookback_frames = (int)(self->midpoint_lookback[b] / self->frame_duration_ms);
         int cutoff = active_start_frame - lookback_frames;
 
+        if (self->lock_func) self->lock_func(self->lock_obj);
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) {
             if (curr->p_idx >= cutoff) {
@@ -533,6 +595,8 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
             }
             curr = curr->next;
         }
+        if (self->unlock_func) self->unlock_func(self->lock_obj);
+
         if (p_count > 1) {
             total_delta_ms = 15000.0;
             avg_delta_ms = total_delta_ms / (double)p_count;

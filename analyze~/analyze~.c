@@ -71,6 +71,7 @@ typedef struct _analyze {
 
 void* analyze_new(t_symbol* s, long argc, t_atom* argv);
 void analyze_free(t_analyze* x);
+void analyze_clear(t_analyze* x);
 void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv);
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -98,6 +99,7 @@ void ext_main(void* r) {
 
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
+    class_addmethod(c, (method)analyze_clear, "clear", 0);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -189,6 +191,28 @@ void analyze_free(t_analyze* x) {
     free(x->audio_buffer);
     free(x->clock_buffer);
     critical_free(x->lock);
+}
+
+void analyze_clear(t_analyze* x) {
+    critical_enter(x->lock);
+    if (x->analyzer) {
+        analyzer_clear(x->analyzer);
+    }
+    if (x->audio_buffer) {
+        memset(x->audio_buffer, 0, sizeof(float) * x->audio_buffer_size);
+    }
+    if (x->clock_buffer) {
+        memset(x->clock_buffer, 0, sizeof(double) * x->audio_buffer_size);
+    }
+    x->audio_buffer_write_ptr = 0;
+    x->current_sample_count = 0;
+    x->last_analysis_frame = 0;
+    x->pending_analysis = 0;
+    for (int i = 0; i < MAX_BANDS; i++) {
+        x->last_peak_frame[i] = -1;
+    }
+    analyze_log(x, "cleared internal state");
+    critical_exit(x->lock);
 }
 
 void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv) {
