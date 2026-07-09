@@ -176,7 +176,7 @@ class UploadBot:
             self.comment_titleIdBody = ['','','']
 
             disliked_videos = self.get_disliked_videos()        # get disliked videos
-            self.delete_videos(disliked_videos)                                   # delete the disliked videos
+            self.delete_videos(disliked_videos, delete_local_files=True)                                   # delete the disliked videos
 
             # Upload videos to YouTube. Does so in a separate thread as Google's
             # library may have a bug that is keeping video files open after uploading.
@@ -440,27 +440,27 @@ class UploadBot:
         self.func = 'extract_featured_artists'
         debug(f'(d) Extracting featured artists from description')
         featured_artists = []
-         
+
         lines = description_text.split('\n')
         for line in lines:
             line_stripped = line.strip()
             if not line_stripped:
                 continue
-             
+
             if line_stripped.startswith('written') or line_stripped.startswith('Midjourney'):
                 continue
-             
+
             if ' by ' in line_stripped:
                 parts = line_stripped.split(' by ')
                 if len(parts) >= 2:
                     artist_part = parts[-1].strip()
                     artist_part = artist_part.split('(')[0].strip()  # Remove URL in parentheses
-                     
+
                     if artist_part and artist_part.lower() != DISPLAY_NAME:
                         if artist_part not in featured_artists:
                             featured_artists.append(artist_part)
                             debug(f'(d) Found featured artist: {artist_part}')
-         
+
         return featured_artists
 
     def get_comment_body(self, videoId):    # retrieves body of the most recent comment on the given video
@@ -500,7 +500,6 @@ class UploadBot:
             print('\nvideoInfo from database:', videoID, videoInfo)
 
             print('Checking video for likes and comments:', videoID, videoTitle)
-            likeCount = 0
             commentCount = 0
             response = self.execute_yt_request(self.youtube.videos().list, dict(
                 part="id,  statistics", id=videoID
@@ -508,7 +507,6 @@ class UploadBot:
 
             try:
                 commentCount = int(response['items'][0]['statistics']['commentCount'])
-                likeCount = int(response['items'][0]['statistics']['likeCount'])
             except: pass
 
             if videoInfo is not None:                           # if it is already in the db
@@ -516,7 +514,6 @@ class UploadBot:
                 if dbVideoUsed == 0:                            # if it hasn't been used
                     debug(
                         f'(d) Checking "{videoTitle}":\n  '
-                        f'{likeCount} current likes, {dbVideoLikes} likes in database | '
                         f'{commentCount} current comments, {dbCommentCount} comments in database.'
                     )
                     if dbCommentCount != commentCount:         # check if the comment count has changed
@@ -531,39 +528,19 @@ class UploadBot:
                             }
                         )
                         self.conn.commit()                      # save the data
-                    if dbVideoLikes != likeCount:               # check if the comment count has changed
-                        if dbVideoLikes < likeCount:            # check if it has risen
-
-                            # check if you were the one to like it and a video hasn't already been chosen
-                            response = self.execute_yt_request(self.youtube.videos().getRating, dict(id=videoID))
-                            if response['items'][0]['rating'] == 'like' and self.like_titleId[0] == '':
-                                self.like_titleId = [videoTitle, videoID]
-
-                        self.cur.execute(                       # update the table
-                            "UPDATE videos SET likeCount=:likeCount WHERE videoId=:id",
-                            {
-                                'id': videoID,
-                                'likeCount': likeCount
-                            }
-                        )
-                        self.conn.commit()                      # save the data
 
             else:                                               # if the video is not already in database, add it
                 print('VIDEO NOT IN DATABASE\n')
 
                 videoDescription = video['snippet']['description']
                 credits = [c for c in CREDITS.values() if c in videoDescription]
-                self.cur.execute("INSERT INTO videos VALUES (?, ?, ?, 0, '', 1, ?, ?)",
-                                 (videoID, likeCount, commentCount, videoTitle, ';&;'.join(credits)))
+                self.cur.execute("INSERT INTO videos VALUES (?, 0, ?, 0, '', 1, ?, ?)",
+                                 (videoID, commentCount, videoTitle, ';&;'.join(credits)))
                 self.conn.commit()                              # save the data
 
                 if commentCount > 0 and self.comment_titleIdBody[0] == '':                              # if comments are present and no video has been chosen yet...
                     self.comment_titleIdBody = [videoTitle, videoID, self.get_comment_body(videoID)]    # ...choose this video
-                if likeCount > 0 and self.like_titleId[0] == '':                                        # if likes are present and no video has been chosen yet...
-                    self.like_titleId = [videoTitle, videoID]                                           # ...choose this video
             if self.comment_titleIdBody[0] != '': return
-            if self.like_titleId[0] != '': return
-
 
     def upload_videos(self):
         self.func = 'upload_videos'
@@ -590,7 +567,7 @@ class UploadBot:
 
                     # Get duplicate videos BEFORE uploading
                     duplicate_videos = self.get_duplicate_videos(title, USER_PLAYLIST_IDS[0])
-                    
+
                     # Check if any duplicates were liked by me
                     should_like_new = False
                     for dup_video_id in duplicate_videos:
@@ -612,7 +589,7 @@ class UploadBot:
                     except:
                         print("Could not open description.txt")
                     body += FULL_BODY_TEXT
-                    
+
                     # Do not modify title with featured artists; keep original title
                     upload_title = title
 
@@ -734,7 +711,7 @@ class UploadBot:
         ''' Delete .wav file and project folder associated with a disliked video '''
         audio_works_path = r"D:\[Library]\[Audio]\[Works]"
         projects_path = r"D:\[Library]\[Audio]\[Works]\[Projects]"
-        
+
         # Look for .wav file
         wav_file = os.path.join(audio_works_path, f"{video_title}.wav")
         if os.path.exists(wav_file):
@@ -745,7 +722,7 @@ class UploadBot:
                 print(f"Failed to send .wav file to recycle bin: {wav_file} - {error}")
         else:
             print(f".wav file not found: {wav_file}")
-        
+
         # Look for project folder
         project_folder = os.path.join(projects_path, video_title)
         if os.path.exists(project_folder):
@@ -808,14 +785,15 @@ class UploadBot:
                 print('\nDeleting video id from YouTube:', vID)
                 self.execute_yt_request(self.youtube.videos().delete, dict(id=vID))   # delete video
                 print('Deleted.\n')
-                
+
                 # Get video title from channel_videos and delete associated files
-                for video in self.channel_videos:
-                    if video['snippet']['resourceId']['videoId'] == vID:
-                        video_title = video['snippet']['title']
-                        print(f'Checking for associated files for: {video_title}')
-                        self.delete_associated_files(video_title)
-                        break
+                if delete_local_files:
+                    for video in self.channel_videos:
+                        if video['snippet']['resourceId']['videoId'] == vID:
+                            video_title = video['snippet']['title']
+                            print(f'Checking for associated files for: {video_title}')
+                            self.delete_associated_files(video_title)
+                            break
             except Exception as error:
                 debug('\n(d)', type(error), error)
                 print('Video-deletion attempt failed with the following error:', vID, error)
