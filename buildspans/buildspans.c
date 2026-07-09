@@ -204,21 +204,29 @@ t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom 
 
 // Registry Helper Functions
 void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+    if (!x || !x->registry || !palette || !track || !bar) return;
+
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
 
     // 1. Get or create palette dictionary
     if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) != MAX_ERR_NONE || !palette_dict) {
         palette_dict = dictionary_new();
-        t_atom a; atom_setobj(&a, (t_object *)palette_dict);
-        dictionary_appendatom(x->registry, palette, &a);
+        if (!palette_dict) return;
+        if (dictionary_appenddictionary(x->registry, palette, (t_object *)palette_dict) != MAX_ERR_NONE) {
+            object_free(palette_dict);
+            return;
+        }
     }
 
     // 2. Get or create track dictionary within palette
     if (dictionary_getdictionary(palette_dict, track, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
         track_dict = dictionary_new();
-        t_atom a; atom_setobj(&a, (t_object *)track_dict);
-        dictionary_appendatom(palette_dict, track, &a);
+        if (!track_dict) return;
+        if (dictionary_appenddictionary(palette_dict, track, (t_object *)track_dict) != MAX_ERR_NONE) {
+            object_free(track_dict);
+            return;
+        }
     }
 
     // 3. Register bar (using it as a key with a dummy value)
@@ -226,41 +234,24 @@ void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, 
 }
 
 void registry_unregister_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+    if (!x || !x->registry || !palette || !track || !bar) return;
+
     t_dictionary *palette_dict = NULL;
     t_dictionary *track_dict = NULL;
 
     if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) == MAX_ERR_NONE && palette_dict) {
         if (dictionary_getdictionary(palette_dict, track, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
             dictionary_deleteentry(track_dict, bar);
-
-            // Cleanup if empty
-            long track_keys_count;
-            dictionary_getkeys(track_dict, &track_keys_count, NULL);
-            if (track_keys_count == 0) {
-                dictionary_deleteentry(palette_dict, track);
-            }
-        }
-
-        // Cleanup if palette empty
-        long palette_keys_count;
-        dictionary_getkeys(palette_dict, &palette_keys_count, NULL);
-        if (palette_keys_count == 0) {
-            dictionary_deleteentry(x->registry, palette);
         }
     }
 }
 
 void registry_unregister_track(t_buildspans *x, t_symbol *palette, t_symbol *track) {
+    if (!x || !x->registry || !palette || !track) return;
+
     t_dictionary *palette_dict = NULL;
     if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) == MAX_ERR_NONE && palette_dict) {
         dictionary_deleteentry(palette_dict, track);
-
-        // Cleanup if palette empty
-        long palette_keys_count;
-        dictionary_getkeys(palette_dict, &palette_keys_count, NULL);
-        if (palette_keys_count == 0) {
-            dictionary_deleteentry(x->registry, palette);
-        }
     }
 }
 
@@ -360,7 +351,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
         if (p > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
 
         t_dictionary *palette_dict = NULL;
-        dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
+        if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict) != MAX_ERR_NONE || !palette_dict) continue;
 
         long unique_track_count = 0;
         t_symbol **unique_tracks = NULL;
@@ -369,14 +360,18 @@ void buildspans_visualize_memory(t_buildspans *x) {
         offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{", 
                             palette_sym->s_name);
 
-        for (long i = 0; i < unique_track_count; i++) {
-            t_symbol *track_sym = unique_tracks[i];
-            if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
+        if (unique_tracks) {
+            for (long i = 0; i < unique_track_count; i++) {
+                t_symbol *track_sym = unique_tracks[i];
+                if (i > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
 
-            t_dictionary *track_dict = NULL;
-            dictionary_getdictionary(palette_dict, track_sym, (t_object **)&track_dict);
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
+
+                t_dictionary *track_dict = NULL;
+                if (dictionary_getdictionary(palette_dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[],\"span\":[]}");
+                    continue;
+                }
 
             // a. Find and sort bars for this track
             long bar_count = 0;
@@ -456,11 +451,12 @@ void buildspans_visualize_memory(t_buildspans *x) {
                 }
             }
 
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
-            sysmem_freeptr(bar_timestamps);
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "]}");
+                sysmem_freeptr(bar_timestamps);
+            }
+            sysmem_freeptr(unique_tracks);
         }
         offset += snprintf(json_buffer + offset, buffer_size - offset, "}}");
-        sysmem_freeptr(unique_tracks);
     }
     long bar_length = buildspans_get_bar_length(x);
     offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"current_offset\":%.2f,\"bar_length\":%ld,\"loop_start\":%.2f}", x->current_offset, bar_length, x->loop_start);
@@ -1032,12 +1028,16 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     snprintf(track_prefix, 32, "%ld-", x->current_track);
 
     t_dictionary *pal_dict = NULL;
+    long reg_track_count = 0;
     if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&pal_dict) == MAX_ERR_NONE && pal_dict) {
-        long reg_track_count = 0;
+        dictionary_getkeys(pal_dict, &reg_track_count, NULL);
+    }
+
+    unique_track_syms = (t_symbol **)sysmem_newptr((reg_track_count + 1) * sizeof(t_symbol *));
+    if (reg_track_count > 0) {
         t_symbol **reg_tracks = NULL;
         dictionary_getkeys(pal_dict, &reg_track_count, &reg_tracks);
         if (reg_tracks) {
-            unique_track_syms = (t_symbol **)sysmem_newptr((reg_track_count + 1) * sizeof(t_symbol *));
             for (long i = 0; i < reg_track_count; i++) {
                 if (strncmp(reg_tracks[i]->s_name, track_prefix, strlen(track_prefix)) == 0) {
                     unique_track_syms[unique_tracks_count++] = reg_tracks[i];
@@ -1045,8 +1045,6 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
             sysmem_freeptr(reg_tracks);
         }
-    } else {
-        unique_track_syms = (t_symbol **)sysmem_newptr(1 * sizeof(t_symbol *));
     }
 
     // 2. Also consider the global current offset as a potential new span
