@@ -87,7 +87,7 @@ def debug(*args, **kwargs):
 
 
 class UploadBot:
-    API_KEY = "AIzaSyD3BXhMQLN8J8FYaa6Z_SVXOdxxIENCEJs"  # <-- Replace with your actual API key
+    API_KEY = ""  # <-- Replace with your actual API key
 
     def run(self):
         ''' Start bot, setup variables, api, and database, then start main loop. '''
