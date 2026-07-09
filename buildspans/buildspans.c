@@ -181,6 +181,9 @@ void buildspans_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
+void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
+void registry_unregister_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar);
+void registry_unregister_track(t_buildspans *x, t_symbol *palette, t_symbol *track);
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
 void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
@@ -199,6 +202,67 @@ t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom
 t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_atom *av);
 t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom *av);
 
+// Registry Helper Functions
+void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+    t_dictionary *palette_dict = NULL;
+    t_dictionary *track_dict = NULL;
+
+    // 1. Get or create palette dictionary
+    if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) != MAX_ERR_NONE || !palette_dict) {
+        palette_dict = dictionary_new();
+        t_atom a; atom_setobj(&a, (t_object *)palette_dict);
+        dictionary_appendatom(x->registry, palette, &a);
+    }
+
+    // 2. Get or create track dictionary within palette
+    if (dictionary_getdictionary(palette_dict, track, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) {
+        track_dict = dictionary_new();
+        t_atom a; atom_setobj(&a, (t_object *)track_dict);
+        dictionary_appendatom(palette_dict, track, &a);
+    }
+
+    // 3. Register bar (using it as a key with a dummy value)
+    dictionary_appendlong(track_dict, bar, 1);
+}
+
+void registry_unregister_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, t_symbol *bar) {
+    t_dictionary *palette_dict = NULL;
+    t_dictionary *track_dict = NULL;
+
+    if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) == MAX_ERR_NONE && palette_dict) {
+        if (dictionary_getdictionary(palette_dict, track, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+            dictionary_deleteentry(track_dict, bar);
+
+            // Cleanup if empty
+            long track_keys_count;
+            dictionary_getkeys(track_dict, &track_keys_count, NULL);
+            if (track_keys_count == 0) {
+                dictionary_deleteentry(palette_dict, track);
+            }
+        }
+
+        // Cleanup if palette empty
+        long palette_keys_count;
+        dictionary_getkeys(palette_dict, &palette_keys_count, NULL);
+        if (palette_keys_count == 0) {
+            dictionary_deleteentry(x->registry, palette);
+        }
+    }
+}
+
+void registry_unregister_track(t_buildspans *x, t_symbol *palette, t_symbol *track) {
+    t_dictionary *palette_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict) == MAX_ERR_NONE && palette_dict) {
+        dictionary_deleteentry(palette_dict, track);
+
+        // Cleanup if palette empty
+        long palette_keys_count;
+        dictionary_getkeys(palette_dict, &palette_keys_count, NULL);
+        if (palette_keys_count == 0) {
+            dictionary_deleteentry(x->registry, palette);
+        }
+    }
+}
 
 // Helper function to send verbose log messages
 void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
@@ -279,34 +343,11 @@ long buildspans_get_bar_length(t_buildspans *x) {
 
 void buildspans_visualize_memory(t_buildspans *x) {
     if (!x->visualize) return;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
 
     // 1. Identify all unique palettes
     long unique_palette_count = 0;
-    t_symbol **unique_palettes = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                int found = 0;
-                for (long j = 0; j < unique_palette_count; j++) {
-                    if (strcmp(unique_palettes[j]->s_name, pal_str) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    unique_palettes[unique_palette_count++] = gensym(pal_str);
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-    }
+    t_symbol **unique_palettes = NULL;
+    dictionary_getkeys(x->registry, &unique_palette_count, &unique_palettes);
 
     // 2. Generate JSON
     long buffer_size = 65536;
@@ -318,32 +359,12 @@ void buildspans_visualize_memory(t_buildspans *x) {
         t_symbol *palette_sym = unique_palettes[p];
         if (p > 0) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
 
-        // Identify unique tracks for this palette
+        t_dictionary *palette_dict = NULL;
+        dictionary_getdictionary(x->registry, palette_sym, (t_object **)&palette_dict);
+
         long unique_track_count = 0;
-        t_symbol **unique_tracks = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, palette_sym->s_name) == 0) {
-                        int found = 0;
-                        for (long j = 0; j < unique_track_count; j++) {
-                            if (strcmp(unique_tracks[j]->s_name, track_str) == 0) {
-                                found = 1;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            unique_tracks[unique_track_count++] = gensym(track_str);
-                        }
-                    }
-                    sysmem_freeptr(pal_str);
-                    sysmem_freeptr(track_str);
-                    sysmem_freeptr(bar_str);
-                    sysmem_freeptr(prop_str);
-                }
-            }
-        }
+        t_symbol **unique_tracks = NULL;
+        dictionary_getkeys(palette_dict, &unique_track_count, &unique_tracks);
 
         offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"building\":{", 
                             palette_sym->s_name);
@@ -354,23 +375,19 @@ void buildspans_visualize_memory(t_buildspans *x) {
             
             offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":[", track_sym->s_name);
 
+            t_dictionary *track_dict = NULL;
+            dictionary_getdictionary(palette_dict, track_sym, (t_object **)&track_dict);
+
             // a. Find and sort bars for this track
             long bar_count = 0;
-            long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
-            if (keys) {
-                for (long j = 0; j < num_keys; j++) {
-                     char *pal_str, *track_str, *bar_str, *prop_str;
-                     if (parse_hierarchical_key(keys[j], &pal_str, &track_str, &bar_str, &prop_str)) {
-                         if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_sym->s_name) == 0 && strcmp(prop_str, "mean") == 0) {
-                             bar_timestamps[bar_count++] = atol(bar_str);
-                         }
-                         sysmem_freeptr(pal_str);
-                         sysmem_freeptr(track_str);
-                         sysmem_freeptr(bar_str);
-                         sysmem_freeptr(prop_str);
-                     }
-                }
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict, &bar_count, &bar_keys);
+
+            long *bar_timestamps = (long *)sysmem_newptr(bar_count * sizeof(long));
+            for(long j=0; j<bar_count; j++) {
+                bar_timestamps[j] = atol(bar_keys[j]->s_name);
             }
+            if (bar_keys) sysmem_freeptr(bar_keys);
             qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
 
             // b. Append absolutes
@@ -451,8 +468,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     visualize((t_object *)x, json_buffer);
 
     sysmem_freeptr(json_buffer);
-    sysmem_freeptr(unique_palettes);
-    if(keys) sysmem_freeptr(keys);
+    if (unique_palettes) sysmem_freeptr(unique_palettes);
 }
 
 
@@ -505,6 +521,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
     t_buildspans *x = (t_buildspans *)object_alloc(buildspans_class);
     if (x) {
         x->building = dictionary_new();
+        x->registry = dictionary_new();
         x->tracks_ended_in_current_event = dictionary_new();
         x->current_track = 0;
         x->current_offset = 0.0;
@@ -566,6 +583,9 @@ void buildspans_free(t_buildspans *x) {
     if (x->building) {
         object_free(x->building);
     }
+    if (x->registry) {
+        object_free(x->registry);
+    }
     if (x->tracks_ended_in_current_event) {
         object_free(x->tracks_ended_in_current_event);
     }
@@ -591,10 +611,14 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     if (x->building) {
         object_free(x->building);
     }
+    if (x->registry) {
+        object_free(x->registry);
+    }
     if (x->tracks_ended_in_current_event) {
         object_free(x->tracks_ended_in_current_event);
     }
     x->building = dictionary_new();
+    x->registry = dictionary_new();
     x->tracks_ended_in_current_event = dictionary_new();
     x->current_track = 0;
     x->current_offset = 0.0;
@@ -662,40 +686,33 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
     // --- MODIFIED DISCONTIGUITY CHECK PHASE ---
     // Conduct a modified discontiguity check for every track across every palette BEFORE duplication.
-    long num_keys_check;
-    t_symbol **keys_check;
-    dictionary_getkeys(x->building, &num_keys_check, &keys_check);
-    if (keys_check) {
-        t_dictionary *unique_pal_tracks = dictionary_new();
-        for (long i = 0; i < num_keys_check; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys_check[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                char combined[512];
-                snprintf(combined, 512, "%s::%s", pal_str, track_str);
-                t_symbol *combined_sym = gensym(combined);
-                if (!dictionary_hasentry(unique_pal_tracks, combined_sym)) {
-                    dictionary_appendsym(unique_pal_tracks, combined_sym, _sym_nothing);
-                    const char *dash = strchr(track_str, '-');
+    long palette_count = 0;
+    t_symbol **palettes = NULL;
+    dictionary_getkeys(x->registry, &palette_count, &palettes);
+    if (palettes) {
+        for (long p = 0; p < palette_count; p++) {
+            t_dictionary *pal_dict = NULL;
+            dictionary_getdictionary(x->registry, palettes[p], (t_object **)&pal_dict);
+            long track_count = 0;
+            t_symbol **tracks = NULL;
+            dictionary_getkeys(pal_dict, &track_count, &tracks);
+            if (tracks) {
+                for (long t = 0; t < track_count; t++) {
+                    const char *dash = strchr(tracks[t]->s_name, '-');
                     if (dash) {
                         double track_offset = (double)atol(dash + 1);
                         double relative_f = f - track_offset;
-                        buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
+                        buildspans_check_discontiguity(x, palettes[p], tracks[t], relative_f);
                     }
                 }
-                sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+                sysmem_freeptr(tracks);
             }
         }
-        object_free(unique_pal_tracks);
-        sysmem_freeptr(keys_check);
+        sysmem_freeptr(palettes);
         buildspans_run_cleanup(x);
     }
 
     buildspans_log(x, "Duplicating one span for each active track on palette %s.", x->current_palette->s_name);
-
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
 
     // --- GATHER PHASE ---
     buildspans_log(x, "Gathering notes for span duplication.");
@@ -707,13 +724,18 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
     // 1. Identify all unique track numbers (the integer part of the track-offset key)
     long unique_track_num_count = 0;
-    long *unique_track_nums = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, x->current_palette->s_name) == 0) {
+    long *unique_track_nums = NULL;
+
+    t_dictionary *current_pal_dict = NULL;
+    if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&current_pal_dict) == MAX_ERR_NONE && current_pal_dict) {
+        long reg_track_count = 0;
+        t_symbol **reg_tracks = NULL;
+        dictionary_getkeys(current_pal_dict, &reg_track_count, &reg_tracks);
+        if (reg_tracks) {
+            unique_track_nums = (long *)sysmem_newptr(reg_track_count * sizeof(long));
+            for (long i = 0; i < reg_track_count; i++) {
                 long current_track_num;
-                if (sscanf(track_str, "%ld-", &current_track_num) == 1) {
+                if (sscanf(reg_tracks[i]->s_name, "%ld-", &current_track_num) == 1) {
                     int found = 0;
                     for (long j = 0; j < unique_track_num_count; j++) {
                         if (unique_track_nums[j] == current_track_num) {
@@ -726,10 +748,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
                     }
                 }
             }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
+            sysmem_freeptr(reg_tracks);
         }
     }
 
@@ -742,26 +761,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         snprintf(target_track_str, 64, "%ld-%ld", track_num_to_process, new_rounded_offset);
         t_symbol *target_track_sym = gensym(target_track_str);
 
-        int target_exists = 0;
-        for (long j = 0; j < num_keys; j++) {
-            char *p_str, *t_str, *b_str, *pr_str;
-            if (parse_hierarchical_key(keys[j], &p_str, &t_str, &b_str, &pr_str)) {
-                if (strcmp(p_str, x->current_palette->s_name) == 0 && strcmp(t_str, target_track_sym->s_name) == 0) {
-                    target_exists = 1;
-                    sysmem_freeptr(p_str);
-                    sysmem_freeptr(t_str);
-                    sysmem_freeptr(b_str);
-                    sysmem_freeptr(pr_str);
-                    break;
-                }
-                sysmem_freeptr(p_str);
-                sysmem_freeptr(t_str);
-                sysmem_freeptr(b_str);
-                sysmem_freeptr(pr_str);
-            }
-        }
-
-        if (target_exists) {
+        if (dictionary_hasentry(current_pal_dict, target_track_sym)) {
             buildspans_log(x, "Target span %s already exists on palette %s. Skipping duplication for this track.", target_track_sym->s_name, x->current_palette->s_name);
             continue;
         }
@@ -771,23 +771,28 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         snprintf(source_track_str, 64, "%ld-%ld", track_num_to_process, old_rounded_offset);
         t_symbol *source_track_sym = gensym(source_track_str);
 
-        // Now iterate through all keys to find notes belonging to the source span
-        for (long j = 0; j < num_keys; j++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[j], &pal_str, &track_str, &bar_str, &prop_str)) {
-                if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, source_track_sym->s_name) == 0 && strcmp(prop_str, "absolutes") == 0) {
+        t_dictionary *source_track_dict = NULL;
+        if (dictionary_getdictionary(current_pal_dict, source_track_sym, (t_object **)&source_track_dict) == MAX_ERR_NONE && source_track_dict) {
+            long bar_key_count = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(source_track_dict, &bar_key_count, &bar_keys);
+            if (bar_keys) {
+                for (long j = 0; j < bar_key_count; j++) {
+                    t_symbol *bar_str_sym = bar_keys[j];
+                    t_symbol *abs_key = generate_hierarchical_key(x->current_palette, source_track_sym, bar_str_sym, gensym("absolutes"));
+                    t_symbol *scores_key = generate_hierarchical_key(x->current_palette, source_track_sym, bar_str_sym, gensym("scores"));
+
                     t_atom *abs_atoms = NULL;
                     long abs_count = 0;
                     t_atomarray *abs_aa = NULL;
                     t_atom abs_atom;
-                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
+                    if (dictionary_getatomarray(x->building, abs_key, (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
                         atomarray_getatoms(abs_aa, &abs_count, &abs_atoms);
-                    } else if (dictionary_getatom(x->building, keys[j], &abs_atom) == MAX_ERR_NONE) {
+                    } else if (dictionary_getatom(x->building, abs_key, &abs_atom) == MAX_ERR_NONE) {
                         abs_atoms = &abs_atom;
                         abs_count = 1;
                     }
 
-                    t_symbol *scores_key = generate_hierarchical_key(x->current_palette, source_track_sym, gensym(bar_str), gensym("scores"));
                     t_atom *scores_atoms = NULL;
                     long scores_count = 0;
                     t_atomarray *scores_aa = NULL;
@@ -806,18 +811,15 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
                         }
                         manifest[manifest_count].track_number = track_num_to_process;
                         manifest[manifest_count].timestamp = atom_getfloat(abs_atoms + k);
-                        manifest[manifest_count].score = atom_getfloat(scores_atoms + k);
+                        manifest[manifest_count].score = (k < scores_count) ? atom_getfloat(scores_atoms + k) : 0.0;
                         manifest_count++;
                     }
                 }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
+                sysmem_freeptr(bar_keys);
             }
         }
     }
-    sysmem_freeptr(unique_track_nums);
+    if (unique_track_nums) sysmem_freeptr(unique_track_nums);
 
     // --- PROCESSING PHASE ---
     buildspans_log(x, "Processing %ld notes from duplication manifest.", manifest_count);
@@ -840,7 +842,6 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     }
 
     sysmem_freeptr(manifest);
-    if (keys) sysmem_freeptr(keys);
     buildspans_visualize_memory(x);
 }
 
@@ -1025,38 +1026,27 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
                     x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-
     long unique_tracks_count = 0;
-    t_symbol **unique_track_syms = (t_symbol **)sysmem_newptr((num_keys + 1) * sizeof(t_symbol *));
+    t_symbol **unique_track_syms = NULL;
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", x->current_track);
 
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                if (strcmp(pal_str, x->current_palette->s_name) == 0 && strncmp(track_str, track_prefix, strlen(track_prefix)) == 0) {
-                    t_symbol *current_track_sym = gensym(track_str);
-                    int found = 0;
-                    for (long j = 0; j < unique_tracks_count; j++) {
-                        if (unique_track_syms[j] == current_track_sym) {
-                            found = 1;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        unique_track_syms[unique_tracks_count++] = current_track_sym;
-                    }
+    t_dictionary *pal_dict = NULL;
+    if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&pal_dict) == MAX_ERR_NONE && pal_dict) {
+        long reg_track_count = 0;
+        t_symbol **reg_tracks = NULL;
+        dictionary_getkeys(pal_dict, &reg_track_count, &reg_tracks);
+        if (reg_tracks) {
+            unique_track_syms = (t_symbol **)sysmem_newptr((reg_track_count + 1) * sizeof(t_symbol *));
+            for (long i = 0; i < reg_track_count; i++) {
+                if (strncmp(reg_tracks[i]->s_name, track_prefix, strlen(track_prefix)) == 0) {
+                    unique_track_syms[unique_tracks_count++] = reg_tracks[i];
                 }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
             }
+            sysmem_freeptr(reg_tracks);
         }
+    } else {
+        unique_track_syms = (t_symbol **)sysmem_newptr(1 * sizeof(t_symbol *));
     }
 
     // 2. Also consider the global current offset as a potential new span
@@ -1094,32 +1084,20 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         // TIER 1: Dictionary Lookup
         // We look at the first available bar from the target active span and use its high-precision offset.
         // This is the authoritative source for spans that have already received data.
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, target_track_sym->s_name) == 0 && strcmp(key_prop, "offset") == 0) {
-                    t_atom *off_atoms = NULL;
-                    long off_count = 0;
-                    t_atomarray *off_aa = NULL;
-                    t_atom off_atom;
-                    if (dictionary_getatomarray(x->building, keys[j], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
-                        atomarray_getatoms(off_aa, &off_count, &off_atoms);
-                    } else if (dictionary_getatom(x->building, keys[j], &off_atom) == MAX_ERR_NONE) {
-                        off_atoms = &off_atom;
-                        off_count = 1;
-                    }
-                    if (off_count > 0) actual_offset = atom_getfloat(off_atoms);
+        t_dictionary *target_track_dict = NULL;
+        if (pal_dict && dictionary_getdictionary(pal_dict, target_track_sym, (t_object **)&target_track_dict) == MAX_ERR_NONE && target_track_dict) {
+            long bar_key_count = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(target_track_dict, &bar_key_count, &bar_keys);
+            if (bar_keys && bar_key_count > 0) {
+                t_symbol *first_bar_sym = bar_keys[0];
+                t_symbol *offset_key = generate_hierarchical_key(x->current_palette, target_track_sym, first_bar_sym, gensym("offset"));
+                t_atom a;
+                if (dictionary_getatom(x->building, offset_key, &a) == MAX_ERR_NONE) {
+                    actual_offset = atom_getfloat(&a);
                     offset_found = 1;
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                    break;
                 }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+                sysmem_freeptr(bar_keys);
             }
         }
 
@@ -1134,8 +1112,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
     }
 
-    if (keys) sysmem_freeptr(keys);
-    sysmem_freeptr(unique_track_syms);
+    if (unique_track_syms) sysmem_freeptr(unique_track_syms);
 
     x->last_note_calc = calc_timestamp;
     x->last_note_store = store_timestamp;
@@ -1147,75 +1124,57 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 void buildspans_flush_track(t_buildspans *x, long track_num) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
 
-    // 1. Identify all unique tracks for this track number across all palettes
-    long track_count = 0;
-    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    t_symbol **palette_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", track_num);
 
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strncmp(key_track, track_prefix, strlen(track_prefix)) == 0) {
-                int found = 0;
-                for(long j=0; j<track_count; ++j) {
-                    if (strcmp(track_syms[j]->s_name, key_track) == 0 && strcmp(palette_syms[j]->s_name, key_pal) == 0) {
-                        found = 1;
-                        break;
+    long palette_count = 0;
+    t_symbol **palettes = NULL;
+    dictionary_getkeys(x->registry, &palette_count, &palettes);
+
+    if (palettes) {
+        for (long p = 0; p < palette_count; p++) {
+            t_symbol *palette_sym = palettes[p];
+            t_dictionary *pal_dict = NULL;
+            dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict);
+
+            long track_count = 0;
+            t_symbol **tracks = NULL;
+            dictionary_getkeys(pal_dict, &track_count, &tracks);
+
+            if (tracks) {
+                for (long t = 0; t < track_count; t++) {
+                    t_symbol *track_sym = tracks[t];
+                    if (strncmp(track_sym->s_name, track_prefix, strlen(track_prefix)) == 0) {
+                        t_dictionary *track_dict = NULL;
+                        dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict);
+
+                        long bar_count = 0;
+                        t_symbol **bar_keys = NULL;
+                        dictionary_getkeys(track_dict, &bar_count, &bar_keys);
+
+                        long last_bar_timestamp = -1;
+                        if (bar_keys) {
+                            for (long j = 0; j < bar_count; j++) {
+                                long bar_val = atol(bar_keys[j]->s_name);
+                                if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                                    last_bar_timestamp = bar_val;
+                                }
+                            }
+                            sysmem_freeptr(bar_keys);
+                        }
+
+                        if (last_bar_timestamp != -1) {
+                            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
+                        }
+                        buildspans_end_track_span(x, palette_sym, track_sym);
                     }
                 }
-                if (!found) {
-                    track_syms[track_count] = gensym(key_track);
-                    palette_syms[track_count] = gensym(key_pal);
-                    track_count++;
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
-    }
-
-    // 2. For each identified track, perform deferred rating check and end the span.
-    for (long i = 0; i < track_count; i++) {
-        t_symbol *track_sym = track_syms[i];
-        t_symbol *palette_sym = palette_syms[i];
-
-        // Find the last bar for this track.
-        long last_bar_timestamp = -1;
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+                sysmem_freeptr(tracks);
             }
         }
-
-        if (last_bar_timestamp != -1) {
-            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
-        }
-
-        buildspans_end_track_span(x, palette_sym, track_sym);
+        sysmem_freeptr(palettes);
     }
-
-    sysmem_freeptr(track_syms);
-    sysmem_freeptr(palette_syms);
-    sysmem_freeptr(keys);
 
     x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
@@ -1226,28 +1185,24 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
     long bar_length = buildspans_get_bar_length(x);
     if (bar_length <= 0) return;
 
+    t_dictionary *pal_dict = NULL;
+    t_dictionary *track_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return;
+    if (dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) return;
+
     // Find the most recent bar for the current track
     long last_bar_timestamp = -1;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
-                    if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
-                        last_bar_timestamp = bar_val;
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+    long bar_key_count = 0;
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+    if (bar_keys) {
+        for (long i = 0; i < bar_key_count; i++) {
+            long bar_val = atol(bar_keys[i]->s_name);
+            if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
+                last_bar_timestamp = bar_val;
             }
         }
-        sysmem_freeptr(keys);
+        sysmem_freeptr(bar_keys);
     }
 
     if (last_bar_timestamp != -1) {
@@ -1255,24 +1210,19 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 
         // Re-find the most recent bar after potential pruning
         long most_recent_bar_after_rating_check = -1;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *key_pal, *key_track, *key_bar, *key_prop;
-                if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                    if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                        long bar_val = atol(key_bar);
-                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
-                            most_recent_bar_after_rating_check = bar_val;
-                        }
+
+        // Re-get track_dict in case it was freed during rating check
+        if (dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+            dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+            if (bar_keys) {
+                for (long i = 0; i < bar_key_count; i++) {
+                    long bar_val = atol(bar_keys[i]->s_name);
+                    if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
+                        most_recent_bar_after_rating_check = bar_val;
                     }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
                 }
+                sysmem_freeptr(bar_keys);
             }
-            sysmem_freeptr(keys);
         }
 
         if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length) {
@@ -1298,25 +1248,20 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
 
         // List active spans
-        long num_keys;
-        t_symbol **keys;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
+        t_dictionary *pal_dict_err = NULL;
+        if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&pal_dict_err) == MAX_ERR_NONE && pal_dict_err) {
             char active_spans_str[2048] = "";
             long active_spans_count = 0;
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
-                        if (active_spans_count > 0) strncat(active_spans_str, ", ", 2048 - strlen(active_spans_str) - 1);
-                        strncat(active_spans_str, track_str, 2048 - strlen(active_spans_str) - 1);
-                        active_spans_count++;
-                    }
-                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
+            t_symbol **reg_tracks = NULL;
+            dictionary_getkeys(pal_dict_err, &active_spans_count, &reg_tracks);
+            if (reg_tracks) {
+                for (long i = 0; i < active_spans_count; i++) {
+                    if (i > 0) strncat(active_spans_str, ", ", 2048 - strlen(active_spans_str) - 1);
+                    strncat(active_spans_str, reg_tracks[i]->s_name, 2048 - strlen(active_spans_str) - 1);
                 }
+                buildspans_log(x, "*** Active spans on palette %s: %s", x->current_palette->s_name, active_spans_str);
+                sysmem_freeptr(reg_tracks);
             }
-            buildspans_log(x, "*** Active spans on palette %s: %s", x->current_palette->s_name, active_spans_str);
-            sysmem_freeptr(keys);
         }
 
         // Temporary Fix: Remove the entire span
@@ -1327,18 +1272,22 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         object_error((t_object *)x, "TEMPORARY FIX: Removing invalid span %s from memory.", target_track_sym->s_name);
         buildspans_log(x, "*** TEMPORARY FIX: Removing all dictionary entries for span %s on palette %s.", target_track_sym->s_name, x->current_palette->s_name);
 
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *pal_str, *track_str, *bar_str, *prop_str;
-                if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                    if (strcmp(pal_str, x->current_palette->s_name) == 0 && strcmp(track_str, target_track_sym->s_name) == 0) {
-                        dictionary_deleteentry(x->building, keys[i]);
+        t_dictionary *track_dict_err = NULL;
+        if (pal_dict_err && dictionary_getdictionary(pal_dict_err, target_track_sym, (t_object **)&track_dict_err) == MAX_ERR_NONE && track_dict_err) {
+            long bar_key_count = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict_err, &bar_key_count, &bar_keys);
+            if (bar_keys) {
+                const char* props[] = {"absolutes", "scores", "mean", "offset", "palette", "rating", "span"};
+                for (long i = 0; i < bar_key_count; i++) {
+                    for (int j = 0; j < 7; j++) {
+                        t_symbol *k = generate_hierarchical_key(x->current_palette, target_track_sym, bar_keys[i], gensym(props[j]));
+                        dictionary_deleteentry(x->building, k);
                     }
-                    sysmem_freeptr(pal_str); sysmem_freeptr(track_str); sysmem_freeptr(bar_str); sysmem_freeptr(prop_str);
                 }
+                sysmem_freeptr(bar_keys);
             }
-            sysmem_freeptr(keys);
+            registry_unregister_track(x, x->current_palette, target_track_sym);
         }
         buildspans_visualize_memory(x);
         return; // Abort processing for this note
@@ -1357,26 +1306,23 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // --- Find the most recent bar for the current track to see if this is a new bar ---
     long last_bar_timestamp = -1;
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
+    t_dictionary *pal_dict_note = NULL;
+    t_dictionary *track_dict_note = NULL;
+    if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&pal_dict_note) == MAX_ERR_NONE && pal_dict_note) {
+        if (dictionary_getdictionary(pal_dict_note, track_sym, (t_object **)&track_dict_note) == MAX_ERR_NONE && track_dict_note) {
+            long bar_key_count = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict_note, &bar_key_count, &bar_keys);
+            if (bar_keys) {
+                for (long i = 0; i < bar_key_count; i++) {
+                    long bar_val = atol(bar_keys[i]->s_name);
                     if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
                         last_bar_timestamp = bar_val;
                     }
                 }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+                sysmem_freeptr(bar_keys);
             }
         }
-        sysmem_freeptr(keys);
     }
 
     int is_new_bar = (last_bar_timestamp == -1 || bar_timestamp_val > last_bar_timestamp);
@@ -1390,6 +1336,8 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     char bar_str[32];
     snprintf(bar_str, 32, "%ld", bar_timestamp_val);
     t_symbol *bar_sym = gensym(bar_str);
+
+    registry_register_bar(x, x->current_palette, track_sym, bar_sym);
 
     // Update offset
     t_symbol *offset_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"));
@@ -1472,26 +1420,18 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
     // 1. Get all bar timestamps for the current track AND PALETTE.
-    dictionary_getkeys(x->building, &num_keys, &keys);
     long bar_timestamps_count = 0;
-    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long)); // Over-allocate, then count
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    // To avoid duplicates, only add when we see the 'mean' property
-                    if (strcmp(key_prop, "mean") == 0) {
-                        bar_timestamps[bar_timestamps_count++] = atol(key_bar);
-                    }
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+    long *bar_timestamps = NULL;
+    if (track_dict_note || (dictionary_getdictionary(pal_dict_note, track_sym, (t_object **)&track_dict_note) == MAX_ERR_NONE && track_dict_note)) {
+        t_symbol **bar_keys = NULL;
+        dictionary_getkeys(track_dict_note, &bar_timestamps_count, &bar_keys);
+        if (bar_keys) {
+            bar_timestamps = (long *)sysmem_newptr(bar_timestamps_count * sizeof(long));
+            for (long i = 0; i < bar_timestamps_count; i++) {
+                bar_timestamps[i] = atol(bar_keys[i]->s_name);
             }
+            sysmem_freeptr(bar_keys);
         }
-        sysmem_freeptr(keys);
     }
     qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
@@ -1564,10 +1504,10 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 }
 
 void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    t_dictionary *pal_dict = NULL;
+    t_dictionary *track_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return;
+    if (dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) return;
 
     // 1. Find the first 'span' atomarray for the track. They are all shared.
     t_atomarray *span_to_output = NULL;
@@ -1575,53 +1515,35 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
     t_atom span_atom;
     int span_found_robustly = 0;
 
-    if (keys) {
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "span") == 0) {
-                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-                        span_to_output = span_aa;
-                        span_found_robustly = 1;
-                    } else if (dictionary_getatom(x->building, keys[i], &span_atom) == MAX_ERR_NONE) {
-                        span_to_output = atomarray_new(1, &span_atom);
-                        span_found_robustly = 1;
-                    }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
-                    if (span_found_robustly) break; // Found it.
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+    long bar_key_count = 0;
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+
+    if (bar_keys) {
+        for (long i = 0; i < bar_key_count; i++) {
+            t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_keys[i], gensym("span"));
+            if (dictionary_getatomarray(x->building, span_key, (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
+                span_to_output = span_aa;
+                span_found_robustly = 1;
+            } else if (dictionary_getatom(x->building, span_key, &span_atom) == MAX_ERR_NONE) {
+                span_to_output = atomarray_new(1, &span_atom);
+                span_found_robustly = 1;
             }
+            if (span_found_robustly) break;
         }
     }
 
     // 2. If no span was found (e.g., single bar), create one locally.
     int local_span_created = 0;
-    if (!span_to_output && keys) {
+    if (!span_to_output && bar_keys) {
         local_span_created = 1;
         span_to_output = atomarray_new(0, NULL);
-        long bar_count = 0;
-        long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
-        for (long i = 0; i < num_keys; i++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-             if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                     bar_timestamps[bar_count++] = atol(key_bar);
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
+        long *bar_timestamps = (long *)sysmem_newptr(bar_key_count * sizeof(long));
+        for (long i = 0; i < bar_key_count; i++) {
+            bar_timestamps[i] = atol(bar_keys[i]->s_name);
         }
-        qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
-        for(long i=0; i<bar_count; ++i) {
+        qsort(bar_timestamps, bar_key_count, sizeof(long), compare_longs);
+        for(long i=0; i<bar_key_count; ++i) {
             t_atom a;
             atom_setlong(&a, bar_timestamps[i]);
             atomarray_appendatom(span_to_output, &a);
@@ -1702,28 +1624,18 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
     }
 
     // 4. Delete all keys associated with the track AND palette.
-    if (keys) {
-        t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
-        long delete_count = 0;
-        for(long i=0; i<num_keys; ++i) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                 if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                     keys_to_delete[delete_count++] = keys[i];
-                 }
-                 sysmem_freeptr(key_pal);
-                 sysmem_freeptr(key_track);
-                 sysmem_freeptr(key_bar);
-                 sysmem_freeptr(key_prop);
-             }
+    if (bar_keys) {
+        const char* props[] = {"absolutes", "scores", "mean", "offset", "palette", "rating", "span"};
+        for (long i = 0; i < bar_key_count; i++) {
+            for (int j = 0; j < 7; j++) {
+                t_symbol *k = generate_hierarchical_key(palette_sym, track_sym, bar_keys[i], gensym(props[j]));
+                dictionary_deleteentry(x->building, k);
+            }
         }
-        for(long i=0; i<delete_count; ++i) {
-            dictionary_deleteentry(x->building, keys_to_delete[i]);
-        }
-        sysmem_freeptr(keys_to_delete);
-        sysmem_freeptr(keys);
+        sysmem_freeptr(bar_keys);
     }
 
+    registry_unregister_track(x, palette_sym, track_sym);
     buildspans_visualize_memory(x);
     // Defer the cleanup check by adding the track to a temporary dictionary.
     // We'll store it as palette::track to be sure
@@ -1776,40 +1688,15 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "Flush triggered by bang for all palettes.");
 
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
+    long unique_palette_count = 0;
+    t_symbol **unique_palettes = NULL;
+    dictionary_getkeys(x->registry, &unique_palette_count, &unique_palettes);
 
-    if (keys) {
-        long unique_palette_count = 0;
-        t_symbol **unique_palettes = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-
-        for (long i = 0; i < num_keys; i++) {
-            char *pal_str, *track_str, *bar_str, *prop_str;
-            if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-                int found = 0;
-                for (long j = 0; j < unique_palette_count; j++) {
-                    if (strcmp(unique_palettes[j]->s_name, pal_str) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    unique_palettes[unique_palette_count++] = gensym(pal_str);
-                }
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-            }
-        }
-
+    if (unique_palettes) {
         for (long i = 0; i < unique_palette_count; i++) {
             buildspans_flush(x, unique_palettes[i]);
         }
-
         sysmem_freeptr(unique_palettes);
-        sysmem_freeptr(keys);
     }
 
     x->local_bar_length = 0;
@@ -1820,67 +1707,46 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_flush: utilizing bar_length %ld", bar_length);
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
 
-    // 1. Identify all unique tracks FOR THIS PALETTE.
-    long track_count = 0;
-    t_symbol **track_syms = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0) {
-                int found = 0;
-                for(long j=0; j<track_count; ++j) {
-                    if (strcmp(track_syms[j]->s_name, key_track) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    track_syms[track_count++] = gensym(key_track);
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
+    t_dictionary *pal_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) {
+        return;
     }
 
-    // 2. For each track, perform deferred rating check and end the span.
-    for (long i = 0; i < track_count; i++) {
-        t_symbol *track_sym = track_syms[i];
+    long track_count = 0;
+    t_symbol **track_syms = NULL;
+    dictionary_getkeys(pal_dict, &track_count, &track_syms);
 
-        // Find the last bar for this track.
-        long last_bar_timestamp = -1;
-        for (long j = 0; j < num_keys; j++) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                    long bar_val = atol(key_bar);
+    if (track_syms) {
+        for (long i = 0; i < track_count; i++) {
+            t_symbol *track_sym = track_syms[i];
+
+            t_dictionary *track_dict = NULL;
+            dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict);
+
+            long bar_count = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict, &bar_count, &bar_keys);
+
+            long last_bar_timestamp = -1;
+            if (bar_keys) {
+                for (long j = 0; j < bar_count; j++) {
+                    long bar_val = atol(bar_keys[j]->s_name);
                     if (last_bar_timestamp == -1 || bar_val > last_bar_timestamp) {
                         last_bar_timestamp = bar_val;
                     }
                 }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
+                sysmem_freeptr(bar_keys);
             }
-        }
 
-        if (last_bar_timestamp != -1) {
-            buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
-        }
+            if (last_bar_timestamp != -1) {
+                buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
+            }
 
-        buildspans_end_track_span(x, palette_sym, track_sym);
+            buildspans_end_track_span(x, palette_sym, track_sym);
+        }
+        sysmem_freeptr(track_syms);
     }
-
-    sysmem_freeptr(track_syms);
-    sysmem_freeptr(keys);
 
     x->last_msg_type = gensym("flush");
     buildspans_run_cleanup(x);
@@ -2124,28 +1990,24 @@ t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    t_dictionary *pal_dict = NULL;
+    t_dictionary *track_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return;
+    if (dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) return;
 
     // 1. Identify all bars to end.
-    long end_count = 0;
-    long *bars_to_end_vals = (long *)sysmem_newptr(num_keys * sizeof(long));
+    long bar_key_count = 0;
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+    if (!bar_keys) return;
 
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                long bar_val = atol(key_bar);
-                if (bar_val != bar_to_keep) {
-                    bars_to_end_vals[end_count++] = bar_val;
-                }
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
+    long end_count = 0;
+    long *bars_to_end_vals = (long *)sysmem_newptr(bar_key_count * sizeof(long));
+
+    for (long i = 0; i < bar_key_count; i++) {
+        long bar_val = atol(bar_keys[i]->s_name);
+        if (bar_val != bar_to_keep) {
+            bars_to_end_vals[end_count++] = bar_val;
         }
     }
 
@@ -2153,6 +2015,12 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
     if (end_count > 0) {
         buildspans_log(x, "Pruning span for track %s on palette %s, keeping bar %ld", track_sym->s_name, palette_sym->s_name, bar_to_keep);
         qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
+
+        for (long i = 0; i < end_count; i++) {
+            char bar_prune_str[32];
+            snprintf(bar_prune_str, 32, "%ld", bars_to_end_vals[i]);
+            registry_unregister_bar(x, palette_sym, track_sym, gensym(bar_prune_str));
+        }
 
         // Create the list of ended bars
         t_atomarray *ended_span_array = atomarray_new(0, NULL);
@@ -2205,31 +2073,18 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
     }
 
     // 4. Delete keys for ended bars.
-    t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
-    long delete_count = 0;
+    const char* props[] = {"absolutes", "scores", "mean", "offset", "palette", "rating", "span"};
     for (long i = 0; i < end_count; i++) {
         char bar_str[32];
         snprintf(bar_str, 32, "%ld", bars_to_end_vals[i]);
-        for(long j=0; j<num_keys; ++j) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_bar, bar_str) == 0) {
-                     keys_to_delete[delete_count++] = keys[j];
-                }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
-            }
+        for (int j = 0; j < 7; j++) {
+            t_symbol *k = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym(props[j]));
+            dictionary_deleteentry(x->building, k);
         }
     }
-    for(long i=0; i<delete_count; ++i) {
-        dictionary_deleteentry(x->building, keys_to_delete[i]);
-    }
 
-    sysmem_freeptr(keys_to_delete);
     sysmem_freeptr(bars_to_end_vals);
-    sysmem_freeptr(keys);
+    sysmem_freeptr(bar_keys);
 
     char bar_to_keep_str[32];
     snprintf(bar_to_keep_str, 32, "%ld", bar_to_keep);
@@ -2356,26 +2211,22 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
 
 
 void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    t_dictionary *pal_dict = NULL;
+    t_dictionary *track_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return;
+    if (dictionary_getdictionary(pal_dict, track_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) return;
 
     // 1. Get all bars for the track AND PALETTE
     long bar_count = 0;
-    long *bar_timestamps = (long *)sysmem_newptr(num_keys * sizeof(long));
-    for (long i = 0; i < num_keys; i++) {
-        char *key_pal, *key_track, *key_bar, *key_prop;
-        if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-            if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_prop, "mean") == 0) {
-                bar_timestamps[bar_count++] = atol(key_bar);
-            }
-            sysmem_freeptr(key_pal);
-            sysmem_freeptr(key_track);
-            sysmem_freeptr(key_bar);
-            sysmem_freeptr(key_prop);
-        }
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(track_dict, &bar_count, &bar_keys);
+    if (!bar_keys) return;
+
+    long *bar_timestamps = (long *)sysmem_newptr(bar_count * sizeof(long));
+    for (long i = 0; i < bar_count; i++) {
+        bar_timestamps[i] = atol(bar_keys[i]->s_name);
     }
+    sysmem_freeptr(bar_keys);
     
     int prune_span = 0;
     if (bar_count > 1) {
@@ -2452,7 +2303,6 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
     }
     
     sysmem_freeptr(bar_timestamps);
-    sysmem_freeptr(keys);
 }
 
 // New comparison function for doubles
@@ -2463,43 +2313,40 @@ int compare_doubles(const void *a, const void *b) {
 }
 
 double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check) {
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return -1.0;
+    t_dictionary *pal_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return -1.0;
 
     t_dictionary *unique_offsets_dict = dictionary_new();
     char track_prefix[32];
     snprintf(track_prefix, 32, "%ld-", track_num_to_check);
 
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strncmp(track_str, track_prefix, strlen(track_prefix)) == 0 && strcmp(prop_str, "offset") == 0) {
-                t_atom *off_atoms = NULL;
-                long off_count = 0;
-                t_atomarray *off_aa = NULL;
-                t_atom off_atom;
-                if (dictionary_getatomarray(x->building, keys[i], (t_object **)&off_aa) == MAX_ERR_NONE && off_aa) {
-                    atomarray_getatoms(off_aa, &off_count, &off_atoms);
-                } else if (dictionary_getatom(x->building, keys[i], &off_atom) == MAX_ERR_NONE) {
-                    off_atoms = &off_atom;
-                    off_count = 1;
-                }
-                if (off_count > 0) {
-                    double current_offset = atom_getfloat(off_atoms);
-                    char offset_key_str[64];
-                    snprintf(offset_key_str, 64, "%.2f", current_offset);
-                    dictionary_appendfloat(unique_offsets_dict, gensym(offset_key_str), current_offset);
+    long track_count = 0;
+    t_symbol **tracks = NULL;
+    dictionary_getkeys(pal_dict, &track_count, &tracks);
+    if (tracks) {
+        for (long t = 0; t < track_count; t++) {
+            if (strncmp(tracks[t]->s_name, track_prefix, strlen(track_prefix)) == 0) {
+                t_dictionary *track_dict = NULL;
+                dictionary_getdictionary(pal_dict, tracks[t], (t_object **)&track_dict);
+                long bar_key_count = 0;
+                t_symbol **bar_keys = NULL;
+                dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+                if (bar_keys && bar_key_count > 0) {
+                    t_symbol *first_bar_sym = bar_keys[0];
+                    t_symbol *offset_key = generate_hierarchical_key(palette_sym, tracks[t], first_bar_sym, gensym("offset"));
+                    t_atom a;
+                    if (dictionary_getatom(x->building, offset_key, &a) == MAX_ERR_NONE) {
+                        double current_offset = atom_getfloat(&a);
+                        char offset_key_str[64];
+                        snprintf(offset_key_str, 64, "%.2f", current_offset);
+                        dictionary_appendfloat(unique_offsets_dict, gensym(offset_key_str), current_offset);
+                    }
+                    sysmem_freeptr(bar_keys);
                 }
             }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
         }
+        sysmem_freeptr(tracks);
     }
-    if (keys) sysmem_freeptr(keys);
 
     long num_unique_offsets;
     t_symbol **offset_keys;
@@ -2690,75 +2537,41 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
         return; // Not a valid track-offset symbol
     }
 
-    long num_keys;
-    t_symbol **keys;
-    dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    t_dictionary *pal_dict = NULL;
+    t_dictionary *track_dict = NULL;
+    if (dictionary_getdictionary(x->registry, palette_sym, (t_object **)&pal_dict) != MAX_ERR_NONE || !pal_dict) return;
+    if (dictionary_getdictionary(pal_dict, track_offset_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) return;
 
-    // Retrieve actual double offset from dictionary for this track AND palette
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_offset_sym->s_name) == 0 && strcmp(prop_str, "offset") == 0) {
-                t_atom a;
-                dictionary_getatom(x->building, keys[i], &a);
-                offset_val_to_check = atom_getfloat(&a);
-                sysmem_freeptr(pal_str);
-                sysmem_freeptr(track_str);
-                sysmem_freeptr(bar_str);
-                sysmem_freeptr(prop_str);
-                break;
-            }
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
+    long bar_key_count = 0;
+    t_symbol **bar_keys = NULL;
+    dictionary_getkeys(track_dict, &bar_key_count, &bar_keys);
+    if (!bar_keys) return;
+
+    // Retrieve actual double offset from dictionary for this track AND palette (pick first bar)
+    if (bar_key_count > 0) {
+        t_symbol *offset_key = generate_hierarchical_key(palette_sym, track_offset_sym, bar_keys[0], gensym("offset"));
+        t_atom a;
+        if (dictionary_getatom(x->building, offset_key, &a) == MAX_ERR_NONE) {
+            offset_val_to_check = atom_getfloat(&a);
         }
     }
 
     buildspans_log(x, "--- Cleanup Check for %s on palette %s (Precision offset: %.2f) ---", track_offset_sym->s_name, palette_sym->s_name, offset_val_to_check);
 
-    // --- Single Pass ---
-    // In one loop, we will:
     // a) Find the oldest absolute time for the specific track-offset we are checking.
-    // b) Collect all keys that belong to the track-offset to be checked.
     double oldest_absolute_time = -1.0;
-    t_symbol **keys_to_delete = (t_symbol **)sysmem_newptr(num_keys * sizeof(t_symbol *));
-    long delete_count = 0;
-    
-    for (long i = 0; i < num_keys; i++) {
-        char *pal_str, *track_str, *bar_str, *prop_str;
-        if (parse_hierarchical_key(keys[i], &pal_str, &track_str, &bar_str, &prop_str)) {
-            // Check if it's the specific track-offset and palette we are interested in
-            if (strcmp(pal_str, palette_sym->s_name) == 0 && strcmp(track_str, track_offset_sym->s_name) == 0) {
-                // b) Collect this key for potential deletion
-                keys_to_delete[delete_count++] = keys[i];
-
-                // a) Find the oldest absolute time
-                if (strcmp(prop_str, "absolutes") == 0) {
-                    t_atom *av = NULL;
-                    long ac = 0;
-                    t_atomarray *aa = NULL;
-                    t_atom a;
-                    if (dictionary_getatomarray(x->building, keys[i], (t_object **)&aa) == MAX_ERR_NONE && aa) {
-                        atomarray_getatoms(aa, &ac, &av);
-                    } else if (dictionary_getatom(x->building, keys[i], &a) == MAX_ERR_NONE) {
-                        av = &a;
-                        ac = 1;
-                    }
-                    for (long k = 0; k < ac; k++) {
-                        double current_time = atom_getfloat(av + k);
-                        if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {
-                            oldest_absolute_time = current_time;
-                        }
-                    }
+    for (long i = 0; i < bar_key_count; i++) {
+        t_symbol *abs_key = generate_hierarchical_key(palette_sym, track_offset_sym, bar_keys[i], gensym("absolutes"));
+        t_atomarray *aa = NULL;
+        if (dictionary_getatomarray(x->building, abs_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+            long ac; t_atom *av;
+            atomarray_getatoms(aa, &ac, &av);
+            for (long k = 0; k < ac; k++) {
+                double current_time = atom_getfloat(av + k);
+                if (oldest_absolute_time == -1.0 || current_time < oldest_absolute_time) {
+                    oldest_absolute_time = current_time;
                 }
             }
-
-            sysmem_freeptr(pal_str);
-            sysmem_freeptr(track_str);
-            sysmem_freeptr(bar_str);
-            sysmem_freeptr(prop_str);
         }
     }
 
@@ -2781,10 +2594,14 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
 
     // 3. Compare and potentially delete.
     if (oldest_absolute_time >= next_offset_time) {
-        buildspans_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting %ld keys for %s on palette %s.", oldest_absolute_time, next_offset_time, delete_count, track_offset_sym->s_name, palette_sym->s_name);
+        buildspans_log(x, "Cleanup: Condition met (%.2f >= %.2f). Deleting keys for %s on palette %s.", oldest_absolute_time, next_offset_time, track_offset_sym->s_name, palette_sym->s_name);
 
-        for (long i = 0; i < delete_count; i++) {
-            dictionary_deleteentry(x->building, keys_to_delete[i]);
+        const char* props[] = {"absolutes", "scores", "mean", "offset", "palette", "rating", "span"};
+        for (long i = 0; i < bar_key_count; i++) {
+            for (int j = 0; j < 7; j++) {
+                t_symbol *k = generate_hierarchical_key(palette_sym, track_offset_sym, bar_keys[i], gensym(props[j]));
+                dictionary_deleteentry(x->building, k);
+            }
         }
         buildspans_visualize_memory(x);
     } else {
@@ -2792,6 +2609,5 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
     }
 
 cleanup:
-    sysmem_freeptr(keys_to_delete);
-    if(keys) sysmem_freeptr(keys);
+    if (bar_keys) sysmem_freeptr(bar_keys);
 }
