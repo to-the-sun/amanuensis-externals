@@ -9,6 +9,16 @@
 #include <math.h>
 #include <stdlib.h> // For qsort
 #include <string.h> // For isdigit
+#if defined(WIN_VERSION) || defined(_WIN32)
+#include <windows.h>
+#else
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dlfcn.h>
+#include <unistd.h>
+#endif
+#include <time.h>
 
 // Helper function to generate a hierarchical key symbol
 t_symbol* generate_hierarchical_key(t_symbol *palette, t_symbol *track, t_symbol *bar, t_symbol *key) {
@@ -213,11 +223,255 @@ void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *a
     }
 }
 
+#define MAX_LOG_HISTORY_LINES 2000
+#define MAX_LOG_LINE_LEN 512
+
+void record_log_message(t_buildspans *x, const char *message) {
+    critical_enter(0);
+    if (!x->log_history) {
+        x->log_history = (char **)sysmem_newptr(MAX_LOG_HISTORY_LINES * sizeof(char *));
+        for (int i = 0; i < MAX_LOG_HISTORY_LINES; i++) {
+            x->log_history[i] = (char *)sysmem_newptr(MAX_LOG_LINE_LEN);
+            x->log_history[i][0] = '\0';
+        }
+        x->log_history_count = 0;
+        x->log_history_write_ptr = 0;
+    }
+
+    strncpy(x->log_history[x->log_history_write_ptr], message, MAX_LOG_LINE_LEN - 1);
+    x->log_history[x->log_history_write_ptr][MAX_LOG_LINE_LEN - 1] = '\0';
+
+    x->log_history_write_ptr = (x->log_history_write_ptr + 1) % MAX_LOG_HISTORY_LINES;
+    if (x->log_history_count < MAX_LOG_HISTORY_LINES) {
+        x->log_history_count++;
+    }
+    critical_exit(0);
+}
+
+void get_object_directory(char *dir_out, size_t max_len) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    HMODULE hModule = NULL;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)get_object_directory, &hModule)) {
+        char path[MAX_PATH_CHARS];
+        DWORD len = GetModuleFileNameA(hModule, path, MAX_PATH_CHARS);
+        if (len > 0 && len < MAX_PATH_CHARS) {
+            char *last_sep = strrchr(path, '\\');
+            if (!last_sep) {
+                last_sep = strrchr(path, '/');
+            }
+            if (last_sep) {
+                *last_sep = '\0';
+                strncpy(dir_out, path, max_len);
+                dir_out[max_len - 1] = '\0';
+                return;
+            }
+        }
+    }
+#else
+    Dl_info info;
+    if (dladdr((const void *)get_object_directory, &info) && info.dli_fname) {
+        char path[MAX_PATH_CHARS];
+        strncpy(path, info.dli_fname, MAX_PATH_CHARS - 1);
+        path[MAX_PATH_CHARS - 1] = '\0';
+        char *last_sep = strrchr(path, '/');
+        if (last_sep) {
+            *last_sep = '\0';
+            strncpy(dir_out, path, max_len);
+            dir_out[max_len - 1] = '\0';
+            return;
+        }
+    }
+#endif
+    strncpy(dir_out, ".", max_len);
+    dir_out[max_len - 1] = '\0';
+}
+
+void write_multibar_negative_rating_log(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array, double rating) {
+    long span_size = 0;
+    t_atom *span_atoms = NULL;
+    atomarray_getatoms(span_array, &span_size, &span_atoms);
+    if (span_size < 3 || rating >= 0.0) {
+        return; // Criteria not met
+    }
+
+    char obj_dir[MAX_PATH_CHARS];
+    get_object_directory(obj_dir, MAX_PATH_CHARS);
+
+    char logs_dir[MAX_PATH_CHARS];
+#if defined(WIN_VERSION) || defined(_WIN32)
+    snprintf(logs_dir, MAX_PATH_CHARS, "%s\\logs", obj_dir);
+    CreateDirectoryA(logs_dir, NULL);
+#else
+    snprintf(logs_dir, MAX_PATH_CHARS, "%s/logs", obj_dir);
+    mkdir(logs_dir, 0777);
+#endif
+
+    struct tm tm_info;
+    int ms = 0;
+    char datetime_str[64];
+#if defined(WIN_VERSION) || defined(_WIN32)
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    tm_info.tm_year = st.wYear - 1900;
+    tm_info.tm_mon = st.wMonth - 1;
+    tm_info.tm_mday = st.wDay;
+    tm_info.tm_hour = st.wHour;
+    tm_info.tm_min = st.wMinute;
+    tm_info.tm_sec = st.wSecond;
+    ms = st.wMilliseconds;
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t t = tv.tv_sec;
+    struct tm *local = localtime(&t);
+    if (local) {
+        tm_info = *local;
+    } else {
+        memset(&tm_info, 0, sizeof(struct tm));
+    }
+    ms = tv.tv_usec / 1000;
+#endif
+
+    snprintf(datetime_str, sizeof(datetime_str), "%04d%02d%02d_%02d%02d%02d_%03d",
+             tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
+             tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, ms);
+
+    char file_path[MAX_PATH_CHARS];
+#if defined(WIN_VERSION) || defined(_WIN32)
+    snprintf(file_path, MAX_PATH_CHARS, "%s\\multibar_negative_rating_%s.txt", logs_dir, datetime_str);
+#else
+    snprintf(file_path, MAX_PATH_CHARS, "%s/multibar_negative_rating_%s.txt", logs_dir, datetime_str);
+#endif
+
+    FILE *f = fopen(file_path, "w");
+    if (!f) {
+        object_error((t_object *)x, "Failed to create log file: %s", file_path);
+        return;
+    }
+
+    fprintf(f, "================================================================================\n");
+    fprintf(f, "MULTIBAR NEGATIVE RATING SPAN LOG\n");
+    fprintf(f, "================================================================================\n");
+    fprintf(f, "Timestamp:       %04d-%02d-%02d %02d:%02d:%02d.%03d\n",
+            tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
+            tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, ms);
+    fprintf(f, "Instance ID:     %ld\n", x->instance_id);
+    fprintf(f, "Palette:         %s\n", palette_sym ? palette_sym->s_name : "N/A");
+    fprintf(f, "Track Symbol:    %s\n", track_sym ? track_sym->s_name : "N/A");
+    fprintf(f, "Span Rating:     %.4f\n", rating);
+    fprintf(f, "Number of Bars:  %ld\n", span_size);
+    fprintf(f, "Current Offset:  %.2f\n", x->current_offset);
+    fprintf(f, "Loop Start:      %.2f\n", x->loop_start);
+    fprintf(f, "Bar Length:      %.2f (ms)\n", x->local_bar_length);
+    fprintf(f, "================================================================================\n\n");
+
+    fprintf(f, "SPAN STRUCTURE DETAILS:\n");
+    fprintf(f, "--------------------------------------------------------------------------------\n");
+    for (long i = 0; i < span_size; i++) {
+        long bar_ts = atom_getlong(&span_atoms[i]);
+        fprintf(f, "Bar %ld:\n", bar_ts);
+        char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
+        t_symbol *bar_sym = gensym(bar_str);
+
+        // Get offset
+        t_symbol *offset_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("offset"));
+        t_atom offset_atom;
+        if (dictionary_getatom(x->building, offset_key, &offset_atom) == MAX_ERR_NONE) {
+            fprintf(f, "  - Offset: %.2f\n", atom_getfloat(&offset_atom));
+        }
+
+        // Get mean
+        t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
+        t_atom mean_atom;
+        if (dictionary_getatom(x->building, mean_key, &mean_atom) == MAX_ERR_NONE) {
+            fprintf(f, "  - Mean score: %.4f\n", atom_getfloat(&mean_atom));
+        }
+
+        // Get rating
+        t_symbol *rating_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("rating"));
+        t_atom rating_atom;
+        if (dictionary_getatom(x->building, rating_key, &rating_atom) == MAX_ERR_NONE) {
+            fprintf(f, "  - Bar-level Rating: %.4f\n", atom_getfloat(&rating_atom));
+        }
+
+        // Get absolutes (notes that went into it)
+        t_symbol *absolutes_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("absolutes"));
+        t_atomarray *abs_aa = NULL;
+        t_atom abs_atom;
+        long abs_count = 0;
+        t_atom *abs_atoms = NULL;
+        if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
+            atomarray_getatoms(abs_aa, &abs_count, &abs_atoms);
+        } else if (dictionary_getatom(x->building, absolutes_key, &abs_atom) == MAX_ERR_NONE) {
+            abs_atoms = &abs_atom;
+            abs_count = 1;
+        }
+        if (abs_count > 0) {
+            fprintf(f, "  - Note Timestamps (Absolutes): [");
+            for (long k = 0; k < abs_count; k++) {
+                fprintf(f, "%.2f%s", atom_getfloat(abs_atoms + k), (k < abs_count - 1) ? ", " : "");
+            }
+            fprintf(f, "]\n");
+        }
+
+        // Get scores
+        t_symbol *scores_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("scores"));
+        t_atomarray *scores_aa = NULL;
+        t_atom scores_atom;
+        long scores_count = 0;
+        t_atom *scores_atoms = NULL;
+        if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
+            atomarray_getatoms(scores_aa, &scores_count, &scores_atoms);
+        } else if (dictionary_getatom(x->building, scores_key, &scores_atom) == MAX_ERR_NONE) {
+            scores_atoms = &scores_atom;
+            scores_count = 1;
+        }
+        if (scores_count > 0) {
+            fprintf(f, "  - Note Scores: [");
+            for (long k = 0; k < scores_count; k++) {
+                fprintf(f, "%.4f%s", atom_getfloat(scores_atoms + k), (k < scores_count - 1) ? ", " : "");
+            }
+            fprintf(f, "]\n");
+        }
+        fprintf(f, "\n");
+    }
+
+    fprintf(f, "EVENT LOG HISTORY (DECISIONS, CHECKS, ETC.):\n");
+    fprintf(f, "--------------------------------------------------------------------------------\n");
+    critical_enter(0);
+    if (x->log_history && x->log_history_count > 0) {
+        long start_idx = 0;
+        if (x->log_history_count == MAX_LOG_HISTORY_LINES) {
+            start_idx = x->log_history_write_ptr;
+        }
+        for (long i = 0; i < x->log_history_count; i++) {
+            long idx = (start_idx + i) % MAX_LOG_HISTORY_LINES;
+            if (x->log_history[idx] && x->log_history[idx][0] != '\0') {
+                fprintf(f, "%s\n", x->log_history[idx]);
+            }
+        }
+    } else {
+        fprintf(f, "[No log history recorded]\n");
+    }
+    critical_exit(0);
+
+    fclose(f);
+    object_post((t_object *)x, "Created log file for multibar negative rating span: %s", file_path);
+}
+
 void buildspans_log(t_buildspans *x, const char *fmt, ...) {
+    char buf[4096];
     va_list args;
     va_start(args, fmt);
-    vcommon_log(x->log_outlet, x->log, "buildspans", fmt, args);
+    vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
+    // Record the log message in our history buffer
+    record_log_message(x, buf);
+
+    // Output using common_log
+    common_log(x->log_outlet, x->log, "buildspans", "%s", buf);
 }
 
 #ifndef REBAR_INTERNAL_BINDING
@@ -530,6 +784,10 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->bind_clock = clock_new(x, (method)buildspans_bind_clock_cb);
         x->bind_attempt_count = 0;
 
+        x->log_history = NULL;
+        x->log_history_count = 0;
+        x->log_history_write_ptr = 0;
+
         // Process attributes before creating outlets
         attr_args_process(x, argc, argv);
 
@@ -572,6 +830,12 @@ void buildspans_free(t_buildspans *x) {
     if (x->buffer_ref) {
         object_free(x->buffer_ref);
     }
+    if (x->log_history) {
+        for (int i = 0; i < MAX_LOG_HISTORY_LINES; i++) {
+            sysmem_freeptr(x->log_history[i]);
+        }
+        sysmem_freeptr(x->log_history);
+    }
 }
 
 void buildspans_clear(t_buildspans *x) {
@@ -602,7 +866,7 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->last_msg_type = gensym("clear");
-    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
+    buildspans_log(x, "Decision: CLEAR state. Outcome: Deleting all currently open spans across all tracks/palettes, and resetting all global parameters (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
 
@@ -1146,7 +1410,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
 void buildspans_flush_track(t_buildspans *x, long track_num) {
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "Decision: FLUSH track. Outcome: Flushing/ending currently open spans specifically for track %ld. Utilizing bar_length: %ld", track_num, bar_length);
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -1275,10 +1539,32 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
             sysmem_freeptr(keys);
         }
 
-        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length) {
-            buildspans_log(x, "Discontiguous gap detected. Comparison value %.2f is more than %ldms after last bar end (%ld).", relative_comparison_val, bar_length, most_recent_bar_after_rating_check + bar_length);
-            buildspans_end_track_span(x, palette_sym, track_sym);
+        if (most_recent_bar_after_rating_check != -1) {
+            double gap_limit = (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length;
+            int is_discontiguous = (relative_comparison_val > gap_limit);
+
+            buildspans_log(x, "Discontiguity check: Assessing track %s on palette %s. Relative comparison value: %.2f, bar_length: %ld",
+                            track_sym->s_name, palette_sym->s_name, relative_comparison_val, bar_length);
+            buildspans_log(x, "  - Math: limit = most_recent_bar (%ld) + 2 * bar_length (%ld) = %.2f",
+                            most_recent_bar_after_rating_check, bar_length, gap_limit);
+            buildspans_log(x, "  - Comparison: (relative_comparison_val > limit) -> (%.2f > %.2f) ? %s",
+                            relative_comparison_val, gap_limit, is_discontiguous ? "YES (Gap detected)" : "NO");
+
+            if (is_discontiguous) {
+                buildspans_log(x, "Decision: END span due to discontiguity. Outcome: Ending span for track %s on palette %s.",
+                                track_sym->s_name, palette_sym->s_name);
+                buildspans_end_track_span(x, palette_sym, track_sym);
+            } else {
+                buildspans_log(x, "Decision: CONTINUE span. Outcome: Span is contiguous. Math: relative_comparison_val (%.2f) <= limit (%.2f).",
+                                relative_comparison_val, gap_limit);
+            }
+        } else {
+            buildspans_log(x, "Discontiguity check: Re-assessing track %s on palette %s after rating check pruning. No previous bars remain. Decision: CONTINUE span.",
+                            track_sym->s_name, palette_sym->s_name);
         }
+    } else {
+        buildspans_log(x, "Discontiguity check: Assessing track %s on palette %s. No previous bars found. Decision: CONTINUE span.",
+                        track_sym->s_name, palette_sym->s_name);
     }
 }
 
@@ -1668,6 +1954,11 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
 
+            // Write log if log is enabled
+            if (x->log) {
+                write_multibar_negative_rating_log(x, palette_sym, track_sym, span_to_output, final_rating);
+            }
+
             // Outlet 3: Detailed span data
             buildspans_output_span_data(x, palette_sym, track_sym, span_to_output);
 
@@ -1772,9 +2063,7 @@ void buildspans_bang(t_buildspans *x) {
 
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
-
-    buildspans_log(x, "Flush triggered by bang for all palettes.");
+    buildspans_log(x, "Decision: BANG flush. Outcome: Flush triggered by bang. Ending/flushing all currently open spans across all tracks/palettes. Utilizing bar_length: %ld", bar_length);
 
     long num_keys;
     t_symbol **keys;
@@ -2171,8 +2460,40 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             t_atom *span_atoms;
             atomarray_getatoms(ended_span_array, &span_size, &span_atoms);
 
+            double lowest_mean = -1.0;
+            if (span_size > 0) {
+                for (long i = 0; i < span_size; i++) {
+                    long bar_ts = atom_getlong(&span_atoms[i]);
+                    char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_ts);
+                    t_symbol *bar_sym = gensym(bar_str);
+                    t_symbol *mean_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("mean"));
+                    t_atom *m_atoms = NULL;
+                    long m_count = 0;
+                    t_atomarray *m_aa = NULL;
+                    t_atom m_atom;
+                    if (dictionary_getatomarray(x->building, mean_key, (t_object **)&m_aa) == MAX_ERR_NONE && m_aa) {
+                        atomarray_getatoms(m_aa, &m_count, &m_atoms);
+                    } else if (dictionary_getatom(x->building, mean_key, &m_atom) == MAX_ERR_NONE) {
+                        m_atoms = &m_atom;
+                        m_count = 1;
+                    }
+                    if (m_count > 0) {
+                        double bar_mean = atom_getfloat(m_atoms);
+                        if (lowest_mean == -1.0 || bar_mean < lowest_mean) {
+                            lowest_mean = bar_mean;
+                        }
+                    }
+                }
+            }
+            double final_rating = (lowest_mean != -1.0) ? (lowest_mean * span_size) : 0.0;
+
             long track_num_to_output;
             sscanf(track_sym->s_name, "%ld-", &track_num_to_output);
+
+            // Write log if log is enabled
+            if (x->log) {
+                write_multibar_negative_rating_log(x, palette_sym, track_sym, ended_span_array, final_rating);
+            }
 
             // Outlet 3: Detailed span data
             buildspans_output_span_data(x, palette_sym, track_sym, ended_span_array);

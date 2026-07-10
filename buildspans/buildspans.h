@@ -41,6 +41,10 @@ typedef struct _buildspans {
     void *bound_crucible;
     void *bind_clock;
     long bind_attempt_count;
+
+    char **log_history;
+    long log_history_count;
+    long log_history_write_ptr;
 } t_buildspans;
 
 // Function prototypes for direct module-to-module coordination
