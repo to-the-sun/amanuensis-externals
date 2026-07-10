@@ -866,7 +866,7 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->last_msg_type = gensym("clear");
-    buildspans_log(x, "buildspans cleared (current_offset reset to 0.0).");
+    buildspans_log(x, "Decision: CLEAR state. Outcome: Deleting all currently open spans across all tracks/palettes, and resetting all global parameters (current_offset reset to 0.0).");
     buildspans_visualize_memory(x);
 }
 
@@ -1410,7 +1410,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
 void buildspans_flush_track(t_buildspans *x, long track_num) {
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_flush_track: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "Decision: FLUSH track. Outcome: Flushing/ending currently open spans specifically for track %ld. Utilizing bar_length: %ld", track_num, bar_length);
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -1539,10 +1539,32 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
             sysmem_freeptr(keys);
         }
 
-        if (most_recent_bar_after_rating_check != -1 && relative_comparison_val > (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length) {
-            buildspans_log(x, "Discontiguous gap detected. Comparison value %.2f is more than %ldms after last bar end (%ld).", relative_comparison_val, bar_length, most_recent_bar_after_rating_check + bar_length);
-            buildspans_end_track_span(x, palette_sym, track_sym);
+        if (most_recent_bar_after_rating_check != -1) {
+            double gap_limit = (double)most_recent_bar_after_rating_check + 2.0 * (double)bar_length;
+            int is_discontiguous = (relative_comparison_val > gap_limit);
+
+            buildspans_log(x, "Discontiguity check: Assessing track %s on palette %s. Relative comparison value: %.2f, bar_length: %ld",
+                            track_sym->s_name, palette_sym->s_name, relative_comparison_val, bar_length);
+            buildspans_log(x, "  - Math: limit = most_recent_bar (%ld) + 2 * bar_length (%ld) = %.2f",
+                            most_recent_bar_after_rating_check, bar_length, gap_limit);
+            buildspans_log(x, "  - Comparison: (relative_comparison_val > limit) -> (%.2f > %.2f) ? %s",
+                            relative_comparison_val, gap_limit, is_discontiguous ? "YES (Gap detected)" : "NO");
+
+            if (is_discontiguous) {
+                buildspans_log(x, "Decision: END span due to discontiguity. Outcome: Ending span for track %s on palette %s.",
+                                track_sym->s_name, palette_sym->s_name);
+                buildspans_end_track_span(x, palette_sym, track_sym);
+            } else {
+                buildspans_log(x, "Decision: CONTINUE span. Outcome: Span is contiguous. Math: relative_comparison_val (%.2f) <= limit (%.2f).",
+                                relative_comparison_val, gap_limit);
+            }
+        } else {
+            buildspans_log(x, "Discontiguity check: Re-assessing track %s on palette %s after rating check pruning. No previous bars remain. Decision: CONTINUE span.",
+                            track_sym->s_name, palette_sym->s_name);
         }
+    } else {
+        buildspans_log(x, "Discontiguity check: Assessing track %s on palette %s. No previous bars found. Decision: CONTINUE span.",
+                        track_sym->s_name, palette_sym->s_name);
     }
 }
 
@@ -2041,9 +2063,7 @@ void buildspans_bang(t_buildspans *x) {
 
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     long bar_length = buildspans_get_bar_length(x);
-    buildspans_log(x, "buildspans_bang: utilizing bar_length %ld", bar_length);
-
-    buildspans_log(x, "Flush triggered by bang for all palettes.");
+    buildspans_log(x, "Decision: BANG flush. Outcome: Flush triggered by bang. Ending/flushing all currently open spans across all tracks/palettes. Utilizing bar_length: %ld", bar_length);
 
     long num_keys;
     t_symbol **keys;
