@@ -80,6 +80,9 @@
 #define buildspans_bind_resolve rebar_buildspans_bind_resolve
 #define buildspans_notify rebar_buildspans_notify
 #define buildspans_attr_set_bind rebar_buildspans_attr_set_bind
+#define registry_register_bar rebar_registry_register_bar
+#define registry_unregister_bar rebar_registry_unregister_bar
+#define registry_unregister_track rebar_registry_unregister_track
 
 #define crucible_class rebar_crucible_class
 #define crucible_new rebar_crucible_new

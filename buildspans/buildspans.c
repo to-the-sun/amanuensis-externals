@@ -217,6 +217,10 @@ void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, 
             object_free(palette_dict);
             return;
         }
+        // In the Max SDK, dictionary_appenddictionary copies the contents (or increments refcount depending on version)
+        // However, standard dictionary behavior for sub-dictionaries implies ownership by the container.
+        // To be safe, we retrieve the borrowed reference back from the container.
+        dictionary_getdictionary(x->registry, palette, (t_object **)&palette_dict);
     }
 
     // 2. Get or create track dictionary within palette
@@ -227,6 +231,7 @@ void registry_register_bar(t_buildspans *x, t_symbol *palette, t_symbol *track, 
             object_free(track_dict);
             return;
         }
+        dictionary_getdictionary(palette_dict, track, (t_object **)&track_dict);
     }
 
     // 3. Register bar (using it as a key with a dummy value)
@@ -383,7 +388,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
                 bar_timestamps[j] = atol(bar_keys[j]->s_name);
             }
             if (bar_keys) sysmem_freeptr(bar_keys);
-            qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
+            if (bar_count > 0) qsort(bar_timestamps, bar_count, sizeof(long), compare_longs);
 
             // b. Append absolutes
             int first_absolute = 1;
@@ -1063,7 +1068,8 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     // 3. Add the note to each span (identified by its unique track symbol)
-    char candidates_str[1024] = "";
+    char candidates_str[1024];
+    candidates_str[0] = '\0';
     for (long i = 0; i < unique_tracks_count; i++) {
         strncat(candidates_str, unique_track_syms[i]->s_name, 1024 - strlen(candidates_str) - 1);
         if (i < unique_tracks_count - 1) strncat(candidates_str, ", ", 1024 - strlen(candidates_str) - 1);
@@ -1418,20 +1424,24 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // --- UPDATE AND BACK-PROPAGATE SPAN ---
     // 1. Get all bar timestamps for the current track AND PALETTE.
+    // Re-verify dictionaries as registry_register_bar might have been called
+    if (dictionary_getdictionary(x->registry, x->current_palette, (t_object **)&pal_dict_note) != MAX_ERR_NONE || !pal_dict_note) return;
+    if (dictionary_getdictionary(pal_dict_note, track_sym, (t_object **)&track_dict_note) != MAX_ERR_NONE || !track_dict_note) return;
+
     long bar_timestamps_count = 0;
     long *bar_timestamps = NULL;
-    if (track_dict_note || (dictionary_getdictionary(pal_dict_note, track_sym, (t_object **)&track_dict_note) == MAX_ERR_NONE && track_dict_note)) {
-        t_symbol **bar_keys = NULL;
-        dictionary_getkeys(track_dict_note, &bar_timestamps_count, &bar_keys);
-        if (bar_keys) {
-            bar_timestamps = (long *)sysmem_newptr(bar_timestamps_count * sizeof(long));
-            for (long i = 0; i < bar_timestamps_count; i++) {
-                bar_timestamps[i] = atol(bar_keys[i]->s_name);
-            }
-            sysmem_freeptr(bar_keys);
+    t_symbol **bar_keys_note = NULL;
+    dictionary_getkeys(track_dict_note, &bar_timestamps_count, &bar_keys_note);
+    if (bar_keys_note && bar_timestamps_count > 0) {
+        bar_timestamps = (long *)sysmem_newptr(bar_timestamps_count * sizeof(long));
+        for (long i = 0; i < bar_timestamps_count; i++) {
+            bar_timestamps[i] = atol(bar_keys_note[i]->s_name);
         }
+        sysmem_freeptr(bar_keys_note);
+    } else if (bar_keys_note) {
+        sysmem_freeptr(bar_keys_note);
     }
-    qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
+    if (bar_timestamps && bar_timestamps_count > 0) qsort(bar_timestamps, bar_timestamps_count, sizeof(long), compare_longs);
 
     // 2. Create the NEW span array and link it to all bars in the track.
     t_atomarray *new_span_array = atomarray_new(0, NULL);
@@ -1450,6 +1460,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             t_atomarray *span_copy = atomarray_deep_copy(new_span_array);
             t_atom span_copy_atom;
             atom_setobj(&span_copy_atom, (t_object *)span_copy);
+            if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
             dictionary_appendatom(x->building, span_key, &span_copy_atom);
 
             // Logging
@@ -1540,7 +1551,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
         for (long i = 0; i < bar_key_count; i++) {
             bar_timestamps[i] = atol(bar_keys[i]->s_name);
         }
-        qsort(bar_timestamps, bar_key_count, sizeof(long), compare_longs);
+        if (bar_key_count > 0) qsort(bar_timestamps, bar_key_count, sizeof(long), compare_longs);
         for(long i=0; i<bar_key_count; ++i) {
             t_atom a;
             atom_setlong(&a, bar_timestamps[i]);
@@ -2012,7 +2023,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
     // 2. Finalize the state of the ended bars and then output.
     if (end_count > 0) {
         buildspans_log(x, "Pruning span for track %s on palette %s, keeping bar %ld", track_sym->s_name, palette_sym->s_name, bar_to_keep);
-        qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
+        if (end_count > 0) qsort(bars_to_end_vals, end_count, sizeof(long), compare_longs);
 
         for (long i = 0; i < end_count; i++) {
             char bar_prune_str[32];
@@ -2133,6 +2144,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
     t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
+    if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
     dictionary_appendatom(x->building, span_key, &new_span_atom);
 
     char *span_str = atomarray_to_string(new_span_array);
@@ -2361,7 +2373,7 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
         offsets[i] = atom_getfloat(&a);
     }
     
-    qsort(offsets, num_unique_offsets, sizeof(double), compare_doubles);
+    if (num_unique_offsets > 0) qsort(offsets, num_unique_offsets, sizeof(double), compare_doubles);
     
     double next_offset_time = -1.0;
     for (long i = 0; i < num_unique_offsets; i++) {
@@ -2601,6 +2613,7 @@ void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palett
                 dictionary_deleteentry(x->building, k);
             }
         }
+        registry_unregister_track(x, palette_sym, track_offset_sym);
         buildspans_visualize_memory(x);
     } else {
         buildspans_log(x, "Cleanup: Condition not met (%.2f < %.2f). No action taken.", oldest_absolute_time, next_offset_time);
