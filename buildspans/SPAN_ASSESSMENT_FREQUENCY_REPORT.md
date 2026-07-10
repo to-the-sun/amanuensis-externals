@@ -64,7 +64,7 @@ This multi-track assessment is entirely dependent on the **frequency and timing 
 
 ## 3. Mathematical Thresholds of the Discontiguity Math
 
-Even when a discontiguity assessment is triggered (either via a new note or an offset update), the mathematical logic inside `buildspans_check_discontiguity` prevents a span from ending immediately after a single completed bar of silence.
+When a discontiguity assessment is triggered, the mathematical logic inside `buildspans_check_discontiguity` evaluates whether a span is contiguous or should end.
 
 ### The Formula
 Let's examine the comparison math:
@@ -73,10 +73,21 @@ double gap_limit = (double)most_recent_bar_after_rating_check + 2.0 * (double)ba
 int is_discontiguous = (relative_comparison_val > gap_limit);
 ```
 
-### The 2-Bar Tolerance Gap
-* **The Threshold**: A span is only declared discontiguous if the current relative time (`relative_comparison_val`) is **strictly greater than two full bar lengths** past the start of the most recently recorded bar.
-* **Why This Prevents 1-Bar Closures**: This formula is designed to allow a "one-bar rest" (allowing musical pauses without immediately shattering the span). However, this means a span *cannot* mathematically end after exactly one completed bar of silence. It must wait until the time elapsed exceeds **two full bar lengths**.
-* **Delayed Action**: Consequently, if a musician plays a phrase and stops, the span is not assessed as completed until more than 2.0 bars of silence have elapsed, which creates a noticeable latency in span ending and output.
+### Understanding the 2.0 Multiplier (The 1-Bar Silence Selector)
+A careful trace of this math reveals that **a multiplier of `2.0` accurately selects for exactly one complete bar of silence**.
+
+Here is why:
+1. **Bar Starting Boundaries**: Bar timestamps (`most_recent_bar_after_rating_check` or `T`) are always rounded down using `floor` to denote the absolute start of a bar.
+2. **First Bar containing Notes**: Note events of the most recent bar occur within `[T, T + bar_length)`. This span of time represents the first bar of the equation.
+3. **The Bar of Silence**: For there to be exactly one completed bar of silence, the next bar `[T + bar_length, T + 2.0 * bar_length)` must contain no notes.
+4. **Gap Limit Calculation**: The limit for contiguity is thus calculated as:
+   $$\text{gap\_limit} = T + 2.0 \times \text{bar\_length}$$
+5. **The Discontiguity Assessment**: Any note arriving with a timestamp `relative_comparison_val > gap_limit` is entering a third bar, meaning it has skipped the entire second bar. This represents exactly one full bar of silence, correctly classifying the span as discontiguous.
+
+### Implications on Evaluation Frequency
+This mathematical structure is highly accurate and behaves as designed to tolerate up to one silent bar (e.g., a musical rest) before ending the span. However, because it requires the *next* note to land strictly beyond the silent bar boundary (`relative_comparison_val > T + 2.0 * bar_length`) to register discontiguity:
+* **Passive Waiting**: It cannot conclude that a span is ended during the bar of silence itself; it must wait for a subsequent note to arrive in a later bar to trigger and confirm the discontiguity.
+* **Delayed Finalization**: This passive reliance on a later note to resolve the boundary means the finalized span data is not pushed out of the object until the moment the *next* phrase begins, rather than immediately when the active bar finishes and goes silent.
 
 ---
 
@@ -135,8 +146,5 @@ To ensure that `buildspans` assesses span continuation/ending precisely after ev
 1. **Implement an Active Timer (Time-Driven Evaluation)**:
    Add a periodic `t_clock` (e.g., ticking every 100-200ms or synchronized to the transport) that iterates over active spans in the registry and evaluates discontiguity without waiting for incoming note events. This would resolve the "silent track" issue completely.
 
-2. **Adjust the Gap Threshold Constraint**:
-   If a more aggressive 1-bar boundary is desired, the gap tolerance multiplier in `buildspans_check_discontiguity` can be adjusted from `2.0` to a value closer to `1.0` (e.g., `1.0 * bar_length` or `1.5 * bar_length`), allowing spans to end sooner.
-
-3. **Synchronize Offset Clock with Bar Boundaries**:
+2. **Synchronize Offset Clock with Bar Boundaries**:
    Ensure that the external Max patcher sends high-priority `offset` messages to the second inlet exactly at every bar boundary, ensuring a clean and consistent assessment pass across all active tracks.
