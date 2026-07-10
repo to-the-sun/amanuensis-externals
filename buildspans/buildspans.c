@@ -190,7 +190,7 @@ void buildspans_visualize_memory(t_buildspans *x);
 void buildspans_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
-void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
+int buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
 void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
@@ -1515,28 +1515,31 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
     }
 
     if (last_bar_timestamp != -1) {
-        buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
+        int was_pruned = buildspans_deferred_rating_check(x, palette_sym, track_sym, last_bar_timestamp);
 
         // Re-find the most recent bar after potential pruning
-        long most_recent_bar_after_rating_check = -1;
-        dictionary_getkeys(x->building, &num_keys, &keys);
-        if (keys) {
-            for (long i = 0; i < num_keys; i++) {
-                char *key_pal, *key_track, *key_bar, *key_prop;
-                if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
-                    if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
-                        long bar_val = atol(key_bar);
-                        if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
-                            most_recent_bar_after_rating_check = bar_val;
+        long most_recent_bar_after_rating_check = last_bar_timestamp;
+        if (was_pruned) {
+            most_recent_bar_after_rating_check = -1;
+            dictionary_getkeys(x->building, &num_keys, &keys);
+            if (keys) {
+                for (long i = 0; i < num_keys; i++) {
+                    char *key_pal, *key_track, *key_bar, *key_prop;
+                    if (parse_hierarchical_key(keys[i], &key_pal, &key_track, &key_bar, &key_prop)) {
+                        if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                            long bar_val = atol(key_bar);
+                            if (most_recent_bar_after_rating_check == -1 || bar_val > most_recent_bar_after_rating_check) {
+                                most_recent_bar_after_rating_check = bar_val;
+                            }
                         }
+                        sysmem_freeptr(key_pal);
+                        sysmem_freeptr(key_track);
+                        sysmem_freeptr(key_bar);
+                        sysmem_freeptr(key_prop);
                     }
-                    sysmem_freeptr(key_pal);
-                    sysmem_freeptr(key_track);
-                    sysmem_freeptr(key_bar);
-                    sysmem_freeptr(key_prop);
                 }
+                sysmem_freeptr(keys);
             }
-            sysmem_freeptr(keys);
         }
 
         if (most_recent_bar_after_rating_check != -1) {
@@ -2528,20 +2531,19 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
     // 4. Delete keys for ended bars.
     t_symbol **keys_to_delete = (t_symbol**)sysmem_newptr(num_keys * sizeof(t_symbol*));
     long delete_count = 0;
-    for (long i = 0; i < end_count; i++) {
-        char bar_str[32];
-        snprintf(bar_str, 32, "%ld", bars_to_end_vals[i]);
-        for(long j=0; j<num_keys; ++j) {
-            char *key_pal, *key_track, *key_bar, *key_prop;
-            if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
-                if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0 && strcmp(key_bar, bar_str) == 0) {
-                     keys_to_delete[delete_count++] = keys[j];
+    for (long j = 0; j < num_keys; j++) {
+        char *key_pal, *key_track, *key_bar, *key_prop;
+        if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
+            if (strcmp(key_pal, palette_sym->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                long bar_val = atol(key_bar);
+                if (bar_val != bar_to_keep) {
+                    keys_to_delete[delete_count++] = keys[j];
                 }
-                sysmem_freeptr(key_pal);
-                sysmem_freeptr(key_track);
-                sysmem_freeptr(key_bar);
-                sysmem_freeptr(key_prop);
             }
+            sysmem_freeptr(key_pal);
+            sysmem_freeptr(key_track);
+            sysmem_freeptr(key_bar);
+            sysmem_freeptr(key_prop);
         }
     }
     for(long i=0; i<delete_count; ++i) {
@@ -2676,11 +2678,11 @@ void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_
 }
 
 
-void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
+int buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp) {
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    if (!keys) return 0;
 
     // 1. Get all bars for the track AND PALETTE
     long bar_count = 0;
@@ -2774,6 +2776,7 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
     
     sysmem_freeptr(bar_timestamps);
     sysmem_freeptr(keys);
+    return prune_span;
 }
 
 // New comparison function for doubles
