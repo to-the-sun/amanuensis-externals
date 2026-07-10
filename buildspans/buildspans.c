@@ -395,45 +395,6 @@ void write_multibar_negative_rating_log(t_buildspans *x, t_symbol *palette_sym, 
             fprintf(f, "  - Bar-level Rating: %.4f\n", atom_getfloat(&rating_atom));
         }
 
-        // Get absolutes (notes that went into it)
-        t_symbol *absolutes_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("absolutes"));
-        t_atomarray *abs_aa = NULL;
-        t_atom abs_atom;
-        long abs_count = 0;
-        t_atom *abs_atoms = NULL;
-        if (dictionary_getatomarray(x->building, absolutes_key, (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
-            atomarray_getatoms(abs_aa, &abs_count, &abs_atoms);
-        } else if (dictionary_getatom(x->building, absolutes_key, &abs_atom) == MAX_ERR_NONE) {
-            abs_atoms = &abs_atom;
-            abs_count = 1;
-        }
-        if (abs_count > 0) {
-            fprintf(f, "  - Note Timestamps (Absolutes): [");
-            for (long k = 0; k < abs_count; k++) {
-                fprintf(f, "%.2f%s", atom_getfloat(abs_atoms + k), (k < abs_count - 1) ? ", " : "");
-            }
-            fprintf(f, "]\n");
-        }
-
-        // Get scores
-        t_symbol *scores_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("scores"));
-        t_atomarray *scores_aa = NULL;
-        t_atom scores_atom;
-        long scores_count = 0;
-        t_atom *scores_atoms = NULL;
-        if (dictionary_getatomarray(x->building, scores_key, (t_object **)&scores_aa) == MAX_ERR_NONE && scores_aa) {
-            atomarray_getatoms(scores_aa, &scores_count, &scores_atoms);
-        } else if (dictionary_getatom(x->building, scores_key, &scores_atom) == MAX_ERR_NONE) {
-            scores_atoms = &scores_atom;
-            scores_count = 1;
-        }
-        if (scores_count > 0) {
-            fprintf(f, "  - Note Scores: [");
-            for (long k = 0; k < scores_count; k++) {
-                fprintf(f, "%.4f%s", atom_getfloat(scores_atoms + k), (k < scores_count - 1) ? ", " : "");
-            }
-            fprintf(f, "]\n");
-        }
         fprintf(f, "\n");
     }
 
@@ -448,7 +409,30 @@ void write_multibar_negative_rating_log(t_buildspans *x, t_symbol *palette_sym, 
         for (long i = 0; i < x->log_history_count; i++) {
             long idx = (start_idx + i) % MAX_LOG_HISTORY_LINES;
             if (x->log_history[idx] && x->log_history[idx][0] != '\0') {
-                fprintf(f, "%s\n", x->log_history[idx]);
+                const char *line = x->log_history[idx];
+
+                // Filter to only include the history of the span in question
+                if (strstr(line, palette_sym->s_name) == NULL) {
+                    continue;
+                }
+                if (strstr(line, track_sym->s_name) == NULL) {
+                    continue;
+                }
+
+                // Filter out note-by-note details and dictionary state updates
+                if (strstr(line, "Adding note to") != NULL) {
+                    continue;
+                }
+                if (strstr(line, "::") != NULL) {
+                    continue;
+                }
+                if (strstr(line, "Relative timestamp") != NULL ||
+                    strstr(line, "Calculated bar timestamp") != NULL ||
+                    strstr(line, "buildspans_process_and_add_note") != NULL) {
+                    continue;
+                }
+
+                fprintf(f, "%s\n", line);
             }
         }
     } else {
@@ -1545,18 +1529,18 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 
             buildspans_log(x, "Discontiguity check: Assessing track %s on palette %s. Relative comparison value: %.2f, bar_length: %ld",
                             track_sym->s_name, palette_sym->s_name, relative_comparison_val, bar_length);
-            buildspans_log(x, "  - Math: limit = most_recent_bar (%ld) + 2 * bar_length (%ld) = %.2f",
-                            most_recent_bar_after_rating_check, bar_length, gap_limit);
-            buildspans_log(x, "  - Comparison: (relative_comparison_val > limit) -> (%.2f > %.2f) ? %s",
-                            relative_comparison_val, gap_limit, is_discontiguous ? "YES (Gap detected)" : "NO");
+            buildspans_log(x, "  - Math for track %s on palette %s: limit = most_recent_bar (%ld) + 2 * bar_length (%ld) = %.2f",
+                            track_sym->s_name, palette_sym->s_name, most_recent_bar_after_rating_check, bar_length, gap_limit);
+            buildspans_log(x, "  - Comparison for track %s on palette %s: (relative_comparison_val > limit) -> (%.2f > %.2f) ? %s",
+                            track_sym->s_name, palette_sym->s_name, relative_comparison_val, gap_limit, is_discontiguous ? "YES (Gap detected)" : "NO");
 
             if (is_discontiguous) {
-                buildspans_log(x, "Decision: END span due to discontiguity. Outcome: Ending span for track %s on palette %s.",
+                buildspans_log(x, "Decision for track %s on palette %s: END span due to discontiguity.",
                                 track_sym->s_name, palette_sym->s_name);
                 buildspans_end_track_span(x, palette_sym, track_sym);
             } else {
-                buildspans_log(x, "Decision: CONTINUE span. Outcome: Span is contiguous. Math: relative_comparison_val (%.2f) <= limit (%.2f).",
-                                relative_comparison_val, gap_limit);
+                buildspans_log(x, "Decision for track %s on palette %s: CONTINUE span. Outcome: Span is contiguous. Math: relative_comparison_val (%.2f) <= limit (%.2f).",
+                                track_sym->s_name, palette_sym->s_name, relative_comparison_val, gap_limit);
             }
         } else {
             buildspans_log(x, "Discontiguity check: Re-assessing track %s on palette %s after rating check pruning. No previous bars remain. Decision: CONTINUE span.",
@@ -1842,7 +1826,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             dictionary_appendfloat(x->building, rating_key, final_rating);
             buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
         }
-        buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
+        buildspans_log(x, "Final rating for span for track %s on palette %s: %.2f (%.2f * %ld)", track_sym->s_name, x->current_palette->s_name, final_rating, final_lowest_mean, bar_timestamps_count);
     }
 
     sysmem_freeptr(bar_timestamps);
@@ -2451,7 +2435,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
         }
 
         // Finalize the span data *before* outputting
-        buildspans_log(x, "Finalizing ended span...");
+        buildspans_log(x, "Finalizing ended span for track %s on palette %s...", track_sym->s_name, palette_sym->s_name);
         buildspans_finalize_and_log_span(x, palette_sym, track_sym, ended_span_array);
 
         // Validate and output the finalized data
@@ -2758,18 +2742,20 @@ void buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_
         double rating_without = (bars_without_count > 0) ? (lowest_mean_without * bars_without_count) : 0.0;
         
         if (rating_with < rating_without) {
-            buildspans_log(x, "Deferred rating check: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", last_bar_timestamp, rating_without, rating_with);
+            buildspans_log(x, "Deferred rating check for track %s on palette %s: Including bar %ld decreased rating (%.2f -> %.2f). Pruning span.", track_sym->s_name, palette_sym->s_name, last_bar_timestamp, rating_without, rating_with);
             prune_span = 1;
         } else if (last_bar_mean > rating_with) {
-            buildspans_log(x, "Deferred rating check: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", last_bar_timestamp, last_bar_mean, rating_with);
+            buildspans_log(x, "Deferred rating check for track %s on palette %s: Bar %ld's individual rating (%.2f) is higher than span rating if included (%.2f). Pruning span.", track_sym->s_name, palette_sym->s_name, last_bar_timestamp, last_bar_mean, rating_with);
             prune_span = 1;
         } else {
-            buildspans_log(x, "Deferred rating check: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", last_bar_timestamp, rating_without, rating_with);
+            buildspans_log(x, "Deferred rating check for track %s on palette %s: Including bar %ld did not decrease rating (%.2f -> %.2f) and is not better on its own. Continuing span.", track_sym->s_name, palette_sym->s_name, last_bar_timestamp, rating_without, rating_with);
         }
 
         if (prune_span) {
             buildspans_prune_span(x, palette_sym, track_sym, last_bar_timestamp);
         }
+    } else {
+        buildspans_log(x, "Deferred rating check for track %s on palette %s: Span size %ld is too small (<= 1 bar). Continuing span.", track_sym->s_name, palette_sym->s_name, bar_count);
     }
     
     sysmem_freeptr(bar_timestamps);
