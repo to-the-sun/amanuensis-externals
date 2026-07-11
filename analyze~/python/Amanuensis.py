@@ -126,7 +126,6 @@ def run_bot():
         Synchronous helper to perform CPU-intensive transient analysis and video generation.
         Designed to be run in a separate thread.
         """
-        add_to_rendering_log(file_path)
         try:
             print(f"Performing transient analysis for {os.path.basename(file_path)}...")
             analysis_data = analyze_files.analyze_audio(file_path)
@@ -184,12 +183,14 @@ def run_bot():
 
                                 if comparison_time and (file_modified_time <= comparison_time and file_created_time <= comparison_time):
                                     continue
+                                add_to_rendering_log(file_path)
                                 print(f'Converting {wav_file} to MP3.')
                                 mp3_path = os.path.join(UPLOADS_DIR, f"{file_name}.mp3")
                                 convert_wav_to_mp3(file_path, mp3_path)
                                 if os.path.getsize(mp3_path) > MAX_FILE_SIZE:
                                     print(f'Skipping {mp3_path} as it exceeds the file size limit.')
                                     os.remove(mp3_path)
+                                    remove_from_rendering_log(file_path)
                                     continue
                                 await delete_previous_messages(channel, f"{file_name}.mp3")
                                 description = await get_description(file_name)
