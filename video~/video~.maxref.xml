@@ -52,6 +52,13 @@
 			<digest>Control recording state (cast to integer)</digest>
 			<description>Receiving a 1.0 starts recording. Receiving a 0.0 stops recording.</description>
 		</method>
+		<method name="path">
+			<arglist>
+				<arg name="save-path" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the output directory path for the next recording</digest>
+			<description>Sets the directory path where the MP4 video will be saved. The change takes effect the next time a 1 is received to start recording.</description>
+		</method>
 	</methodlist>
 	<!--SEEALSO-->
 	<seealsolist>
