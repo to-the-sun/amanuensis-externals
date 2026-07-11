@@ -1654,15 +1654,44 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     int is_new_bar = (last_bar_timestamp == -1 || bar_timestamp_val > last_bar_timestamp);
 
-    // --- Deferred span ending logic (only if a new bar is detected) ---
-    if (is_new_bar && last_bar_timestamp != -1) {
-        buildspans_check_discontiguity(x, x->current_palette, track_sym, relative_timestamp);
-    }
-
     // --- ADD OR UPDATE BAR ---
     char bar_str[32];
     snprintf(bar_str, 32, "%ld", bar_timestamp_val);
     t_symbol *bar_sym = gensym(bar_str);
+
+    // --- Run a quick safety check on the active track-offset when a new bar begins ---
+    // Specifically, if this is a bar that has not been started yet in x->building,
+    // ensure no other bar already exists in x->building for this track-offset with a timestamp larger than bar_timestamp_val.
+    t_symbol *offset_key_check = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"));
+    if (!dictionary_hasentry(x->building, offset_key_check)) {
+        long num_keys_safety;
+        t_symbol **keys_safety;
+        dictionary_getkeys(x->building, &num_keys_safety, &keys_safety);
+        if (keys_safety) {
+            for (long i = 0; i < num_keys_safety; i++) {
+                char *key_pal, *key_track, *key_bar, *key_prop;
+                if (parse_hierarchical_key(keys_safety[i], &key_pal, &key_track, &key_bar, &key_prop)) {
+                    if (strcmp(key_pal, x->current_palette->s_name) == 0 && strcmp(key_track, track_sym->s_name) == 0) {
+                        long bar_val = atol(key_bar);
+                        if (bar_val > bar_timestamp_val) {
+                            object_error((t_object *)x, "Safety check failed: Bar %ld already exists and is larger than new bar %ld for track-offset %s",
+                                         bar_val, bar_timestamp_val, track_sym->s_name);
+                        }
+                    }
+                    sysmem_freeptr(key_pal);
+                    sysmem_freeptr(key_track);
+                    sysmem_freeptr(key_bar);
+                    sysmem_freeptr(key_prop);
+                }
+            }
+            sysmem_freeptr(keys_safety);
+        }
+    }
+
+    // --- Deferred span ending logic (only if a new bar is detected) ---
+    if (is_new_bar && last_bar_timestamp != -1) {
+        buildspans_check_discontiguity(x, x->current_palette, track_sym, relative_timestamp);
+    }
 
     // Update offset
     t_symbol *offset_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"));
