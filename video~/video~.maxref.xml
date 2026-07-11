@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="video~" module="msp" category="Audio">
+	<digest>Record screen synchronized to audio input and output MP4</digest>
+	<description>
+		The `video~` object captures Windows desktop screen activity and synchronizes it with the audio signal received at its inlet. When a 1 is received, it starts recording. When a 0 is received, it stops recording and muxes the captured video and audio into a high-quality MP4 file using ffmpeg.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Audio</metadata>
+		<metadata name="tag">Video</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="signal/messages">
+			<digest>Inlet 1 (signal): Audio signal and control messages (1 to start, 0 to stop)</digest>
+			<description>Accepts an audio signal to record, as well as messages 1 (start) or 0 (stop) to control the recording lifecycle.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="anything">
+			<digest>Outlet 1: Status Messages (started, stopped, error)</digest>
+			<description>Outputs status symbols such as 'started', 'stopped [path]', or 'error [msg]'.</description>
+		</outlet>
+		<outlet id="2" type="anything">
+			<digest>Outlet 2: Diagnostic Logs</digest>
+			<description>Outputs detailed diagnostic messages and logging information.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="save-path" type="symbol" optional="1">
+			<digest>Designated save folder path</digest>
+			<description>The directory where the final MP4 videos will be saved. Uses forward slashes (e.g. C:/Users/Videos). If not provided, videos are saved in the same directory as the external itself.</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="int">
+			<arglist>
+				<arg name="control" type="int" optional="0" />
+			</arglist>
+			<digest>Control recording state</digest>
+			<description>Receiving a 1 starts recording the screen and audio. Receiving a 0 stops the recording and generates the MP4 file.</description>
+		</method>
+		<method name="float">
+			<arglist>
+				<arg name="control" type="float" optional="0" />
+			</arglist>
+			<digest>Control recording state (cast to integer)</digest>
+			<description>Receiving a 1.0 starts recording. Receiving a 0.0 stops recording.</description>
+		</method>
+	</methodlist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="notify" />
+		<seealso name="buildspans" />
+		<seealso name="crucible" />
+		<seealso name="cropsilence~" />
+	</seealsolist>
+</c74object>
