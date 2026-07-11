@@ -15,6 +15,7 @@
 typedef struct _video {
     t_pxobject v_obj;
     t_symbol *save_path;
+    t_symbol *pending_save_path;
     double sr;
 
     // Outlets
@@ -56,6 +57,7 @@ void video_free(t_video *x);
 void video_assist(t_video *x, void *b, long m, long a, char *s);
 void video_int(t_video *x, long n);
 void video_float(t_video *x, double f);
+void video_path(t_video *x, t_symbol *s);
 void video_dsp64(t_video *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void video_perform64(t_video *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 void video_status_qfn(t_video *x);
@@ -73,6 +75,7 @@ void ext_main(void *r) {
 
     class_addmethod(c, (method)video_int, "int", A_LONG, 0);
     class_addmethod(c, (method)video_float, "float", A_FLOAT, 0);
+    class_addmethod(c, (method)video_path, "path", A_SYM, 0);
     class_addmethod(c, (method)video_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)video_assist, "assist", A_CANT, 0);
 
@@ -151,6 +154,7 @@ void *video_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         x->save_path = gensym(path_buf);
+        x->pending_save_path = NULL;
 
         // Ring buffer initialization
         x->ring_size = 44100 * RING_BUFFER_SIZE_SECONDS;
@@ -198,7 +202,7 @@ void video_free(t_video *x) {
 
 void video_assist(t_video *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "Inlet 1: Signal input & control messages (1 to start, 0 to stop recording)");
+        sprintf(s, "Inlet 1: Signal input & control messages (1 to start, 0 to stop, path [sym] to set save path)");
     } else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Status Messages (started, stopped, error)"); break;
@@ -212,6 +216,13 @@ void video_int(t_video *x, long n) {
         if (x->is_recording || x->is_thread_active) {
             object_warn((t_object *)x, "video~: Already recording or processing a previous session. Ignore start command.");
             return;
+        }
+
+        // Apply pending save path if set
+        if (x->pending_save_path) {
+            x->save_path = x->pending_save_path;
+            x->pending_save_path = NULL;
+            object_post((t_object *)x, "video~: Output path updated to: %s", x->save_path->s_name);
         }
 
         // Generate timestamp
@@ -247,6 +258,32 @@ void video_int(t_video *x, long n) {
 
 void video_float(t_video *x, double f) {
     video_int(x, (long)f);
+}
+
+void video_path(t_video *x, t_symbol *s) {
+    if (s && strlen(s->s_name) > 0) {
+        char path_buf[1024];
+        strncpy(path_buf, s->s_name, sizeof(path_buf));
+        path_buf[sizeof(path_buf) - 1] = '\0';
+
+        // Convert Windows backslashes to forward slashes
+        for (int i = 0; path_buf[i] != '\0'; i++) {
+            if (path_buf[i] == '\\') {
+                path_buf[i] = '/';
+            }
+        }
+
+        // Clean trailing slash if present
+        size_t len = strlen(path_buf);
+        if (len > 0 && path_buf[len - 1] == '/') {
+            path_buf[len - 1] = '\0';
+        }
+
+        x->pending_save_path = gensym(path_buf);
+        object_post((t_object *)x, "video~: Pending save path set to: %s", x->pending_save_path->s_name);
+    } else {
+        object_error((t_object *)x, "video~: path message requires a symbol argument");
+    }
 }
 
 void video_dsp64(t_video *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags) {
