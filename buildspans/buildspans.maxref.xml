@@ -1,67 +1,135 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
 <c74object name="buildspans" module="max" category="Analysis">
-	<digest>Assembles spans of notes and offsets for a music transcript</digest>
+	<digest>Assembles and analyzes temporal spans of musical note data using hierarchical dictionaries, deferred rating heuristics, and multi-threaded coordination</digest>
 	<description>
-		The `buildspans` object receives individual note and offset timestamps and groups them into spans for each track. A span is a contiguous sequence of bars. The object automatically ends a span based on two conditions:
-		1. **Discontinuity:** A span will end if the object receives a timestamp that creates a bar that is not contiguous with the previous bars. This also occurs if the global **offset** is updated to a value that creates a gap larger than one bar length beyond the performance's most recent activity. These checks happen after the deferred rating check.
-		2. **Rating-Based End:** A span will also end based on a deferred rating check that occurs when a new bar is started. The object evaluates the previous bar against the span and will end the span before that previous bar if either of these two conditions are met:
-		a. Including the previous bar would have decreased the span's overall rating.
-		b. The previous bar's own individual rating (its mean score) is higher than the rating the span would have if the bar were included.
-		The rating is calculated as the lowest mean score of any bar in the span multiplied by the number of bars.
-		A bang to the first inlet will flush (end and output) all currently open spans for all tracks and palettes.
+		The &lt;code&gt;buildspans&lt;/code&gt; object is an advanced real-time musical analysis external for Max/MSP. It is designed to ingest stream-like note events (such as timestamp-score pairs) and dynamically group them into contiguous sequences of musical bars called &lt;strong&gt;spans&lt;/strong&gt;. A bar is a musical time interval of a specific duration, defined either by a local override value or retrieved dynamically from an external &lt;code&gt;buffer~&lt;/code&gt;.
+		&lt;br /&gt;&lt;br /&gt;
+		The internal working memory is maintained within a hierarchical &lt;code&gt;t_dictionary&lt;/code&gt; called &lt;code&gt;building&lt;/code&gt;, using key pathways formatted as &lt;code&gt;palette::track_offset::bar_timestamp::property&lt;/code&gt;. Each bar in this dictionary stores parallel lists of absolute note timestamps (&lt;code&gt;absolutes&lt;/code&gt;), note-level ratings (&lt;code&gt;scores&lt;/code&gt;), a calculated mean score (&lt;code&gt;mean&lt;/code&gt;), the high-precision offset at the bar's creation (&lt;code&gt;offset&lt;/code&gt;), and the active palette (&lt;code&gt;palette&lt;/code&gt;). A lightweight Active Registry maintains track-to-palette combinations, preventing expensive linear scans during discovery and flushing operations.
+		&lt;br /&gt;&lt;br /&gt;
+		&lt;h3&gt;1. Offset Resolution Hierarchy and Quantization&lt;/h3&gt;
+		To correctly assign incoming notes to their proper temporal grid, the object uses a two-tier offset resolution hierarchy:
+		&lt;ul&gt;
+			&lt;li&gt;&lt;strong&gt;Tier 1 (Dictionary Lookup):&lt;/strong&gt; If notes have already been received for a given span, the object retrieves the precise high-precision offset stored with the first bar of that span in memory. This ensures all subsequent notes in the span align to the exact same temporal grid, even if the global offset has moved.&lt;/li&gt;
+			&lt;li&gt;&lt;strong&gt;Tier 2 (Effective Global Offset):&lt;/strong&gt; If no active span is found in memory, the object falls back to the current global offset. If no global offset has been set (value is &lt;code&gt;&amp;lt;= 0.0&lt;/code&gt;), the object enters &lt;strong&gt;Ephemeral Auto-Initialization&lt;/strong&gt; mode, where the note's own calculated timestamp acts as the offset for that specific processing cycle without mutating the global state.&lt;/li&gt;
+		&lt;/ul&gt;
+		Using the resolved &lt;code&gt;actual_offset&lt;/code&gt;, the relative note position is calculated as:
+		&lt;br /&gt;
+		&lt;code&gt;relative_timestamp = calc_timestamp - actual_offset + loop_start&lt;/code&gt;
+		&lt;br /&gt;
+		And quantized into a bar timestamp by rounding down to the nearest multiple of the bar length:
+		&lt;br /&gt;
+		&lt;code&gt;bar_timestamp = floor(relative_timestamp / bar_length) * bar_length&lt;/code&gt;
+		&lt;br /&gt;&lt;br /&gt;
+		&lt;h3&gt;2. Span Termination and Discontiguity Checks&lt;/h3&gt;
+		A span will automatically close and flush to the outlets under the following conditions:
+		&lt;ul&gt;
+			&lt;li&gt;&lt;strong&gt;Discontiguity (Gap Detection):&lt;/strong&gt; If an incoming note or a manual global offset update creates a temporal gap larger than a configured threshold (by default, &lt;code&gt;2.0 * bar_length&lt;/code&gt;, mathematically representing exactly one full bar of absolute silence), the current span is closed and flushed. An optimized lookup avoids redundant key traversals when no pruning or discontiguity occurs.&lt;/li&gt;
+			&lt;li&gt;&lt;strong&gt;Rating-Based Deferred Pruning:&lt;/strong&gt; When a new bar is started, the object evaluates the previous bar against the existing span using a deferred rating heuristic (see below). If the criteria are met, the previous bar is pruned from the span, and the remaining portion of the span is immediately terminated.&lt;/li&gt;
+			&lt;li&gt;&lt;strong&gt;Manual Flush / Bang:&lt;/strong&gt; A &lt;code&gt;bang&lt;/code&gt; or explicit &lt;code&gt;flush&lt;/code&gt; message instantly ends and outputs open spans.&lt;/li&gt;
+		&lt;/ul&gt;
+		&lt;h3&gt;3. Deferred Rating-Based Pruning Mechanics&lt;/h3&gt;
+		Rather than assessing bars instantly, the object defers evaluation until a new bar receives its first note. The rating of any span is calculated as the lowest bar mean score in that span multiplied by the total number of bars in the span:
+		&lt;br /&gt;
+		&lt;code&gt;Rating = lowest_mean_score * bar_count&lt;/code&gt;
+		&lt;br /&gt;
+		The object compares the hypothetical rating of the span with the last bar included (&lt;code&gt;Rating_with&lt;/code&gt;) against the rating of the span excluding the last bar (&lt;code&gt;Rating_without&lt;/code&gt;). The span is pruned and ended before the last bar if either condition is met:
+		&lt;ol&gt;
+			&lt;li&gt;Including the last bar decreases the overall span rating: &lt;code&gt;Rating_with &amp;lt; Rating_without&lt;/code&gt;.&lt;/li&gt;
+			&lt;li&gt;The individual rating (mean score) of the last bar on its own is strictly greater than the rating of the combined span if it were included: &lt;code&gt;Mean_last_bar &amp;gt; Rating_with&lt;/code&gt;.&lt;/li&gt;
+		&lt;/ol&gt;
+		When pruning is triggered, the pruned bar's dictionary keys are surgically removed (using an optimized $O(K)$ single-pass linear traversal) and re-initialized as a standalone span, while the previous contiguous bars are terminated and output.
+		&lt;br /&gt;&lt;br /&gt;
+		&lt;h3&gt;4. Concurrency, Deferral, and Crucible Binding&lt;/h3&gt;
+		To guarantee high-precision scheduling and prevent audio dropouts (such as the "Audio Thread Grip" phenomenon where dictionary allocations block the audio thread), &lt;code&gt;buildspans&lt;/code&gt; provides multiple execution models:
+		&lt;ul&gt;
+			&lt;li&gt;&lt;strong&gt;Deferred Execution (@defer 1):&lt;/strong&gt; Automatically redirects all state-changing operations and dictionary management from high-priority threads (such as Scheduler or Audio) to the Max Main (UI) thread.&lt;/li&gt;
+			&lt;li&gt;&lt;strong&gt;Asynchronous Worker Thread (@async 1):&lt;/strong&gt; Offloads all heavy computations, dictionary allocations, and span-building operations to a dedicated background worker thread.&lt;/li&gt;
+			&lt;li&gt;&lt;strong&gt;Direct Crucible Binding (@bind &amp;lt;name&amp;gt;):&lt;/strong&gt; Binds directly to a &lt;code&gt;crucible&lt;/code&gt; object via scripting name. When bound, &lt;code&gt;buildspans&lt;/code&gt; calls &lt;code&gt;crucible&lt;/code&gt; functions directly to synchronize data structures and bypasses its own standard outlets for ultimate efficiency. If both objects are in &lt;code&gt;@async&lt;/code&gt; mode, they safely share the same background worker thread to enforce strict operation ordering.&lt;/li&gt;
+		&lt;/ul&gt;
 	</description>
 	<!--METADATA-->
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
 		<metadata name="tag">Analysis</metadata>
+		<metadata name="tag">Transcription</metadata>
+		<metadata name="tag">Thread-Safe</metadata>
 	</metadatalist>
 	<!--INLETS-->
 	<inletlist>
 		<inlet id="1" type="list/bang/clear">
-			<digest>Inlet 1: Timestamp-score pair, bang to flush, or clear</digest>
+			<digest>Inlet 1 (Leftmost): Note data, bang to flush, clear state, or configuration messages</digest>
 			<description>
-				Receives note data as a list of two floats (absolute timestamp and score) or three floats (synthesized timestamp, score, and original absolute timestamp). If three items are received, the first is used for bar calculation and the third is stored in the dictionary.
-				If the global offset has not been set yet, the first timestamp received in this inlet will be used to automatically initialize it.
-				A bang message triggers a flush of all currently open spans for all tracks and palettes.
-				A clear message resets the internal state.
-				The set_bar_buffer message sets the buffer to read bar length from.
+				Accepts note data as:
+				&lt;br /&gt;
+				- A two-float list: &lt;code&gt;[calc_timestamp, score]&lt;/code&gt; representing the note's millisecond timestamp and rating.
+				&lt;br /&gt;
+				- A three-float list: &lt;code&gt;[calc_timestamp, score, store_timestamp]&lt;/code&gt; where the third value is the absolute physical timestamp preserved in the dictionary, and the first value is used for bar quantization.
+				&lt;br /&gt;&lt;br /&gt;
+				Also accepts:
+				&lt;br /&gt;
+				- &lt;code&gt;bang&lt;/code&gt;: Triggers a global flush of all open spans for all tracks and palettes, resetting the cached local bar length to zero.
+				&lt;br /&gt;
+				- &lt;code&gt;clear&lt;/code&gt;: Instantly resets all internal states, frees all allocated memory, empties dictionaries, and resets the local bar length to zero.
+				&lt;br /&gt;
+				- &lt;code&gt;set_bar_buffer [symbol]&lt;/code&gt;: Specifies the name of the external &lt;code&gt;buffer~&lt;/code&gt; to read the default bar length from.
 			</description>
 		</inlet>
 		<inlet id="2" type="list/float">
 			<digest>Inlet 2: Global offset timestamp and loop start</digest>
-			<description>Receives either a single high-precision float representing a global offset in milliseconds, or a list of two floats [offset, loop_start]. The offset is used as a relative anchor for new bars, and the loop_start is added when calculating the absolute bar timestamp. Both are stored with full precision.</description>
+			<description>
+				Receives high-precision temporal anchors to calculate relative note positions:
+				&lt;br /&gt;
+				- A single float sets the persistent global offset (in milliseconds).
+				&lt;br /&gt;
+				- A two-float list &lt;code&gt;[offset, loop_start]&lt;/code&gt; sets both the global offset and the loop start compensation (used in the relative timestamp calculation).
+				&lt;br /&gt;&lt;br /&gt;
+				Setting this offset can trigger track duplication or discontiguity checks across active spans.
+			</description>
 		</inlet>
 		<inlet id="3" type="int">
-			<digest>Inlet 3: Track number</digest>
-			<description>Receives an integer that sets the current track for incoming notes.</description>
+			<digest>Inlet 3: Active track number</digest>
+			<description>Receives an integer that sets the active track ID for subsequently received notes.</description>
 		</inlet>
 		<inlet id="4" type="symbol">
-			<digest>Inlet 4: Palette name</digest>
-			<description>Receives a symbol that sets the current palette.</description>
+			<digest>Inlet 4: Active palette name</digest>
+			<description>Receives a symbol representing the current palette name, partitioning note streams into independent analysis scopes.</description>
 		</inlet>
 		<inlet id="5" type="float">
-			<digest>Inlet 5: Local Bar Length</digest>
-			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message or after a flush triggered by a 'bang'.</description>
+			<digest>Inlet 5 (Rightmost): Local bar length</digest>
+			<description>
+				Sets a local bar length override in milliseconds. If set to &lt;code&gt;0.0&lt;/code&gt; or less, the override is disabled, and &lt;code&gt;buildspans&lt;/code&gt; will retrieve the bar length from the external &lt;code&gt;buffer~&lt;/code&gt; (configured via &lt;code&gt;set_bar_buffer&lt;/code&gt;) and cache it.
+			</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->
 	<outletlist>
 		<outlet id="1" type="list">
-			<digest>Outlet 1: Span of bar timestamps</digest>
-			<description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+			<digest>Outlet 1 (Leftmost): Span of bar timestamps</digest>
+			<description>
+				When a span completes and is flushed, outputs a list of integers representing the quantized bar timestamps that constitute the span.
+				&lt;strong&gt;Note:&lt;/strong&gt; This outlet is bypassed entirely if the object is successfully bound to a &lt;code&gt;crucible&lt;/code&gt; object via the &lt;code&gt;@bind&lt;/code&gt; attribute.
+			</description>
 		</outlet>
 		<outlet id="2" type="int">
-			<digest>Outlet 2: Track number</digest>
-			<description>Outputs the track number associated with the completed span.</description>
+			<digest>Outlet 2: Track ID</digest>
+			<description>
+				Outputs the track identifier associated with the completed span.
+				&lt;strong&gt;Note:&lt;/strong&gt; This outlet is bypassed entirely if the object is successfully bound to a &lt;code&gt;crucible&lt;/code&gt; object via the &lt;code&gt;@bind&lt;/code&gt; attribute.
+			</description>
 		</outlet>
 		<outlet id="3" type="anything">
-			<digest>Outlet 3: Detailed bar data</digest>
-			<description>When a span completes, this outlet outputs detailed data for all bars in that span using selectors in the format track::bar::key.</description>
+			<digest>Outlet 3: Detailed bar dictionary data</digest>
+			<description>
+				When a span completes, this outlet outputs individual messages containing the detailed properties of each bar in the span. The messages are output with hierarchical selectors formatted as &lt;code&gt;track::bar::property&lt;/code&gt; (such as &lt;code&gt;absolutes&lt;/code&gt;, &lt;code&gt;scores&lt;/code&gt;, &lt;code&gt;mean&lt;/code&gt;, &lt;code&gt;offset&lt;/code&gt;, and &lt;code&gt;palette&lt;/code&gt;).
+				&lt;strong&gt;Note:&lt;/strong&gt; This outlet is bypassed entirely if the object is successfully bound to a &lt;code&gt;crucible&lt;/code&gt; object via the &lt;code&gt;@bind&lt;/code&gt; attribute.
+			</description>
 		</outlet>
 		<outlet id="4" type="anything">
-			<digest>Outlet 4: Logging (Optional)</digest>
-			<description>If the log attribute is enabled, this outlet provides status messages.</description>
+			<digest>Outlet 4 (Rightmost): Real-time logging and visualization</digest>
+			<description>
+				If logging (&lt;code&gt;@log 1&lt;/code&gt;) or visualization (&lt;code&gt;@visualize 1&lt;/code&gt;) is enabled, this outlet outputs detailed status information and JSON-formatted state snapshots.
+			</description>
 		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
@@ -69,81 +137,126 @@
 	<!--MESSAGES-->
 	<methodlist>
 		<method name="list">
-			<digest>Process a single note</digest>
-			<description>Receives a list containing either [timestamp, score] or [calc_timestamp, score, store_timestamp].</description>
+			<digest>Process a note or offset update</digest>
+			<description>
+				Processes note data on Inlet 1, or offset updates on Inlet 2.
+				&lt;br /&gt;
+				- Inlet 1 expects &lt;code&gt;[calc_timestamp, score]&lt;/code&gt; or &lt;code&gt;[calc_timestamp, score, store_timestamp]&lt;/code&gt;.
+				&lt;br /&gt;
+				- Inlet 2 expects &lt;code&gt;[offset, loop_start]&lt;/code&gt; or a single float &lt;code&gt;[offset]&lt;/code&gt;.
+			</description>
+		</method>
+		<method name="float">
+			<digest>Process numeric input</digest>
+			<description>
+				Redirected based on the inlet:
+				&lt;br /&gt;
+				- Inlet 2: Sets the persistent global offset.
+				&lt;br /&gt;
+				- Inlet 3: Updates the active track ID.
+				&lt;br /&gt;
+				- Inlet 5: Updates the local bar length override.
+			</description>
+		</method>
+		<method name="int">
+			<digest>Process integer input</digest>
+			<description>
+				Equivalent to float input. Typically used on Inlet 3 to set the active track ID.
+			</description>
 		</method>
 		<method name="bang">
-			<digest>Flush all spans</digest>
-			<description>Immediately ends and outputs all currently open spans for all tracks.</description>
+			<digest>Flush all active spans</digest>
+			<description>
+				Immediately ends and outputs all currently active spans across all tracks, palettes, and offsets. It also resets the cached local bar length to zero to force a fresh buffer query on the next note.
+			</description>
 		</method>
 		<method name="flush">
 			<arglist>
-				<arg name="track-number" type="int" optional="0" />
+				<arg name="track-id" type="int" optional="0" />
 			</arglist>
-			<digest>Flush specific track</digest>
-			<description>Immediately ends and outputs all currently open spans for the specified track across all palettes.</description>
+			<digest>Flush a specific track</digest>
+			<description>
+				Immediately ends, prunes, and outputs all currently open spans for the specified track ID across all active palettes.
+			</description>
 		</method>
 		<method name="clear">
-			<digest>Reset internal state</digest>
-			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults.</description>
+			<digest>Reset internal state and memory</digest>
+			<description>
+				Completely resets the analysis engine. Clears the working &lt;code&gt;building&lt;/code&gt; dictionary, resets the active registry, zeroes out the global offset, resets the local bar length to zero, and empties the thread-safe circular log history.
+			</description>
 		</method>
 		<method name="set_bar_buffer">
 			<arglist>
 				<arg name="buffer-name" type="symbol" optional="0" />
 			</arglist>
-			<digest>Set the buffer for bar length</digest>
-			<description>Sets the buffer~ object to read the bar length from (defaults to "bar").</description>
+			<digest>Configure external bar length buffer</digest>
+			<description>
+				Sets the name of the Max &lt;code&gt;buffer~&lt;/code&gt; object to read the default bar length from (defaults to "bar" if not configured).
+			</description>
 		</method>
 		<method name="log">
 			<arglist>
 				<arg name="state" type="int" optional="0" />
 			</arglist>
-			<digest>Set the log attribute</digest>
-			<description>Sets the `log` attribute in real time. When enabled (1), creates an additional outlet for status information.</description>
+			<digest>Enable or disable logging in real-time</digest>
+			<description>
+				Sets the &lt;code&gt;@log&lt;/code&gt; attribute dynamically.
+			</description>
 		</method>
 		<method name="visualize">
 			<arglist>
 				<arg name="state" type="int" optional="0" />
 			</arglist>
-			<digest>Set the visualize attribute</digest>
-			<description>Sets the `visualize` attribute in real time. When enabled (1), the object sends JSON data to the connected visualization script.</description>
+			<digest>Enable or disable real-time visualization data output</digest>
+			<description>
+				Sets the &lt;code&gt;@visualize&lt;/code&gt; attribute dynamically.
+			</description>
 		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
 		<attribute name="bind" get="1" set="1" type="symbol" size="1">
-			<digest>Bind to Crucible Object</digest>
+			<digest>Bind to crucible instance</digest>
 			<description>
-				Specifies the scripting name (varname) of a `crucible` object to bind to. When bound, `buildspans` will call `crucible` functions directly for data output and coordination, bypassing the outlet system for maximum efficiency. It uses `object_attach` for lifecycle management.
+				Specifies the scripting name (varname) of a target &lt;code&gt;crucible&lt;/code&gt; object in the Max patch.
+				When bound, &lt;code&gt;buildspans&lt;/code&gt; bypasses its standard outlets (Outlets 1, 2, and 3) and instead invokes &lt;code&gt;crucible&lt;/code&gt;'s internal functions directly for data communication. This eliminates high-overhead message passing and maintains strict data alignment. If both objects are configured for asynchronous execution, they automatically share the same background worker thread to enforce strict FIFO ordering.
 			</description>
 		</attribute>
 		<attribute name="log" get="1" set="1" type="long" size="1">
-			<digest>Enable Logging</digest>
-			<description>When enabled (1), creates an additional outlet for status information. Furthermore, whenever a span successfully ends and leaves the object that has three or more bars and a negative rating, it creates a log file containing all the details and events leading to its creation under a newly created `logs/` directory in the same folder as the object itself.</description>
+			<digest>Enable verbose logging and automatic file reports</digest>
+			<description>
+				When enabled (1), outputs step-by-step mathematical calculations, offset resolutions, discontiguity assessments, and pruning outcomes to the rightmost outlet.
+				&lt;br /&gt;&lt;br /&gt;
+				Furthermore, whenever a completed or pruned span consisting of &lt;strong&gt;three or more bars&lt;/strong&gt; with a &lt;strong&gt;negative rating (&amp;lt; 0.0)&lt;/strong&gt; is processed, the object automatically generates a detailed textual report file. These logs are saved in a &lt;code&gt;logs/&lt;/code&gt; directory created adjacent to the compiled external object file, utilizing platform-appropriate cross-platform path resolution APIs (Win32 or POSIX) to guarantee compatibility.
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
 		<attribute name="visualize" get="1" set="1" type="long" size="1">
-			<digest>Enable Visualization</digest>
-			<description>When enabled (1), the object sends JSON data to the connected visualization script.</description>
+			<digest>Enable real-time visualization output</digest>
+			<description>
+				When enabled (1), &lt;code&gt;buildspans&lt;/code&gt; serializes its internal state changes, ratings, and track configurations into JSON formatted packets and outputs them via the rightmost outlet to synchronize with connected external visualizer applications.
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
 		<attribute name="defer" get="1" set="1" type="long" size="1">
-			<digest>Deferred Execution</digest>
+			<digest>Defer dictionary operations to the Main thread</digest>
 			<description>
-				When enabled (1), state-changing operations and span building logic are moved to the Main (UI) thread using deferral. This ensures that the heavy computational work involved in managing the transcript dictionary does not interfere with the precision of the Scheduler or audio processing.
+				When enabled (1), intercepts incoming note and offset events and defers their processing to the Max Main (UI) thread. This keeps the high-priority Audio and Scheduler threads completely free from the overhead of memory allocations and complex dictionary modifications, preventing jitter and dropouts in audio-rate tasks.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
 		<attribute name="async" get="1" set="1" type="long" size="1">
-			<digest>Asynchronous Execution</digest>
+			<digest>Enable thread-agnostic asynchronous background execution</digest>
 			<description>
-				When enabled (1), all dictionary operations, span building, and rating calculations are performed on a dedicated background worker thread. This allows for non-blocking concurrent processing. If bound to an `@async` `crucible` object, both will share the same worker thread to maintain strict operation ordering.
+				When enabled (1), instantiates and offloads all analytical computations, rating evaluations, and dictionary mutations to a dedicated background worker thread.
+				&lt;br /&gt;&lt;br /&gt;
+				This provides full protection against the "Audio Thread Grip" phenomenon by ensuring that high-priority threads never block on mutexes or undergo heavy calculations. If bound to a crucible object that also has asynchronous mode enabled, both objects seamlessly coordinate on the same background worker thread to ensure operations are processed in the exact order they were received.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
@@ -152,8 +265,8 @@
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>
-		<seealso name="buildspans" />
 		<seealso name="crucible" />
+		<seealso name="rebar" />
 		<seealso name="notify" />
 		<seealso name="whichoffset" />
 		<seealso name="growbuffer~" />
