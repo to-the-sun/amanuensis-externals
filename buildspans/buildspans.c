@@ -2587,6 +2587,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
     atom_setobj(&new_span_atom, (t_object *)new_span_array);
 
     t_symbol *span_key = generate_hierarchical_key(palette_sym, track_sym, bar_sym, gensym("span"));
+    if (dictionary_hasentry(x->building, span_key)) dictionary_deleteentry(x->building, span_key);
     dictionary_appendatom(x->building, span_key, &new_span_atom);
 
     char *span_str = atomarray_to_string(new_span_array);
