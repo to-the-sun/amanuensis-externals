@@ -150,7 +150,7 @@
 			<digest>Enable Detailed Logging</digest>
 			<description>
 				When active (1), outputs verbose mathematical decision details, rating evaluation comparisons, and gap checking limits. Additionally, successfully completed or pruned spans containing &lt;b&gt;three or more bars&lt;/b&gt; with a &lt;b&gt;negative rating&lt;/b&gt; (&amp;lt; 0.0) automatically generate a detailed report file under a &lt;code&gt;logs/&lt;/code&gt; directory situated adjacent to the compiled external object binary itself.
-			&description>
+			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
