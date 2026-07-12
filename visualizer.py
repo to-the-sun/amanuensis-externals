@@ -21,6 +21,7 @@ state = {
     "tracks": {},
     "bar_data": {},
     "logged_hashes": set(),
+    "song_start": 0,
     "song_reach": 0,
     "bar_length": 125,
     "events": [],
@@ -54,7 +55,6 @@ def perform_smartloop_analysis():
     for tid, bars in bar_ratings_copy.items():
         for b_ts, rating in bars.items():
             ts = snap_to_bar(b_ts, bar_length)
-            if ts < 0: continue
             if ts not in ts_to_ratings:
                 ts_to_ratings[ts] = []
             ts_to_ratings[ts].append(rating)
@@ -98,8 +98,7 @@ def perform_smartloop_analysis():
             for b in track_bars:
                 try:
                     ts = snap_to_bar(b, bar_length)
-                    if ts >= 0:
-                        all_ts.append(ts)
+                    all_ts.append(ts)
                 except: continue
 
         if all_ts:
@@ -200,20 +199,30 @@ def cleanup_obsolete_bars(new_bl):
         recalculate_reach()
 
 def recalculate_reach():
-    """Recalculates state['song_reach'] based on the furthest bar in state['tracks']."""
+    """Recalculates state['song_start'] and state['song_reach'] based on bars in state['tracks']."""
     with state_lock:
-        max_reach = 0
+        min_start = 0.0
+        max_reach = 0.0
         bar_length = state.get("bar_length", 125)
+        has_bars = False
         for track_bars in state["tracks"].values():
             for bar_ts in track_bars:
                 try:
                     snapped_ts = snap_to_bar(bar_ts, bar_length)
                     b_ts = float(snapped_ts)
-                    if b_ts + bar_length > max_reach:
+                    if not has_bars:
+                        min_start = b_ts
                         max_reach = b_ts + bar_length
+                        has_bars = True
+                    else:
+                        if b_ts < min_start:
+                            min_start = b_ts
+                        if b_ts + bar_length > max_reach:
+                            max_reach = b_ts + bar_length
                 except (ValueError, TypeError):
                     continue
-        state["song_reach"] = max_reach
+        state["song_start"] = min(0.0, min_start)
+        state["song_reach"] = max(0.0, max_reach)
 
 def process_packet(text, client_sock=None):
     if not text:
@@ -483,6 +492,7 @@ def run_gui():
 
         with state_lock:
             tracks = {tid: bars[:] for tid, bars in state["tracks"].items()}
+            song_start = state["song_start"]
             song_reach = state["song_reach"]
             bar_length = state["bar_length"]
             events = state["events"][:]
@@ -508,14 +518,14 @@ def run_gui():
 
         screen.fill((30, 30, 35))
 
-        if not tracks and song_reach == 0:
+        if not tracks and song_reach == 0 and song_start == 0:
             pygame.display.flip()
             clock.tick(FPS)
             continue
 
         track_to_row = {tid: i for i, tid in enumerate(sorted_track_ids)}
 
-        num_cols = (song_reach // bar_length) + 1 if bar_length > 0 else 0
+        num_cols = ((song_reach - song_start) // bar_length) + 1 if bar_length > 0 else 0
         cell_w = (screen_w - margin_left - margin_right) / max(1, num_cols)
 
         # Draw background grid lines
@@ -532,8 +542,10 @@ def run_gui():
         step = max(1, int((label_w * 2) // cell_w) + 1) if cell_w > 0 else 1
         for j in range(0, int(num_cols) + 1, step):
             x = margin_left + j * cell_w
-            total_seconds = (j * bar_length) // 1000
-            time_str = f"{int(total_seconds // 60)}:{int(total_seconds % 60):02d}"
+            total_seconds = (song_start + j * bar_length) // 1000
+            prefix = "-" if total_seconds < 0 else ""
+            abs_secs = abs(total_seconds)
+            time_str = f"{prefix}{int(abs_secs // 60)}:{int(abs_secs % 60):02d}"
             lbl = font.render(time_str, True, (180, 180, 180))
             screen.blit(lbl, (x - lbl.get_width() // 2, margin_top - lbl.get_height() - 5))
 
@@ -581,7 +593,7 @@ def run_gui():
                         color[0] = int(80 + (200 - 80) * factor)
                         color[2] = int(100 + (80 - 100) * factor)
 
-                col = b_ts // bar_length
+                col = int((b_ts - song_start) // bar_length)
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, tuple(color), rect)
 
@@ -632,7 +644,7 @@ def run_gui():
                     # This gives song-relative timestamp (assuming offset is standard transcript offset).
                     # Map this ms value to pixels along the grid:
                     rel_ms = abs_val - off_val
-                    x_pos = margin_left + (rel_ms / bar_length) * cell_w
+                    x_pos = margin_left + ((rel_ms - song_start) / bar_length) * cell_w
 
                     with state_lock:
                         if hash_key not in state["logged_hashes"]:
@@ -652,8 +664,8 @@ def run_gui():
             sl_e = state["smartloop_end"]
 
         if False and sl_s >= 0 and sl_e > sl_s:
-            x_s = margin_left + (sl_s / bar_length) * cell_w
-            x_e = margin_left + (sl_e / bar_length) * cell_w
+            x_s = margin_left + ((sl_s - song_start) / bar_length) * cell_w
+            x_e = margin_left + ((sl_e - song_start) / bar_length) * cell_w
             box_rect = pygame.Rect(x_s, margin_top, x_e - x_s, num_tracks * cell_h)
             pygame.draw.rect(screen, (255, 255, 255), box_rect, 2)
 
@@ -682,13 +694,13 @@ def run_gui():
                     # Flash for 0.5s then stay bright
                     is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
                     color = (255, 255, 255) if is_flashing else (150, 150, 220)
-                    col = b_ts // bar_length
+                    col = int((b_ts - song_start) // bar_length)
                     rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                     pygame.draw.rect(screen, color, rect)
 
             # Floating Rating
             if valid_bars and bar_length > 0:
-                avg_col = sum(b // bar_length for b in valid_bars) / len(valid_bars)
+                avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
                 float_x = margin_left + avg_col * cell_w + (cell_w / 2)
                 float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
