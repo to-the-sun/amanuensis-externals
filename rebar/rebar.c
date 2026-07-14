@@ -132,6 +132,7 @@ typedef struct _rebar {
     t_async_worker *worker;
     long consume;
     long visualize;
+    long fill;
 
     t_symbol *user_dict_name;
     t_symbol *tmp_dict_name;
@@ -574,6 +575,14 @@ t_max_err rebar_attr_set_consume(t_rebar *x, void *attr, long ac, t_atom *av) {
     return MAX_ERR_NONE;
 }
 
+t_max_err rebar_attr_set_fill(t_rebar *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        x->fill = atom_getlong(av);
+        if (x->crucible_inst) crucible_attr_set_fill(x->crucible_inst, NULL, ac, av);
+    }
+    return MAX_ERR_NONE;
+}
+
 t_max_err rebar_attr_set_visualize(t_rebar *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         x->visualize = atom_getlong(av);
@@ -636,6 +645,11 @@ void ext_main(void *r) {
     CLASS_ATTR_DEFAULT(c, "consume", 0, "0");
     CLASS_ATTR_ACCESSORS(c, "consume", NULL, (method)rebar_attr_set_consume);
 
+    CLASS_ATTR_LONG(c, "fill", 0, t_rebar, fill);
+    CLASS_ATTR_STYLE_LABEL(c, "fill", 0, "onoff", "Enable Fill (Crucible)");
+    CLASS_ATTR_DEFAULT(c, "fill", 0, "0");
+    CLASS_ATTR_ACCESSORS(c, "fill", NULL, (method)rebar_attr_set_fill);
+
     CLASS_ATTR_LONG(c, "visualize", 0, t_rebar, visualize);
     CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization (Crucible/Buildspans)");
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
@@ -665,6 +679,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->worker = NULL;
         x->consume = 0;
         x->visualize = 0;
+        x->fill = 0;
         x->user_dict_name = gensym("");
         x->tmp_dict_name = gensym("");
 
@@ -726,6 +741,7 @@ void *rebar_new(t_symbol *s, long argc, t_atom *argv) {
         x->crucible_inst->log = x->log;
         x->crucible_inst->defer = x->defer;
         x->crucible_inst->consume = x->consume;
+        x->crucible_inst->fill = x->fill;
 
         // Ensure workers are synced if async was set via arguments
         if (x->async && x->worker) {
