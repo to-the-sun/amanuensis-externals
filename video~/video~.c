@@ -130,16 +130,16 @@ void start_recorder_process(t_video *x) {
     get_object_directory(obj_dir, sizeof(obj_dir));
 
     char cmd[2048];
-    // We try to use python or python3
-    snprintf(cmd, sizeof(cmd), "python \"%s/recorder.py\"", obj_dir);
-
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
+    BOOL success = FALSE;
+
+    // Try 1: "py" (Standard Windows Python Launcher)
+    snprintf(cmd, sizeof(cmd), "py \"%s/recorder.py\"", obj_dir);
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
-
-    BOOL success = CreateProcessA(
+    success = CreateProcessA(
         NULL,
         cmd,
         NULL,
@@ -152,9 +152,32 @@ void start_recorder_process(t_video *x) {
         &pi
     );
 
+    // Try 2: "python"
     if (!success) {
-        // Try python3 if python failed
+        snprintf(cmd, sizeof(cmd), "python \"%s/recorder.py\"", obj_dir);
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
+        success = CreateProcessA(
+            NULL,
+            cmd,
+            NULL,
+            NULL,
+            FALSE,
+            CREATE_NEW_CONSOLE,
+            NULL,
+            NULL,
+            &si,
+            &pi
+        );
+    }
+
+    // Try 3: "python3"
+    if (!success) {
         snprintf(cmd, sizeof(cmd), "python3 \"%s/recorder.py\"", obj_dir);
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
         success = CreateProcessA(
             NULL,
             cmd,
@@ -176,7 +199,7 @@ void start_recorder_process(t_video *x) {
         // Sleep a short bit to allow the Python script to start listening on the sockets
         Sleep(1000);
     } else {
-        object_error((t_object *)x, "video~: Failed to launch external recorder process (tried python and python3).");
+        object_error((t_object *)x, "video~: Failed to launch external recorder process (tried py, python, and python3).");
     }
 }
 
