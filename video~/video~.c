@@ -8,9 +8,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
 #define RING_BUFFER_SIZE_SECONDS 10
+#define CONTROL_PORT 9099
+#define AUDIO_PORT 9100
 
 typedef struct _video {
     t_pxobject v_obj;
@@ -34,16 +40,8 @@ typedef struct _video {
     volatile int is_thread_active;
     long long total_samples_recorded;
 
-    // Thread & System process handles
+    // Thread handle
     t_systhread worker_thread;
-    HANDLE hFfmpegProcess;
-    HANDLE hFfmpegStdinWrite;
-    FILE *wav_file;
-
-    // Temporary & final file paths
-    char temp_audio_path[1024];
-    char temp_video_path[1024];
-    char final_video_path[1024];
 
     // Status queuing for main-thread outlets
     void *status_qelem;
@@ -63,9 +61,11 @@ void video_perform64(t_video *x, t_object *dsp64, double **ins, long numins, dou
 void video_status_qfn(t_video *x);
 void *video_worker_thread(t_video *x);
 void get_object_directory(char *dir_out, size_t max_len);
-void write_wav_header(FILE *f, int samplerate, long num_samples);
-int start_ffmpeg_screen_recording(t_video *x, const char *temp_video_path);
-void stop_ffmpeg_screen_recording(t_video *x);
+
+int connect_socket(const char *host, int port, SOCKET *sock_out);
+void start_recorder_process(t_video *x);
+int ensure_recorder_running(t_video *x);
+int send_control_command(t_video *x, const char *cmd, char *response_out, int response_len);
 
 static t_class *video_class;
 
@@ -107,10 +107,164 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
+int connect_socket(const char *host, int port, SOCKET *sock_out) {
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        return 0;
+    }
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr(host);
+
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(sock);
+        return 0;
+    }
+    *sock_out = sock;
+    return 1;
+}
+
+void start_recorder_process(t_video *x) {
+    char obj_dir[1024];
+    get_object_directory(obj_dir, sizeof(obj_dir));
+
+    char cmd[2048];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    BOOL success = FALSE;
+
+    // Try 1: "py" (Standard Windows Python Launcher)
+    snprintf(cmd, sizeof(cmd), "py \"%s/recorder.py\"", obj_dir);
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_SHOWMINIMIZED;
+    ZeroMemory(&pi, sizeof(pi));
+    success = CreateProcessA(
+        NULL,
+        cmd,
+        NULL,
+        NULL,
+        FALSE,
+        CREATE_NEW_CONSOLE,
+        NULL,
+        NULL,
+        &si,
+        &pi
+    );
+
+    // Try 2: "python"
+    if (!success) {
+        snprintf(cmd, sizeof(cmd), "python \"%s/recorder.py\"", obj_dir);
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags |= STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_SHOWMINIMIZED;
+        ZeroMemory(&pi, sizeof(pi));
+        success = CreateProcessA(
+            NULL,
+            cmd,
+            NULL,
+            NULL,
+            FALSE,
+            CREATE_NEW_CONSOLE,
+            NULL,
+            NULL,
+            &si,
+            &pi
+        );
+    }
+
+    // Try 3: "python3"
+    if (!success) {
+        snprintf(cmd, sizeof(cmd), "python3 \"%s/recorder.py\"", obj_dir);
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags |= STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_SHOWMINIMIZED;
+        ZeroMemory(&pi, sizeof(pi));
+        success = CreateProcessA(
+            NULL,
+            cmd,
+            NULL,
+            NULL,
+            FALSE,
+            CREATE_NEW_CONSOLE,
+            NULL,
+            NULL,
+            &si,
+            &pi
+        );
+    }
+
+    if (success) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        object_post((t_object *)x, "video~: Launched external recorder process.");
+        // Sleep a short bit to allow the Python script to start listening on the sockets
+        Sleep(1000);
+    } else {
+        object_error((t_object *)x, "video~: Failed to launch external recorder process (tried py, python, and python3).");
+    }
+}
+
+int ensure_recorder_running(t_video *x) {
+    SOCKET test_sock = INVALID_SOCKET;
+    if (connect_socket("127.0.0.1", CONTROL_PORT, &test_sock)) {
+        closesocket(test_sock);
+        return 1; // Already running
+    }
+
+    start_recorder_process(x);
+
+    // Try to connect again with retry loop
+    for (int i = 0; i < 5; i++) {
+        Sleep(500);
+        if (connect_socket("127.0.0.1", CONTROL_PORT, &test_sock)) {
+            closesocket(test_sock);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int send_control_command(t_video *x, const char *cmd, char *response_out, int response_len) {
+    SOCKET sock = INVALID_SOCKET;
+    if (!connect_socket("127.0.0.1", CONTROL_PORT, &sock)) {
+        return 0;
+    }
+
+    int len = (int)strlen(cmd);
+    if (send(sock, cmd, len, 0) == SOCKET_ERROR) {
+        closesocket(sock);
+        return 0;
+    }
+
+    if (response_out && response_len > 0) {
+        int received = recv(sock, response_out, response_len - 1, 0);
+        if (received > 0) {
+            response_out[received] = '\0';
+        } else {
+            response_out[0] = '\0';
+        }
+    }
+
+    closesocket(sock);
+    return 1;
+}
+
 void *video_new(t_symbol *s, long argc, t_atom *argv) {
     t_video *x = (t_video *)object_alloc(video_class);
 
     if (x) {
+        // Initialize Winsock
+        WSADATA wsaData;
+        int wsa_err = WSAStartup(MAKEWORD(2,2), &wsaData);
+        if (wsa_err != 0) {
+            object_error((t_object *)x, "video~: WSAStartup failed with error: %d", wsa_err);
+        }
+
         dsp_setup((t_pxobject *)x, 1);
 
         // Outlets (Right-to-Left)
@@ -122,9 +276,6 @@ void *video_new(t_symbol *s, long argc, t_atom *argv) {
         x->is_thread_active = 0;
         x->total_samples_recorded = 0;
         x->worker_thread = NULL;
-        x->hFfmpegProcess = NULL;
-        x->hFfmpegStdinWrite = NULL;
-        x->wav_file = NULL;
 
         // Path Parsing & Formatting
         t_symbol *arg_path = NULL;
@@ -198,6 +349,8 @@ void video_free(t_video *x) {
         qelem_free(x->status_qelem);
         x->status_qelem = NULL;
     }
+
+    WSACleanup();
 }
 
 void video_assist(t_video *x, void *b, long m, long a, char *s) {
@@ -224,17 +377,6 @@ void video_int(t_video *x, long n) {
             x->pending_save_path = NULL;
             object_post((t_object *)x, "video~: Output path updated to: %s", x->save_path->s_name);
         }
-
-        // Generate timestamp
-        time_t t = time(NULL);
-        struct tm *tm_info = localtime(&t);
-        char timestamp[64];
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
-
-        // Prepare temporary & final file paths
-        snprintf(x->temp_audio_path, sizeof(x->temp_audio_path), "%s/temp_audio_%s.wav", x->save_path->s_name, timestamp);
-        snprintf(x->temp_video_path, sizeof(x->temp_video_path), "%s/temp_video_%s.mp4", x->save_path->s_name, timestamp);
-        snprintf(x->final_video_path, sizeof(x->final_video_path), "%s/video_%s.mp4", x->save_path->s_name, timestamp);
 
         // Reset pointers
         critical_enter(x->ring_lock);
@@ -281,6 +423,16 @@ void video_path(t_video *x, t_symbol *s) {
 
         x->pending_save_path = gensym(path_buf);
         object_post((t_object *)x, "video~: Pending save path set to: %s", x->pending_save_path->s_name);
+
+        // Try sending it to the recorder immediately if running
+        if (ensure_recorder_running(x)) {
+            char cmd[2048];
+            char resp[1024];
+            snprintf(cmd, sizeof(cmd), "PATH %s\n", x->pending_save_path->s_name);
+            if (send_control_command(x, cmd, resp, sizeof(resp))) {
+                object_post((t_object *)x, "video~: Recorder path set response: %s", resp);
+            }
+        }
     } else {
         object_error((t_object *)x, "video~: path message requires a symbol argument");
     }
@@ -318,168 +470,96 @@ void video_status_qfn(t_video *x) {
     }
 }
 
-void write_wav_header(FILE *f, int samplerate, long num_samples) {
-    if (!f) return;
-    fseek(f, 0, SEEK_SET);
-
-    unsigned char header[44];
-    long subchunk2_size = num_samples * 2; // 16-bit Mono PCM
-    long chunk_size = 36 + subchunk2_size;
-    long byte_rate = samplerate * 2;
-
-    header[0] = 'R'; header[1] = 'I'; header[2] = 'F'; header[3] = 'F';
-    header[4] = chunk_size & 0xff;
-    header[5] = (chunk_size >> 8) & 0xff;
-    header[6] = (chunk_size >> 16) & 0xff;
-    header[7] = (chunk_size >> 24) & 0xff;
-
-    header[8] = 'W'; header[9] = 'A'; header[10] = 'V'; header[11] = 'E';
-
-    header[12] = 'f'; header[13] = 'm'; header[14] = 't'; header[15] = ' ';
-    header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; // fmt chunk size
-    header[20] = 1; header[21] = 0; // AudioFormat = 1 (PCM)
-    header[22] = 1; header[23] = 0; // Mono (1 channel)
-
-    header[24] = samplerate & 0xff;
-    header[25] = (samplerate >> 8) & 0xff;
-    header[26] = (samplerate >> 16) & 0xff;
-    header[27] = (samplerate >> 24) & 0xff;
-
-    header[28] = byte_rate & 0xff;
-    header[29] = (byte_rate >> 8) & 0xff;
-    header[30] = (byte_rate >> 16) & 0xff;
-    header[31] = (byte_rate >> 24) & 0xff;
-
-    header[32] = 2; header[33] = 0; // BlockAlign = 2 bytes
-    header[34] = 16; header[35] = 0; // BitsPerSample = 16
-
-    header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
-    header[40] = subchunk2_size & 0xff;
-    header[41] = (subchunk2_size >> 8) & 0xff;
-    header[42] = (subchunk2_size >> 16) & 0xff;
-    header[43] = (subchunk2_size >> 24) & 0xff;
-
-    fwrite(header, 1, 44, f);
-}
-
-int start_ffmpeg_screen_recording(t_video *x, const char *temp_video_path) {
-    HANDLE hChildStd_IN_Rd = NULL;
-    HANDLE hChildStd_IN_Wr = NULL;
-    SECURITY_ATTRIBUTES saAttr;
-
-    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
-    saAttr.bInheritHandle = TRUE;
-    saAttr.lpSecurityDescriptor = NULL;
-
-    if (!CreatePipe(&hChildStd_IN_Rd, &hChildStd_IN_Wr, &saAttr, 0)) {
-        return 0;
-    }
-
-    if (!SetHandleInformation(hChildStd_IN_Wr, HANDLE_FLAG_INHERIT, 0)) {
-        CloseHandle(hChildStd_IN_Rd);
-        CloseHandle(hChildStd_IN_Wr);
-        return 0;
-    }
-
-    PROCESS_INFORMATION piProcInfo;
-    STARTUPINFO siStartInfo;
-    BOOL bSuccess = FALSE;
-
-    ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
-    ZeroMemory(&siStartInfo, sizeof(STARTUPINFO));
-    siStartInfo.cb = sizeof(STARTUPINFO);
-    siStartInfo.hStdInput = hChildStd_IN_Rd;
-
-    // Set valid stdout and stderr handles to comply with Win32 standards when using STARTF_USESTDHANDLES
-    siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (siStartInfo.hStdOutput == NULL || siStartInfo.hStdOutput == INVALID_HANDLE_VALUE) {
-        siStartInfo.hStdOutput = INVALID_HANDLE_VALUE;
-    }
-    siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    if (siStartInfo.hStdError == NULL || siStartInfo.hStdError == INVALID_HANDLE_VALUE) {
-        siStartInfo.hStdError = INVALID_HANDLE_VALUE;
-    }
-
-    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
-
-    char cmd[2048];
-    // Record Windows screen with gdigrab
-    snprintf(cmd, sizeof(cmd), "ffmpeg -y -f gdigrab -framerate 30 -i desktop -c:v libx264 -pix_fmt yuv420p \"%s\"", temp_video_path);
-
-    bSuccess = CreateProcessA(
-        NULL,
-        cmd,
-        NULL,
-        NULL,
-        TRUE,
-        CREATE_NO_WINDOW,
-        NULL,
-        NULL,
-        &siStartInfo,
-        &piProcInfo
-    );
-
-    if (!bSuccess) {
-        CloseHandle(hChildStd_IN_Rd);
-        CloseHandle(hChildStd_IN_Wr);
-        return 0;
-    }
-
-    CloseHandle(hChildStd_IN_Rd);
-
-    x->hFfmpegProcess = piProcInfo.hProcess;
-    x->hFfmpegStdinWrite = hChildStd_IN_Wr;
-    CloseHandle(piProcInfo.hThread);
-
-    return 1;
-}
-
-void stop_ffmpeg_screen_recording(t_video *x) {
-    if (x->hFfmpegStdinWrite) {
-        DWORD written = 0;
-        // Signal ffmpeg to quit gracefully
-        WriteFile(x->hFfmpegStdinWrite, "q\r\n", 3, &written, NULL);
-        CloseHandle(x->hFfmpegStdinWrite);
-        x->hFfmpegStdinWrite = NULL;
-    }
-
-    if (x->hFfmpegProcess) {
-        DWORD waitResult = WaitForSingleObject(x->hFfmpegProcess, 8000);
-        if (waitResult == WAIT_TIMEOUT) {
-            TerminateProcess(x->hFfmpegProcess, 0);
-        }
-        CloseHandle(x->hFfmpegProcess);
-        x->hFfmpegProcess = NULL;
-    }
-}
-
 void *video_worker_thread(t_video *x) {
     x->is_thread_active = 1;
 
-    // 1. Open audio WAV file
-    x->wav_file = fopen(x->temp_audio_path, "wb");
-    if (!x->wav_file) {
+    // 1. Ensure recorder is running
+    if (!ensure_recorder_running(x)) {
         x->is_recording = 0;
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
-        snprintf(x->q_status_arg, sizeof(x->q_status_arg), "Failed to open WAV file: %s", x->temp_audio_path);
+        strncpy(x->q_status_arg, "External recorder is not running and could not be started.", sizeof(x->q_status_arg));
         qelem_set(x->status_qelem);
         x->is_thread_active = 0;
         systhread_exit(0);
         return NULL;
     }
 
-    // Write dummy WAV header to be overwritten later
-    write_wav_header(x->wav_file, (int)x->sr, 0);
+    // Send path immediately to be sure the current path is active
+    char path_cmd[2048];
+    char path_resp[1024];
+    snprintf(path_cmd, sizeof(path_cmd), "PATH %s\n", x->save_path->s_name);
+    send_control_command(x, path_cmd, path_resp, sizeof(path_resp));
 
-    // 2. Start ffmpeg screen recording
-    if (!start_ffmpeg_screen_recording(x, x->temp_video_path)) {
-        fclose(x->wav_file);
-        x->wav_file = NULL;
-        DeleteFileA(x->temp_audio_path);
+    // 2. Connect control socket
+    SOCKET ctrl_sock = INVALID_SOCKET;
+    if (!connect_socket("127.0.0.1", CONTROL_PORT, &ctrl_sock)) {
         x->is_recording = 0;
-
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
-        strncpy(x->q_status_arg, "Failed to start ffmpeg screen recording. Ensure ffmpeg is in your PATH.", sizeof(x->q_status_arg));
+        strncpy(x->q_status_arg, "Failed to connect to recorder control port 9099.", sizeof(x->q_status_arg));
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+
+    // 3. Send START command
+    time_t t = time(NULL);
+    struct tm *tm_info = localtime(&t);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "START %s %d\n", timestamp, (int)x->sr);
+
+    if (send(ctrl_sock, cmd, (int)strlen(cmd), 0) == SOCKET_ERROR) {
+        closesocket(ctrl_sock);
+        x->is_recording = 0;
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        strncpy(x->q_status_arg, "Failed to send START command to recorder.", sizeof(x->q_status_arg));
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+
+    // Read response
+    char response[1024];
+    int recvd = recv(ctrl_sock, response, sizeof(response) - 1, 0);
+    if (recvd <= 0) {
+        closesocket(ctrl_sock);
+        x->is_recording = 0;
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        strncpy(x->q_status_arg, "Did not receive response from recorder for START command.", sizeof(x->q_status_arg));
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+    response[recvd] = '\0';
+
+    if (strstr(response, "STARTED") == NULL) {
+        closesocket(ctrl_sock);
+        x->is_recording = 0;
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        snprintf(x->q_status_arg, sizeof(x->q_status_arg), "Recorder failed to start: %s", response);
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+
+    // Sleep 100ms to allow recorder to bind and listen on audio port
+    Sleep(100);
+
+    // 4. Connect audio socket
+    SOCKET audio_sock = INVALID_SOCKET;
+    if (!connect_socket("127.0.0.1", AUDIO_PORT, &audio_sock)) {
+        // Stop recorder
+        send(ctrl_sock, "STOP\n", 5, 0);
+        closesocket(ctrl_sock);
+        x->is_recording = 0;
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        strncpy(x->q_status_arg, "Failed to connect to recorder audio port 9100.", sizeof(x->q_status_arg));
         qelem_set(x->status_qelem);
         x->is_thread_active = 0;
         systhread_exit(0);
@@ -490,7 +570,7 @@ void *video_worker_thread(t_video *x) {
     x->q_status_arg[0] = '\0';
     qelem_set(x->status_qelem);
 
-    // 3. Audio draining loop
+    // 5. Audio draining loop (streams raw 16-bit PCM over TCP)
     while (x->is_recording) {
         systhread_sleep(10);
 
@@ -525,13 +605,18 @@ void *video_worker_thread(t_video *x) {
                 x->total_samples_recorded += available;
                 critical_exit(x->ring_lock);
 
-                fwrite(local_buf, sizeof(short), available, x->wav_file);
+                // Send to audio socket
+                int bytes_to_send = (int)(available * sizeof(short));
+                int sent = send(audio_sock, (char *)local_buf, bytes_to_send, 0);
+                if (sent == SOCKET_ERROR) {
+                    object_error((t_object *)x, "video~: Failed sending audio samples over TCP.");
+                }
                 sysmem_freeptr(local_buf);
             }
         }
     }
 
-    // 4. Drain any remaining audio samples
+    // 6. Drain any remaining audio samples
     long long final_write_ptr;
     long long final_read_ptr;
 
@@ -563,67 +648,60 @@ void *video_worker_thread(t_video *x) {
             x->total_samples_recorded += final_available;
             critical_exit(x->ring_lock);
 
-            fwrite(local_buf, sizeof(short), final_available, x->wav_file);
+            // Send remaining to audio socket
+            int bytes_to_send = (int)(final_available * sizeof(short));
+            send(audio_sock, (char *)local_buf, bytes_to_send, 0);
             sysmem_freeptr(local_buf);
         }
     }
 
-    // Overwrite the WAV header with actual samples recorded
-    write_wav_header(x->wav_file, (int)x->sr, (long)x->total_samples_recorded);
-    fclose(x->wav_file);
-    x->wav_file = NULL;
+    // Close audio socket to signal EOF to recorder's receiver
+    closesocket(audio_sock);
+    audio_sock = INVALID_SOCKET;
 
-    // 5. Stop ffmpeg screen recording gracefully
-    stop_ffmpeg_screen_recording(x);
-
-    // 6. Audio-Video Muxing via ffmpeg
-    STARTUPINFO siStartInfo;
-    PROCESS_INFORMATION piProcInfo;
-    ZeroMemory(&siStartInfo, sizeof(STARTUPINFO));
-    ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
-    siStartInfo.cb = sizeof(STARTUPINFO);
-
-    char mux_cmd[3072];
-    // Copy video directly, encode audio to AAC, truncate to shortest stream
-    snprintf(mux_cmd, sizeof(mux_cmd), "ffmpeg -y -i \"%s\" -i \"%s\" -c:v copy -c:a aac -shortest \"%s\"",
-             x->temp_video_path, x->temp_audio_path, x->final_video_path);
-
-    BOOL bMuxSuccess = CreateProcessA(
-        NULL,
-        mux_cmd,
-        NULL,
-        NULL,
-        FALSE,
-        CREATE_NO_WINDOW,
-        NULL,
-        NULL,
-        &siStartInfo,
-        &piProcInfo
-    );
-
-    int muxed = 0;
-    if (bMuxSuccess) {
-        // Wait up to 10 seconds for muxing to complete
-        DWORD waitRes = WaitForSingleObject(piProcInfo.hProcess, 10000);
-        if (waitRes == WAIT_OBJECT_0) {
-            muxed = 1;
-        } else {
-            TerminateProcess(piProcInfo.hProcess, 0);
-        }
-        CloseHandle(piProcInfo.hProcess);
-        CloseHandle(piProcInfo.hThread);
+    // 7. Send STOP command over control socket and wait for final status & path
+    if (send(ctrl_sock, "STOP\n", 5, 0) == SOCKET_ERROR) {
+        closesocket(ctrl_sock);
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        strncpy(x->q_status_arg, "Failed to send STOP command to recorder.", sizeof(x->q_status_arg));
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
     }
 
-    // 7. Cleanup temp files
-    DeleteFileA(x->temp_audio_path);
-    DeleteFileA(x->temp_video_path);
+    // Read response for STOP command
+    recvd = recv(ctrl_sock, response, sizeof(response) - 1, 0);
+    if (recvd <= 0) {
+        closesocket(ctrl_sock);
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        strncpy(x->q_status_arg, "Did not receive STOP response from recorder.", sizeof(x->q_status_arg));
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+    response[recvd] = '\0';
+    closesocket(ctrl_sock);
 
-    if (muxed && GetFileAttributesA(x->final_video_path) != INVALID_FILE_ATTRIBUTES) {
+    // Parse response, e.g., "STOPPED C:/path/to/final_video.mp4"
+    if (strncmp(response, "STOPPED", 7) == 0) {
+        char *final_path = response + 7;
+        while (*final_path == ' ' || *final_path == '\t') {
+            final_path++;
+        }
+        // Trim trailing newlines/spaces
+        int len = (int)strlen(final_path);
+        while (len > 0 && (final_path[len - 1] == '\r' || final_path[len - 1] == '\n' || final_path[len - 1] == ' ' || final_path[len - 1] == '\t')) {
+            final_path[len - 1] = '\0';
+            len--;
+        }
+
         strncpy(x->q_status_msg, "stopped", sizeof(x->q_status_msg));
-        strncpy(x->q_status_arg, x->final_video_path, sizeof(x->q_status_arg));
+        strncpy(x->q_status_arg, final_path, sizeof(x->q_status_arg));
     } else {
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
-        strncpy(x->q_status_arg, "Failed to mux audio and video streams.", sizeof(x->q_status_arg));
+        strncpy(x->q_status_arg, response, sizeof(x->q_status_arg));
     }
 
     qelem_set(x->status_qelem);
