@@ -849,7 +849,7 @@ void rebar_copy_dictionary(t_dictionary *src, t_dictionary *dst) {
 }
 
 void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
-    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, visualize, async) and Trigger (int)");
+    if (m == ASSIST_INLET) sprintf(s, "Control (log, consume, fill, visualize, async) and Trigger (int)");
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;

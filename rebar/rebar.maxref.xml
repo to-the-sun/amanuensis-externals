@@ -115,6 +115,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="fill" get="1" set="1" type="long" size="1">
+			<digest>Enable Padding/Filling (Crucible)</digest>
+			<description>
+				When enabled (1), any song growth event in either the positive or negative direction automatically pads/fills all other lesser tracks in that direction by copying their existing bars forward or backward to match the longest track length.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 		<attribute name="visualize" get="1" set="1" type="long" size="1">
 			<digest>Enable Visualization (Buildspans)</digest>
 			<description>
