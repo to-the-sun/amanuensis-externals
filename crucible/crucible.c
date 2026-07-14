@@ -697,32 +697,60 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             }
         }
 
-        if (x->fill && song_had_bars) {
-            // Find bounds of the winning track now
+        crucible_log(x, "[Fill Debug] x->fill = %ld, song_had_bars = %d, bar_length = %lld", x->fill, song_had_bars, (long long)bar_length);
+        if (song_had_bars) {
+            crucible_log(x, "[Fill Debug] song_prev_min = %lld, song_prev_max = %lld", (long long)song_prev_min, (long long)song_prev_max);
+        }
+        if (incumbent_track_dict) {
             t_atom_long win_min = 0, win_max = 0;
             int win_has = 0;
             get_track_bounds(incumbent_track_dict, bar_length, &win_min, &win_max, &win_has);
+            crucible_log(x, "[Fill Debug] win_has = %d, win_min = %lld, win_max = %lld", win_has, (long long)win_min, (long long)win_max);
+        }
 
-            if (win_has) {
-                int song_grew_positive = (win_max > song_prev_max);
-                int song_grew_negative = (win_min < song_prev_min);
+        if (x->fill && incumbent_dict) {
+            // Recalculate song boundaries after the winner is written
+            t_atom_long song_curr_min = 0;
+            t_atom_long song_curr_max = 0;
+            int song_has = 0;
 
-                if (song_grew_positive) {
-                    crucible_log(x, "Song grew in positive direction (prev_max: %lld, new_max: %lld). Filling lesser tracks.", (long long)song_prev_max, (long long)win_max);
-                    for (long t = 0; t < num_all_tracks; t++) {
-                        t_symbol *other_track_sym = all_track_keys[t];
-                        t_dictionary *other_track_dict = NULL;
-                        dictionary_getdictionary(incumbent_dict, other_track_sym, (t_object **)&other_track_dict);
-                        if (other_track_dict) {
-                            t_atom_long o_min = 0, o_max = 0;
-                            int o_has = 0;
-                            get_track_bounds(other_track_dict, bar_length, &o_min, &o_max, &o_has);
-                            if (o_has && o_max < win_max) {
+            for (long t = 0; t < num_all_tracks; t++) {
+                t_dictionary *tr_dict = NULL;
+                dictionary_getdictionary(incumbent_dict, all_track_keys[t], (t_object **)&tr_dict);
+                if (tr_dict) {
+                    t_atom_long t_min = 0, t_max = 0;
+                    int t_has = 0;
+                    get_track_bounds(tr_dict, bar_length, &t_min, &t_max, &t_has);
+                    if (t_has) {
+                        if (!song_has) {
+                            song_curr_min = t_min;
+                            song_curr_max = t_max;
+                            song_has = 1;
+                        } else {
+                            if (t_min < song_curr_min) song_curr_min = t_min;
+                            if (t_max > song_curr_max) song_curr_max = t_max;
+                        }
+                    }
+                }
+            }
+
+            if (song_has) {
+                crucible_log(x, "Filling tracks to match song bounds: [%lld, %lld]", (long long)song_curr_min, (long long)song_curr_max);
+                for (long t = 0; t < num_all_tracks; t++) {
+                    t_symbol *other_track_sym = all_track_keys[t];
+                    t_dictionary *other_track_dict = NULL;
+                    dictionary_getdictionary(incumbent_dict, other_track_sym, (t_object **)&other_track_dict);
+                    if (other_track_dict) {
+                        t_atom_long o_min = 0, o_max = 0;
+                        int o_has = 0;
+                        get_track_bounds(other_track_dict, bar_length, &o_min, &o_max, &o_has);
+                        if (o_has) {
+                            if (o_max < song_curr_max) {
                                 long o_bars_count = 0;
                                 t_atom_long *o_bars = get_sorted_track_bars(other_track_dict, &o_bars_count);
                                 if (o_bars && o_bars_count > 0) {
                                     long k = 0;
-                                    for (t_atom_long dest_ts = o_max + bar_length; dest_ts <= win_max; dest_ts += bar_length) {
+                                    for (t_atom_long dest_ts = o_max + bar_length; dest_ts <= song_curr_max; dest_ts += bar_length) {
                                         t_atom_long src_ts = o_bars[k % o_bars_count];
                                         char src_ts_str[64];
                                         snprintf(src_ts_str, 64, "%lld", (long long)src_ts);
@@ -757,26 +785,13 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                     sysmem_freeptr(o_bars);
                                 }
                             }
-                        }
-                    }
-                }
 
-                if (song_grew_negative) {
-                    crucible_log(x, "Song grew in negative direction (prev_min: %lld, new_min: %lld). Filling lesser tracks.", (long long)song_prev_min, (long long)win_min);
-                    for (long t = 0; t < num_all_tracks; t++) {
-                        t_symbol *other_track_sym = all_track_keys[t];
-                        t_dictionary *other_track_dict = NULL;
-                        dictionary_getdictionary(incumbent_dict, other_track_sym, (t_object **)&other_track_dict);
-                        if (other_track_dict) {
-                            t_atom_long o_min = 0, o_max = 0;
-                            int o_has = 0;
-                            get_track_bounds(other_track_dict, bar_length, &o_min, &o_max, &o_has);
-                            if (o_has && o_min > win_min) {
+                            if (o_min > song_curr_min) {
                                 long o_bars_count = 0;
                                 t_atom_long *o_bars = get_sorted_track_bars(other_track_dict, &o_bars_count);
                                 if (o_bars && o_bars_count > 0) {
                                     long k = 0;
-                                    for (t_atom_long dest_ts = o_min - bar_length; dest_ts >= win_min; dest_ts -= bar_length) {
+                                    for (t_atom_long dest_ts = o_min - bar_length; dest_ts >= song_curr_min; dest_ts -= bar_length) {
                                         long src_idx = o_bars_count - 1 - (k % o_bars_count);
                                         t_atom_long src_ts = o_bars[src_idx];
                                         char src_ts_str[64];
