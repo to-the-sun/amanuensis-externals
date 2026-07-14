@@ -422,6 +422,38 @@ def process_packet(text, client_sock=None):
                             "duration": 3.0
                         })
 
+                if pkt.get("event") == "fill_bar":
+                    track = pkt.get("track")
+                    bar = pkt.get("bar")
+                    copied_from = pkt.get("copied_from")
+                    if track is not None and bar is not None and copied_from is not None:
+                        t_str = str(track)
+                        bar_length = state["bar_length"]
+                        snapped_bar = snap_to_bar(bar, bar_length)
+                        snapped_src = snap_to_bar(copied_from, bar_length)
+
+                        # Add to tracks
+                        if t_str not in state["tracks"]:
+                            state["tracks"][t_str] = []
+                        if snapped_bar not in state["tracks"][t_str]:
+                            state["tracks"][t_str].append(snapped_bar)
+
+                        # Copy rating
+                        if t_str in state["bar_ratings"]:
+                            src_rating = state["bar_ratings"][t_str].get(str(float(snapped_src)))
+                            if src_rating is not None:
+                                state["bar_ratings"][t_str][str(float(snapped_bar))] = src_rating
+
+                        state["events"].append({
+                            "type": "fill_bar",
+                            "track": t_str,
+                            "bar": snapped_bar,
+                            "copied_from": int(snapped_src // bar_length) if bar_length > 0 else 0,
+                            "start_time": time.time(),
+                            "duration": 3.0
+                        })
+                        dirty = True
+
                 if dirty:
                     recalculate_reach()
 
@@ -678,6 +710,22 @@ def run_gui():
             tid = e["track"]
             if tid not in track_to_row: continue
             row = track_to_row[tid]
+
+            if e.get("type") == "fill_bar":
+                b_ts = e["bar"]
+                if bar_length > 0:
+                    col = int((b_ts - song_start) // bar_length)
+                    cell_x = margin_left + col * cell_w
+                    cell_y = margin_top + row * cell_h
+                    center_x = cell_x + cell_w / 2
+                    center_y = cell_y + cell_h / 2
+
+                    alpha = int(255 * (1.0 - t))
+                    val_text = font.render(str(e["copied_from"]), True, (160, 160, 160))
+                    val_text.set_alpha(alpha)
+                    text_rect = val_text.get_rect(center=(center_x, center_y))
+                    screen.blit(val_text, text_rect)
+                continue
 
             # Flashing/Bright Boxes
             valid_bars = []

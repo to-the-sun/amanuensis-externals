@@ -793,6 +793,14 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                             crucible_log(x, "  [Fill Pos] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
 
                                             crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+
+                                            if (x->visualize) {
+                                                char vis_msg[256];
+                                                snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
+                                                         other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                visualize((t_object *)x, vis_msg);
+                                            }
+                                            object_release((t_object *)copied_bar_dict);
                                         }
                                         k++;
                                     }
@@ -840,6 +848,14 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                                             crucible_log(x, "  [Fill Neg] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
 
                                             crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+
+                                            if (x->visualize) {
+                                                char vis_msg[256];
+                                                snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
+                                                         other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                visualize((t_object *)x, vis_msg);
+                                            }
+                                            object_release((t_object *)copied_bar_dict);
                                         }
                                         k++;
                                     }
@@ -1157,6 +1173,9 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
         if (track_has) {
             t_atom_long track_reach = (track_max + bar_length) - track_min;
+            if (dictionary_hasentry(x->track_reaches_dict, track_sym)) {
+                dictionary_deleteentry(x->track_reaches_dict, track_sym);
+            }
             dictionary_appendlong(x->track_reaches_dict, track_sym, track_reach);
 
             if (!song_has) {
