@@ -5,7 +5,6 @@ import subprocess
 import threading
 import wave
 import time
-import tempfile
 from datetime import datetime
 
 CONTROL_PORT = 9099
@@ -22,6 +21,9 @@ class VideoRecorderServer:
         self.save_path = "."
         self.is_recording = False
         self.ffmpeg_proc = None
+
+        # Connection that owns the active recording session
+        self.recording_conn = None
 
         # Audio streaming states
         self.audio_thread = None
@@ -131,10 +133,10 @@ class VideoRecorderServer:
                 data = conn.recv(4096)
                 if not data:
                     log_msg("CONNECTION: Control client disconnected gracefully.")
-                    # If we were recording and client disconnected unexpectedly, stop gracefully
+                    # Only stop recording if the disconnected client was the one who started it!
                     with self.lock:
-                        if self.is_recording:
-                            log_msg("WARNING: Client disconnected while recording. Stopping recording automatically.")
+                        if self.is_recording and self.recording_conn == conn:
+                            log_msg("WARNING: Recording owner client disconnected. Stopping recording automatically.")
                             self.stop_recording_internal()
                     break
 
@@ -148,23 +150,28 @@ class VideoRecorderServer:
                     self.process_command(line, conn)
         except Exception as e:
             log_msg(f"ERROR: Exception in control client receiver: {e}")
+            # Only stop recording if the client that threw the exception was the recording owner!
             with self.lock:
-                if self.is_recording:
+                if self.is_recording and self.recording_conn == conn:
+                    log_msg("WARNING: Recording owner client connection threw exception. Stopping recording automatically.")
                     self.stop_recording_internal()
         finally:
             conn.close()
 
     def process_command(self, cmd_line, conn):
         log_msg(f"COMMAND RECEIVED: '{cmd_line}'")
-        parts = cmd_line.split(" ", 2)
+
+        # Split command and argument string robustly with maxsplit=1
+        parts = cmd_line.split(" ", 1)
         cmd = parts[0].upper()
+        args = parts[1].strip() if len(parts) > 1 else ""
 
         if cmd == "PATH":
-            if len(parts) < 2:
+            if not args:
                 log_msg("ERROR: PATH command missing target directory path")
                 conn.sendall(b"ERROR: Missing path argument\n")
                 return
-            new_path = parts[1].strip()
+            new_path = args
             # Clean quotes if present
             if (new_path.startswith('"') and new_path.endswith('"')) or (new_path.startswith("'") and new_path.endswith("'")):
                 new_path = new_path[1:-1]
@@ -180,18 +187,25 @@ class VideoRecorderServer:
                     conn.sendall(f"ERROR: Failed to create directory: {e}\n".encode('utf-8'))
 
         elif cmd == "START":
-            if len(parts) < 3:
-                log_msg("ERROR: START command missing timestamp or samplerate arguments")
+            if not args:
+                log_msg("ERROR: START command missing arguments")
                 conn.sendall(b"ERROR: Missing timestamp or samplerate arguments\n")
                 return
-            timestamp = parts[1].strip()
+
+            sub_parts = args.split(" ", 1)
+            if len(sub_parts) < 2:
+                log_msg("ERROR: START command missing samplerate argument")
+                conn.sendall(b"ERROR: Missing samplerate argument\n")
+                return
+
+            timestamp = sub_parts[0].strip()
             try:
-                sr = int(parts[2].strip())
+                sr = int(sub_parts[1].strip())
             except ValueError:
                 sr = 44100
 
             log_msg(f"ACTION: Starting record handshake for session '{timestamp}' @ {sr}Hz")
-            success, msg = self.start_recording(timestamp, sr)
+            success, msg = self.start_recording(timestamp, sr, conn)
             if success:
                 log_msg(f"SUCCESS: Recording session '{timestamp}' successfully started.")
                 conn.sendall(b"STARTED\n")
@@ -212,23 +226,21 @@ class VideoRecorderServer:
             log_msg(f"WARNING: Unknown command received: '{cmd}'")
             conn.sendall(f"ERROR: Unknown command: {cmd}\n".encode('utf-8'))
 
-    def start_recording(self, timestamp, samplerate):
+    def start_recording(self, timestamp, samplerate, conn):
         with self.lock:
             if self.is_recording:
                 return False, "Already recording"
 
             self.samplerate = samplerate
 
-            # Store temporary intermediate video & audio files in the OS temporary directory
-            # This keeps the user-specified output folder perfectly clean from temp artifacts.
-            temp_dir = tempfile.gettempdir()
-            self.temp_audio_path = os.path.join(temp_dir, f"temp_audio_{timestamp}.wav").replace("\\", "/")
-            self.temp_video_path = os.path.join(temp_dir, f"temp_video_{timestamp}.mp4").replace("\\", "/")
-
+            # Store temporary intermediate video & audio files directly in the target destination folder,
+            # as explicitly requested by the user.
+            self.temp_audio_path = os.path.join(self.save_path, f"temp_audio_{timestamp}.wav").replace("\\", "/")
+            self.temp_video_path = os.path.join(self.save_path, f"temp_video_{timestamp}.mp4").replace("\\", "/")
             self.final_video_path = os.path.join(self.save_path, f"video_{timestamp}.mp4").replace("\\", "/")
 
-            log_msg(f"CONFIG: Temp Audio WAV Path: '{self.temp_audio_path}' (stored in system temp)")
-            log_msg(f"CONFIG: Temp Video MP4 Path: '{self.temp_video_path}' (stored in system temp)")
+            log_msg(f"CONFIG: Temp Audio WAV Path: '{self.temp_audio_path}'")
+            log_msg(f"CONFIG: Temp Video MP4 Path: '{self.temp_video_path}'")
             log_msg(f"CONFIG: Final Video MP4 Path: '{self.final_video_path}'")
 
             # 1. Open the wave file writer
@@ -257,6 +269,7 @@ class VideoRecorderServer:
 
             # 3. Start audio listener thread
             self.is_recording = True
+            self.recording_conn = conn  # Set this connection as the owner of the active recording session
             self.audio_thread = threading.Thread(target=self.audio_receiver_loop, daemon=True)
             self.audio_thread.start()
 
@@ -330,6 +343,7 @@ class VideoRecorderServer:
             except Exception as e:
                 log_msg(f"SUBPROCESS ERROR: Failed to start ffmpeg: {e}")
                 self.is_recording = False
+                self.recording_conn = None
                 self.audio_socket.close()
                 self.wav_file.close()
                 try:
@@ -385,6 +399,7 @@ class VideoRecorderServer:
     def stop_recording_internal(self):
         log_msg("ACTION: Stopping recording internally and releasing all file/socket resources...")
         self.is_recording = False
+        self.recording_conn = None  # Clear owner connection
 
         # 1. Stop audio socket & receiver
         if self.audio_conn:
@@ -466,7 +481,7 @@ class VideoRecorderServer:
             log_msg(f"SUBPROCESS ERROR: Exception during muxing: {e}")
 
         # 4. Clean up temp files
-        log_msg("ACTION: Cleaning up temporary WAV and raw MP4 files from system temp folder...")
+        log_msg("ACTION: Cleaning up temporary WAV and raw MP4 files from destination folder...")
         try:
             if os.path.exists(self.temp_audio_path):
                 os.remove(self.temp_audio_path)
