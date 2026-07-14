@@ -133,57 +133,7 @@ t_atom_long *get_sorted_track_bars(t_dictionary *track_dict, long *out_count) {
 }
 
 void adjust_filled_bar_dict(t_dictionary *bar_dict, t_atom_long src_ts, t_atom_long dest_ts) {
-    if (!bar_dict) return;
-    t_atom_long shift = dest_ts - src_ts;
-    if (shift == 0) return;
-
-    t_atom offset_atom;
-    if (dictionary_getatom(bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
-        if (atom_gettype(&offset_atom) == A_FLOAT) {
-            atom_setfloat(&offset_atom, atom_getfloat(&offset_atom) + (double)shift);
-        } else if (atom_gettype(&offset_atom) == A_LONG) {
-            atom_setlong(&offset_atom, atom_getlong(&offset_atom) + shift);
-        }
-        dictionary_deleteentry(bar_dict, gensym("offset"));
-        dictionary_appendatom(bar_dict, gensym("offset"), &offset_atom);
-    }
-
-    t_atomarray *span_aa = NULL;
-    if (dictionary_getatomarray(bar_dict, gensym("span"), (t_object **)&span_aa) == MAX_ERR_NONE && span_aa) {
-        long ac = 0; t_atom *av = NULL;
-        atomarray_getatoms(span_aa, &ac, &av);
-        for (long i = 0; i < ac; i++) {
-            if (atom_gettype(av + i) == A_LONG) {
-                atom_setlong(av + i, atom_getlong(av + i) + shift);
-            } else if (atom_gettype(av + i) == A_FLOAT) {
-                atom_setfloat(av + i, atom_getfloat(av + i) + (double)shift);
-            }
-        }
-    }
-
-    t_atomarray *abs_aa = NULL;
-    if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
-        long ac = 0; t_atom *av = NULL;
-        atomarray_getatoms(abs_aa, &ac, &av);
-        for (long i = 0; i < ac; i++) {
-            if (atom_gettype(av + i) == A_LONG) {
-                atom_setlong(av + i, atom_getlong(av + i) + shift);
-            } else if (atom_gettype(av + i) == A_FLOAT) {
-                atom_setfloat(av + i, atom_getfloat(av + i) + (double)shift);
-            }
-        }
-    } else {
-        t_atom abs_atom;
-        if (dictionary_getatom(bar_dict, gensym("absolutes"), &abs_atom) == MAX_ERR_NONE) {
-            if (atom_gettype(&abs_atom) == A_FLOAT) {
-                atom_setfloat(&abs_atom, atom_getfloat(&abs_atom) + (double)shift);
-            } else if (atom_gettype(&abs_atom) == A_LONG) {
-                atom_setlong(&abs_atom, atom_getlong(&abs_atom) + shift);
-            }
-            dictionary_deleteentry(bar_dict, gensym("absolutes"));
-            dictionary_appendatom(bar_dict, gensym("absolutes"), &abs_atom);
-        }
-    }
+    // No-op: do not shift any internal values of the copied bar
 }
 
 void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
