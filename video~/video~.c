@@ -16,7 +16,6 @@
 
 #define RING_BUFFER_SIZE_SECONDS 10
 #define CONTROL_PORT 9099
-#define AUDIO_PORT 9100
 
 typedef struct _video {
     t_pxobject v_obj;
@@ -42,6 +41,10 @@ typedef struct _video {
 
     // Thread handle
     t_systhread worker_thread;
+    FILE *wav_file;
+
+    // Temporary & final file paths
+    char temp_audio_path[1024];
 
     // Status queuing for main-thread outlets
     void *status_qelem;
@@ -61,6 +64,7 @@ void video_perform64(t_video *x, t_object *dsp64, double **ins, long numins, dou
 void video_status_qfn(t_video *x);
 void *video_worker_thread(t_video *x);
 void get_object_directory(char *dir_out, size_t max_len);
+void write_wav_header(FILE *f, int samplerate, long num_samples);
 
 int connect_socket(const char *host, int port, SOCKET *sock_out);
 void start_recorder_process(t_video *x);
@@ -254,6 +258,50 @@ int send_control_command(t_video *x, const char *cmd, char *response_out, int re
     return 1;
 }
 
+void write_wav_header(FILE *f, int samplerate, long num_samples) {
+    if (!f) return;
+    fseek(f, 0, SEEK_SET);
+
+    unsigned char header[44];
+    long subchunk2_size = num_samples * 2; // 16-bit Mono PCM
+    long chunk_size = 36 + subchunk2_size;
+    long byte_rate = samplerate * 2;
+
+    header[0] = 'R'; header[1] = 'I'; header[2] = 'F'; header[3] = 'F';
+    header[4] = chunk_size & 0xff;
+    header[5] = (chunk_size >> 8) & 0xff;
+    header[6] = (chunk_size >> 16) & 0xff;
+    header[7] = (chunk_size >> 24) & 0xff;
+
+    header[8] = 'W'; header[9] = 'A'; header[10] = 'V'; header[11] = 'E';
+
+    header[12] = 'f'; header[13] = 'm'; header[14] = 't'; header[15] = ' ';
+    header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; // fmt chunk size
+    header[20] = 1; header[21] = 0; // AudioFormat = 1 (PCM)
+    header[22] = 1; header[23] = 0; // Mono (1 channel)
+
+    header[24] = samplerate & 0xff;
+    header[25] = (samplerate >> 8) & 0xff;
+    header[26] = (samplerate >> 16) & 0xff;
+    header[27] = (samplerate >> 24) & 0xff;
+
+    header[28] = byte_rate & 0xff;
+    header[29] = (byte_rate >> 8) & 0xff;
+    header[30] = (byte_rate >> 16) & 0xff;
+    header[31] = (byte_rate >> 24) & 0xff;
+
+    header[32] = 2; header[33] = 0; // BlockAlign = 2 bytes
+    header[34] = 16; header[35] = 0; // BitsPerSample = 16
+
+    header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
+    header[40] = subchunk2_size & 0xff;
+    header[41] = (subchunk2_size >> 8) & 0xff;
+    header[42] = (subchunk2_size >> 16) & 0xff;
+    header[43] = (subchunk2_size >> 24) & 0xff;
+
+    fwrite(header, 1, 44, f);
+}
+
 void *video_new(t_symbol *s, long argc, t_atom *argv) {
     t_video *x = (t_video *)object_alloc(video_class);
 
@@ -276,6 +324,7 @@ void *video_new(t_symbol *s, long argc, t_atom *argv) {
         x->is_thread_active = 0;
         x->total_samples_recorded = 0;
         x->worker_thread = NULL;
+        x->wav_file = NULL;
 
         // Path Parsing & Formatting
         t_symbol *arg_path = NULL;
@@ -490,9 +539,35 @@ void *video_worker_thread(t_video *x) {
     snprintf(path_cmd, sizeof(path_cmd), "PATH %s\n", x->save_path->s_name);
     send_control_command(x, path_cmd, path_resp, sizeof(path_resp));
 
+    // Generate session timestamp
+    time_t t = time(NULL);
+    struct tm *tm_info = localtime(&t);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+    // Prepare temp audio WAV file locally directly on disk
+    snprintf(x->temp_audio_path, sizeof(x->temp_audio_path), "%s/temp_audio_%s.wav", x->save_path->s_name, timestamp);
+
+    x->wav_file = fopen(x->temp_audio_path, "wb");
+    if (!x->wav_file) {
+        x->is_recording = 0;
+        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
+        snprintf(x->q_status_arg, sizeof(x->q_status_arg), "Failed to open WAV file: %s", x->temp_audio_path);
+        qelem_set(x->status_qelem);
+        x->is_thread_active = 0;
+        systhread_exit(0);
+        return NULL;
+    }
+
+    // Write dummy WAV header to be overwritten later
+    write_wav_header(x->wav_file, (int)x->sr, 0);
+
     // 2. Connect control socket
     SOCKET ctrl_sock = INVALID_SOCKET;
     if (!connect_socket("127.0.0.1", CONTROL_PORT, &ctrl_sock)) {
+        fclose(x->wav_file);
+        x->wav_file = NULL;
+        DeleteFileA(x->temp_audio_path);
         x->is_recording = 0;
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
         strncpy(x->q_status_arg, "Failed to connect to recorder control port 9099.", sizeof(x->q_status_arg));
@@ -503,16 +578,14 @@ void *video_worker_thread(t_video *x) {
     }
 
     // 3. Send START command
-    time_t t = time(NULL);
-    struct tm *tm_info = localtime(&t);
-    char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
-
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "START %s %d\n", timestamp, (int)x->sr);
 
     if (send(ctrl_sock, cmd, (int)strlen(cmd), 0) == SOCKET_ERROR) {
         closesocket(ctrl_sock);
+        fclose(x->wav_file);
+        x->wav_file = NULL;
+        DeleteFileA(x->temp_audio_path);
         x->is_recording = 0;
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
         strncpy(x->q_status_arg, "Failed to send START command to recorder.", sizeof(x->q_status_arg));
@@ -527,6 +600,9 @@ void *video_worker_thread(t_video *x) {
     int recvd = recv(ctrl_sock, response, sizeof(response) - 1, 0);
     if (recvd <= 0) {
         closesocket(ctrl_sock);
+        fclose(x->wav_file);
+        x->wav_file = NULL;
+        DeleteFileA(x->temp_audio_path);
         x->is_recording = 0;
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
         strncpy(x->q_status_arg, "Did not receive response from recorder for START command.", sizeof(x->q_status_arg));
@@ -539,27 +615,12 @@ void *video_worker_thread(t_video *x) {
 
     if (strstr(response, "STARTED") == NULL) {
         closesocket(ctrl_sock);
+        fclose(x->wav_file);
+        x->wav_file = NULL;
+        DeleteFileA(x->temp_audio_path);
         x->is_recording = 0;
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
         snprintf(x->q_status_arg, sizeof(x->q_status_arg), "Recorder failed to start: %s", response);
-        qelem_set(x->status_qelem);
-        x->is_thread_active = 0;
-        systhread_exit(0);
-        return NULL;
-    }
-
-    // Sleep 100ms to allow recorder to bind and listen on audio port
-    Sleep(100);
-
-    // 4. Connect audio socket
-    SOCKET audio_sock = INVALID_SOCKET;
-    if (!connect_socket("127.0.0.1", AUDIO_PORT, &audio_sock)) {
-        // Stop recorder
-        send(ctrl_sock, "STOP\n", 5, 0);
-        closesocket(ctrl_sock);
-        x->is_recording = 0;
-        strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));
-        strncpy(x->q_status_arg, "Failed to connect to recorder audio port 9100.", sizeof(x->q_status_arg));
         qelem_set(x->status_qelem);
         x->is_thread_active = 0;
         systhread_exit(0);
@@ -570,7 +631,7 @@ void *video_worker_thread(t_video *x) {
     x->q_status_arg[0] = '\0';
     qelem_set(x->status_qelem);
 
-    // 5. Audio draining loop
+    // 4. Audio draining loop (writes directly to local WAV file on disk)
     while (x->is_recording) {
         systhread_sleep(10);
 
@@ -605,18 +666,13 @@ void *video_worker_thread(t_video *x) {
                 x->total_samples_recorded += available;
                 critical_exit(x->ring_lock);
 
-                // Send to audio socket
-                int bytes_to_send = (int)(available * sizeof(short));
-                int sent = send(audio_sock, (char *)local_buf, bytes_to_send, 0);
-                if (sent == SOCKET_ERROR) {
-                    object_error((t_object *)x, "video~: Failed sending audio samples over TCP.");
-                }
+                fwrite(local_buf, sizeof(short), available, x->wav_file);
                 sysmem_freeptr(local_buf);
             }
         }
     }
 
-    // 6. Drain any remaining audio samples
+    // 5. Drain any remaining audio samples
     long long final_write_ptr;
     long long final_read_ptr;
 
@@ -648,18 +704,17 @@ void *video_worker_thread(t_video *x) {
             x->total_samples_recorded += final_available;
             critical_exit(x->ring_lock);
 
-            // Send remaining to audio socket
-            int bytes_to_send = (int)(final_available * sizeof(short));
-            send(audio_sock, (char *)local_buf, bytes_to_send, 0);
+            fwrite(local_buf, sizeof(short), final_available, x->wav_file);
             sysmem_freeptr(local_buf);
         }
     }
 
-    // Close audio socket to signal EOF to recorder's receiver
-    closesocket(audio_sock);
-    audio_sock = INVALID_SOCKET;
+    // Overwrite the WAV header with actual samples recorded
+    write_wav_header(x->wav_file, (int)x->sr, (long)x->total_samples_recorded);
+    fclose(x->wav_file);
+    x->wav_file = NULL;
 
-    // 7. Send STOP command over control socket and wait for final status & path
+    // 6. Send STOP command over control socket and wait for final status & path
     if (send(ctrl_sock, "STOP\n", 5, 0) == SOCKET_ERROR) {
         closesocket(ctrl_sock);
         strncpy(x->q_status_msg, "error", sizeof(x->q_status_msg));

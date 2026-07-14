@@ -3,12 +3,10 @@ import sys
 import socket
 import subprocess
 import threading
-import wave
 import time
 from datetime import datetime
 
 CONTROL_PORT = 9099
-AUDIO_PORT = 9100
 
 def get_timestamp_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -25,11 +23,6 @@ class VideoRecorderServer:
         # Connection that owns the active recording session
         self.recording_conn = None
 
-        # Audio streaming states
-        self.audio_thread = None
-        self.audio_socket = None
-        self.audio_conn = None
-        self.wav_file = None
         self.samplerate = 44100
 
         # Paths for current session
@@ -243,37 +236,7 @@ class VideoRecorderServer:
             log_msg(f"CONFIG: Temp Video MP4 Path: '{self.temp_video_path}'")
             log_msg(f"CONFIG: Final Video MP4 Path: '{self.final_video_path}'")
 
-            # 1. Open the wave file writer
-            try:
-                self.wav_file = wave.open(self.temp_audio_path, 'wb')
-                self.wav_file.setnchannels(1)  # Mono
-                self.wav_file.setsampwidth(2)  # 16-bit PCM (2 bytes)
-                self.wav_file.setframerate(self.samplerate)
-                log_msg(f"WAV WRITER: File opened successfully at '{self.temp_audio_path}'")
-            except Exception as e:
-                log_msg(f"WAV WRITER ERROR: Failed to create wave file: {e}")
-                return False, f"Failed to create wave file: {e}"
-
-            # 2. Setup audio TCP listener socket
-            self.audio_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.audio_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                self.audio_socket.bind(('127.0.0.1', AUDIO_PORT))
-                self.audio_socket.listen(1)
-                log_msg(f"AUDIO SOCKET: Bound to port {AUDIO_PORT}, listening for audio stream connection...")
-            except Exception as e:
-                log_msg(f"AUDIO SOCKET ERROR: Failed to bind to port {AUDIO_PORT}: {e}")
-                self.wav_file.close()
-                os.remove(self.temp_audio_path)
-                return False, f"Failed to bind audio socket to port {AUDIO_PORT}: {e}"
-
-            # 3. Start audio listener thread
-            self.is_recording = True
-            self.recording_conn = conn  # Set this connection as the owner of the active recording session
-            self.audio_thread = threading.Thread(target=self.audio_receiver_loop, daemon=True)
-            self.audio_thread.start()
-
-            # 4. Start ffmpeg screen recording with optimized GPU capabilities
+            # Start ffmpeg screen recording with optimized GPU capabilities
             cmd = [
                 'ffmpeg', '-y'
             ]
@@ -339,55 +302,16 @@ class VideoRecorderServer:
                     stderr=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
+                self.is_recording = True
+                self.recording_conn = conn  # Set this connection as the owner of the active recording session
                 log_msg(f"SUBPROCESS: FFmpeg capture spawned with PID {self.ffmpeg_proc.pid}")
             except Exception as e:
                 log_msg(f"SUBPROCESS ERROR: Failed to start ffmpeg: {e}")
                 self.is_recording = False
                 self.recording_conn = None
-                self.audio_socket.close()
-                self.wav_file.close()
-                try:
-                    os.remove(self.temp_audio_path)
-                except:
-                    pass
                 return False, f"Failed to start ffmpeg: {e}"
 
             return True, "Recording started"
-
-    def audio_receiver_loop(self):
-        log_msg("AUDIO RECEIVER: Thread active. Waiting for TCP audio connection...")
-        try:
-            self.audio_socket.settimeout(5.0)  # Wait up to 5 seconds for Max to connect
-            conn, addr = self.audio_socket.accept()
-            self.audio_socket.settimeout(None)
-            self.audio_conn = conn
-            log_msg(f"AUDIO RECEIVER: Success! Connected to Max audio client from {addr}")
-
-            total_bytes_received = 0
-            while True:
-                # Receive raw 16-bit PCM samples
-                data = conn.recv(65536)
-                if not data:
-                    log_msg("AUDIO RECEIVER: Received EOF / connection closed by Max.")
-                    break
-
-                total_bytes_received += len(data)
-                with self.lock:
-                    if self.wav_file:
-                        self.wav_file.writeframes(data)
-
-            log_msg(f"AUDIO RECEIVER: Connection closed. Total audio bytes received: {total_bytes_received}")
-        except socket.timeout:
-            log_msg("AUDIO RECEIVER ERROR: Timeout waiting for audio stream connection from Max.")
-        except Exception as e:
-            log_msg(f"AUDIO RECEIVER ERROR: Exception in audio receiver loop: {e}")
-        finally:
-            if self.audio_conn:
-                try:
-                    self.audio_conn.close()
-                except:
-                    pass
-            log_msg("AUDIO RECEIVER: Thread finished.")
 
     def stop_recording(self):
         with self.lock:
@@ -401,38 +325,7 @@ class VideoRecorderServer:
         self.is_recording = False
         self.recording_conn = None  # Clear owner connection
 
-        # 1. Stop audio socket & receiver
-        if self.audio_conn:
-            try:
-                self.audio_conn.close()
-                log_msg("AUDIO SOCKET: Closed active connection.")
-            except Exception as e:
-                log_msg(f"AUDIO SOCKET ERROR: Failed to close connection: {e}")
-            self.audio_conn = None
-
-        if self.audio_socket:
-            try:
-                self.audio_socket.close()
-                log_msg("AUDIO SOCKET: Closed listener socket.")
-            except Exception as e:
-                log_msg(f"AUDIO SOCKET ERROR: Failed to close listener: {e}")
-            self.audio_socket = None
-
-        if self.audio_thread:
-            log_msg("AUDIO THREAD: Joining thread...")
-            self.audio_thread.join(timeout=2.0)
-            self.audio_thread = None
-            log_msg("AUDIO THREAD: Joined successfully.")
-
-        if self.wav_file:
-            try:
-                self.wav_file.close()
-                log_msg("WAV WRITER: File successfully saved and closed.")
-            except Exception as e:
-                log_msg(f"WAV WRITER ERROR: Failed to close WAV file: {e}")
-            self.wav_file = None
-
-        # 2. Stop ffmpeg screen recording gracefully
+        # 1. Stop ffmpeg screen recording gracefully
         if self.ffmpeg_proc:
             log_msg(f"SUBPROCESS: Gracefully terminating FFmpeg capture PID {self.ffmpeg_proc.pid}...")
             try:
@@ -451,7 +344,10 @@ class VideoRecorderServer:
                     pass
             self.ffmpeg_proc = None
 
-        # 3. Audio-Video Muxing
+        # Give Max a split second to finish flushing and closing its WAV file
+        time.sleep(0.5)
+
+        # 2. Audio-Video Muxing
         mux_cmd = [
             'ffmpeg', '-y',
             '-i', self.temp_video_path,
@@ -480,7 +376,7 @@ class VideoRecorderServer:
         except Exception as e:
             log_msg(f"SUBPROCESS ERROR: Exception during muxing: {e}")
 
-        # 4. Clean up temp files
+        # 3. Clean up temp files
         log_msg("ACTION: Cleaning up temporary WAV and raw MP4 files from destination folder...")
         try:
             if os.path.exists(self.temp_audio_path):
