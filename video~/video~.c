@@ -138,6 +138,8 @@ void start_recorder_process(t_video *x) {
     snprintf(cmd, sizeof(cmd), "py \"%s/recorder.py\"", obj_dir);
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_SHOWMINIMIZED;
     ZeroMemory(&pi, sizeof(pi));
     success = CreateProcessA(
         NULL,
@@ -157,6 +159,8 @@ void start_recorder_process(t_video *x) {
         snprintf(cmd, sizeof(cmd), "python \"%s/recorder.py\"", obj_dir);
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
+        si.dwFlags |= STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_SHOWMINIMIZED;
         ZeroMemory(&pi, sizeof(pi));
         success = CreateProcessA(
             NULL,
@@ -177,6 +181,8 @@ void start_recorder_process(t_video *x) {
         snprintf(cmd, sizeof(cmd), "python3 \"%s/recorder.py\"", obj_dir);
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
+        si.dwFlags |= STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_SHOWMINIMIZED;
         ZeroMemory(&pi, sizeof(pi));
         success = CreateProcessA(
             NULL,
