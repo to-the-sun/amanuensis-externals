@@ -154,6 +154,7 @@ typedef struct _weaver {
     double high_ms;
 
     double last_viz_check_ms;
+    double most_negative_bar;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -164,6 +165,7 @@ int compare_doubles(const void *a, const void *b) {
     return 0;
 }
 
+void weaver_update_most_negative_bar(t_weaver *x);
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
@@ -202,7 +204,25 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks_in_dict, &track_keys);
 
+    double local_most_negative = 0.0;
+    for (long i = 0; i < num_tracks_in_dict; i++) {
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
+            long num_bars = 0;
+            t_symbol **bar_keys = NULL;
+            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+            for (long j = 0; j < num_bars; j++) {
+                double bar_ts = atof(bar_keys[j]->s_name);
+                if (bar_ts < local_most_negative) {
+                    local_most_negative = bar_ts;
+                }
+            }
+            if (bar_keys) sysmem_freeptr(bar_keys);
+        }
+    }
+
     critical_enter(x->lock);
+    x->most_negative_bar = local_most_negative;
     // Reset all track lengths first
     for (long t = 0; t < x->track_cache_count; t++) {
         x->track_cache[t]->track_length = 0.0;
@@ -226,8 +246,9 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             }
             if (bar_keys) sysmem_freeptr(bar_keys);
 
-            x->track_cache[track_id - 1]->track_length = track_length;
-            if (track_length > song_length) song_length = track_length;
+            double absolute_track_length = track_length - local_most_negative;
+            x->track_cache[track_id - 1]->track_length = absolute_track_length;
+            if (absolute_track_length > song_length) song_length = absolute_track_length;
         }
     }
     critical_exit(x->lock);
@@ -482,7 +503,50 @@ void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job) {
     }
 }
 
+void weaver_update_most_negative_bar(t_weaver *x) {
+    if (x->audio_dict_name == _sym_nothing) {
+        x->most_negative_bar = 0.0;
+        return;
+    }
+    t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
+    if (!d) {
+        return;
+    }
+
+    long num_tracks = 0;
+    t_symbol **track_keys = NULL;
+    dictionary_getkeys(d, &num_tracks, &track_keys);
+
+    double local_most_negative = 0.0;
+    for (long i = 0; i < num_tracks; i++) {
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        long num_bars = 0;
+        t_symbol **bar_keys = NULL;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        for (long j = 0; j < num_bars; j++) {
+            double bar_ts = atof(bar_keys[j]->s_name);
+            if (bar_ts < local_most_negative) {
+                local_most_negative = bar_ts;
+            }
+        }
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+    if (track_keys) sysmem_freeptr(track_keys);
+    dictobj_release(d);
+
+    if (local_most_negative != x->most_negative_bar) {
+        weaver_log(x, "most_negative_bar updated to %.2f ms", local_most_negative);
+        critical_enter(x->lock);
+        x->most_negative_bar = local_most_negative;
+        critical_exit(x->lock);
+    }
+}
+
 void weaver_check_attachments(t_weaver *x) {
+    weaver_update_most_negative_bar(x);
     // Dictionary check
     if (x->audio_dict_name != _sym_nothing) {
         t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
@@ -629,6 +693,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->high_ms = 4999.0;
         x->track_cache_count = 0;
         x->last_viz_check_ms = 0;
+        x->most_negative_bar = 0.0;
 
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
@@ -876,6 +941,7 @@ void weaver_clear(t_weaver *x) {
     x->last_scan_val = -1.0;
     x->fifo_head = 0;
     x->fifo_tail = 0;
+    x->most_negative_bar = 0.0;
 
     x->dict_found = 0;
     x->dict_error_sent = 0;
@@ -1084,8 +1150,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
     // 3. Sample Loop (Unlocked)
     for (int i = 0; i < sampleframes; i++) {
-        double current_scan = ramp_in[i];
-        int main_looped = (current_scan < last_scan);
+        double current_scan = ramp_in[i] + x->most_negative_bar;
+        int main_looped = (last_scan != -1.0 && current_scan < last_scan);
 
         if (main_looped) {
             x->fifo_head = x->fifo_tail;
@@ -1205,9 +1271,11 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             }
 
             double f1, f2;
+            long long f_offset = (long long)round(x->most_negative_bar * tb[t].sr_dest / 1000.0);
             for (long long f = tr->last_f_dest + 1; f <= f_curr; f++) {
                 double v_at_f = (double)f * 1000.0 / tb[t].sr_dest;
-                long long f_wrapped = f % tb[t].n_frames_dest;
+                long long f_dest = f - f_offset;
+                long long f_wrapped = f_dest % tb[t].n_frames_dest;
                 if (f_wrapped < 0) f_wrapped += tb[t].n_frames_dest;
 
                 double max_abs[2] = {0.0, 0.0};
@@ -1285,7 +1353,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
         }
     }
 
-    x->last_scan_val = (sampleframes > 0) ? ramp_in[sampleframes - 1] : last_scan;
+    x->last_scan_val = (sampleframes > 0) ? (ramp_in[sampleframes - 1] + x->most_negative_bar) : last_scan;
     qelem_set(x->audio_qelem);
 }
 
