@@ -19,7 +19,7 @@
 
 		**Note:** Valid start or end points for a loop that are exactly 0.0 are output as 1.0. This ensures that 0.0 is reserved exclusively for when the time ramp is stationary.
 
-		**Note:** Bars with negative timestamps are artificially ignored in all calculations (averaging, global average calculation, and loop identification) as if they did not exist.
+		**Note:** Negative bar timestamps are fully supported and included in all calculations (averaging, global average calculation, and loop identification).
 
 		Temporal analysis requires the `bar_length` metadata, which is retrieved from an external `buffer~` named **bar**. If the buffer is not found, the object will periodically attempt to re-bind to it ("kick the reference").
 	</description>
