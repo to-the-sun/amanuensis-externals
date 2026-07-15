@@ -121,3 +121,18 @@ To ensure consistent bar detection at the loop destination:
 To prevent visual artifacts:
 
 *   **Flag Reset:** The `viz_trigger_dirty` and `viz_dirty` flags are cleared. This prevents the delivery of "stale" visual updates from the previous song cycle immediately after the UI has been cleared by the `{"clear": 1}` command.
+
+## 7. Individual Track Looping in the Negative Direction
+
+For tracks that are not the longest (most negative) in the negative direction, individual track looping is activated when `current_scan < tr->most_negative_bar`. This looping utilizes the track's own content bounds, counting backwards from the track's `most_negative_bar` using the highest bar key (`tr->highest_bar`) as the starting point.
+
+### Mathematical Mapping
+When `current_scan` goes beyond a track's `most_negative_bar` (in the negative direction):
+1.  Calculate total content span of the track: `T_content_length = tr->highest_bar - tr->most_negative_bar + bar_len`.
+2.  Determine absolute difference from the track's starting bound: `diff = tr->most_negative_bar - current_scan`.
+3.  Wrap this difference within the track's content span: `wrapped_diff = fmod(diff, T_content_length)`.
+4.  Derive the looped scan position for the track:
+    - If `wrapped_diff == 0.0`: `current_scan_for_track = tr->most_negative_bar`.
+    - Otherwise: `current_scan_for_track = tr->highest_bar - (wrapped_diff - bar_len)`.
+
+This conditionally maps the track-specific scanning time (`tr_scan`) so that the bar hit detection and initial bar trigger logics seamlessly retrieve and play looped bar data (e.g. wrapping back to `highest_bar` and preceding bars) rather than playing silence. Because the master transport moves forward, the looped scan position also moves forward at normal playback speed, preserving continuous forward musical flow.

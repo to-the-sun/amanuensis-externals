@@ -52,6 +52,8 @@ typedef struct _weaver_track {
     double last_track_scan;
     long long last_f_dest;
     double last_visualize_ms;
+    double most_negative_bar;
+    double highest_bar;
 
     // Thread-safe state handover
     t_symbol *pending_palette;
@@ -226,6 +228,8 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     // Reset all track lengths first
     for (long t = 0; t < x->track_cache_count; t++) {
         x->track_cache[t]->track_length = 0.0;
+        x->track_cache[t]->most_negative_bar = 0.0;
+        x->track_cache[t]->highest_bar = 0.0;
     }
 
     for (long i = 0; i < num_tracks_in_dict; i++) {
@@ -235,11 +239,22 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
 
             double track_length = 0;
+            double track_most_neg = 0.0;
+            double track_highest = 0.0;
+            int track_has_bars = 0;
             long num_bars = 0;
             t_symbol **bar_keys = NULL;
             dictionary_getkeys(track_dict, &num_bars, &bar_keys);
             for (long j = 0; j < num_bars; j++) {
                 double bar_ts = atof(bar_keys[j]->s_name);
+                if (!track_has_bars) {
+                    track_most_neg = bar_ts;
+                    track_highest = bar_ts;
+                    track_has_bars = 1;
+                } else {
+                    if (bar_ts < track_most_neg) track_most_neg = bar_ts;
+                    if (bar_ts > track_highest) track_highest = bar_ts;
+                }
                 if (bar_ts + job->bar_length > track_length) {
                     track_length = bar_ts + job->bar_length;
                 }
@@ -248,6 +263,8 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
 
             double absolute_track_length = track_length - local_most_negative;
             x->track_cache[track_id - 1]->track_length = absolute_track_length;
+            x->track_cache[track_id - 1]->most_negative_bar = track_most_neg;
+            x->track_cache[track_id - 1]->highest_bar = track_highest;
             if (absolute_track_length > song_length) song_length = absolute_track_length;
         }
     }
@@ -367,6 +384,8 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
             tr->last_visualize_ms = -1000.0;
+            tr->most_negative_bar = 0.0;
+            tr->highest_bar = 0.0;
 
             // Thread-safe state handover init
             tr->pending_palette = _sym_nothing;
@@ -518,22 +537,50 @@ void weaver_update_most_negative_bar(t_weaver *x) {
     dictionary_getkeys(d, &num_tracks, &track_keys);
 
     double local_most_negative = 0.0;
+
+    // We can also update track-specific most_negative_bar and highest_bar here
+    critical_enter(x->lock);
+    for (long t = 0; t < x->track_cache_count; t++) {
+        x->track_cache[t]->most_negative_bar = 0.0;
+        x->track_cache[t]->highest_bar = 0.0;
+    }
+
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
+        long track_id = atol(track_keys[i]->s_name);
         if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
 
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
+        double track_most_neg = 0.0;
+        double track_highest = 0.0;
+        int track_has_bars = 0;
+
         for (long j = 0; j < num_bars; j++) {
             double bar_ts = atof(bar_keys[j]->s_name);
             if (bar_ts < local_most_negative) {
                 local_most_negative = bar_ts;
             }
+            if (!track_has_bars) {
+                track_most_neg = bar_ts;
+                track_highest = bar_ts;
+                track_has_bars = 1;
+            } else {
+                if (bar_ts < track_most_neg) track_most_neg = bar_ts;
+                if (bar_ts > track_highest) track_highest = bar_ts;
+            }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
+
+        if (track_id > 0 && track_id <= x->track_cache_count) {
+            x->track_cache[track_id - 1]->most_negative_bar = track_most_neg;
+            x->track_cache[track_id - 1]->highest_bar = track_highest;
+        }
     }
+    critical_exit(x->lock);
+
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(d);
 
@@ -955,6 +1002,8 @@ void weaver_clear(t_weaver *x) {
         if (tr) {
             tr->track_length = 0.0;
             tr->viz_track_length = 0.0;
+            tr->most_negative_bar = 0.0;
+            tr->highest_bar = 0.0;
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
             tr->busy = 0;
@@ -1207,8 +1256,22 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 continue;
             }
 
+            double current_scan_for_track = current_scan;
+            if (current_scan < tr->most_negative_bar) {
+                double T_content_length = tr->highest_bar - tr->most_negative_bar + bar_len;
+                if (T_content_length > 0) {
+                    double diff = tr->most_negative_bar - current_scan;
+                    double wrapped_diff = fmod(diff, T_content_length);
+                    if (wrapped_diff < 1e-5) {
+                        current_scan_for_track = tr->most_negative_bar;
+                    } else {
+                        current_scan_for_track = tr->highest_bar - (wrapped_diff - bar_len);
+                    }
+                }
+            }
+
             // 2. Continuous Bar Hit Detection (Outside samples_dest check)
-            double tr_scan = fmod(current_scan, tr->track_length);
+            double tr_scan = fmod(current_scan_for_track, tr->track_length);
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(tr->last_track_scan);
             int track_looped = (r_scan < r_last);
