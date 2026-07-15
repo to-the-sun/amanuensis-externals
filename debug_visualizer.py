@@ -33,6 +33,7 @@ state = {
     "track_lengths": {},
     "busy_states": {},
     "tracks_seen": {1, 2, 3, 4},
+    "global_min_ms": 0.0,
     "global_max_ms": 0.0,
     "main_ramp_duration": 5000.0,
 
@@ -76,13 +77,14 @@ def process_packet(text):
                 if pkt_type == "weaver":
                     # 1. Weaver 'clear'
                     if "clear" in pkt:
-                        if state["global_max_ms"] > 0:
-                            state["main_ramp_duration"] = state["global_max_ms"]
+                        if state["global_max_ms"] > state["global_min_ms"]:
+                            state["main_ramp_duration"] = state["global_max_ms"] - state["global_min_ms"]
                         state["data_points_by_track"].clear()
                         state["labels_by_track"].clear()
                         state["track_lengths"].clear()
                         state["busy_states"].clear()
                         state["tracks_seen"] = {1, 2, 3, 4}
+                        state["global_min_ms"] = 0.0
                         state["global_max_ms"] = 0.0
                         print(f"!!! Weaver state cleared via TCP. New scale: {state['main_ramp_duration']:.0f}ms !!!")
                         sys.stdout.flush()
@@ -107,6 +109,10 @@ def process_packet(text):
                         if "busy" in pkt:
                             state["busy_states"][track_id] = bool(pkt["busy"])
                         state["tracks_seen"].add(track_id)
+                        if pkt["ms"] < state["global_min_ms"]:
+                            state["global_min_ms"] = pkt["ms"]
+                        if pkt["ms"] > state["global_max_ms"]:
+                            state["global_max_ms"] = pkt["ms"]
                         if len(state["labels_by_track"][track_id]) > 1000:
                             state["labels_by_track"][track_id].pop(0)
 
@@ -121,6 +127,8 @@ def process_packet(text):
                         if "busy" in pkt:
                             state["busy_states"][track_id] = bool(pkt["busy"])
                         state["tracks_seen"].add(track_id)
+                        if pkt["ms"] < state["global_min_ms"]:
+                            state["global_min_ms"] = pkt["ms"]
                         if pkt["ms"] > state["global_max_ms"]:
                             state["global_max_ms"] = pkt["ms"]
                         if len(state["data_points_by_track"][track_id]) > 10000:
@@ -301,12 +309,16 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                             label = fonts["building_small"].render(f"{ts:.0f}", True, (200, 100, 100))
                             surface.blit(label, (x + int(2 * SCALE), p_top - int(15 * SCALE)))
 
-def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width_ms, fonts):
+def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start_ms, view_end_ms, fonts):
     w, h = surface.get_size()
     surface.fill((30, 30, 35)) # BACKGROUND_WEAVER
 
+    view_span_ms = view_end_ms - view_start_ms
+    if view_span_ms <= 0:
+        view_span_ms = 1.0
+
     total_points = sum(len(pts) for pts in points_dict.values())
-    status_text = fonts["weaver_status"].render(f"Tracks: {len(tracks)} Points: {total_points} Duration: {view_width_ms:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
+    status_text = fonts["weaver_status"].render(f"Tracks: {len(tracks)} Points: {total_points} Duration: {view_span_ms:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
     surface.blit(status_text, (w - status_text.get_width() - int(20 * SCALE), int(20 * SCALE)))
 
     if not tracks:
@@ -339,12 +351,12 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
             if j + 1 < len(track_labels):
                 end_ms = track_labels[j+1]["ms"]
             else:
-                end_ms = view_width_ms
+                end_ms = view_end_ms
 
-            if start_ms >= view_width_ms: continue
+            if start_ms >= view_end_ms: continue
 
-            lx = left_pad + (start_ms / view_width_ms) * graph_w
-            rx = left_pad + (min(end_ms, view_width_ms) / view_width_ms) * graph_w
+            lx = left_pad + ((start_ms - view_start_ms) / view_span_ms) * graph_w
+            rx = left_pad + ((min(end_ms, view_end_ms) - view_start_ms) / view_span_ms) * graph_w
 
             width = int(rx) - int(lx)
             if width > 0:
@@ -361,7 +373,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
         if len(track_points) < 2: continue
         f1_pts, f2_pts = [], []
         for p in track_points:
-            x = left_pad + (p["ms"] / view_width_ms) * graph_w
+            x = left_pad + ((p["ms"] - view_start_ms) / view_span_ms) * graph_w
             y_f1 = row_bottom - p["f1"] * row_graph_h
             y_f2 = row_bottom - p["f2"] * row_graph_h
             f1_pts.append((int(x), int(y_f1)))
@@ -375,7 +387,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
         row_bottom = row_top + row_graph_h
         track_labels = labels_dict.get(t, [])
         for l in track_labels:
-            lx = left_pad + (l["ms"] / view_width_ms) * graph_w
+            lx = left_pad + ((l["ms"] - view_start_ms) / view_span_ms) * graph_w
             if left_pad <= lx <= left_pad + graph_w:
                 pygame.draw.line(surface, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
                 txt_bar = fonts["weaver_tiny"].render(f"{l.get('bar', '')}", True, (220, 220, 255))
@@ -410,7 +422,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_width
     axis_y = top_pad + graph_h
     pygame.draw.line(surface, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)
     for i in range(11):
-        tick_ms = (i / 10) * view_width_ms
+        tick_ms = view_start_ms + (i / 10) * view_span_ms
         tick_x = left_pad + (i / 10) * graph_w
         pygame.draw.line(surface, (200, 200, 200), (int(tick_x), axis_y), (int(tick_x), axis_y + int(5 * SCALE)), 2)
         tick_label = fonts["weaver_tiny"].render(f"{tick_ms:.0f} ms", True, (200, 200, 200))
@@ -446,6 +458,7 @@ def run_gui():
                         state["data_points_by_track"].clear()
                         state["labels_by_track"].clear()
                         state["tracks_seen"] = {1, 2, 3, 4}
+                        state["global_min_ms"] = 0.0
                         state["global_max_ms"] = 0.0
 
         with state_lock:
@@ -458,6 +471,7 @@ def run_gui():
             p_labels = {tid: list(lbs) for tid, lbs in state["labels_by_track"].items()}
             p_busy = state["busy_states"].copy()
             p_tracks = sorted(list(state["tracks_seen"]))
+            p_min_ms = state["global_min_ms"]
             p_max_ms = state["global_max_ms"]
             p_ramp_dur = state["main_ramp_duration"]
 
@@ -465,8 +479,9 @@ def run_gui():
         draw_building(building_surf, p_palettes, p_bar_len, p_offset, p_loop_start, fonts)
 
         weaver_surf = screen.subsurface((0, int(400 * SCALE), int(1200 * SCALE), int(600 * SCALE)))
-        view_width_ms = max(p_ramp_dur, p_max_ms)
-        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_width_ms, fonts)
+        view_start_ms = p_min_ms
+        view_end_ms = max(p_min_ms + p_ramp_dur, p_max_ms)
+        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, fonts)
 
         pygame.display.flip()
         clock.tick(FPS)

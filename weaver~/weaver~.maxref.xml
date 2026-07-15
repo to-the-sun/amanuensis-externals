@@ -3,7 +3,7 @@
 <c74object name="weaver~" module="msp" category="Utility">
 	<digest>Writes incoming track data into a polybuffer~</digest>
 	<description>
-		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~` in real-time. It monitors an incoming time ramp signal on its first inlet. Each track loops individually based on its own length, derived as `main_ramp % track_length`. Track lengths can be manually specified via a list of `[track_id, length]` on the second inlet, or are automatically calculated during consolidation. The object performs sample-accurate weaving at the current location of the input ramp. When a track-specific ramp crosses a bar timestamp (derived from a `bar` buffer), the object performs a lookup in a transcript dictionary. If a corresponding entry exists, it initiates a sample-accurate crossfade to that palette and offset. If the entry exists but the specified palette buffer cannot be found in the Max session, it falls back to a buffer named `stems.[track_id]` and sets the offset to 0. If no dictionary entry exists at all, it automatically crossfades to silence. Transitions and `busy` states are managed per-sample for smooth real-time performance.
+		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~` in real-time. It monitors an incoming time ramp signal on its first inlet. Each track loops individually based on its own length, derived as `main_ramp % track_length`. Track lengths can be manually specified via a list of `[track_id, length]` on the second inlet, or are automatically calculated during consolidation. The object performs sample-accurate weaving at the current location of the input ramp. When a track-specific ramp crosses a bar timestamp (derived from a `bar` buffer), the object performs a lookup in a transcript dictionary. If a corresponding entry exists, it initiates a sample-accurate crossfade to that palette and offset. If the entry exists but the specified palette buffer cannot be found in the Max session, it falls back to a buffer named `stems.[track_id]` and sets the offset to 0. If no dictionary entry exists at all, it automatically crossfades to silence. Transitions and `busy` states are managed per-sample for smooth real-time performance. It automatically supports absolute song and track lengths, including negative as well as positive bars, by applying a `most_negative_bar` offset to both the incoming ramp and destination buffer write indices.
 	</description>
 	<!--METADATA-->
 	<metadatalist>
@@ -14,7 +14,7 @@
 	<inletlist>
 		<inlet id="1" type="signal">
 			<digest>Main time ramp (signal)</digest>
-			<description>Accepts an audio signal treated as the main time ramp in milliseconds. Each track derives its own looping ramp from this signal. Crossings of scheduled bar timestamps and ramp wrap-arounds on the track-specific ramps trigger audio weaving.</description>
+			<description>Accepts an audio signal treated as the main time ramp in milliseconds. Each track derives its own looping ramp from this signal. Crossings of scheduled bar timestamps and ramp wrap-arounds on the track-specific ramps trigger audio weaving. Automatically maps negative bar timestamps internally using the computed `most_negative_bar` offset.</description>
 		</inlet>
 		<inlet id="2" type="list">
 			<digest>Track Length Updates (list)</digest>
