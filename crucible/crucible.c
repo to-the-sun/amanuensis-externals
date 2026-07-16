@@ -1164,62 +1164,7 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
 void crucible_visualize_dump_all_spans(t_crucible *x) {
     if (!x->visualize) return;
-    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-    if (!incumbent_dict) return;
-
-    t_symbol **track_keys = NULL;
-    long num_tracks = 0;
-    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
-
-    for (long i = 0; i < num_tracks; i++) {
-        t_symbol *t_sym = track_keys[i];
-        t_dictionary *track_dict = NULL;
-        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
-
-        t_symbol **bar_keys = NULL;
-        long num_bars = 0;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-
-        t_dictionary *seen_spans = dictionary_new();
-
-        for (long j = 0; j < num_bars; j++) {
-            t_symbol *bar_sym = bar_keys[j];
-            t_dictionary *bar_dict = NULL;
-            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-            if (!bar_dict) continue;
-
-            t_atomarray *span_aa = crucible_get_span_as_atomarray(bar_dict);
-            if (!span_aa) continue;
-
-            long ac = 0;
-            t_atom *av = NULL;
-            atomarray_getatoms(span_aa, &ac, &av);
-            if (ac > 0) {
-                // Use the first bar of the span as a unique identifier for the span
-                t_atom_long first_bar = atom_getlong(av);
-                char first_bar_str[64];
-                snprintf(first_bar_str, 64, "%lld", (long long)first_bar);
-                t_symbol *first_bar_sym = gensym(first_bar_str);
-
-                if (!dictionary_hasentry(seen_spans, first_bar_sym)) {
-                    dictionary_appendlong(seen_spans, first_bar_sym, 1);
-
-                    double rating = 0.0;
-                    t_atom r_atom;
-                    if (dictionary_getatom(bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
-                        rating = atom_getfloat(&r_atom);
-                    }
-                    crucible_visualize_state(x, gensym("new_span"), t_sym, span_aa, rating, 0);
-                }
-            }
-            object_release((t_object *)span_aa);
-        }
-        if (bar_keys) sysmem_freeptr(bar_keys);
-        object_release((t_object *)seen_spans);
-    }
-
-    if (track_keys) sysmem_freeptr(track_keys);
-    dictobj_release(incumbent_dict);
+    crucible_visualize_state(x, gensym("full_repopulate"), NULL, NULL, 0.0, 1);
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
@@ -1490,7 +1435,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
 
-    long buffer_size = 262144;
+    long buffer_size = 524288;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     if (!json_buffer) {
         dictobj_release(incumbent_dict);
@@ -1501,105 +1446,137 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     t_atom_long bar_length = crucible_get_bar_length(x);
 
     offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"bar_length\":%lld", (long long)bar_length);
+    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"full_repopulate\"");
 
-    if (event_type && event_type != _sym_nothing) {
-        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"%s\"", event_type->s_name);
-        if (track_id_sym && offset < buffer_size - 1) {
-            offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_track\":\"%s\"", track_id_sym->s_name);
-        }
-        if (span_aa && offset < buffer_size - 1) {
-            long ac = 0;
-            t_atom *av = NULL;
-            atomarray_getatoms(span_aa, &ac, &av);
-            offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_bars\":[");
-            for (long i = 0; i < ac; i++) {
-                if (offset >= buffer_size - 1) break;
-                offset += snprintf(json_buffer + offset, buffer_size - offset, "%lld%s", (long long)atom_getlong(av + i), (i < ac - 1) ? "," : "");
-            }
-            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
 
-            if (track_id_sym && offset < buffer_size - 1) {
-                t_dictionary *track_dict = NULL;
-                if (dictionary_getdictionary(incumbent_dict, track_id_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_data\":{");
-                    int first_data = 1;
-                    for (long i = 0; i < ac; i++) {
-                        if (offset >= buffer_size - 1) break;
-                        t_atom_long b_ts = atom_getlong(av + i);
-                        char b_ts_str[64];
-                        snprintf(b_ts_str, 64, "%lld", (long long)b_ts);
-                        t_dictionary *bar_dict = NULL;
-                        if (dictionary_getdictionary(track_dict, gensym(b_ts_str), (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
-                            if (!first_data && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                            first_data = 0;
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%lld\":{\"absolutes\":", (long long)b_ts);
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("absolutes"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"scores\":");
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("scores"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"offset\":");
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("offset"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
-                        }
-                    }
-                    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
-                }
-            }
-        }
-        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
-    }
+    // 1. Tracks Structure
+    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
+    int first_track = 1;
+    for (long i = 0; i < num_tracks; i++) {
+        if (offset >= buffer_size - 1) break;
+        t_symbol *t_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
 
-    if (include_tracks && offset < buffer_size - 1) {
-        offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");
+        if (!first_track && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+        first_track = 0;
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
 
-        t_symbol **track_keys = NULL;
-        long num_tracks = 0;
-        dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
-        int first_track = 1;
-        for (long i = 0; i < num_tracks; i++) {
+        for (long j = 0; j < num_bars; j++) {
             if (offset >= buffer_size - 1) break;
-            t_symbol *t_sym = track_keys[i];
-            t_dictionary *track_dict = NULL;
-            if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
-
-            if (!first_track && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-            first_track = 0;
-            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":[", t_sym->s_name);
-
-            t_symbol **bar_keys = NULL;
-            long num_bars = 0;
-            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-
-            for (long j = 0; j < num_bars; j++) {
-                if (offset >= buffer_size - 1) break;
-                if (j > 0 && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                // Check if it's a numeric bar key
-                const char *bk = bar_keys[j]->s_name;
-                int is_num = (bk && bk[0] != '\0');
-                if (is_num) {
-                    for(int k=0; bk[k]; k++) {
-                        if(!isdigit(bk[k])) {
-                            is_num = 0;
-                            break;
-                        }
+            if (j > 0 && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+            const char *bk = bar_keys[j]->s_name;
+            int is_num = (bk && bk[0] != '\0');
+            if (is_num) {
+                for(int k=0; bk[k]; k++) {
+                    if(!isdigit(bk[k])) {
+                        is_num = 0;
+                        break;
                     }
-                }
-
-                if (is_num) {
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
-                } else {
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\"", bk);
                 }
             }
 
-            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
-            if (bar_keys) sysmem_freeptr(bar_keys);
+            if (is_num) {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "%s", bk);
+            } else {
+                offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\"", bk);
+            }
         }
-        if (track_keys) sysmem_freeptr(track_keys);
-        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
+        if (bar_keys) sysmem_freeptr(bar_keys);
     }
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+
+    // 2. Ratings Structure
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"ratings\":{");
+    first_track = 1;
+    for (long i = 0; i < num_tracks; i++) {
+        if (offset >= buffer_size - 1) break;
+        t_symbol *t_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        if (!first_track && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+        first_track = 0;
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{", t_sym->s_name);
+
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        int first_bar = 1;
+        for (long j = 0; j < num_bars; j++) {
+            if (offset >= buffer_size - 1) break;
+            t_symbol *b_sym = bar_keys[j];
+            t_dictionary *bar_dict = NULL;
+            if (dictionary_getdictionary(track_dict, b_sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                t_atom r_atom;
+                double rating_val = 0.0;
+                if (dictionary_getatom(bar_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
+                    rating_val = atom_getfloat(&r_atom);
+                }
+                if (!first_bar && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                first_bar = 0;
+                if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":%.6f", b_sym->s_name, rating_val);
+            }
+        }
+
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+
+    // 3. Bar Data Structure
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"bar_data\":{");
+    first_track = 1;
+    for (long i = 0; i < num_tracks; i++) {
+        if (offset >= buffer_size - 1) break;
+        t_symbol *t_sym = track_keys[i];
+        t_dictionary *track_dict = NULL;
+        if (dictionary_getdictionary(incumbent_dict, t_sym, (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
+
+        if (!first_track && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+        first_track = 0;
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{", t_sym->s_name);
+
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+
+        int first_bar = 1;
+        for (long j = 0; j < num_bars; j++) {
+            if (offset >= buffer_size - 1) break;
+            t_symbol *b_sym = bar_keys[j];
+            t_dictionary *bar_dict = NULL;
+            if (dictionary_getdictionary(track_dict, b_sym, (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
+                if (!first_bar && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                first_bar = 0;
+                if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%s\":{\"absolutes\":", b_sym->s_name);
+                offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("absolutes"));
+                if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"scores\":");
+                offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("scores"));
+                if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"offset\":");
+                offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("offset"));
+                if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+            }
+        }
+
+        if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+        if (bar_keys) sysmem_freeptr(bar_keys);
+    }
+    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
 
     if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
+
+    if (track_keys) sysmem_freeptr(track_keys);
 
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);

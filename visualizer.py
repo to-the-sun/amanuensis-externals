@@ -318,7 +318,7 @@ def process_packet(text, client_sock=None):
                     if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
-            if pkt_type != "crucible" and pkt_event not in ["cleanup", "fill_bar", "replace", "new_span"] and "bar_length" not in pkt:
+            if pkt_type != "crucible" and pkt_event not in ["cleanup", "fill_bar", "replace", "new_span", "full_repopulate"] and "bar_length" not in pkt:
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
@@ -335,18 +335,50 @@ def process_packet(text, client_sock=None):
                         state["bar_length"] = new_bl
 
                 dirty = False
-                if "tracks" in pkt:
+                if pkt_event == "full_repopulate":
                     new_tracks = {}
-                    for tid, t_bars in pkt["tracks"].items():
-                        new_tracks[tid] = [snap_to_bar(b, state["bar_length"]) for b in t_bars]
+                    if "tracks" in pkt:
+                        for tid, t_bars in pkt["tracks"].items():
+                            new_tracks[tid] = [snap_to_bar(b, state["bar_length"]) for b in t_bars]
                     state["tracks"] = new_tracks
 
-                    if not state["tracks"]:
-                        state["bar_data"] = {}
-                        state["logged_hashes"].clear()
-                        state["bar_ratings"] = {}
-                        state["spans_seen"] = {}
+                    # Wipe and populate ratings
+                    state["bar_ratings"] = {}
+                    if "ratings" in pkt:
+                        for tid, bars in pkt["ratings"].items():
+                            if tid not in state["bar_ratings"]:
+                                state["bar_ratings"][tid] = {}
+                            for b_ts, rating in bars.items():
+                                snapped_ts = snap_to_bar(b_ts, state["bar_length"])
+                                state["bar_ratings"][tid][str(float(snapped_ts))] = rating
+
+                    # Wipe and populate bar_data (absolute notes, scores, offsets)
+                    state["bar_data"] = {}
+                    state["logged_hashes"].clear()
+                    if "bar_data" in pkt:
+                        for tid, bars_info in pkt["bar_data"].items():
+                            if tid not in state["bar_data"]:
+                                state["bar_data"][tid] = {}
+                            for b_ts, b_data in bars_info.items():
+                                snapped_ts = snap_to_bar(b_ts, state["bar_length"])
+                                state["bar_data"][tid][str(float(snapped_ts))] = b_data
+
+                    state["spans_seen"] = {}
+                    state["events"] = []
                     dirty = True
+                else:
+                    if "tracks" in pkt:
+                        new_tracks = {}
+                        for tid, t_bars in pkt["tracks"].items():
+                            new_tracks[tid] = [snap_to_bar(b, state["bar_length"]) for b in t_bars]
+                        state["tracks"] = new_tracks
+
+                        if not state["tracks"]:
+                            state["bar_data"] = {}
+                            state["logged_hashes"].clear()
+                            state["bar_ratings"] = {}
+                            state["spans_seen"] = {}
+                        dirty = True
 
                 if pkt_event == "fill_bar":
                     track = pkt.get("track")
@@ -568,6 +600,10 @@ def run_gui():
         for j in range(int(num_cols) + 1):
             x = margin_left + j * cell_w
             pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
+
+        # Draw bar length in the margin to the left of the time legend
+        bl_lbl = font.render(f"BL: {int(bar_length)}ms", True, (180, 180, 180))
+        screen.blit(bl_lbl, (10, margin_top - bl_lbl.get_height() - 5))
 
         # Draw time legend
         sample_lbl = font.render("00:00", True, (0,0,0))
