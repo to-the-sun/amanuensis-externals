@@ -1430,10 +1430,16 @@ static long json_append_atom_or_array(char *buffer, long offset, long buffer_siz
 }
 
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
-    if (!x->visualize) return;
+    if (!x->visualize) {
+        crucible_log(x, "crucible_visualize_state ignored: visualize attribute is disabled.");
+        return;
+    }
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-    if (!incumbent_dict) return;
+    if (!incumbent_dict) {
+        crucible_log(x, "crucible_visualize_state ignored: incumbent dictionary %s not found.", x->incumbent_dict_name->s_name);
+        return;
+    }
 
     long buffer_size = 2097152;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
@@ -1449,6 +1455,8 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
     object_post((t_object *)x, "crucible_visualize_state called: event_type=%s, num_tracks=%ld",
                 event_type ? event_type->s_name : "NULL", num_tracks);
+    crucible_log(x, "crucible_visualize_state executing: event_type=%s, num_tracks=%ld",
+                 event_type ? event_type->s_name : "NULL", num_tracks);
 
     t_atom_long bar_length = crucible_get_bar_length(x);
 
@@ -1581,6 +1589,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
     if (track_keys) sysmem_freeptr(track_keys);
 
+    crucible_log(x, "Visualize Send (full_repopulate): %s", json_buffer);
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
     dictobj_release(incumbent_dict);
@@ -1606,6 +1615,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
             if (anim_offset < 4095) anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, ",\"new_span_rating\":%.4f}", rating);
 
+            crucible_log(x, "Visualize Send (new_span): %s", anim_buffer);
             visualize((t_object *)x, anim_buffer);
             sysmem_freeptr(anim_buffer);
         }
