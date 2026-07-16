@@ -415,54 +415,20 @@ def process_packet(text, client_sock=None):
                     track = pkt.get("new_span_track")
                     orig_bars = pkt.get("new_span_bars", [])
                     rating = pkt.get("new_span_rating", 0.0)
-                    new_data = pkt.get("new_span_data", {})
                     bar_length = state["bar_length"]
 
-                    # Snap all bar timestamps
                     bars = [snap_to_bar(b, bar_length) for b in orig_bars]
 
-                    # Update local track state from the new span event
                     if track is not None:
                         t_str = str(track)
-                        if t_str not in state["tracks"]:
-                            state["tracks"][t_str] = []
-                        if t_str not in state["bar_data"]:
-                            state["bar_data"][t_str] = {}
-
-                        print(f"DEBUG: Storing data for T{t_str}. Bars in event: {bars}. Data keys: {list(new_data.keys())}")
-
-                        existing_bars = set(state["tracks"][t_str])
-                        added = False
-                        for b in bars:
-                            if b not in existing_bars:
-                                state["tracks"][t_str].append(b)
-                                added = True
-
-                        for b_ts, b_data in new_data.items():
-                            snapped_ts = snap_to_bar(b_ts, bar_length)
-                            state["bar_data"][t_str][str(float(snapped_ts))] = b_data
-
-                        # Update ratings for analysis
-                        if t_str not in state["bar_ratings"]:
-                            state["bar_ratings"][t_str] = {}
-                        for b in bars:
-                            state["bar_ratings"][t_str][str(float(b))] = rating
-
-                        if bars:
-                            span_id = (t_str, bars[0])
-                            state["spans_seen"][span_id] = {"rating": rating, "bars": bars}
-
-                        if added:
-                            dirty = True
-
-                    state["events"].append({
-                        "type": "new_span",
-                        "track": track,
-                        "bars": bars,
-                        "rating": rating,
-                        "start_time": time.time(),
-                        "duration": 3.0
-                    })
+                        state["events"].append({
+                            "type": "new_span",
+                            "track": t_str,
+                            "bars": bars,
+                            "rating": rating,
+                            "start_time": time.time(),
+                            "duration": 3.0
+                        })
 
                 if pkt.get("event") == "replace":
                     track = pkt.get("track")

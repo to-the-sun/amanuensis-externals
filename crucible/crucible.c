@@ -1581,6 +1581,32 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
     dictobj_release(incumbent_dict);
+
+    // If it's a new_span event, send a second compact packet to trigger the animation
+    if (event_type == gensym("new_span") && track_id_sym && span_aa) {
+        char *anim_buffer = (char *)sysmem_newptr(4096);
+        if (anim_buffer) {
+            long anim_offset = 0;
+            anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, "{\"bar_length\":%lld", (long long)bar_length);
+            anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, ",\"event\":\"new_span\"");
+            anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, ",\"new_span_track\":\"%s\"", track_id_sym->s_name);
+
+            long ac = 0;
+            t_atom *av = NULL;
+            atomarray_getatoms(span_aa, &ac, &av);
+            anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, ",\"new_span_bars\":[");
+            for (long i = 0; i < ac; i++) {
+                if (anim_offset >= 4095) break;
+                anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, "%lld%s", (long long)atom_getlong(av + i), (i < ac - 1) ? "," : "");
+            }
+            if (anim_offset < 4095) anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, "]");
+
+            if (anim_offset < 4095) anim_offset += snprintf(anim_buffer + anim_offset, 4096 - anim_offset, ",\"new_span_rating\":%.4f}", rating);
+
+            visualize((t_object *)x, anim_buffer);
+            sysmem_freeptr(anim_buffer);
+        }
+    }
 }
 
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av) {
