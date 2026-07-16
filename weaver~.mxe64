@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="weaver~" module="msp" category="Utility">
+	<digest>Writes incoming track data into a polybuffer~</digest>
+	<description>
+		The `weaver~` object "weaves" audio from external palette buffers into a named `polybuffer~` in real-time. It monitors an incoming time ramp signal on its first inlet. Each track loops individually based on its own length, derived as `main_ramp % track_length`. For tracks that are not the longest (most negative) in the negative direction, individual track looping is mathematically mapped to count backwards from that track's `most_negative_bar` using the highest bar key as a start point. Track lengths can be manually specified via a list of `[track_id, length]` on the second inlet, or are automatically calculated during consolidation. The object performs sample-accurate weaving at the current location of the input ramp. When a track-specific ramp crosses a bar timestamp (derived from a `bar` buffer), the object performs a lookup in a transcript dictionary. If a corresponding entry exists, it initiates a sample-accurate crossfade to that palette and offset. If the entry exists but the specified palette buffer cannot be found in the Max session, it falls back to a buffer named `stems.[track_id]` and sets the offset to 0. If no dictionary entry exists at all, it automatically crossfades to silence. Transitions and `busy` states are managed per-sample for smooth real-time performance. It automatically supports absolute song and track lengths, including negative as well as positive bars, by applying a `most_negative_bar` offset to both the incoming ramp and destination buffer write indices.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="1" type="signal">
+			<digest>Main time ramp (signal)</digest>
+			<description>Accepts an audio signal treated as the main time ramp in milliseconds. Each track derives its own looping ramp from this signal. Crossings of scheduled bar timestamps and ramp wrap-arounds on the track-specific ramps trigger audio weaving. Automatically maps negative bar timestamps internally using the computed `most_negative_bar` offset.</description>
+		</inlet>
+		<inlet id="2" type="list">
+			<digest>Track Length Updates (list)</digest>
+			<description>Accepts a two-item list consisting of a track ID (integer) and a track length (float/integer) in milliseconds. This updates the looping length for the specified track.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="1" type="int">
+			<digest>Outlet 1: Track ID on Loop</digest>
+			<description>Whenever a track's individual ramp loops (including when the main ramp loops), it outputs an integer corresponding to that track ID.</description>
+		</outlet>
+		<outlet id="2" type="bang">
+			<digest>Outlet 2: Consolidate Complete</digest>
+			<description>Sends a bang when the offline consolidation process has finished.</description>
+		</outlet>
+		<outlet id="3" type="anything">
+			<digest>Outlet 3: Logging Outlet</digest>
+			<description>Outputs diagnostic information when the log attribute is enabled.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="dictionary" type="symbol" optional="0">
+			<digest>Name of the dictionary to reference</digest>
+		</objarg>
+		<objarg name="polybuffer" type="symbol" optional="0">
+			<digest>Name of the polybuffer~ to reference</digest>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="tracks">
+			<digest>Set maximum tracks</digest>
+			<description>Accepts the message `tracks` followed by an integer to set the maximum number of tracks to process.</description>
+		</method>
+		<method name="clear">
+			<digest>Reset the object to its initial state</digest>
+			<description>Resets all track lengths to 0 and clears the internal state, effectively stopping all audio weaving until new track lengths and data are received.</description>
+		</method>
+		<method name="consolidate">
+			<digest>Process all tracks offline</digest>
+			<description>Runs each track buffer in the referenced polybuffer~ through the same weaving process that would be done in real-time, but as quickly as possible using a simulated ramp from 0 to the end of the song. The total song length and individual track looping lengths are determined from the transcript dictionary. While consolidation is running, real-time attention to the input ramp is paused. Sends a bang to the second outlet when finished, and verbose logging messages to the third outlet.</description>
+		</method>
+		<method name="list">
+			<digest>Update individual track lengths</digest>
+			<description>Accepts a two-item list [track_id, length] on the second inlet to set the loop length for a specific track in milliseconds.</description>
+		</method>
+		<method name="dsp64">
+			<digest>DSP method</digest>
+		</method>
+		<method name="visualize">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the visualize attribute</digest>
+			<description>Sets the `visualize` attribute in real time. When enabled, sends real-time crossfade ramp positions to the visualization script.</description>
+		</method>
+		<method name="log">
+			<arglist>
+				<arg name="state" type="int" optional="0" />
+			</arglist>
+			<digest>Set the log attribute</digest>
+			<description>Sets the `log` attribute in real time. When enabled (1), enables verbose logging to the third outlet.</description>
+		</method>
+		<method name="low">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the low attribute</digest>
+			<description>Sets the `low` attribute in real time, defining the minimum ramp time for crossfades.</description>
+		</method>
+		<method name="high">
+			<arglist>
+				<arg name="limit-ms" type="float" optional="0" />
+			</arglist>
+			<digest>Set the high attribute</digest>
+			<description>Sets the `high` attribute in real time, defining the maximum ramp time for crossfades.</description>
+		</method>
+		<method name="tracks">
+			<arglist>
+				<arg name="num-tracks" type="int" optional="0" />
+			</arglist>
+			<digest>Set the tracks attribute</digest>
+			<description>Sets the `tracks` attribute in real time. (Note: This is already implemented as a method but is listed here for completeness with the other attributes).</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="visualize" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Visualization</digest>
+			<description>When enabled, sends real-time crossfade ramp positions to the visualization script.</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="tracks" type="long" get="1" set="1" opaque="0">
+			<digest>Number of Tracks</digest>
+			<description>The maximum number of tracks to process from the transcript dictionary (default is 4).</description>
+		</attribute>
+		<attribute name="log" type="long" get="1" set="1" opaque="0">
+			<digest>Enable Logging</digest>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="low" type="double" get="1" set="1" opaque="0">
+			<digest>Low Limit (ms)</digest>
+			<description>Minimum ramp time for crossfades in milliseconds.</description>
+		</attribute>
+		<attribute name="high" type="double" get="1" set="1" opaque="0">
+			<digest>High Limit (ms)</digest>
+			<description>Maximum ramp time for crossfades in milliseconds.</description>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="crucible" />
+		<seealso name="buildspans" />
+	</seealsolist>
+</c74object>

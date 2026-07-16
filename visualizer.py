@@ -37,10 +37,8 @@ state = {
 state_lock = threading.RLock()
 
 def snap_to_bar(ts, bar_length):
-    """Snaps a timestamp to the nearest bar start."""
-    if bar_length <= 0:
-        return float(ts)
-    return round(float(ts) / bar_length) * bar_length
+    """Returns the timestamp as float directly since they always arrive as already rounded integers."""
+    return float(ts)
 
 def perform_smartloop_analysis():
     """Performs the smartloop calculations locally based on gathered data."""
@@ -239,6 +237,7 @@ def process_packet(text, client_sock=None):
         try:
             pkt = json.loads(line)
             pkt_type = pkt.get("type")
+            pkt_event = pkt.get("event")
 
             if pkt_type == "smartloop":
                 print(f"DEBUG: Processing 'smartloop' packet. Keys: {list(pkt.keys())}")
@@ -319,18 +318,21 @@ def process_packet(text, client_sock=None):
                     if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
-            if pkt_type != "crucible":
+            if pkt_type != "crucible" and pkt_event not in ["cleanup", "fill_bar", "replace", "new_span"] and "bar_length" not in pkt:
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
             with state_lock:
                 new_bl = pkt.get("bar_length")
 
-                if pkt.get("event") == "cleanup":
+                if pkt_event == "cleanup":
                     if new_bl is not None and new_bl > 0:
                         cleanup_obsolete_bars(new_bl)
                 elif new_bl is not None and new_bl > 0:
-                    state["bar_length"] = new_bl
+                    if new_bl != state.get("bar_length", 125):
+                        cleanup_obsolete_bars(new_bl)
+                    else:
+                        state["bar_length"] = new_bl
 
                 dirty = False
                 if "tracks" in pkt:
@@ -345,6 +347,37 @@ def process_packet(text, client_sock=None):
                         state["bar_ratings"] = {}
                         state["spans_seen"] = {}
                     dirty = True
+
+                if pkt_event == "fill_bar":
+                    track = pkt.get("track")
+                    dest_bar = pkt.get("bar")
+                    src_bar = pkt.get("copied_from")
+                    if track is not None and dest_bar is not None and src_bar is not None:
+                        t_str = str(track)
+                        b_str = str(float(dest_bar))
+                        src_str = str(float(src_bar))
+                        
+                        # Copy the rating of the source bar to the destination bar
+                        if t_str not in state["bar_ratings"]:
+                            state["bar_ratings"][t_str] = {}
+                        if src_str in state["bar_ratings"][t_str]:
+                            state["bar_ratings"][t_str][b_str] = state["bar_ratings"][t_str][src_str]
+                        
+                        # Add destination bar to the track if not already present
+                        if t_str not in state["tracks"]:
+                            state["tracks"][t_str] = []
+                        if float(dest_bar) not in state["tracks"][t_str]:
+                            state["tracks"][t_str].append(float(dest_bar))
+                            dirty = True
+                        
+                        state["events"].append({
+                            "type": "fill_bar",
+                            "track": t_str,
+                            "dest_bar": float(dest_bar),
+                            "src_bar": float(src_bar),
+                            "start_time": time.time(),
+                            "duration": 3.0
+                        })
 
                 if pkt.get("event") == "new_span":
                     track = pkt.get("new_span_track")
@@ -678,6 +711,19 @@ def run_gui():
             tid = e["track"]
             if tid not in track_to_row: continue
             row = track_to_row[tid]
+
+            if e.get("type") == "fill_bar":
+                dest_bar = e["dest_bar"]
+                src_bar = e["src_bar"]
+                src_idx = int(src_bar / bar_length) if bar_length > 0 else 0
+                col = int((dest_bar - song_start) // bar_length)
+                float_x = margin_left + col * cell_w + (cell_w / 2)
+                float_y = margin_top + row * cell_h + (cell_h / 2)
+                alpha = int(255 * (1.0 - t))
+                lbl = big_font.render(str(src_idx), True, (160, 160, 160))
+                lbl.set_alpha(alpha)
+                screen.blit(lbl, (float_x - lbl.get_width() / 2, float_y - lbl.get_height() / 2))
+                continue
 
             # Flashing/Bright Boxes
             valid_bars = []
