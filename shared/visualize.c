@@ -147,8 +147,20 @@ static void ensure_connected(t_viz_socket *vs) {
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
+                return;
             }
         }
+
+        // Wait for connect to complete (socket becomes writable)
+        fd_set writefds;
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // 100ms timeout
+
+        FD_ZERO(&writefds);
+        FD_SET(vs->sock, &writefds);
+
+        select((int)vs->sock + 1, NULL, &writefds, NULL, &tv);
     }
 }
 
@@ -181,7 +193,7 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
         if (sent == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAENOTCONN || err == WSAEINPROGRESS) {
-                if (total_sent > 0) {
+                if (total_sent > 0 || err == WSAENOTCONN) {
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 }
