@@ -1443,14 +1443,17 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     }
     long offset = 0;
 
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+
+    object_post((t_object *)x, "crucible_visualize_state called: event_type=%s, num_tracks=%ld",
+                event_type ? event_type->s_name : "NULL", num_tracks);
+
     t_atom_long bar_length = crucible_get_bar_length(x);
 
     offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"bar_length\":%lld", (long long)bar_length);
     offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"event\":\"full_repopulate\"");
-
-    t_symbol **track_keys = NULL;
-    long num_tracks = 0;
-    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
 
     // 1. Tracks Structure
     offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"tracks\":{");

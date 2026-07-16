@@ -264,6 +264,7 @@ void visualize(void *x, const char *message) {
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
         systhread_mutex_unlock(queue_mutex);
+        object_error((t_object *)x, "visualize queue full! Message dropped.");
         return;
     }
 
