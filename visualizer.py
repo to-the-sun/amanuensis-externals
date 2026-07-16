@@ -237,6 +237,7 @@ def process_packet(text, client_sock=None):
         try:
             pkt = json.loads(line)
             pkt_type = pkt.get("type")
+            pkt_event = pkt.get("event")
 
             if pkt_type == "smartloop":
                 print(f"DEBUG: Processing 'smartloop' packet. Keys: {list(pkt.keys())}")
