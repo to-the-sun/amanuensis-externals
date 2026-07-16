@@ -28,6 +28,7 @@ int crucible_span_has_loser(t_atomarray *span_aa, t_dictionary *defeated_dict);
 void crucible_recalculate_reaches(t_crucible *x);
 void crucible_visualize_dump_all_spans(t_crucible *x);
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks);
+void crucible_deferred_visualize(t_crucible *x, t_symbol *s, short argc, t_atom *argv);
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
 
@@ -865,7 +866,12 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         song_grew = (x->song_reach > old_song_reach);
 
         if (x->visualize) {
-            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
+            t_atom args[3];
+            atom_setsym(args, track_sym);
+            atom_setobj(args + 1, span_atomarray);
+            atom_setfloat(args + 2, challenger_winning_rating);
+            object_retain((t_object *)span_atomarray);
+            defer(x, (method)crucible_deferred_visualize, gensym("new_span"), 3, args);
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
@@ -1164,7 +1170,7 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
 void crucible_visualize_dump_all_spans(t_crucible *x) {
     if (!x->visualize) return;
-    crucible_visualize_state(x, gensym("full_repopulate"), NULL, NULL, 0.0, 1);
+    defer(x, (method)crucible_deferred_visualize, _sym_nothing, 0, NULL);
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
@@ -1216,8 +1222,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         crucible_recalculate_reaches(x);
         if (x->visualize) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
-            crucible_visualize_dump_all_spans(x);
+            defer(x, (method)crucible_deferred_visualize, _sym_nothing, 0, NULL);
         }
 
         if (x->outlet_reach_int) {
@@ -1627,12 +1632,31 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     }
 }
 
+void crucible_deferred_visualize(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
+    t_symbol *event_type = (s == _sym_nothing) ? NULL : s;
+    t_symbol *track_id_sym = NULL;
+    t_atomarray *span_aa = NULL;
+    double rating = 0.0;
+
+    if (argc >= 3) {
+        track_id_sym = atom_getsym(argv);
+        span_aa = (t_atomarray *)atom_getobj(argv + 1);
+        rating = atom_getfloat(argv + 2);
+    }
+
+    crucible_visualize_state(x, event_type, track_id_sym, span_aa, rating, 1);
+
+    if (span_aa) {
+        object_release((t_object *)span_aa);
+    }
+}
+
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         long val = atom_getlong(av);
         x->visualize = val;
         if (val) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
+            defer(x, (method)crucible_deferred_visualize, _sym_nothing, 0, NULL);
         }
     }
     return MAX_ERR_NONE;
