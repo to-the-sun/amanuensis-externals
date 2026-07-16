@@ -1435,6 +1435,11 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
         return;
     }
 
+    // Mandatory kick of dictionary name to force unbinding/rebinding and fetch the fresh registered dictionary object
+    t_symbol *tmp = x->incumbent_dict_name;
+    x->incumbent_dict_name = _sym_nothing;
+    x->incumbent_dict_name = tmp;
+
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         crucible_log(x, "crucible_visualize_state ignored: incumbent dictionary %s not found.", x->incumbent_dict_name->s_name);
