@@ -615,11 +615,16 @@ def run_gui():
             x = margin_left + j * cell_w
             pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
 
-        # Draw bar length in the margin to the left of the time legend
-        bar_len_str = f"Bar Length: {int(bar_length)} ms"
-        bar_len_lbl = font.render(bar_len_str, True, (180, 180, 180))
-        # Left margin sits between x=0 and x=margin_left (100). Position nicely centered or left-aligned within that margin
-        screen.blit(bar_len_lbl, (10, margin_top - bar_len_lbl.get_height() - 5))
+        # Draw bar length in the margin to the left of the time legend on two lines
+        bar_len_lbl1 = font.render("Bar Length:", True, (180, 180, 180))
+        bar_len_lbl2 = font.render(f"{int(bar_length)} ms", True, (180, 180, 180))
+
+        # Position nicely in the left margin space (x=10). We draw line 1 above, and line 2 directly below it.
+        line1_y = margin_top - (bar_len_lbl1.get_height() * 2) - 6
+        line2_y = margin_top - bar_len_lbl2.get_height() - 4
+
+        screen.blit(bar_len_lbl1, (10, line1_y))
+        screen.blit(bar_len_lbl2, (10, line2_y))
 
         # Draw time legend
         sample_lbl = font.render("00:00", True, (0,0,0))
