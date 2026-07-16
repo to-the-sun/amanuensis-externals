@@ -865,13 +865,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         song_grew = (x->song_reach > old_song_reach);
 
+        crucible_log(x, "crucible_process_span: completed span successfully. x->visualize = %ld", x->visualize);
         if (x->visualize) {
-            t_atom args[3];
-            atom_setsym(args, track_sym);
-            atom_setobj(args + 1, span_atomarray);
-            atom_setfloat(args + 2, challenger_winning_rating);
-            object_retain((t_object *)span_atomarray);
-            defer(x, (method)crucible_deferred_visualize, gensym("new_span"), 3, args);
+            crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
@@ -1435,6 +1431,9 @@ static long json_append_atom_or_array(char *buffer, long offset, long buffer_siz
 }
 
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
+    crucible_log(x, "crucible_visualize_state entered. event_type = %s, x->visualize = %ld, incumbent_dict_name = %s",
+                 event_type ? event_type->s_name : "NULL", x->visualize, x->incumbent_dict_name->s_name);
+
     if (!x->visualize) {
         crucible_log(x, "crucible_visualize_state ignored: visualize attribute is disabled.");
         return;
