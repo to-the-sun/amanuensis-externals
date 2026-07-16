@@ -158,7 +158,7 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
     ensure_connected(vs);
     if (vs->sock == INVALID_SOCKET) return -1;
 
-    long buf_size = 524288;
+    long buf_size = 2097152;
     char *buf = (char *)sysmem_newptr(buf_size);
     if (!buf) return -1;
 

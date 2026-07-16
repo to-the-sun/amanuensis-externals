@@ -487,7 +487,9 @@ def handle_client(sock):
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
                 process_packet(line.strip(), sock)
-        except: break
+        except Exception as e:
+            traceback.print_exc()
+            break
     sock.close()
 
 def smartloop_worker():

@@ -1435,7 +1435,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
 
-    long buffer_size = 524288;
+    long buffer_size = 2097152;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     if (!json_buffer) {
         dictobj_release(incumbent_dict);
