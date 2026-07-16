@@ -318,7 +318,7 @@ def process_packet(text, client_sock=None):
                     if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
-            if pkt_type != "crucible" and pkt_event not in ["cleanup", "fill_bar", "replace", "new_span"] and "bar_length" not in pkt:
+            if pkt_type != "crucible" and pkt_event not in ["cleanup", "fill_bar", "replace", "new_span", "repopulate"] and "bar_length" not in pkt:
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
@@ -335,6 +335,52 @@ def process_packet(text, client_sock=None):
                         state["bar_length"] = new_bl
 
                 dirty = False
+                if pkt_event == "repopulate":
+                    # Replace reference dictionaries in full
+                    new_tracks = {}
+                    new_bar_data = {}
+                    new_bar_ratings = {}
+                    new_spans_seen = {}
+
+                    incoming_dict = pkt.get("dictionary", {})
+                    bar_length = state["bar_length"]
+
+                    for t_id, t_dict in incoming_dict.items():
+                        t_str = str(t_id)
+                        new_tracks[t_str] = []
+                        new_bar_data[t_str] = {}
+                        new_bar_ratings[t_str] = {}
+
+                        for b_ts_str, b_dict in t_dict.items():
+                            try:
+                                b_ts_val = float(b_ts_str)
+                            except ValueError:
+                                continue
+
+                            snapped_ts = snap_to_bar(b_ts_val, bar_length)
+                            new_tracks[t_str].append(snapped_ts)
+                            new_bar_data[t_str][str(float(snapped_ts))] = b_dict
+
+                            rating = b_dict.get("rating", 0.0)
+                            if isinstance(rating, list):
+                                rating = rating[0] if len(rating) > 0 else 0.0
+                            new_bar_ratings[t_str][str(float(snapped_ts))] = float(rating)
+
+                            span = b_dict.get("span", [])
+                            if not isinstance(span, list):
+                                span = [span]
+                            span_bars = [snap_to_bar(b, bar_length) for b in span]
+                            if span_bars:
+                                span_id = (t_str, span_bars[0])
+                                if span_id not in new_spans_seen:
+                                    new_spans_seen[span_id] = {"rating": float(rating), "bars": span_bars}
+
+                    state["tracks"] = new_tracks
+                    state["bar_data"] = new_bar_data
+                    state["bar_ratings"] = new_bar_ratings
+                    state["spans_seen"] = new_spans_seen
+                    dirty = True
+
                 if "tracks" in pkt:
                     new_tracks = {}
                     for tid, t_bars in pkt["tracks"].items():
@@ -568,6 +614,17 @@ def run_gui():
         for j in range(int(num_cols) + 1):
             x = margin_left + j * cell_w
             pygame.draw.line(screen, (60, 60, 65), (x, margin_top), (x, margin_top + len(sorted_track_ids) * cell_h))
+
+        # Draw bar length in the margin to the left of the time legend on two lines
+        bar_len_lbl1 = font.render("Bar Length:", True, (180, 180, 180))
+        bar_len_lbl2 = font.render(f"{int(bar_length)} ms", True, (180, 180, 180))
+
+        # Position nicely in the left margin space (x=10). We draw line 1 above, and line 2 directly below it.
+        line1_y = margin_top - (bar_len_lbl1.get_height() * 2) - 6
+        line2_y = margin_top - bar_len_lbl2.get_height() - 4
+
+        screen.blit(bar_len_lbl1, (10, line1_y))
+        screen.blit(bar_len_lbl2, (10, line2_y))
 
         # Draw time legend
         sample_lbl = font.render("00:00", True, (0,0,0))
