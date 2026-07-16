@@ -30,6 +30,23 @@ void crucible_visualize_dump_all_spans(t_crucible *x);
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks);
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
 
+// Dyn String helper struct and prototypes
+typedef struct {
+    char *data;
+    long size;
+    long capacity;
+} t_dyn_str;
+
+void dyn_str_init(t_dyn_str *ds, long initial_cap);
+void dyn_str_free(t_dyn_str *ds);
+void dyn_str_append(t_dyn_str *ds, const char *str);
+void dyn_str_append_char(t_dyn_str *ds, char c);
+void dyn_str_append_printf(t_dyn_str *ds, const char *fmt, ...);
+void serialize_atom(t_dyn_str *ds, t_atom *a);
+void serialize_atomarray(t_dyn_str *ds, t_atomarray *aa);
+void serialize_dict(t_dyn_str *ds, t_dictionary *dict);
+void crucible_visualize_repopulate(t_crucible *x);
+
 
 #ifndef REBAR_INTERNAL_BINDING
 t_class *crucible_class;
@@ -865,6 +882,8 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         song_grew = (x->song_reach > old_song_reach);
 
         if (x->visualize) {
+            // Send entire repopulate dictionary first, then send the span packet to trigger animation/pop-up
+            crucible_visualize_repopulate(x);
             crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
@@ -1039,6 +1058,170 @@ t_max_err crucible_attr_set_async(t_crucible *x, void *attr, long ac, t_atom *av
         }
     }
     return MAX_ERR_NONE;
+}
+
+// Dynamic string / Serialization Implementation
+void dyn_str_init(t_dyn_str *ds, long initial_cap) {
+    if (initial_cap <= 0) initial_cap = 256;
+    ds->data = (char *)sysmem_newptr(initial_cap);
+    ds->data[0] = '\0';
+    ds->size = 0;
+    ds->capacity = initial_cap;
+}
+
+void dyn_str_free(t_dyn_str *ds) {
+    if (ds->data) {
+        sysmem_freeptr(ds->data);
+        ds->data = NULL;
+    }
+    ds->size = 0;
+    ds->capacity = 0;
+}
+
+void dyn_str_append(t_dyn_str *ds, const char *str) {
+    if (!str) return;
+    long len = strlen(str);
+    while (ds->size + len >= ds->capacity) {
+        ds->capacity *= 2;
+        ds->data = (char *)sysmem_resizeptr(ds->data, ds->capacity);
+    }
+    strcpy(ds->data + ds->size, str);
+    ds->size += len;
+}
+
+void dyn_str_append_char(t_dyn_str *ds, char c) {
+    while (ds->size + 1 >= ds->capacity) {
+        ds->capacity *= 2;
+        ds->data = (char *)sysmem_resizeptr(ds->data, ds->capacity);
+    }
+    ds->data[ds->size] = c;
+    ds->size++;
+    ds->data[ds->size] = '\0';
+}
+
+void dyn_str_append_printf(t_dyn_str *ds, const char *fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    dyn_str_append(ds, buf);
+}
+
+void serialize_atom(t_dyn_str *ds, t_atom *a) {
+    if (!a) {
+        dyn_str_append(ds, "null");
+        return;
+    }
+    switch (atom_gettype(a)) {
+        case A_LONG:
+            dyn_str_append_printf(ds, "%lld", (long long)atom_getlong(a));
+            break;
+        case A_FLOAT:
+            dyn_str_append_printf(ds, "%.6f", atom_getfloat(a));
+            break;
+        case A_SYM: {
+            t_symbol *sym = atom_getsym(a);
+            if (sym && sym->s_name) {
+                // Escape string if needed, otherwise output inside quotes.
+                // Simple quoting is usually safe for names, keys, palettes.
+                dyn_str_append_char(ds, '"');
+                // Escape simple quotes and backslashes if present
+                for (const char *p = sym->s_name; *p; p++) {
+                    if (*p == '"' || *p == '\\') {
+                        dyn_str_append_char(ds, '\\');
+                    }
+                    dyn_str_append_char(ds, *p);
+                }
+                dyn_str_append_char(ds, '"');
+            } else {
+                dyn_str_append(ds, "\"\"");
+            }
+            break;
+        }
+        case A_OBJ: {
+            t_object *obj = atom_getobj(a);
+            if (obj) {
+                if (object_classname_compare(obj, gensym("dictionary"))) {
+                    serialize_dict(ds, (t_dictionary *)obj);
+                } else if (object_classname_compare(obj, gensym("atomarray"))) {
+                    serialize_atomarray(ds, (t_atomarray *)obj);
+                } else {
+                    dyn_str_append(ds, "{}");
+                }
+            } else {
+                dyn_str_append(ds, "null");
+            }
+            break;
+        }
+        default:
+            dyn_str_append(ds, "null");
+            break;
+    }
+}
+
+void serialize_atomarray(t_dyn_str *ds, t_atomarray *aa) {
+    if (!aa) {
+        dyn_str_append(ds, "[]");
+        return;
+    }
+    long ac = 0;
+    t_atom *av = NULL;
+    atomarray_getatoms(aa, &ac, &av);
+    dyn_str_append_char(ds, '[');
+    for (long i = 0; i < ac; i++) {
+        if (i > 0) dyn_str_append_char(ds, ',');
+        serialize_atom(ds, av + i);
+    }
+    dyn_str_append_char(ds, ']');
+}
+
+void serialize_dict(t_dyn_str *ds, t_dictionary *dict) {
+    if (!dict) {
+        dyn_str_append(ds, "{}");
+        return;
+    }
+    t_symbol **keys = NULL;
+    long num_keys = 0;
+    dictionary_getkeys(dict, &num_keys, &keys);
+    dyn_str_append_char(ds, '{');
+    for (long i = 0; i < num_keys; i++) {
+        if (i > 0) dyn_str_append_char(ds, ',');
+        t_symbol *k = keys[i];
+
+        // Output key in quotes
+        dyn_str_append_char(ds, '"');
+        dyn_str_append(ds, k->s_name);
+        dyn_str_append(ds, "\":");
+
+        t_atom val;
+        dictionary_getatom(dict, k, &val);
+        serialize_atom(ds, &val);
+    }
+    dyn_str_append_char(ds, '}');
+    if (keys) {
+        sysmem_freeptr(keys);
+    }
+}
+
+void crucible_visualize_repopulate(t_crucible *x) {
+    if (!x->visualize) return;
+    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+    if (!incumbent_dict) return;
+
+    t_dyn_str ds;
+    dyn_str_init(&ds, 32768);
+
+    t_atom_long bar_length = crucible_get_bar_length(x);
+
+    dyn_str_append_printf(&ds, "{\"event\":\"repopulate\",\"bar_length\":%lld,\"dictionary\":", (long long)bar_length);
+    serialize_dict(&ds, incumbent_dict);
+    dyn_str_append_char(&ds, '}');
+
+    visualize((t_object *)x, ds.data);
+
+    dyn_str_free(&ds);
+    dictobj_release(incumbent_dict);
 }
 
 t_max_err crucible_attr_set_fill(t_crucible *x, void *attr, long ac, t_atom *av) {
@@ -1271,7 +1454,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         crucible_recalculate_reaches(x);
         if (x->visualize) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
+            crucible_visualize_repopulate(x);
             crucible_visualize_dump_all_spans(x);
         }
 
@@ -1611,7 +1794,7 @@ t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom
         long val = atom_getlong(av);
         x->visualize = val;
         if (val) {
-            crucible_visualize_state(x, NULL, NULL, NULL, 0.0, 1);
+            crucible_visualize_repopulate(x);
         }
     }
     return MAX_ERR_NONE;
