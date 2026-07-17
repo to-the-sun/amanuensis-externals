@@ -1410,6 +1410,54 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
     dictobj_release(incumbent_dict);
 }
 
+t_atom_long *crucible_get_span_list_longs(t_dictionary *bar_dict, long *out_count);
+
+t_atom_long crucible_detect_old_bar_length(t_dictionary *incumbent_dict, t_atom_long fallback) {
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
+    dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
+    for (long i = 0; i < num_tracks; i++) {
+        t_dictionary *track_dict = NULL;
+        dictionary_getdictionary(incumbent_dict, track_keys[i], (t_object **)&track_dict);
+        if (!track_dict) continue;
+
+        t_symbol **bar_keys = NULL;
+        long num_bars = 0;
+        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
+        if (num_bars > 0 && bar_keys) {
+            t_dictionary *bar_dict = NULL;
+            dictionary_getdictionary(track_dict, bar_keys[0], (t_object **)&bar_dict);
+            if (bar_dict) {
+                long span_len = 0;
+                t_atom_long *span_ts = crucible_get_span_list_longs(bar_dict, &span_len);
+                if (span_ts && span_len > 1) {
+                    t_atom_long diff = llabs(span_ts[1] - span_ts[0]);
+                    sysmem_freeptr(span_ts);
+                    if (diff > 0) {
+                        sysmem_freeptr(bar_keys);
+                        sysmem_freeptr(track_keys);
+                        return diff;
+                    }
+                }
+                if (span_ts) sysmem_freeptr(span_ts);
+            }
+            if (num_bars > 1) {
+                t_atom_long b0 = atoll(bar_keys[0]->s_name);
+                t_atom_long b1 = atoll(bar_keys[1]->s_name);
+                t_atom_long diff = llabs(b1 - b0);
+                if (diff > 0) {
+                    sysmem_freeptr(bar_keys);
+                    sysmem_freeptr(track_keys);
+                    return diff;
+                }
+            }
+            sysmem_freeptr(bar_keys);
+        }
+    }
+    if (track_keys) sysmem_freeptr(track_keys);
+    return fallback;
+}
+
 typedef struct {
     double *data;
     long count;
@@ -1524,6 +1572,9 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
     }
 
     t_atom_long old_bar_length = crucible_get_bar_length(x);
+    if (old_bar_length <= 0) {
+        old_bar_length = crucible_detect_old_bar_length(incumbent_dict, new_bar_length);
+    }
 
     t_dictionary *new_incumbent_dict = dictionary_new();
     if (!new_incumbent_dict) {
@@ -1826,6 +1877,16 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         char *val_str = crucible_atoms_to_string(argc, argv);
         crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
         if (val_str) sysmem_freeptr(val_str);
+    }
+
+    if (s == gensym("rebar") && argc > 0) {
+        t_atom_long new_bl = atom_getlong(argv);
+        if (new_bl > 0) {
+            crucible_do_rebar(x, new_bl);
+        } else {
+            object_error((t_object *)x, "rebar message requires a positive integer argument");
+        }
+        return;
     }
 
     if (s == gensym("clear")) {
