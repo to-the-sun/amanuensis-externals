@@ -148,52 +148,12 @@ def perform_smartloop_analysis():
         # state["smartloop_start"] = sl_start
         # state["smartloop_end"] = sl_end
 
-def cleanup_obsolete_bars(new_bl):
-    """Purges all bar-related data when bar_length changes."""
+def update_bar_length(new_bl):
+    """Updates bar_length and recalculates display coordinates without purging track data."""
     with state_lock:
         prev_bl = state.get("bar_length", 125)
-        removed_bars = []
-        invalid_bars = []
-        valid_bars = []
-
-        for tid, bars in state["tracks"].items():
-            for b in bars:
-                label = f"T{tid}:{b}"
-                removed_bars.append(label)
-                if b == 0 or (prev_bl > 0 and b % prev_bl == 0):
-                    valid_bars.append(label)
-                else:
-                    invalid_bars.append(label)
-
-        print(f"DEBUG: Bar length changed from {prev_bl} to {new_bl}. Cleaning up all bars.", flush=True)
-        if removed_bars:
-            print(f"DEBUG: Removing bars: {', '.join(removed_bars)}", flush=True)
-        else:
-            print("DEBUG: No bars to remove.", flush=True)
-
-        if invalid_bars:
-            print("\n" + "*" * 80)
-            print("*" * 80)
-            print("!!! WARNING: NON-MULTIPLE BAR TIMESTAMPS DETECTED DURING CLEANUP !!!")
-            print(f"The following bars are NOT multiples of the previous bar_length ({prev_bl}) and are not 0:")
-            for ib in invalid_bars:
-                print(f"  - {ib}")
-            print("\nFor comparison, these bars WERE valid multiples:")
-            for vb in valid_bars:
-                print(f"  - {vb}")
-            print("*" * 80)
-            print("*" * 80 + "\n", flush=True)
-
-        state["tracks"] = {}
-        state["bar_data"] = {}
-        state["logged_hashes"].clear()
-        state["bar_ratings"] = {}
-        state["song_bar_ratings"] = {}
-        state["spans_seen"] = {}
-        state["events"] = []
+        print(f"DEBUG: Bar length changed from {prev_bl} to {new_bl}. Updating and redrawing.", flush=True)
         state["bar_length"] = new_bl
-        state["smartloop_start"] = -1
-        state["smartloop_end"] = -1
         recalculate_reach()
 
 def recalculate_reach():
@@ -327,10 +287,10 @@ def process_packet(text, client_sock=None):
 
                 if pkt_event == "cleanup":
                     if new_bl is not None and new_bl > 0:
-                        cleanup_obsolete_bars(new_bl)
+                        update_bar_length(new_bl)
                 elif new_bl is not None and new_bl > 0:
                     if new_bl != state.get("bar_length", 125):
-                        cleanup_obsolete_bars(new_bl)
+                        update_bar_length(new_bl)
                     else:
                         state["bar_length"] = new_bl
 
@@ -829,7 +789,7 @@ def run_gui():
 
 if __name__ == "__main__":
     threading.Thread(target=tcp_server, daemon=True).start()
-    threading.Thread(target=smartloop_worker, daemon=True).start()
+    # threading.Thread(target=smartloop_worker, daemon=True).start()
     try:
         run_gui()
     except Exception:
