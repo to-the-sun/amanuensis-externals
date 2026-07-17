@@ -6,7 +6,6 @@
 #include "../shared/async_worker.h"
 #include <string.h>
 #include <ctype.h>
-#include <math.h>
 
 // Function prototypes
 void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length);
@@ -47,7 +46,7 @@ void dyn_str_append_printf(t_dyn_str *ds, const char *fmt, ...);
 void serialize_atom(t_dyn_str *ds, t_atom *a);
 void serialize_atomarray(t_dyn_str *ds, t_atomarray *aa);
 void serialize_dict(t_dyn_str *ds, t_dictionary *dict);
-void crucible_visualize_repopulate(t_crucible *x);
+void crucible_visualize_repopulate(t_crucible *x, int is_rebar);
 
 
 #ifndef REBAR_INTERNAL_BINDING
@@ -885,7 +884,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         if (x->visualize) {
             // Send entire repopulate dictionary first, then send the span packet to trigger animation/pop-up
-            crucible_visualize_repopulate(x);
+            crucible_visualize_repopulate(x, 0);
             crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
@@ -1206,7 +1205,7 @@ void serialize_dict(t_dyn_str *ds, t_dictionary *dict) {
     }
 }
 
-void crucible_visualize_repopulate(t_crucible *x) {
+void crucible_visualize_repopulate(t_crucible *x, int is_rebar) {
     if (!x->visualize) return;
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
@@ -1216,7 +1215,11 @@ void crucible_visualize_repopulate(t_crucible *x) {
 
     t_atom_long bar_length = crucible_get_bar_length(x);
 
-    dyn_str_append_printf(&ds, "{\"event\":\"repopulate\",\"bar_length\":%lld,\"dictionary\":", (long long)bar_length);
+    if (is_rebar) {
+        dyn_str_append_printf(&ds, "{\"event\":\"repopulate\",\"bar_length\":%lld,\"rebar\":true,\"dictionary\":", (long long)bar_length);
+    } else {
+        dyn_str_append_printf(&ds, "{\"event\":\"repopulate\",\"bar_length\":%lld,\"dictionary\":", (long long)bar_length);
+    }
     serialize_dict(&ds, incumbent_dict);
     dyn_str_append_char(&ds, '}');
 
@@ -1423,6 +1426,7 @@ void crucible_copy_key(t_dictionary *src_dict, t_dictionary *dest_dict, t_symbol
                     t_dictionary *nested_copy = dictionary_deep_copy((t_dictionary *)obj);
                     if (nested_copy) {
                         dictionary_appenddictionary(dest_dict, key, (t_object *)nested_copy);
+                        object_release((t_object *)nested_copy);
                     }
                 } else if (object_classname_compare(obj, gensym("atomarray"))) {
                     t_atomarray *aa_src = (t_atomarray *)obj;
@@ -1432,6 +1436,7 @@ void crucible_copy_key(t_dictionary *src_dict, t_dictionary *dest_dict, t_symbol
                     t_atomarray *aa_dest = atomarray_new(aa_len, aa_atoms);
                     if (aa_dest) {
                         dictionary_appendatomarray(dest_dict, key, (t_object *)aa_dest);
+                        object_release((t_object *)aa_dest);
                     }
                 }
             }
@@ -1518,6 +1523,8 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
         return;
     }
 
+    t_atom_long old_bar_length = crucible_get_bar_length(x);
+
     t_dictionary *new_incumbent_dict = dictionary_new();
     if (!new_incumbent_dict) {
         dictobj_release(incumbent_dict);
@@ -1565,32 +1572,26 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                 dictionary_appendlong(processed_old_bars, gensym(member_str), 1);
             }
 
-            t_atom_long *new_ts_list = (t_atom_long *)sysmem_newptr(pre_span_len * sizeof(t_atom_long));
-            long new_ts_count = 0;
-            for (long k = 0; k < pre_span_len; k++) {
-                t_atom_long old_ts = pre_span_ts[k];
-                t_atom_long new_ts = (t_atom_long)round((double)old_ts / (double)new_bar_length) * new_bar_length;
-                int dup = 0;
-                for (long m = 0; m < new_ts_count; m++) {
-                    if (new_ts_list[m] == new_ts) {
-                        dup = 1;
-                        break;
-                    }
-                }
-                if (!dup) {
-                    new_ts_list[new_ts_count++] = new_ts;
-                }
+            // Find lowest and highest old timestamps
+            t_atom_long lowest_old_ts = pre_span_ts[0];
+            t_atom_long highest_old_ts = pre_span_ts[0];
+            for (long k = 1; k < pre_span_len; k++) {
+                if (pre_span_ts[k] < lowest_old_ts) lowest_old_ts = pre_span_ts[k];
+                if (pre_span_ts[k] > highest_old_ts) highest_old_ts = pre_span_ts[k];
             }
 
-            qsort(new_ts_list, new_ts_count, sizeof(t_atom_long), crucible_compare_longs);
+            t_atom_long lowest_new_ts = (t_atom_long)round((double)lowest_old_ts / (double)new_bar_length) * new_bar_length;
+            t_atom_long limit = highest_old_ts + old_bar_length;
 
-            t_atom_long lowest_new_ts = new_ts_list[0];
-            t_atom_long highest_new_ts = new_ts_list[new_ts_count - 1];
-            long new_span_len = (highest_new_ts - lowest_new_ts) / new_bar_length + 1;
+            long new_span_len = 0;
+            for (t_atom_long m = lowest_new_ts; m < limit; m += new_bar_length) {
+                new_span_len++;
+            }
 
             t_atom_long *new_assembled_span = (t_atom_long *)sysmem_newptr(new_span_len * sizeof(t_atom_long));
-            for (long k = 0; k < new_span_len; k++) {
-                new_assembled_span[k] = lowest_new_ts + k * new_bar_length;
+            long idx = 0;
+            for (t_atom_long m = lowest_new_ts; m < limit; m += new_bar_length) {
+                new_assembled_span[idx++] = m;
             }
 
             t_double_list *accum_scores = (t_double_list *)sysmem_newptr(new_span_len * sizeof(t_double_list));
@@ -1631,23 +1632,23 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                     double abs_val = old_abs[p];
                     double score_val = old_scores[p];
                     t_atom_long T_post = (t_atom_long)floor((abs_val - offset_val) / (double)new_bar_length) * new_bar_length;
-                    if (T_post >= lowest_new_ts && T_post <= highest_new_ts) {
-                        long idx = (T_post - lowest_new_ts) / new_bar_length;
-                        t_double_list *sl = &accum_scores[idx];
+                    if (T_post >= lowest_new_ts && T_post < limit) {
+                        long idx_post = (T_post - lowest_new_ts) / new_bar_length;
+                        t_double_list *sl = &accum_scores[idx_post];
                         if (sl->count >= sl->capacity) {
                             sl->capacity = sl->capacity == 0 ? 4 : sl->capacity * 2;
                             sl->data = (double *)sysmem_resizeptr(sl->data, sl->capacity * sizeof(double));
                         }
                         sl->data[sl->count++] = score_val;
 
-                        t_double_list *al = &accum_absolutes[idx];
+                        t_double_list *al = &accum_absolutes[idx_post];
                         if (al->count >= al->capacity) {
                             al->capacity = al->capacity == 0 ? 4 : al->capacity * 2;
                             al->data = (double *)sysmem_resizeptr(al->data, al->capacity * sizeof(double));
                         }
                         al->data[al->count++] = abs_val;
                     } else {
-                        object_warn((t_object *)x, "rebar: Pair forgotten. Track: %s, Pre-conversion bar: %lld, Absolute: %.6f, Score: %.6f, Offset: %.6f, Calculated post-conversion bar %lld is outside newly assembled span [%lld, %lld]", track_sym->s_name, (long long)old_ts, abs_val, score_val, offset_val, (long long)T_post, (long long)lowest_new_ts, (long long)highest_new_ts);
+                        object_warn((t_object *)x, "rebar: Pair forgotten. Track: %s, Pre-conversion bar: %lld, Absolute: %.6f, Score: %.6f, Offset: %.6f, Calculated post-conversion bar %lld is outside newly assembled span limit %lld, Pre-conversion bar length: %lld, Post-conversion bar length: %lld", track_sym->s_name, (long long)old_ts, abs_val, score_val, offset_val, (long long)T_post, (long long)limit, (long long)old_bar_length, (long long)new_bar_length);
                     }
                 }
 
@@ -1694,6 +1695,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                 }
                 t_atomarray *span_aa = atomarray_new(new_span_len, span_atoms);
                 dictionary_appendatomarray(new_bar_dict, gensym("span"), (t_object *)span_aa);
+                object_release((t_object *)span_aa);
                 sysmem_freeptr(span_atoms);
 
                 t_atom_long nearest_old_ts = pre_span_ts[0];
@@ -1721,6 +1723,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                 }
                 t_atomarray *abs_aa = atomarray_new(accum_absolutes[k].count, abs_atoms);
                 dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)abs_aa);
+                object_release((t_object *)abs_aa);
                 sysmem_freeptr(abs_atoms);
 
                 t_atom *scores_atoms = (t_atom *)sysmem_newptr((accum_scores[k].count == 0 ? 1 : accum_scores[k].count) * sizeof(t_atom));
@@ -1729,24 +1732,30 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                 }
                 t_atomarray *scores_aa = atomarray_new(accum_scores[k].count, scores_atoms);
                 dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)scores_aa);
+                object_release((t_object *)scores_aa);
                 sysmem_freeptr(scores_atoms);
 
                 if (mean_is_null[k]) {
-                    t_atom null_atom;
-                    atom_setobj(&null_atom, NULL);
-                    dictionary_appendatom(new_bar_dict, gensym("mean"), &null_atom);
+                    t_atomarray *mean_aa = atomarray_new(0, NULL);
+                    dictionary_appendatomarray(new_bar_dict, gensym("mean"), (t_object *)mean_aa);
+                    object_release((t_object *)mean_aa);
                 } else {
                     dictionary_appendfloat(new_bar_dict, gensym("mean"), new_means[k]);
                 }
-                dictionary_appendfloat(new_bar_dict, gensym("rating"), span_rating);
+
+                t_atom rating_atom;
+                atom_setfloat(&rating_atom, span_rating);
+                t_atomarray *rating_aa = atomarray_new(1, &rating_atom);
+                dictionary_appendatomarray(new_bar_dict, gensym("rating"), (t_object *)rating_aa);
+                object_release((t_object *)rating_aa);
 
                 char b_new_str[64];
                 snprintf(b_new_str, 64, "%lld", (long long)b_new);
                 dictionary_appenddictionary(new_track_dict, gensym(b_new_str), (t_object *)new_bar_dict);
+                object_release((t_object *)new_bar_dict);
             }
 
             sysmem_freeptr(pre_span_ts);
-            sysmem_freeptr(new_ts_list);
             sysmem_freeptr(new_assembled_span);
             sysmem_freeptr(new_means);
             sysmem_freeptr(mean_is_null);
@@ -1770,6 +1779,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
         object_release((t_object *)new_track_dict);
 
         dictionary_appenddictionary(new_incumbent_dict, track_sym, (t_object *)sorted_track_dict);
+        object_release((t_object *)sorted_track_dict);
         if (bar_keys) sysmem_freeptr(bar_keys);
         object_release((t_object *)processed_old_bars);
     }
@@ -1790,41 +1800,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
     crucible_recalculate_reaches(x);
 
     if (x->visualize) {
-        crucible_visualize_repopulate(x);
-
-        t_symbol **vis_track_keys = NULL;
-        long vis_num_tracks = 0;
-        dictionary_getkeys(new_incumbent_dict, &vis_num_tracks, &vis_track_keys);
-
-        for (long i = 0; i < vis_num_tracks; i++) {
-            t_symbol *t_sym = vis_track_keys[i];
-            t_dictionary *t_dict = NULL;
-            dictionary_getdictionary(new_incumbent_dict, t_sym, (t_object **)&t_dict);
-            if (!t_dict) continue;
-
-            t_symbol **vis_bar_keys = NULL;
-            long vis_num_bars = 0;
-            dictionary_getkeys(t_dict, &vis_num_bars, &vis_bar_keys);
-
-            for (long j = 0; j < vis_num_bars; j++) {
-                t_symbol *b_sym = vis_bar_keys[j];
-                t_dictionary *b_dict = NULL;
-                dictionary_getdictionary(t_dict, b_sym, (t_object **)&b_dict);
-                if (!b_dict) continue;
-
-                double rating = 0.0;
-                t_atom r_atom;
-                if (dictionary_getatom(b_dict, gensym("rating"), &r_atom) == MAX_ERR_NONE) {
-                    rating = atom_getfloat(&r_atom);
-                }
-
-                char vis_msg[256];
-                snprintf(vis_msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", t_sym->s_name, b_sym->s_name, rating);
-                visualize((t_object *)x, vis_msg);
-            }
-            if (vis_bar_keys) sysmem_freeptr(vis_bar_keys);
-        }
-        if (vis_track_keys) sysmem_freeptr(vis_track_keys);
+        crucible_visualize_repopulate(x, 1);
     }
 
     object_release((t_object *)new_incumbent_dict);
@@ -1850,16 +1826,6 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         char *val_str = crucible_atoms_to_string(argc, argv);
         crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
         if (val_str) sysmem_freeptr(val_str);
-    }
-
-    if (s == gensym("rebar") && argc > 0) {
-        t_atom_long new_bl = atom_getlong(argv);
-        if (new_bl > 0) {
-            crucible_do_rebar(x, new_bl);
-        } else {
-            object_error((t_object *)x, "rebar message requires a positive integer argument");
-        }
-        return;
     }
 
     if (s == gensym("clear")) {
@@ -1890,7 +1856,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         crucible_recalculate_reaches(x);
         if (x->visualize) {
-            crucible_visualize_repopulate(x);
+            crucible_visualize_repopulate(x, 0);
             crucible_visualize_dump_all_spans(x);
         }
 
@@ -2030,7 +1996,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Inlet 1: Primary messages (clear, rebar, track, span, reaches, replace, log, consume, fill, visualize, async). Also sets incumbent dictionary name."); break;
+            case 0: sprintf(s, "Inlet 1: Primary messages (clear, track, span, reaches, replace, log, consume, fill, visualize, async). Also sets incumbent dictionary name."); break;
             case 1: sprintf(s, "Inlet 2: Local Bar Length (float)."); break;
         }
     } else { // ASSIST_OUTLET
@@ -2230,7 +2196,7 @@ t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom
         long val = atom_getlong(av);
         x->visualize = val;
         if (val) {
-            crucible_visualize_repopulate(x);
+            crucible_visualize_repopulate(x, 0);
         }
     }
     return MAX_ERR_NONE;
