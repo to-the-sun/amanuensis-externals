@@ -1491,6 +1491,26 @@ void crucible_get_float_array(t_dictionary *bar_dict, t_symbol *key, double **ou
     *out_count = 0;
 }
 
+int crucible_compare_track_keys(const void *a, const void *b) {
+    t_symbol *sa = *(t_symbol *const *)a;
+    t_symbol *sb = *(t_symbol *const *)b;
+    t_atom_long la = atoll(sa->s_name);
+    t_atom_long lb = atoll(sb->s_name);
+    if (la < lb) return -1;
+    if (la > lb) return 1;
+    return 0;
+}
+
+int crucible_compare_bar_keys(const void *a, const void *b) {
+    t_symbol *sa = *(t_symbol *const *)a;
+    t_symbol *sb = *(t_symbol *const *)b;
+    t_atom_long la = atoll(sa->s_name);
+    t_atom_long lb = atoll(sb->s_name);
+    if (la < lb) return -1;
+    if (la > lb) return 1;
+    return 0;
+}
+
 void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
@@ -1636,21 +1656,26 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
             }
 
             double *new_means = (double *)sysmem_newptr(new_span_len * sizeof(double));
+            int *mean_is_null = (int *)sysmem_newptr(new_span_len * sizeof(int));
             double min_mean = -1.0;
             int has_min_mean = 0;
             for (long k = 0; k < new_span_len; k++) {
-                double sum = 0.0;
-                for (long p = 0; p < accum_scores[k].count; p++) {
-                    sum += accum_scores[k].data[p];
+                if (accum_scores[k].count == 0) {
+                    mean_is_null[k] = 1;
+                    new_means[k] = 0.0;
+                } else {
+                    mean_is_null[k] = 0;
+                    double sum = 0.0;
+                    for (long p = 0; p < accum_scores[k].count; p++) {
+                        sum += accum_scores[k].data[p];
+                    }
+                    new_means[k] = sum / (double)accum_scores[k].count;
                 }
-                double mean_val = 0.0;
-                if (accum_scores[k].count > 0) {
-                    mean_val = sum / (double)accum_scores[k].count;
-                }
-                new_means[k] = mean_val;
-                if (!has_min_mean || mean_val < min_mean) {
-                    min_mean = mean_val;
-                    has_min_mean = 1;
+                if (!mean_is_null[k]) {
+                    if (!has_min_mean || new_means[k] < min_mean) {
+                        min_mean = new_means[k];
+                        has_min_mean = 1;
+                    }
                 }
             }
 
@@ -1706,7 +1731,13 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                 dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)scores_aa);
                 sysmem_freeptr(scores_atoms);
 
-                dictionary_appendfloat(new_bar_dict, gensym("mean"), new_means[k]);
+                if (mean_is_null[k]) {
+                    t_atom null_atom;
+                    atom_setobj(&null_atom, NULL);
+                    dictionary_appendatom(new_bar_dict, gensym("mean"), &null_atom);
+                } else {
+                    dictionary_appendfloat(new_bar_dict, gensym("mean"), new_means[k]);
+                }
                 dictionary_appendfloat(new_bar_dict, gensym("rating"), span_rating);
 
                 char b_new_str[64];
@@ -1718,6 +1749,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
             sysmem_freeptr(new_ts_list);
             sysmem_freeptr(new_assembled_span);
             sysmem_freeptr(new_means);
+            sysmem_freeptr(mean_is_null);
             for (long k = 0; k < new_span_len; k++) {
                 if (accum_scores[k].data) sysmem_freeptr(accum_scores[k].data);
                 if (accum_absolutes[k].data) sysmem_freeptr(accum_absolutes[k].data);
@@ -1726,7 +1758,18 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
             sysmem_freeptr(accum_absolutes);
         }
 
-        dictionary_appenddictionary(new_incumbent_dict, track_sym, (t_object *)new_track_dict);
+        t_dictionary *sorted_track_dict = dictionary_new();
+        t_symbol **new_bar_keys = NULL;
+        long num_new_bars = 0;
+        dictionary_getkeys(new_track_dict, &num_new_bars, &new_bar_keys);
+        if (num_new_bars > 0 && new_bar_keys) {
+            qsort(new_bar_keys, num_new_bars, sizeof(t_symbol *), crucible_compare_bar_keys);
+            dictionary_copyentries(new_track_dict, sorted_track_dict, new_bar_keys);
+            sysmem_freeptr(new_bar_keys);
+        }
+        object_release((t_object *)new_track_dict);
+
+        dictionary_appenddictionary(new_incumbent_dict, track_sym, (t_object *)sorted_track_dict);
         if (bar_keys) sysmem_freeptr(bar_keys);
         object_release((t_object *)processed_old_bars);
     }
@@ -1737,7 +1780,8 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
     t_symbol **new_track_keys = NULL;
     long num_new_tracks = 0;
     dictionary_getkeys(new_incumbent_dict, &num_new_tracks, &new_track_keys);
-    if (new_track_keys) {
+    if (num_new_tracks > 0 && new_track_keys) {
+        qsort(new_track_keys, num_new_tracks, sizeof(t_symbol *), crucible_compare_track_keys);
         dictionary_copyentries(new_incumbent_dict, incumbent_dict, new_track_keys);
         sysmem_freeptr(new_track_keys);
     }
