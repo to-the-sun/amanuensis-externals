@@ -1512,6 +1512,11 @@ int crucible_compare_bar_keys(const void *a, const void *b) {
 }
 
 void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
+    t_atom_long old_bar_length = crucible_get_bar_length(x);
+    if (old_bar_length <= 0) {
+        old_bar_length = (x->local_bar_length > 0) ? (t_atom_long)x->local_bar_length : new_bar_length;
+    }
+
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "rebar: could not find registered dictionary %s", x->incumbent_dict_name->s_name);
@@ -1585,13 +1590,27 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
             qsort(new_ts_list, new_ts_count, sizeof(t_atom_long), crucible_compare_longs);
 
             t_atom_long lowest_new_ts = new_ts_list[0];
-            t_atom_long highest_new_ts = new_ts_list[new_ts_count - 1];
-            long new_span_len = (highest_new_ts - lowest_new_ts) / new_bar_length + 1;
+            t_atom_long old_highest = pre_span_ts[0];
+            for (long m = 1; m < pre_span_len; m++) {
+                if (pre_span_ts[m] > old_highest) {
+                    old_highest = pre_span_ts[m];
+                }
+            }
+            t_atom_long upper_bound = old_highest + old_bar_length;
+
+            long new_span_len = 0;
+            if (upper_bound > lowest_new_ts) {
+                new_span_len = (upper_bound - 1 - lowest_new_ts) / new_bar_length + 1;
+            }
+            if (new_span_len < 1) {
+                new_span_len = 1;
+            }
 
             t_atom_long *new_assembled_span = (t_atom_long *)sysmem_newptr(new_span_len * sizeof(t_atom_long));
             for (long k = 0; k < new_span_len; k++) {
                 new_assembled_span[k] = lowest_new_ts + k * new_bar_length;
             }
+            t_atom_long highest_span_ts = new_assembled_span[new_span_len - 1];
 
             t_double_list *accum_scores = (t_double_list *)sysmem_newptr(new_span_len * sizeof(t_double_list));
             t_double_list *accum_absolutes = (t_double_list *)sysmem_newptr(new_span_len * sizeof(t_double_list));
@@ -1631,7 +1650,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                     double abs_val = old_abs[p];
                     double score_val = old_scores[p];
                     t_atom_long T_post = (t_atom_long)floor((abs_val - offset_val) / (double)new_bar_length) * new_bar_length;
-                    if (T_post >= lowest_new_ts && T_post <= highest_new_ts) {
+                    if (T_post >= lowest_new_ts && T_post <= highest_span_ts) {
                         long idx = (T_post - lowest_new_ts) / new_bar_length;
                         t_double_list *sl = &accum_scores[idx];
                         if (sl->count >= sl->capacity) {
@@ -1647,7 +1666,7 @@ void crucible_do_rebar(t_crucible *x, t_atom_long new_bar_length) {
                         }
                         al->data[al->count++] = abs_val;
                     } else {
-                        object_warn((t_object *)x, "rebar: Pair forgotten. Track: %s, Pre-conversion bar: %lld, Absolute: %.6f, Score: %.6f, Offset: %.6f, Calculated post-conversion bar %lld is outside newly assembled span [%lld, %lld]", track_sym->s_name, (long long)old_ts, abs_val, score_val, offset_val, (long long)T_post, (long long)lowest_new_ts, (long long)highest_new_ts);
+                        object_warn((t_object *)x, "rebar: Pair forgotten. Track: %s, Pre-conversion bar: %lld, Absolute: %.6f, Score: %.6f, Offset: %.6f, Calculated post-conversion bar %lld is outside newly assembled span [%lld, %lld]", track_sym->s_name, (long long)old_ts, abs_val, score_val, offset_val, (long long)T_post, (long long)lowest_new_ts, (long long)highest_span_ts);
                     }
                 }
 
