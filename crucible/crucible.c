@@ -1424,12 +1424,8 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 dictionary_appendfloat(new_bar_dict, gensym("offset"), pb->offset);
                 dictionary_appendsym(new_bar_dict, gensym("palette"), pb->palette);
 
-                // rating as a single atom within an array (t_atomarray of size 1)
-                t_atom rat_atom;
-                atom_setfloat(&rat_atom, span_rating);
-                t_atomarray *rat_aa = atomarray_new(1, &rat_atom);
-                dictionary_appendatomarray(new_bar_dict, gensym("rating"), (t_object *)rat_aa);
-                if (rat_aa) object_release((t_object *)rat_aa);
+                // rating as a normal float atom
+                dictionary_appendfloat(new_bar_dict, gensym("rating"), span_rating);
 
                 // absolutes, scores, and mean
                 if (pb->count > 0) {
@@ -1445,8 +1441,6 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     t_atomarray *sco_aa_new = atomarray_new(pb->count, sco_atoms_new);
                     dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)abs_aa_new);
                     dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)sco_aa_new);
-                    if (abs_aa_new) object_release((t_object *)abs_aa_new);
-                    if (sco_aa_new) object_release((t_object *)sco_aa_new);
 
                     double mean_val = sum_scores / pb->count;
                     dictionary_appendfloat(new_bar_dict, gensym("mean"), mean_val);
@@ -1460,13 +1454,6 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)empty_abs_aa);
                     dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)empty_sco_aa);
                     dictionary_appendatomarray(new_bar_dict, gensym("mean"), (t_object *)empty_mean_aa);
-                    if (empty_abs_aa) object_release((t_object *)empty_abs_aa);
-                    if (empty_sco_aa) object_release((t_object *)empty_sco_aa);
-                    if (empty_mean_aa) object_release((t_object *)empty_mean_aa);
-                }
-
-                if (new_bar_dict) {
-                    object_release((t_object *)new_bar_dict);
                 }
             }
 
@@ -1498,17 +1485,12 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 t_dictionary *bd = NULL;
                 dictionary_getdictionary(temp_track_dict, bk, (t_object **)&bd);
                 if (bd) {
-                    t_dictionary *copied_bd = dictionary_deep_copy(bd);
-                    dictionary_appenddictionary(new_track_dict, bk, (t_object *)copied_bd);
-                    object_release((t_object *)copied_bd);
+                    dictionary_appenddictionary(new_track_dict, bk, (t_object *)dictionary_deep_copy(bd));
                 }
             }
             sysmem_freeptr(temp_bar_keys);
         }
         object_release((t_object *)temp_track_dict);
-        if (new_track_dict) {
-            object_release((t_object *)new_track_dict);
-        }
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
@@ -1529,9 +1511,7 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             t_dictionary *tr_dict = NULL;
             dictionary_getdictionary(new_incumbent_dict, tr_sym, (t_object **)&tr_dict);
             if (tr_dict) {
-                t_dictionary *copied_tr = dictionary_deep_copy(tr_dict);
-                dictionary_appenddictionary(incumbent_dict, tr_sym, (t_object *)copied_tr);
-                object_release((t_object *)copied_tr);
+                dictionary_appenddictionary(incumbent_dict, tr_sym, (t_object *)dictionary_deep_copy(tr_dict));
             }
         }
         sysmem_freeptr(new_track_keys);
@@ -1795,7 +1775,6 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
                    t_dictionary *nested_dest = dictionary_deep_copy(nested_src);
                    if (nested_dest) {
                        dictionary_appenddictionary(dest, key, (t_object *)nested_dest);
-                       object_release((t_object *)nested_dest);
                    }
                } else if (object_classname_compare(obj, gensym("atomarray"))) {
                    t_atomarray *aa_src = (t_atomarray *)obj;
@@ -1805,7 +1784,6 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
                    t_atomarray *aa_dest = atomarray_new(aa_len, aa_atoms);
                    if (aa_dest) {
                        dictionary_appendatomarray(dest, key, (t_object *)aa_dest);
-                       object_release((t_object *)aa_dest);
                    }
                }
            }
