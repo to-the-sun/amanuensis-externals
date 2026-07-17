@@ -2267,33 +2267,6 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
                 offset += snprintf(json_buffer + offset, buffer_size - offset, "%lld%s", (long long)atom_getlong(av + i), (i < ac - 1) ? "," : "");
             }
             if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "]");
-
-            if (track_id_sym && offset < buffer_size - 1) {
-                t_dictionary *track_dict = NULL;
-                if (dictionary_getdictionary(incumbent_dict, track_id_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-                    offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_data\":{");
-                    int first_data = 1;
-                    for (long i = 0; i < ac; i++) {
-                        if (offset >= buffer_size - 1) break;
-                        t_atom_long b_ts = atom_getlong(av + i);
-                        char b_ts_str[64];
-                        snprintf(b_ts_str, 64, "%lld", (long long)b_ts);
-                        t_dictionary *bar_dict = NULL;
-                        if (dictionary_getdictionary(track_dict, gensym(b_ts_str), (t_object **)&bar_dict) == MAX_ERR_NONE && bar_dict) {
-                            if (!first_data && offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
-                            first_data = 0;
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%lld\":{\"absolutes\":", (long long)b_ts);
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("absolutes"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"scores\":");
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("scores"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"offset\":");
-                            offset = json_append_atom_or_array(json_buffer, offset, buffer_size, bar_dict, gensym("offset"));
-                            if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
-                        }
-                    }
-                    if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
-                }
-            }
         }
         if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, ",\"new_span_rating\":%.4f", rating);
     }
