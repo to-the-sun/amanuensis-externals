@@ -102,6 +102,15 @@
 				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. If the key in the selector is 'rating' and the @visualize attribute is enabled, this message sends a packet to the visualizer to update the specified bar's rating in its local database. This is used for real-time visualization updates and local smartloop analysis within the visualizer.
 			</description>
 		</method>
+		<method name="rebar">
+			<arglist>
+				<arg name="new_bar_length" type="int" optional="0" />
+			</arglist>
+			<digest>Convert bar timestamps in transcript dictionary to new bar length</digest>
+			<description>
+				Converts all bar timestamps in the incumbent transcript dictionary to multiples of the new bar length using nearest-multiple rounding, pads contiguous missing multiples within the spans, copies offset/palette from the nearest old bar, maps scores/absolutes, and triggers subdued visualizer updates when @visualize is enabled.
+			</description>
+		</method>
 		<method name="log">
 			<arglist>
 				<arg name="state" type="int" optional="0" />

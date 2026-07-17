@@ -1,5 +1,7 @@
 # Internal Coordination and Communication in the `rebar` Object
 
+> **Deprecation Notice:** A native `rebar` function has been directly integrated into the `crucible` object (via a `rebar` message). The `rebar` composite object described below is now obsolete and superseded by the direct `crucible` integration.
+
 This report details the communication and coordination mechanisms between the internal modules (`notify`, `buildspans`, and `crucible`) of the `rebar` composite object, specifically focusing on the differences between synchronous (`@async 0`) and asynchronous (`@async 1`) execution.
 
 ## 1. Structural Overview

@@ -381,6 +381,19 @@ def process_packet(text, client_sock=None):
                     state["spans_seen"] = new_spans_seen
                     dirty = True
 
+                    if pkt.get("rebar"):
+                        now = time.time()
+                        for t_str, bar_ratings in new_bar_ratings.items():
+                            for b_str, rating in bar_ratings.items():
+                                state["events"].append({
+                                    "type": "replace",
+                                    "track": t_str,
+                                    "bars": [float(b_str)],
+                                    "rating": float(rating),
+                                    "start_time": now,
+                                    "duration": 3.0
+                                })
+
                 if "tracks" in pkt:
                     new_tracks = {}
                     for tid, t_bars in pkt["tracks"].items():
