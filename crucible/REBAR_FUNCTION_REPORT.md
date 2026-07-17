@@ -10,7 +10,7 @@ The `rebar` feature is triggered by sending a `rebar` message to the first inlet
 1. **Timestamp Rounding**: Every bar timestamp key is converted to the closest multiple of the new `bar_length` using standard rounding:
    $$\text{new\_ts} = \text{round}\left(\frac{\text{old\_ts}}{\text{new\_bar\_length}}\right) \times \text{new\_bar\_length}$$
 2. **Span Conversion**: The list of timestamps inside the `span` key of each bar is converted using the same rounding formula.
-3. **Contiguous Span Padding**: Any missing multiples of the new `bar_length` between the lowest and highest converted bar timestamps of the span are filled in and sorted from low to high. The highest plus new `bar_length` is used to define the span boundary but is not included as a bar in the span array.
+3. **Contiguous Span Padding**: Any missing multiples of the new `bar_length` from the lowest converted bar timestamp to the end of the highest converted bar (exclusive of the end timestamp itself, representing the limiting bounds of where we are looking for missing bars) are filled in and added to the array in low to high order.
 4. **Key Construction**: All bar timestamps added to the span are also added outright as keys of their own under the track in question in the dictionary, with identical `span` arrays.
 5. **Offset and Palette Copying**: Under each bar key in the newly assembled span, the `offset` and `palette` keys are copied from the nearest pre-conversion bar (minimum timestamp difference) to protect integrity.
 6. **Parallel Array Pairing (Scores/Absolutes)**:
