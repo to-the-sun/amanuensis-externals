@@ -96,6 +96,15 @@
 				Clears the challenger dictionary, all track reaches, song reach, and internal track context.
 			</description>
 		</method>
+		<method name="rebar">
+			<arglist>
+				<arg name="new-bar-length" type="int" optional="0" />
+			</arglist>
+			<digest>Convert transcript to a new bar length</digest>
+			<description>
+				Converts all of the bar timestamps present in the incumbent dictionary to multiples of the specified new bar length. Re-maps scores and absolutes pairs to the rounded post-conversion bar, updates mean/rating scores, pads contiguous missing multiples, and sends an optimized visualizer update if visualization is enabled.
+			</description>
+		</method>
 		<method name="replace">
 			<digest>Update bar rating for visualization</digest>
 			<description>

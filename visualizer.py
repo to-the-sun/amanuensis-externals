@@ -344,6 +344,7 @@ def process_packet(text, client_sock=None):
 
                     incoming_dict = pkt.get("dictionary", {})
                     bar_length = state["bar_length"]
+                    is_rebar = pkt.get("rebar", False)
 
                     for t_id, t_dict in incoming_dict.items():
                         t_str = str(t_id)
@@ -374,6 +375,16 @@ def process_packet(text, client_sock=None):
                                 span_id = (t_str, span_bars[0])
                                 if span_id not in new_spans_seen:
                                     new_spans_seen[span_id] = {"rating": float(rating), "bars": span_bars}
+
+                            if is_rebar:
+                                state["events"].append({
+                                    "type": "replace",
+                                    "track": t_str,
+                                    "bars": [snapped_ts],
+                                    "rating": float(rating),
+                                    "start_time": time.time(),
+                                    "duration": 3.0
+                                })
 
                     state["tracks"] = new_tracks
                     state["bar_data"] = new_bar_data
