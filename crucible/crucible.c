@@ -1145,6 +1145,8 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         object_warn((t_object *)x, "rebar: old_bar_length is <= 0. Proceeding with conversion.");
     }
 
+    long long forgotten_pairs_count = 0;
+
     // We will build a completely new dictionary structure that replaces incumbent_dict's tracks
     t_dictionary *new_incumbent_dict = dictionary_new();
 
@@ -1349,16 +1351,24 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                         t_post_bar *pb = &new_span_bars[target_idx];
                         if (pb->count >= pb->capacity) {
                             pb->capacity = pb->capacity == 0 ? 4 : pb->capacity * 2;
-                            pb->absolutes = (double *)sysmem_resizeptr(pb->absolutes, pb->capacity * sizeof(double));
-                            pb->scores = (double *)sysmem_resizeptr(pb->scores, pb->capacity * sizeof(double));
+                            if (pb->absolutes == NULL) {
+                                pb->absolutes = (double *)sysmem_newptr(pb->capacity * sizeof(double));
+                                pb->scores = (double *)sysmem_newptr(pb->capacity * sizeof(double));
+                            } else {
+                                pb->absolutes = (double *)sysmem_resizeptr(pb->absolutes, pb->capacity * sizeof(double));
+                                pb->scores = (double *)sysmem_resizeptr(pb->scores, pb->capacity * sizeof(double));
+                            }
                         }
                         pb->absolutes[pb->count] = abs_val;
                         pb->scores[pb->count] = sco_val;
                         pb->count++;
                     } else {
-                        // Warn to Max Console
-                        object_warn((t_object *)x, "rebar: Pair forgotten (absolute %f, score %f) because calculated bar timestamp %lld is not in the newly assembled span [%lld, %lld]. Pre-conversion bar_length: %lld, Post-conversion bar_length: %lld",
-                                    abs_val, sco_val, (long long)pair_post_ts, (long long)lowest_converted, (long long)max_ts, (long long)old_bar_length, (long long)new_bar_length);
+                        forgotten_pairs_count++;
+                        // Warn to Max Console (limit to first 20 warnings to prevent flooding)
+                        if (forgotten_pairs_count <= 20) {
+                            object_warn((t_object *)x, "rebar: Pair forgotten (absolute %f, score %f) because calculated bar timestamp %lld is not in the newly assembled span [%lld, %lld]. Pre-conversion bar_length: %lld, Post-conversion bar_length: %lld",
+                                        abs_val, sco_val, (long long)pair_post_ts, (long long)lowest_converted, (long long)max_ts, (long long)old_bar_length, (long long)new_bar_length);
+                        }
                     }
                 }
             }
@@ -1454,6 +1464,10 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     if (empty_sco_aa) object_release((t_object *)empty_sco_aa);
                     if (empty_mean_aa) object_release((t_object *)empty_mean_aa);
                 }
+
+                if (new_bar_dict) {
+                    object_release((t_object *)new_bar_dict);
+                }
             }
 
             if (new_span_aa) object_release((t_object *)new_span_aa);
@@ -1484,12 +1498,17 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 t_dictionary *bd = NULL;
                 dictionary_getdictionary(temp_track_dict, bk, (t_object **)&bd);
                 if (bd) {
-                    dictionary_appenddictionary(new_track_dict, bk, (t_object *)dictionary_deep_copy(bd));
+                    t_dictionary *copied_bd = dictionary_deep_copy(bd);
+                    dictionary_appenddictionary(new_track_dict, bk, (t_object *)copied_bd);
+                    object_release((t_object *)copied_bd);
                 }
             }
             sysmem_freeptr(temp_bar_keys);
         }
         object_release((t_object *)temp_track_dict);
+        if (new_track_dict) {
+            object_release((t_object *)new_track_dict);
+        }
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
@@ -1510,12 +1529,18 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             t_dictionary *tr_dict = NULL;
             dictionary_getdictionary(new_incumbent_dict, tr_sym, (t_object **)&tr_dict);
             if (tr_dict) {
-                dictionary_appenddictionary(incumbent_dict, tr_sym, (t_object *)dictionary_deep_copy(tr_dict));
+                t_dictionary *copied_tr = dictionary_deep_copy(tr_dict);
+                dictionary_appenddictionary(incumbent_dict, tr_sym, (t_object *)copied_tr);
+                object_release((t_object *)copied_tr);
             }
         }
         sysmem_freeptr(new_track_keys);
     }
     object_release((t_object *)new_incumbent_dict);
+
+    if (forgotten_pairs_count > 20) {
+        object_warn((t_object *)x, "rebar: ... forgotten a total of %lld additional pairs to prevent console flood.", forgotten_pairs_count - 20);
+    }
 
     // Update bar_length to new_bar_length
     long long old_bl_temp = (long long)x->local_bar_length;
@@ -1768,14 +1793,20 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
                if (object_classname_compare(obj, gensym("dictionary"))) {
                    t_dictionary *nested_src = (t_dictionary *)obj;
                    t_dictionary *nested_dest = dictionary_deep_copy(nested_src);
-                   if (nested_dest) dictionary_appenddictionary(dest, key, (t_object *)nested_dest);
+                   if (nested_dest) {
+                       dictionary_appenddictionary(dest, key, (t_object *)nested_dest);
+                       object_release((t_object *)nested_dest);
+                   }
                } else if (object_classname_compare(obj, gensym("atomarray"))) {
                    t_atomarray *aa_src = (t_atomarray *)obj;
                    long aa_len = 0;
                    t_atom *aa_atoms = NULL;
                    atomarray_getatoms(aa_src, &aa_len, &aa_atoms);
                    t_atomarray *aa_dest = atomarray_new(aa_len, aa_atoms);
-                   if (aa_dest) dictionary_appendatomarray(dest, key, (t_object *)aa_dest);
+                   if (aa_dest) {
+                       dictionary_appendatomarray(dest, key, (t_object *)aa_dest);
+                       object_release((t_object *)aa_dest);
+                   }
                }
            }
        } else {
