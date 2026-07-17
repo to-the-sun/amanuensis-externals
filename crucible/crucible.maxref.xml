@@ -17,7 +17,7 @@
 		<inlet id="1" type="anything/symbol">
 			<digest>Primary message stream / Incumbent name</digest>
 			<description>
-				Accepts all primary control and data messages. This includes 'clear', 'track', 'span', 'reaches', and hierarchical data selectors. Additionally, sending a symbol sets the name of the external incumbent dictionary to be used for comparisons.
+				Accepts all primary control and data messages. This includes 'clear', 'rebar', 'track', 'span', 'reaches', and hierarchical data selectors. Additionally, sending a symbol sets the name of the external incumbent dictionary to be used for comparisons.
 			</description>
 		</inlet>
 		<inlet id="2" type="float">
@@ -88,6 +88,12 @@
 			<digest>Report current song and track reaches</digest>
 			<description>
 				Triggers an immediate output of the current song reach and all individual track reaches through the third outlet.
+			</description>
+		</method>
+		<method name="rebar">
+			<digest>Convert all bar timestamps to a new bar length</digest>
+			<description>
+				Accepts a single integer argument representing the new bar length. This converts all the bar timestamps present in the incumbent dictionary to multiples of the new bar length. Converted bars are positioned at the closest multiple, missing contiguous multiples in the span (up to the end of the highest converted bar, exclusive of the end timestamp itself as a limiting bounds) are padded, and internal pairs of absolute/score data are mapped, calculated, and recalculated (updating mean/rating). Finally, updates the object's bar length and reaches, and sends visual updates if visualization is active.
 			</description>
 		</method>
 		<method name="clear">
