@@ -110,12 +110,22 @@ The complete lack of verbose logs in the Max console during socket resets and tr
 
 ---
 
-## 5. Architectural Recommendations
+## 5. Architectural Recommendations & Implementation Status
 
-To resolve these communication overheads and packet losses in future updates, we recommend the following structural adjustments:
-- **Synchronous Connection Handshakes:** `ensure_connected` should poll the socket using `select()` with a short timeout to wait for the handshake to finish before allowing `perform_send` to proceed, ensuring the first packet is never dropped.
-- **Rate Limiting / Debouncing:** Rather than sending a complete `repopulate` packet on *every single* won span during rapid-fire operations, the object should implement a short debounce timer (e.g. 50ms) to trigger a single, consolidated state synchronization.
-- **Adaptive Buffer Sizes & Chunking:** The `perform_send` loop should be modified to handle non-blocking `WSAEWOULDBLOCK` delays gracefully using standard socket polling (`select` or `WSASend` with completion events) instead of immediately closing the socket.
+Both of the critical network-reliability recommendations have been successfully implemented and integrated into the `shared/visualize.c` engine:
+
+1. **Synchronous Connection Handshakes (Implemented):**
+   - **Mechanism:** `ensure_connected()` now uses non-blocking socket polling via the standard `select()` function immediately after initiating the asynchronous connection.
+   - **Timeout:** It polls both write and exception descriptors with a 500ms timeout.
+   - **Verification:** It uses `getsockopt()` with `SO_ERROR` to confirm successful handshake completion before allowing `perform_send()` to write data. This ensures the first packet (such as `repopulate`) is never dropped due to an unfinished handshake.
+
+2. **Adaptive Buffer Sizes & Chunking (Implemented):**
+   - **Mechanism:** The `perform_send()` transmission loop has been hardened to gracefully intercept non-blocking socket delay signals (`WSAEWOULDBLOCK` and `WSAEINPROGRESS`).
+   - **Writability Polling:** Instead of immediately aborting and resetting the socket, the loop polls the socket for writability using `select()` with a 1-second timeout.
+   - **Resilience:** If the buffer clears and the socket becomes writable, it resumes sending from the correct chunk offset. The socket is only closed if a real error occurs or the polling timeout is exceeded.
+
+3. **Rate Limiting / Debouncing (Future Scope):**
+   - Rather than sending a complete `repopulate` packet on *every single* won span during rapid-fire operations, the object should implement a short debounce timer (e.g. 50ms) to trigger a single, consolidated state synchronization.
 
 ---
 
