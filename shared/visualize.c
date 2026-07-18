@@ -189,6 +189,60 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 if (x) {
                     object_post((t_object *)x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
                 }
+
+                // Poll for handshake completion using select()
+                fd_set write_fds, except_fds;
+                struct timeval tv;
+                tv.tv_sec = 0;
+                tv.tv_usec = 500000; // 500ms timeout
+
+                FD_ZERO(&write_fds);
+                FD_ZERO(&except_fds);
+                FD_SET(vs->sock, &write_fds);
+                FD_SET(vs->sock, &except_fds);
+
+                int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, &except_fds, &tv);
+                if (sel_ret > 0) {
+                    if (FD_ISSET(vs->sock, &except_fds)) {
+                        if (x) {
+                            object_error((t_object *)x, "visualize: TCP handshake failed (exception set)");
+                        }
+                        closesocket(vs->sock);
+                        vs->sock = INVALID_SOCKET;
+                    } else if (FD_ISSET(vs->sock, &write_fds)) {
+                        int valopt;
+                        int lon = sizeof(int);
+                        if (getsockopt(vs->sock, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0) {
+                            if (x) {
+                                object_error((t_object *)x, "visualize: getsockopt failed during handshake");
+                            }
+                            closesocket(vs->sock);
+                            vs->sock = INVALID_SOCKET;
+                        } else if (valopt != 0) {
+                            if (x) {
+                                object_error((t_object *)x, "visualize: TCP handshake failed with socket error %d", valopt);
+                            }
+                            closesocket(vs->sock);
+                            vs->sock = INVALID_SOCKET;
+                        } else {
+                            if (x) {
+                                object_post((t_object *)x, "visualize: TCP handshake completed successfully via select!");
+                            }
+                        }
+                    }
+                } else if (sel_ret == 0) {
+                    if (x) {
+                        object_error((t_object *)x, "visualize: TCP handshake timed out (500ms)");
+                    }
+                    closesocket(vs->sock);
+                    vs->sock = INVALID_SOCKET;
+                } else {
+                    if (x) {
+                        object_error((t_object *)x, "visualize: select failed during TCP handshake");
+                    }
+                    closesocket(vs->sock);
+                    vs->sock = INVALID_SOCKET;
+                }
             }
         } else {
             if (x) {
@@ -246,22 +300,41 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         int sent = send(vs->sock, buf + total_sent, len - total_sent, 0);
         if (sent == SOCKET_ERROR) {
             int err = WSAGetLastError();
-            if (err == WSAEWOULDBLOCK || err == WSAENOTCONN || err == WSAEINPROGRESS) {
+            if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
                 if (x) {
-                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s'", err, total_sent, len, ev);
+                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s', waiting for writability...", err, total_sent, len, ev);
                 }
-                if (total_sent > 0) {
+
+                fd_set write_fds;
+                struct timeval tv;
+                tv.tv_sec = 1; // Wait up to 1 second
+                tv.tv_usec = 0;
+
+                FD_ZERO(&write_fds);
+                FD_SET(vs->sock, &write_fds);
+
+                int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, NULL, &tv);
+                if (sel_ret > 0 && FD_ISSET(vs->sock, &write_fds)) {
+                    if (x) {
+                        object_post((t_object *)x, "visualize: socket became writable after WSAEWOULDBLOCK, retrying send...");
+                    }
+                    continue;
+                } else {
+                    if (x) {
+                        object_error((t_object *)x, "visualize: select timed out or failed while waiting for writability (sent %d/%d bytes) for event '%s'", total_sent, len, ev);
+                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
+                    break;
                 }
+            } else {
+                if (x) {
+                    object_error((t_object *)x, "visualize: send failed with socket error %d for event '%s'", err, ev);
+                }
+                closesocket(vs->sock);
+                vs->sock = INVALID_SOCKET;
                 break;
             }
-            if (x) {
-                object_error((t_object *)x, "visualize: send failed with socket error %d for event '%s'", err, ev);
-            }
-            closesocket(vs->sock);
-            vs->sock = INVALID_SOCKET;
-            break;
         }
         if (sent == 0) {
             if (x) {
