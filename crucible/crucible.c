@@ -1514,10 +1514,12 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             t_rebar_temp_span *s_ptr = &spans[s_idx];
             double lowest_mean = 0.0;
             int has_any_valid_mean = 0;
+            long bars_with_mean_count = 0;
 
             for (long k = 0; k < total_post_bars; k++) {
                 if (track_bars[k].span == s_ptr) {
                     if (track_bars[k].has_mean) {
+                        bars_with_mean_count++;
                         if (!has_any_valid_mean || track_bars[k].mean < lowest_mean) {
                             lowest_mean = track_bars[k].mean;
                             has_any_valid_mean = 1;
@@ -1527,7 +1529,7 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             }
 
             if (has_any_valid_mean) {
-                s_ptr->rating = lowest_mean * (double)s_ptr->new_span_count;
+                s_ptr->rating = lowest_mean * (double)bars_with_mean_count;
             } else {
                 s_ptr->rating = 0.0;
             }

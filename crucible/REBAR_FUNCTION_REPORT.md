@@ -19,8 +19,8 @@ The `rebar` feature is triggered by sending a `rebar` message to the first inlet
    - If $\text{T\_post}$ is within the newly assembled span, the pair is inserted into the `scores` and `absolutes` arrays of that post-conversion bar.
    - If $\text{T\_post}$ is outside the span, the pair is omitted/forgotten, and a detailed warning is posted directly to the Max console.
 7. **Mean Calculation**: For each post-conversion bar, its `mean` key is calculated as the average of all its mapped `scores`. If there are no scores, it defaults to `0.0`.
-8. **Rating Recalculation**: For each post-conversion bar, its `rating` is calculated as the minimum `mean` among all bars in its span multiplied by the total number of bars in its span:
-   $$\text{rating} = \text{min\_mean} \times \text{new\_span\_len}$$
+8. **Rating Recalculation**: For each post-conversion bar, its `rating` is calculated as the minimum `mean` among all bars in its span multiplied by the number of bars in its span that have a valid mean (excluding any bars with a null set of scores / no calculated mean):
+   $$\text{rating} = \text{min\_mean} \times \text{bars\_with\_mean\_count}$$
 
 ---
 
