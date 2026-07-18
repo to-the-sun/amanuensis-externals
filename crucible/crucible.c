@@ -1994,11 +1994,13 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
+        object_post((t_object *)x, "crucible: enqueuing async task for message '%s'...", s->s_name);
         async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
         return;
     }
 
     if (x->defer && !systhread_ismainthread()) {
+        object_post((t_object *)x, "crucible: deferring execution for message '%s' to main thread...", s->s_name);
         defer(x, (method)crucible_do_anything, s, (short)argc, argv);
         return;
     }
