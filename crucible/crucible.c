@@ -1766,7 +1766,10 @@ void serialize_dict(t_dyn_str *ds, t_dictionary *dict) {
 void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
     if (!x->visualize) return;
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-    if (!incumbent_dict) return;
+    if (!incumbent_dict) {
+        object_error((t_object *)x, "visualize: could not retain incumbent dictionary named '%s' for repopulate", x->incumbent_dict_name->s_name);
+        return;
+    }
 
     t_dyn_str ds;
     dyn_str_init(&ds, 32768);
@@ -2238,7 +2241,10 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     if (!x->visualize) return;
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-    if (!incumbent_dict) return;
+    if (!incumbent_dict) {
+        object_error((t_object *)x, "visualize: could not retain incumbent dictionary named '%s' for state update", x->incumbent_dict_name->s_name);
+        return;
+    }
 
     long buffer_size = 262144;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);

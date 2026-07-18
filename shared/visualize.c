@@ -22,6 +22,7 @@ typedef struct {
 
 typedef struct _viz_queue_item {
     t_viz_socket *vs;
+    void *x;    // Reference to Max object
     char *type; // Resolved type string
     char *message;
     struct _viz_queue_item *next;
@@ -154,9 +155,14 @@ static void ensure_connected(t_viz_socket *vs) {
 
 // Internal helper for socket sending logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static int perform_send(t_viz_socket *vs, const char *type, const char *message) {
+static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
     ensure_connected(vs);
-    if (vs->sock == INVALID_SOCKET) return -1;
+    if (vs->sock == INVALID_SOCKET) {
+        if (x) {
+            object_warn((t_object *)x, "visualize: not connected to visualizer server");
+        }
+        return -1;
+    }
 
     long buf_size = strlen(message) + strlen(type) + 64;
     char *buf = (char *)sysmem_newptr(buf_size);
@@ -171,6 +177,9 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
 
     if (n <= 0 || n >= (int)buf_size) {
         sysmem_freeptr(buf);
+        if (x) {
+            object_error((t_object *)x, "visualize: packet formatting error or truncation (length: %d)", n);
+        }
         return -1;
     }
 
@@ -187,11 +196,17 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
                 }
                 break;
             }
+            if (x) {
+                object_error((t_object *)x, "visualize: send failed with socket error %d", err);
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             break;
         }
         if (sent == 0) {
+            if (x) {
+                object_warn((t_object *)x, "visualize: connection closed by remote visualizer server");
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             break;
@@ -229,7 +244,7 @@ void *viz_worker_thread(void *arg) {
 
         if (item) {
             systhread_mutex_lock(item->vs->mutex);
-            perform_send(item->vs, item->type, item->message);
+            perform_send(item->vs, item->x, item->type, item->message);
             systhread_mutex_unlock(item->vs->mutex);
 
             sysmem_freeptr(item->type);
@@ -247,10 +262,14 @@ void visualize(void *x, const char *message) {
 
     const char *type_static = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type_static);
-    if (!vs) return;
+    if (!vs) {
+        object_warn((t_object *)x, "visualize: could not resolve socket for object");
+        return;
+    }
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
+        object_error((t_object *)x, "visualize queue overflow (count: %d >= %d). Dropping packet.", queue_count, MAX_QUEUE_SIZE);
         systhread_mutex_unlock(queue_mutex);
         return;
     }
@@ -262,6 +281,7 @@ void visualize(void *x, const char *message) {
     }
 
     item->vs = vs;
+    item->x = x;
     item->type = (char *)sysmem_newptr(strlen(type_static) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
     
@@ -294,12 +314,15 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
 
     const char *type = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type);
-    if (!vs) return -1;
+    if (!vs) {
+        object_warn((t_object *)x, "visualize_exchange: could not resolve socket for object");
+        return -1;
+    }
 
     int received = -1;
     systhread_mutex_lock(vs->mutex);
     
-    if (perform_send(vs, type, message) == 0) {
+    if (perform_send(vs, x, type, message) == 0) {
         fd_set read_fds;
         struct timeval tv;
         tv.tv_sec = 1;
