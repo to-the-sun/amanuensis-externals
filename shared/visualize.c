@@ -22,6 +22,7 @@ typedef struct {
 
 typedef struct _viz_queue_item {
     t_viz_socket *vs;
+    void *x;    // Reference to Max object
     char *type; // Resolved type string
     char *message;
     struct _viz_queue_item *next;
@@ -124,19 +125,53 @@ void visualize_cleanup() {
     }
 }
 
+static const char *get_event_name_from_message(const char *message) {
+    if (!message) return "unknown";
+    if (strstr(message, "\"event\":\"repopulate\"")) {
+        return "repopulate";
+    } else if (strstr(message, "\"event\":\"new_span\"")) {
+        return "new_span";
+    } else if (strstr(message, "\"event\":\"replace\"")) {
+        return "replace";
+    } else if (strstr(message, "\"event\":\"cleanup\"")) {
+        return "cleanup";
+    } else if (strstr(message, "\"event\":\"fill_bar\"")) {
+        return "fill_bar";
+    } else if (message[0] == '{' && strstr(message, "\"tracks\":")) {
+        return "clear/tracks";
+    }
+    return "unknown";
+}
+
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static void ensure_connected(t_viz_socket *vs) {
+static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
+        if (x) {
+            object_post((t_object *)x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
+        }
         DWORD now = GetTickCount();
-        if (now - vs->last_connect_attempt < 2000) return;
+        if (now - vs->last_connect_attempt < 2000) {
+            if (x) {
+                object_post((t_object *)x, "visualize: throttling connection attempt (too frequent)");
+            }
+            return;
+        }
         vs->last_connect_attempt = now;
 
         vs->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (vs->sock == INVALID_SOCKET) return;
+        if (vs->sock == INVALID_SOCKET) {
+            if (x) {
+                object_error((t_object *)x, "visualize: socket creation failed");
+            }
+            return;
+        }
 
         u_long mode = 1;
         if (ioctlsocket(vs->sock, FIONBIO, &mode) != 0) {
+            if (x) {
+                object_error((t_object *)x, "visualize: failed to set non-blocking mode");
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             return;
@@ -145,20 +180,44 @@ static void ensure_connected(t_viz_socket *vs) {
         if (connect(vs->sock, (struct sockaddr *)&vs->addr, sizeof(vs->addr)) == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+                if (x) {
+                    object_error((t_object *)x, "visualize: TCP connect failed with error %d", err);
+                }
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
+            } else {
+                if (x) {
+                    object_post((t_object *)x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
+                }
             }
+        } else {
+            if (x) {
+                object_post((t_object *)x, "visualize: TCP socket connected immediately!");
+            }
+        }
+    } else {
+        if (x) {
+            object_post((t_object *)x, "visualize: socket is already open and ready");
         }
     }
 }
 
 // Internal helper for socket sending logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static int perform_send(t_viz_socket *vs, const char *type, const char *message) {
-    ensure_connected(vs);
-    if (vs->sock == INVALID_SOCKET) return -1;
+static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
+    const char *ev = get_event_name_from_message(message);
+    if (x) {
+        object_post((t_object *)x, "visualize: calling ensure_connected for event '%s'...", ev);
+    }
+    ensure_connected(vs, x);
+    if (vs->sock == INVALID_SOCKET) {
+        if (x) {
+            object_warn((t_object *)x, "visualize: perform_send aborting for event '%s', not connected to visualizer server", ev);
+        }
+        return -1;
+    }
 
-    long buf_size = 524288;
+    long buf_size = strlen(message) + strlen(type) + 64;
     char *buf = (char *)sysmem_newptr(buf_size);
     if (!buf) return -1;
 
@@ -171,7 +230,14 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
 
     if (n <= 0 || n >= (int)buf_size) {
         sysmem_freeptr(buf);
+        if (x) {
+            object_error((t_object *)x, "visualize: packet formatting error or truncation for event '%s' (length: %d)", ev, n);
+        }
         return -1;
+    }
+
+    if (x) {
+        object_post((t_object *)x, "visualize: attempting socket send of %d bytes for event '%s' (type '%s')...", n, ev, type);
     }
 
     int total_sent = 0;
@@ -181,17 +247,26 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
         if (sent == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAENOTCONN || err == WSAEINPROGRESS) {
+                if (x) {
+                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s'", err, total_sent, len, ev);
+                }
                 if (total_sent > 0) {
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 }
                 break;
             }
+            if (x) {
+                object_error((t_object *)x, "visualize: send failed with socket error %d for event '%s'", err, ev);
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             break;
         }
         if (sent == 0) {
+            if (x) {
+                object_warn((t_object *)x, "visualize: connection closed by remote visualizer server during event '%s'", ev);
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             break;
@@ -200,6 +275,9 @@ static int perform_send(t_viz_socket *vs, const char *type, const char *message)
     }
 
     sysmem_freeptr(buf);
+    if (x) {
+        object_post((t_object *)x, "visualize: perform_send complete for event '%s' (sent %d of %d bytes)", ev, total_sent, len);
+    }
     return (total_sent == len) ? 0 : -1;
 }
 
@@ -229,7 +307,7 @@ void *viz_worker_thread(void *arg) {
 
         if (item) {
             systhread_mutex_lock(item->vs->mutex);
-            perform_send(item->vs, item->type, item->message);
+            perform_send(item->vs, item->x, item->type, item->message);
             systhread_mutex_unlock(item->vs->mutex);
 
             sysmem_freeptr(item->type);
@@ -247,10 +325,17 @@ void visualize(void *x, const char *message) {
 
     const char *type_static = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type_static);
-    if (!vs) return;
+    if (!vs) {
+        object_warn((t_object *)x, "visualize: could not resolve socket for object");
+        return;
+    }
+
+    const char *ev = get_event_name_from_message(message);
+    object_post((t_object *)x, "visualize: enqueuing %s packet (queue count: %d, type: '%s')", ev, queue_count, type_static);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
+        object_error((t_object *)x, "visualize queue overflow (count: %d >= %d). Dropping packet.", queue_count, MAX_QUEUE_SIZE);
         systhread_mutex_unlock(queue_mutex);
         return;
     }
@@ -262,6 +347,7 @@ void visualize(void *x, const char *message) {
     }
 
     item->vs = vs;
+    item->x = x;
     item->type = (char *)sysmem_newptr(strlen(type_static) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
     
@@ -294,12 +380,15 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
 
     const char *type = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type);
-    if (!vs) return -1;
+    if (!vs) {
+        object_warn((t_object *)x, "visualize_exchange: could not resolve socket for object");
+        return -1;
+    }
 
     int received = -1;
     systhread_mutex_lock(vs->mutex);
     
-    if (perform_send(vs, type, message) == 0) {
+    if (perform_send(vs, x, type, message) == 0) {
         fd_set read_fds;
         struct timeval tv;
         tv.tv_sec = 1;
