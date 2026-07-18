@@ -75,54 +75,67 @@ The system loops through all tracks (`all_track_keys[t]`) and fetches their spec
 
 ### Step 3.5: Positive Growth Padding (Forward Copying)
 If a track's local maximum `o_max` is strictly less than the global maximum `song_curr_max`:
-1. **Retrieve Sorted Bars**: It retrieves the track's existing bar timestamps, sorted numerically:
+1. **Retrieve Virtual Grid of Source Bars**: Rather than querying only the present bar keys (which would omit missing bars), the system generates a complete virtual timestamp grid covering the entire track timeline range from the absolute minimum (`o_min`) to the absolute maximum (`o_max`) at `bar_length` steps. This ensures that the track's exact discontiguity/missing-bar pattern is correctly preserved and wrapped:
    ```c
-   t_atom_long *o_bars = get_sorted_track_bars(other_track_dict, &o_bars_count);
+   long o_bars_count = ((o_max - o_min) / bar_length) + 1;
+   t_atom_long *o_bars = (t_atom_long *)sysmem_newptr(o_bars_count * sizeof(t_atom_long));
+   for (long i = 0; i < o_bars_count; i++) {
+       o_bars[i] = o_min + i * bar_length;
+   }
    ```
 2. **Loop to Fill Gaps**: It loops `dest_ts` starting from `o_max + bar_length` up to `song_curr_max`, incrementing by `bar_length`:
    ```c
    for (t_atom_long dest_ts = o_max + bar_length; dest_ts <= song_curr_max; dest_ts += bar_length) { ... }
    ```
-3. **Select Source Bar (Modulo indexing)**: It wraps around the sorted array from start to end using a forward modulo counter:
+3. **Select Source Bar (Modulo indexing)**: It wraps around the virtual grid array from start to end using a forward modulo counter:
    ```c
    t_atom_long src_ts = o_bars[k % o_bars_count];
    ```
 4. **Copy & Adjust Bar**:
-   - It deep-copies the source bar dictionary: `t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);`
-   - It calls `adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);`. This is a **no-op** ensuring that internal values (such as `offset`, `span`, or `absolutes`) remain **exactly unshifted**; only the main dictionary key is updated to the destination timestamp.
-5. **Write to Incumbent**: It deletes any existing bar at `dest_ts` and writes the `copied_bar_dict` under the key string of `dest_ts`.
-6. **Log and Output**:
-   - Logs: `[Fill Pos] Copied track <name> bar <src_ts> to <dest_ts>`.
-   - Outputs the new bar via `crucible_output_bar_data` to downstream outlets.
-7. **Downstream Visualization Packet**: If `@visualize` is enabled, it sends a `"fill_bar"` JSON event via TCP:
-   ```json
-   {"event":"fill_bar","track":"<track_name>","bar":<dest_ts>,"copied_from":<src_ts>}
-   ```
-8. **Memory Cleanup**: Releases the copied dictionary and frees the sorted bars array.
+   - **Case A: Source Bar is Present**:
+     - It deep-copies the source bar dictionary: `t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);`
+     - It calls `adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);`. This is a **no-op** ensuring that internal values (such as `offset`, `span`, or `absolutes`) remain **exactly unshifted**; only the main dictionary key is updated to the destination timestamp.
+     - Deletes any existing bar at `dest_ts` and writes the `copied_bar_dict` under the key string of `dest_ts`.
+     - Logs: `[Fill Pos] Copied track <name> bar <src_ts> to <dest_ts>`.
+     - Outputs the new bar via `crucible_output_bar_data` to downstream outlets.
+     - If `@visualize` is enabled, it sends a `"fill_bar"` JSON event packet via TCP.
+   - **Case B: Source Bar is Missing**:
+     - Since the source bar at `src_ts` is a missing bar, its "missing" state must be copied to the destination.
+     - If there is an existing bar entry at `dest_ts` in the track dictionary, it is deleted:
+       ```c
+       if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
+           dictionary_deleteentry(other_track_dict, dest_bar_sym);
+       }
+       ```
+     - Logs: `[Fill Pos Missing] Deleted track <name> bar <dest_ts> (copied missing bar <src_ts>)`.
+5. **Memory Cleanup**: Frees the virtual `o_bars` array and releases any copied dictionary structures.
 
 ---
 
 ### Step 3.6: Negative Growth Padding (Backward Copying)
 If a track's local minimum `o_min` is strictly greater than the global minimum `song_curr_min`:
-1. **Retrieve Sorted Bars**: It retrieves the track's existing bar timestamps, sorted numerically.
+1. **Retrieve Virtual Grid of Source Bars**: It retrieves the complete virtual timestamp grid covering the range from `o_min` to `o_max` at `bar_length` steps (exactly as in step 3.5).
 2. **Loop to Fill Gaps**: It loops `dest_ts` starting from `o_min - bar_length` down to `song_curr_min`, decrementing by `bar_length`:
    ```c
    for (t_atom_long dest_ts = o_min - bar_length; dest_ts >= song_curr_min; dest_ts -= bar_length) { ... }
    ```
-3. **Select Source Bar (Backward modulo indexing)**: It wraps around the sorted array from end to start using a backward modulo counter:
+3. **Select Source Bar (Backward modulo indexing)**: It wraps around the virtual grid array from end to start using a backward modulo counter:
    ```c
    long src_idx = o_bars_count - 1 - (k % o_bars_count);
    t_atom_long src_ts = o_bars[src_idx];
    ```
 4. **Copy & Adjust Bar**:
-   - It deep-copies the source bar dictionary.
-   - Calls `adjust_filled_bar_dict` (no-op; internal values remain unshifted).
-5. **Write to Incumbent**: Deletes any existing bar at `dest_ts` and writes the `copied_bar_dict`.
-6. **Log and Output**:
-   - Logs: `[Fill Neg] Copied track <name> bar <src_ts> to <dest_ts>`.
-   - Outputs the new bar via `crucible_output_bar_data`.
-7. **Downstream Visualization Packet**: If `@visualize` is enabled, it sends a `"fill_bar"` JSON event via TCP.
-8. **Memory Cleanup**: Releases the copied dictionary and frees the sorted bars array.
+   - **Case A: Source Bar is Present**:
+     - Deep-copies the source bar dictionary.
+     - Calls `adjust_filled_bar_dict` (no-op).
+     - Deletes any existing bar at `dest_ts` and writes the `copied_bar_dict`.
+     - Logs: `[Fill Neg] Copied track <name> bar <src_ts> to <dest_ts>`.
+     - Outputs the new bar via `crucible_output_bar_data`.
+     - If `@visualize` is enabled, it sends a `"fill_bar"` JSON event packet via TCP.
+   - **Case B: Source Bar is Missing**:
+     - Since the source bar at `src_ts` is a missing bar, its "missing" state is copied to the destination by deleting any existing entry at `dest_ts` from the track dictionary.
+     - Logs: `[Fill Neg Missing] Deleted track <name> bar <dest_ts> (copied missing bar <src_ts>)`.
+5. **Memory Cleanup**: Frees the virtual `o_bars` array and releases any copied dictionary structures.
 
 ---
 

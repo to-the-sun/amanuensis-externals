@@ -821,85 +821,107 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                         get_track_bounds(other_track_dict, bar_length, &o_min, &o_max, &o_has);
                         if (o_has) {
                             if (o_max < song_curr_max) {
-                                long o_bars_count = 0;
-                                t_atom_long *o_bars = get_sorted_track_bars(other_track_dict, &o_bars_count);
-                                if (o_bars && o_bars_count > 0) {
-                                    long k = 0;
-                                    for (t_atom_long dest_ts = o_max + bar_length; dest_ts <= song_curr_max; dest_ts += bar_length) {
-                                        t_atom_long src_ts = o_bars[k % o_bars_count];
-                                        char src_ts_str[64];
-                                        snprintf(src_ts_str, 64, "%lld", (long long)src_ts);
-                                        t_dictionary *src_bar_dict = NULL;
-                                        dictionary_getdictionary(other_track_dict, gensym(src_ts_str), (t_object **)&src_bar_dict);
-                                        if (src_bar_dict) {
-                                            t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);
-                                            adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);
+                                if (bar_length > 0) {
+                                    long o_bars_count = ((o_max - o_min) / bar_length) + 1;
+                                    t_atom_long *o_bars = (t_atom_long *)sysmem_newptr(o_bars_count * sizeof(t_atom_long));
+                                    if (o_bars) {
+                                        for (long i = 0; i < o_bars_count; i++) {
+                                            o_bars[i] = o_min + i * bar_length;
+                                        }
+                                        long k = 0;
+                                        for (t_atom_long dest_ts = o_max + bar_length; dest_ts <= song_curr_max; dest_ts += bar_length) {
+                                            t_atom_long src_ts = o_bars[k % o_bars_count];
+                                            char src_ts_str[64];
+                                            snprintf(src_ts_str, 64, "%lld", (long long)src_ts);
+                                            t_dictionary *src_bar_dict = NULL;
+                                            dictionary_getdictionary(other_track_dict, gensym(src_ts_str), (t_object **)&src_bar_dict);
 
                                             char dest_ts_str[64];
                                             snprintf(dest_ts_str, 64, "%lld", (long long)dest_ts);
                                             t_symbol *dest_bar_sym = gensym(dest_ts_str);
 
-                                            if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
-                                                dictionary_deleteentry(other_track_dict, dest_bar_sym);
-                                            }
-                                            dictionary_appenddictionary(other_track_dict, dest_bar_sym, (t_object *)copied_bar_dict);
-                                            crucible_log(x, "  [Fill Pos] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
+                                            if (src_bar_dict) {
+                                                t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);
+                                                adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);
 
-                                            crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+                                                if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
+                                                    dictionary_deleteentry(other_track_dict, dest_bar_sym);
+                                                }
+                                                dictionary_appenddictionary(other_track_dict, dest_bar_sym, (t_object *)copied_bar_dict);
+                                                crucible_log(x, "  [Fill Pos] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
 
-                                            if (x->visualize) {
-                                                char vis_msg[256];
-                                                snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
-                                                         other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
-                                                visualize((t_object *)x, vis_msg);
+                                                crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+
+                                                if (x->visualize) {
+                                                    char vis_msg[256];
+                                                    snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
+                                                             other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                    visualize((t_object *)x, vis_msg);
+                                                }
+                                                object_release((t_object *)copied_bar_dict);
+                                            } else {
+                                                if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
+                                                    dictionary_deleteentry(other_track_dict, dest_bar_sym);
+                                                    crucible_log(x, "  [Fill Pos Missing] Deleted track %s bar %lld (copied missing bar %lld)", other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                }
                                             }
-                                            object_release((t_object *)copied_bar_dict);
+                                            k++;
                                         }
-                                        k++;
+                                        sysmem_freeptr(o_bars);
                                     }
-                                    sysmem_freeptr(o_bars);
                                 }
                             }
 
                             if (o_min > song_curr_min) {
-                                long o_bars_count = 0;
-                                t_atom_long *o_bars = get_sorted_track_bars(other_track_dict, &o_bars_count);
-                                if (o_bars && o_bars_count > 0) {
-                                    long k = 0;
-                                    for (t_atom_long dest_ts = o_min - bar_length; dest_ts >= song_curr_min; dest_ts -= bar_length) {
-                                        long src_idx = o_bars_count - 1 - (k % o_bars_count);
-                                        t_atom_long src_ts = o_bars[src_idx];
-                                        char src_ts_str[64];
-                                        snprintf(src_ts_str, 64, "%lld", (long long)src_ts);
-                                        t_dictionary *src_bar_dict = NULL;
-                                        dictionary_getdictionary(other_track_dict, gensym(src_ts_str), (t_object **)&src_bar_dict);
-                                        if (src_bar_dict) {
-                                            t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);
-                                            adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);
+                                if (bar_length > 0) {
+                                    long o_bars_count = ((o_max - o_min) / bar_length) + 1;
+                                    t_atom_long *o_bars = (t_atom_long *)sysmem_newptr(o_bars_count * sizeof(t_atom_long));
+                                    if (o_bars) {
+                                        for (long i = 0; i < o_bars_count; i++) {
+                                            o_bars[i] = o_min + i * bar_length;
+                                        }
+                                        long k = 0;
+                                        for (t_atom_long dest_ts = o_min - bar_length; dest_ts >= song_curr_min; dest_ts -= bar_length) {
+                                            long src_idx = o_bars_count - 1 - (k % o_bars_count);
+                                            t_atom_long src_ts = o_bars[src_idx];
+                                            char src_ts_str[64];
+                                            snprintf(src_ts_str, 64, "%lld", (long long)src_ts);
+                                            t_dictionary *src_bar_dict = NULL;
+                                            dictionary_getdictionary(other_track_dict, gensym(src_ts_str), (t_object **)&src_bar_dict);
 
                                             char dest_ts_str[64];
                                             snprintf(dest_ts_str, 64, "%lld", (long long)dest_ts);
                                             t_symbol *dest_bar_sym = gensym(dest_ts_str);
 
-                                            if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
-                                                dictionary_deleteentry(other_track_dict, dest_bar_sym);
-                                            }
-                                            dictionary_appenddictionary(other_track_dict, dest_bar_sym, (t_object *)copied_bar_dict);
-                                            crucible_log(x, "  [Fill Neg] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
+                                            if (src_bar_dict) {
+                                                t_dictionary *copied_bar_dict = dictionary_deep_copy(src_bar_dict);
+                                                adjust_filled_bar_dict(copied_bar_dict, src_ts, dest_ts);
 
-                                            crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+                                                if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
+                                                    dictionary_deleteentry(other_track_dict, dest_bar_sym);
+                                                }
+                                                dictionary_appenddictionary(other_track_dict, dest_bar_sym, (t_object *)copied_bar_dict);
+                                                crucible_log(x, "  [Fill Neg] Copied track %s bar %lld to %lld", other_track_sym->s_name, (long long)src_ts, (long long)dest_ts);
 
-                                            if (x->visualize) {
-                                                char vis_msg[256];
-                                                snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
-                                                         other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
-                                                visualize((t_object *)x, vis_msg);
+                                                crucible_output_bar_data(x, copied_bar_dict, dest_ts, other_track_sym, other_track_dict);
+
+                                                if (x->visualize) {
+                                                    char vis_msg[256];
+                                                    snprintf(vis_msg, 256, "{\"event\":\"fill_bar\",\"track\":\"%s\",\"bar\":%lld,\"copied_from\":%lld}",
+                                                             other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                    visualize((t_object *)x, vis_msg);
+                                                }
+                                                object_release((t_object *)copied_bar_dict);
+                                            } else {
+                                                if (dictionary_hasentry(other_track_dict, dest_bar_sym)) {
+                                                    dictionary_deleteentry(other_track_dict, dest_bar_sym);
+                                                    crucible_log(x, "  [Fill Neg Missing] Deleted track %s bar %lld (copied missing bar %lld)", other_track_sym->s_name, (long long)dest_ts, (long long)src_ts);
+                                                }
                                             }
-                                            object_release((t_object *)copied_bar_dict);
+                                            k++;
                                         }
-                                        k++;
+                                        sysmem_freeptr(o_bars);
                                     }
-                                    sysmem_freeptr(o_bars);
                                 }
                             }
                         }
