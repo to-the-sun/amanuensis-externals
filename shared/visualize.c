@@ -127,17 +127,33 @@ void visualize_cleanup() {
 
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
-static void ensure_connected(t_viz_socket *vs) {
+static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
+        if (x) {
+            object_post((t_object *)x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
+        }
         DWORD now = GetTickCount();
-        if (now - vs->last_connect_attempt < 2000) return;
+        if (now - vs->last_connect_attempt < 2000) {
+            if (x) {
+                object_post((t_object *)x, "visualize: throttling connection attempt (too frequent)");
+            }
+            return;
+        }
         vs->last_connect_attempt = now;
 
         vs->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (vs->sock == INVALID_SOCKET) return;
+        if (vs->sock == INVALID_SOCKET) {
+            if (x) {
+                object_error((t_object *)x, "visualize: socket creation failed");
+            }
+            return;
+        }
 
         u_long mode = 1;
         if (ioctlsocket(vs->sock, FIONBIO, &mode) != 0) {
+            if (x) {
+                object_error((t_object *)x, "visualize: failed to set non-blocking mode");
+            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             return;
@@ -146,9 +162,24 @@ static void ensure_connected(t_viz_socket *vs) {
         if (connect(vs->sock, (struct sockaddr *)&vs->addr, sizeof(vs->addr)) == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+                if (x) {
+                    object_error((t_object *)x, "visualize: TCP connect failed with error %d", err);
+                }
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
+            } else {
+                if (x) {
+                    object_post((t_object *)x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
+                }
             }
+        } else {
+            if (x) {
+                object_post((t_object *)x, "visualize: TCP socket connected immediately!");
+            }
+        }
+    } else {
+        if (x) {
+            object_post((t_object *)x, "visualize: socket is already open and ready");
         }
     }
 }
@@ -156,10 +187,13 @@ static void ensure_connected(t_viz_socket *vs) {
 // Internal helper for socket sending logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
-    ensure_connected(vs);
+    if (x) {
+        object_post((t_object *)x, "visualize: calling ensure_connected...");
+    }
+    ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) {
         if (x) {
-            object_warn((t_object *)x, "visualize: not connected to visualizer server");
+            object_warn((t_object *)x, "visualize: perform_send aborting, not connected to visualizer server");
         }
         return -1;
     }
@@ -183,6 +217,10 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         return -1;
     }
 
+    if (x) {
+        object_post((t_object *)x, "visualize: attempting socket send of %d bytes for type '%s'...", n, type);
+    }
+
     int total_sent = 0;
     int len = n;
     while (total_sent < len) {
@@ -190,6 +228,9 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         if (sent == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAENOTCONN || err == WSAEINPROGRESS) {
+                if (x) {
+                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes)", err, total_sent, len);
+                }
                 if (total_sent > 0) {
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
@@ -215,6 +256,9 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
     }
 
     sysmem_freeptr(buf);
+    if (x) {
+        object_post((t_object *)x, "visualize: perform_send complete (sent %d of %d bytes)", total_sent, len);
+    }
     return (total_sent == len) ? 0 : -1;
 }
 
@@ -266,6 +310,8 @@ void visualize(void *x, const char *message) {
         object_warn((t_object *)x, "visualize: could not resolve socket for object");
         return;
     }
+
+    object_post((t_object *)x, "visualize: enqueuing packet (queue count: %d, type: '%s')", queue_count, type_static);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {

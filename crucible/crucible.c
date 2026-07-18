@@ -932,9 +932,12 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         song_grew = (x->song_reach > old_song_reach);
 
+        object_post((t_object *)x, "crucible: Span won! Preparing visualizer packets. (visualize attribute status: %ld)", x->visualize);
         if (x->visualize) {
             // Send entire repopulate dictionary first, then send the span packet to trigger animation/pop-up
+            object_post((t_object *)x, "crucible: Calling crucible_visualize_repopulate...");
             crucible_visualize_repopulate(x);
+            object_post((t_object *)x, "crucible: Calling crucible_visualize_state (new_span)...");
             crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
@@ -1764,7 +1767,11 @@ void serialize_dict(t_dyn_str *ds, t_dictionary *dict) {
 }
 
 void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
-    if (!x->visualize) return;
+    if (!x->visualize) {
+        object_post((t_object *)x, "crucible repopulate: visualize attribute is disabled, skipping");
+        return;
+    }
+    object_post((t_object *)x, "crucible repopulate: attempting to retain incumbent dictionary '%s'", x->incumbent_dict_name->s_name);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "visualize: could not retain incumbent dictionary named '%s' for repopulate", x->incumbent_dict_name->s_name);
@@ -1784,10 +1791,12 @@ void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
     serialize_dict(&ds, incumbent_dict);
     dyn_str_append_char(&ds, '}');
 
+    object_post((t_object *)x, "crucible repopulate: serialization complete. JSON size: %ld chars. Enqueuing to visualize queue...", ds.size);
     visualize((t_object *)x, ds.data);
 
     dyn_str_free(&ds);
     dictobj_release(incumbent_dict);
+    object_post((t_object *)x, "crucible repopulate: dictionary released, repopulate process complete");
 }
 
 void crucible_visualize_repopulate(t_crucible *x) {
@@ -2238,7 +2247,11 @@ static long json_append_atom_or_array(char *buffer, long offset, long buffer_siz
 }
 
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
-    if (!x->visualize) return;
+    if (!x->visualize) {
+        object_post((t_object *)x, "crucible state: visualize attribute is disabled, skipping");
+        return;
+    }
+    object_post((t_object *)x, "crucible state: preparing packet for event type '%s'", event_type ? event_type->s_name : "none");
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
@@ -2330,9 +2343,11 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
     if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
 
+    object_post((t_object *)x, "crucible state: packet formatting complete. JSON size: %ld chars. Enqueuing to visualize queue...", offset);
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
     dictobj_release(incumbent_dict);
+    object_post((t_object *)x, "crucible state: dictionary released, state packet process complete");
 }
 
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av) {
