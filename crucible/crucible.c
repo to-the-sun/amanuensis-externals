@@ -1162,28 +1162,25 @@ void copy_dict_key(t_dictionary *src, t_dictionary *dest, t_symbol *key) {
 }
 
 typedef struct {
+    t_atom_long lowest_new;
+    t_atom_long limit_new;
+    long new_span_count;
+    t_atom_long *new_span_ts;
+    t_dictionary **nearest_old_dicts;
+    double rating;
+} t_rebar_temp_span;
+
+typedef struct {
     t_atom_long ts;
+    t_rebar_temp_span *span;
+    t_dictionary *nearest_old;
     double *scores;
     double *absolutes;
     long count;
     long capacity;
-} t_rebar_temp_bar;
-
-void temp_bar_add_pair(t_rebar_temp_bar *tb, double score, double absolute) {
-    if (tb->count >= tb->capacity) {
-        tb->capacity = tb->capacity == 0 ? 4 : tb->capacity * 2;
-        if (tb->scores == NULL) {
-            tb->scores = (double *)sysmem_newptr(tb->capacity * sizeof(double));
-            tb->absolutes = (double *)sysmem_newptr(tb->capacity * sizeof(double));
-        } else {
-            tb->scores = (double *)sysmem_resizeptr(tb->scores, tb->capacity * sizeof(double));
-            tb->absolutes = (double *)sysmem_resizeptr(tb->absolutes, tb->capacity * sizeof(double));
-        }
-    }
-    tb->scores[tb->count] = score;
-    tb->absolutes[tb->count] = absolute;
-    tb->count++;
-}
+    double mean;
+    int has_mean;
+} t_rebar_track_bar;
 
 void crucible_rebar(t_crucible *x, t_atom_long new_bar_length) {
     if (new_bar_length <= 0) {
@@ -1262,8 +1259,11 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             qsort(bar_keys, num_bars, sizeof(t_symbol *), compare_numerical_symbols);
         }
 
-        // We need to keep track of which old bars have been processed
-        // to avoid processing the same span multiple times
+        // First pass: lay out all the newly assembled spans and their bars
+        t_rebar_temp_span *spans = (t_rebar_temp_span *)sysmem_newptr(num_bars * sizeof(t_rebar_temp_span));
+        long span_count = 0;
+        long total_post_bars = 0;
+
         char *processed_bars = (char *)sysmem_newptr(num_bars * sizeof(char));
         memset(processed_bars, 0, num_bars * sizeof(char));
 
@@ -1302,9 +1302,6 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 }
             }
 
-            // 1. Convert each bar timestamp to the closest multiple of new_bar_length
-            // 2. Do the same for span array values
-            // 3. Fill missing multiples between lowest value in converted span and highest_old + old_bar_length
             t_atom_long lowest_new = 0;
             int has_lowest_new = 0;
             t_atom_long highest_old = 0;
@@ -1332,24 +1329,18 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             long new_span_count = (limit_new - lowest_new) / new_bar_length;
             if (new_span_count <= 0) new_span_count = 1; // safety
 
-            // Allocate S_assembled
-            t_atom_long *new_span_ts = (t_atom_long *)sysmem_newptr(new_span_count * sizeof(t_atom_long));
+            t_rebar_temp_span *s_ptr = &spans[span_count++];
+            s_ptr->lowest_new = lowest_new;
+            s_ptr->limit_new = limit_new;
+            s_ptr->new_span_count = new_span_count;
+            s_ptr->new_span_ts = (t_atom_long *)sysmem_newptr(new_span_count * sizeof(t_atom_long));
             for (long k = 0; k < new_span_count; k++) {
-                new_span_ts[k] = lowest_new + k * new_bar_length;
+                s_ptr->new_span_ts[k] = lowest_new + k * new_bar_length;
             }
 
-            // Allocate temp bars to collect scores & absolutes
-            t_rebar_temp_bar *temp_bars = (t_rebar_temp_bar *)sysmem_newptr(new_span_count * sizeof(t_rebar_temp_bar));
-            memset(temp_bars, 0, new_span_count * sizeof(t_rebar_temp_bar));
+            s_ptr->nearest_old_dicts = (t_dictionary **)sysmem_newptr(new_span_count * sizeof(t_dictionary *));
             for (long k = 0; k < new_span_count; k++) {
-                temp_bars[k].ts = new_span_ts[k];
-            }
-
-            // 5. Setup safety copy from nearest old bar.
-            // For each new_bar in new_span_ts, find the nearest old bar in old_span_atoms
-            t_dictionary **nearest_old_dicts = (t_dictionary **)sysmem_newptr(new_span_count * sizeof(t_dictionary *));
-            for (long k = 0; k < new_span_count; k++) {
-                t_atom_long new_ts = new_span_ts[k];
+                t_atom_long new_ts = s_ptr->new_span_ts[k];
                 t_atom_long closest_old_ts = 0;
                 int first_old = 1;
                 t_dictionary *closest_old_dict = NULL;
@@ -1362,238 +1353,278 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     }
                 }
 
-                // Find the actual dictionary of closest_old_ts under track_dict
                 char old_ts_str[64];
                 snprintf(old_ts_str, 64, "%lld", (long long)closest_old_ts);
                 dictionary_getdictionary(track_dict, gensym(old_ts_str), (t_object **)&closest_old_dict);
-                nearest_old_dicts[k] = closest_old_dict;
+                s_ptr->nearest_old_dicts[k] = closest_old_dict;
             }
 
-            // 6. Process scores and absolutes pairs
-            // For each old bar in the pre-conversion span, extract scores and absolutes
-            for (long sb = 0; sb < old_span_len; sb++) {
-                t_atom_long old_ts = atom_getlong(&old_span_atoms[sb]);
-                char old_ts_str[64];
-                snprintf(old_ts_str, 64, "%lld", (long long)old_ts);
+            total_post_bars += new_span_count;
 
-                t_dictionary *old_bar_dict = NULL;
-                if (dictionary_getdictionary(track_dict, gensym(old_ts_str), (t_object **)&old_bar_dict) != MAX_ERR_NONE || !old_bar_dict) {
-                    continue;
-                }
-
-                // Get offset
-                double offset = 0.0;
-                t_atom offset_atom;
-                if (dictionary_getatom(old_bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
-                    if (atom_gettype(&offset_atom) == A_FLOAT) {
-                        offset = atom_getfloat(&offset_atom);
-                    } else if (atom_gettype(&offset_atom) == A_LONG) {
-                        offset = (double)atom_getlong(&offset_atom);
-                    } else if (atom_gettype(&offset_atom) == A_OBJ) {
-                        t_object *offset_obj = atom_getobj(&offset_atom);
-                        if (offset_obj && object_classname_compare(offset_obj, gensym("atomarray"))) {
-                            long off_len = 0;
-                            t_atom *off_atoms = NULL;
-                            atomarray_getatoms((t_atomarray *)offset_obj, &off_len, &off_atoms);
-                            if (off_len > 0) {
-                                offset = atom_getfloat(off_atoms);
-                            }
-                        }
-                    }
-                }
-
-                // Get absolutes and scores
-                t_atomarray *abs_aa = NULL;
-                t_atom abs_single;
-                long abs_len = 0;
-                t_atom *abs_atoms = NULL;
-
-                if (dictionary_getatomarray(old_bar_dict, gensym("absolutes"), (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
-                    atomarray_getatoms(abs_aa, &abs_len, &abs_atoms);
-                } else if (dictionary_getatom(old_bar_dict, gensym("absolutes"), &abs_single) == MAX_ERR_NONE) {
-                    abs_atoms = &abs_single;
-                    abs_len = 1;
-                }
-
-                t_atomarray *sc_aa = NULL;
-                t_atom sc_single;
-                long sc_len = 0;
-                t_atom *sc_atoms = NULL;
-
-                if (dictionary_getatomarray(old_bar_dict, gensym("scores"), (t_object **)&sc_aa) == MAX_ERR_NONE && sc_aa) {
-                    atomarray_getatoms(sc_aa, &sc_len, &sc_atoms);
-                } else if (dictionary_getatom(old_bar_dict, gensym("scores"), &sc_single) == MAX_ERR_NONE) {
-                    sc_atoms = &sc_single;
-                    sc_len = 1;
-                }
-
-                long num_pairs = abs_len < sc_len ? abs_len : sc_len;
-                for (long j = 0; j < num_pairs; j++) {
-                    double abs_val = 0.0;
-                    if (atom_gettype(abs_atoms + j) == A_FLOAT) {
-                        abs_val = atom_getfloat(abs_atoms + j);
-                    } else if (atom_gettype(abs_atoms + j) == A_LONG) {
-                        abs_val = (double)atom_getlong(abs_atoms + j);
-                    }
-
-                    double score_val = 0.0;
-                    if (atom_gettype(sc_atoms + j) == A_FLOAT) {
-                        score_val = atom_getfloat(sc_atoms + j);
-                    } else if (atom_gettype(sc_atoms + j) == A_LONG) {
-                        score_val = (double)atom_getlong(sc_atoms + j);
-                    }
-
-                    double val = abs_val - offset;
-                    t_atom_long floored_ts = (t_atom_long)floor(val / new_bar_length) * new_bar_length;
-
-                    // Check if floored_ts is in the assembled span
-                    int found_assembled = 0;
-                    for (long k = 0; k < new_span_count; k++) {
-                        if (new_span_ts[k] == floored_ts) {
-                            temp_bar_add_pair(&temp_bars[k], score_val, abs_val);
-                            found_assembled = 1;
-                            break;
-                        }
-                    }
-
-                    if (!found_assembled) {
-                        object_warn((t_object *)x, "rebar: pair (absolute: %.4f, score: %.4f) under old bar %lld mapped to floored timestamp %lld which is not in the newly assembled span. Pre bar_length: %lld, Post bar_length: %lld",
-                                    abs_val, score_val, (long long)old_ts, (long long)floored_ts, (long long)old_bar_length, (long long)new_bar_length);
-                    }
-                }
-            }
-
-            // 7. Calculate mean for each temp bar
-            double *means = (double *)sysmem_newptr(new_span_count * sizeof(double));
-            char *has_mean = (char *)sysmem_newptr(new_span_count * sizeof(char));
-            memset(has_mean, 0, new_span_count * sizeof(char));
-
-            for (long k = 0; k < new_span_count; k++) {
-                if (temp_bars[k].count > 0) {
-                    double sum = 0.0;
-                    for (long j = 0; j < temp_bars[k].count; j++) {
-                        sum += temp_bars[k].scores[j];
-                    }
-                    means[k] = sum / temp_bars[k].count;
-                    has_mean[k] = 1;
-                } else {
-                    means[k] = 0.0;
-                }
-            }
-
-            // 8. Calculate rating
-            // "Rating is the lowest mean of every bar in its span multiplied by the number of bars in its span."
-            // "When calculating a rating, a [] mean should not be considered when finding the lowest mean."
-            double lowest_mean = 0.0;
-            int has_any_valid_mean = 0;
-            for (long k = 0; k < new_span_count; k++) {
-                if (has_mean[k]) {
-                    if (!has_any_valid_mean || means[k] < lowest_mean) {
-                        lowest_mean = means[k];
-                        has_any_valid_mean = 1;
-                    }
-                }
-            }
-
-            double final_rating = 0.0;
-            if (has_any_valid_mean) {
-                final_rating = lowest_mean * (double)new_span_count;
-            }
-
-            // Now create dictionaries for each post-conversion bar
-            for (long k = 0; k < new_span_count; k++) {
-                t_dictionary *new_bar_dict = dictionary_new();
-                if (!new_bar_dict) continue;
-
-                // Set palette and offset from the nearest old bar
-                t_dictionary *nearest_old = nearest_old_dicts[k];
-                if (nearest_old) {
-                    copy_dict_key(nearest_old, new_bar_dict, gensym("palette"));
-                    copy_dict_key(nearest_old, new_bar_dict, gensym("offset"));
-                }
-
-                // Build a fresh new span array of atoms for this specific bar to avoid sharing
-                t_atom *new_span_atoms_to_append = (t_atom *)sysmem_newptr(new_span_count * sizeof(t_atom));
-                if (new_span_atoms_to_append) {
-                    for (long j = 0; j < new_span_count; j++) {
-                        atom_setlong(new_span_atoms_to_append + j, new_span_ts[j]);
-                    }
-                    t_atomarray *new_span_array_obj = atomarray_new(new_span_count, new_span_atoms_to_append);
-                    if (new_span_array_obj) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("span"), (t_object *)new_span_array_obj);
-                    }
-                    sysmem_freeptr(new_span_atoms_to_append);
-                }
-
-                // Set scores, absolutes, and mean
-                if (temp_bars[k].count > 0) {
-                    t_atom *sc_atoms_new = (t_atom *)sysmem_newptr(temp_bars[k].count * sizeof(t_atom));
-                    t_atom *abs_atoms_new = (t_atom *)sysmem_newptr(temp_bars[k].count * sizeof(t_atom));
-                    for (long j = 0; j < temp_bars[k].count; j++) {
-                        atom_setfloat(sc_atoms_new + j, temp_bars[k].scores[j]);
-                        atom_setfloat(abs_atoms_new + j, temp_bars[k].absolutes[j]);
-                    }
-                    t_atomarray *sc_aa_new = atomarray_new(temp_bars[k].count, sc_atoms_new);
-                    t_atomarray *abs_aa_new = atomarray_new(temp_bars[k].count, abs_atoms_new);
-                    if (sc_aa_new) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)sc_aa_new);
-                    }
-                    if (abs_aa_new) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)abs_aa_new);
-                    }
-
-                    t_atom mean_atom;
-                    atom_setfloat(&mean_atom, means[k]);
-                    dictionary_appendatom(new_bar_dict, gensym("mean"), &mean_atom);
-
-                    sysmem_freeptr(sc_atoms_new);
-                    sysmem_freeptr(abs_atoms_new);
-                } else {
-                    t_atomarray *empty_sc = atomarray_new(0, NULL);
-                    t_atomarray *empty_abs = atomarray_new(0, NULL);
-                    t_atomarray *empty_mean = atomarray_new(0, NULL);
-                    if (empty_sc) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)empty_sc);
-                    }
-                    if (empty_abs) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)empty_abs);
-                    }
-                    if (empty_mean) {
-                        dictionary_appendatomarray(new_bar_dict, gensym("mean"), (t_object *)empty_mean);
-                    }
-                }
-
-                // Set rating
-                t_atom rating_atom;
-                atom_setfloat(&rating_atom, final_rating);
-                dictionary_appendatom(new_bar_dict, gensym("rating"), &rating_atom);
-
-                // Add outright to track key in new track dictionary
-                char new_ts_str[64];
-                snprintf(new_ts_str, 64, "%lld", (long long)new_span_ts[k]);
-                dictionary_appenddictionary(new_track_dict, gensym(new_ts_str), (t_object *)new_bar_dict);
-            }
-
-            // Cleanup allocated memories for this span
-            sysmem_freeptr(means);
-            sysmem_freeptr(has_mean);
-            for (long k = 0; k < new_span_count; k++) {
-                if (temp_bars[k].scores) sysmem_freeptr(temp_bars[k].scores);
-                if (temp_bars[k].absolutes) sysmem_freeptr(temp_bars[k].absolutes);
-            }
-            sysmem_freeptr(temp_bars);
-            sysmem_freeptr(new_span_ts);
-            sysmem_freeptr(nearest_old_dicts);
             if (old_span_aa) {
                 object_release((t_object *)old_span_aa);
             }
+        }
+        sysmem_freeptr(processed_bars);
+
+        // Allocate and setup all post-conversion bars for the track
+        t_rebar_track_bar *track_bars = (t_rebar_track_bar *)sysmem_newptr(total_post_bars * sizeof(t_rebar_track_bar));
+        memset(track_bars, 0, total_post_bars * sizeof(t_rebar_track_bar));
+
+        long bar_idx = 0;
+        for (long s_idx = 0; s_idx < span_count; s_idx++) {
+            t_rebar_temp_span *s_ptr = &spans[s_idx];
+            for (long k = 0; k < s_ptr->new_span_count; k++) {
+                track_bars[bar_idx].ts = s_ptr->new_span_ts[k];
+                track_bars[bar_idx].span = s_ptr;
+                track_bars[bar_idx].nearest_old = s_ptr->nearest_old_dicts[k];
+                track_bars[bar_idx].scores = NULL;
+                track_bars[bar_idx].absolutes = NULL;
+                track_bars[bar_idx].count = 0;
+                track_bars[bar_idx].capacity = 0;
+                track_bars[bar_idx].mean = 0.0;
+                track_bars[bar_idx].has_mean = 0;
+                bar_idx++;
+            }
+        }
+
+        // Second pass: Process and distribute all absolute/score pairs under pre-conversion bars
+        for (long b = 0; b < num_bars; b++) {
+            t_symbol *bar_sym = bar_keys[b];
+            t_dictionary *old_bar_dict = NULL;
+            if (dictionary_getdictionary(track_dict, bar_sym, (t_object **)&old_bar_dict) != MAX_ERR_NONE || !old_bar_dict) {
+                continue;
+            }
+
+            t_atom_long old_ts = atoll(bar_sym->s_name);
+
+            // Get offset
+            double offset = 0.0;
+            t_atom offset_atom;
+            if (dictionary_getatom(old_bar_dict, gensym("offset"), &offset_atom) == MAX_ERR_NONE) {
+                if (atom_gettype(&offset_atom) == A_FLOAT) {
+                    offset = atom_getfloat(&offset_atom);
+                } else if (atom_gettype(&offset_atom) == A_LONG) {
+                    offset = (double)atom_getlong(&offset_atom);
+                } else if (atom_gettype(&offset_atom) == A_OBJ) {
+                    t_object *offset_obj = atom_getobj(&offset_atom);
+                    if (offset_obj && object_classname_compare(offset_obj, gensym("atomarray"))) {
+                        long off_len = 0;
+                        t_atom *off_atoms = NULL;
+                        atomarray_getatoms((t_atomarray *)offset_obj, &off_len, &off_atoms);
+                        if (off_len > 0) {
+                            offset = atom_getfloat(off_atoms);
+                        }
+                    }
+                }
+            }
+
+            // Get absolutes and scores
+            t_atomarray *abs_aa = NULL;
+            t_atom abs_single;
+            long abs_len = 0;
+            t_atom *abs_atoms = NULL;
+
+            if (dictionary_getatomarray(old_bar_dict, gensym("absolutes"), (t_object **)&abs_aa) == MAX_ERR_NONE && abs_aa) {
+                atomarray_getatoms(abs_aa, &abs_len, &abs_atoms);
+            } else if (dictionary_getatom(old_bar_dict, gensym("absolutes"), &abs_single) == MAX_ERR_NONE) {
+                abs_atoms = &abs_single;
+                abs_len = 1;
+            }
+
+            t_atomarray *sc_aa = NULL;
+            t_atom sc_single;
+            long sc_len = 0;
+            t_atom *sc_atoms = NULL;
+
+            if (dictionary_getatomarray(old_bar_dict, gensym("scores"), (t_object **)&sc_aa) == MAX_ERR_NONE && sc_aa) {
+                atomarray_getatoms(sc_aa, &sc_len, &sc_atoms);
+            } else if (dictionary_getatom(old_bar_dict, gensym("scores"), &sc_single) == MAX_ERR_NONE) {
+                sc_atoms = &sc_single;
+                sc_len = 1;
+            }
+
+            long num_pairs = abs_len < sc_len ? abs_len : sc_len;
+            for (long j = 0; j < num_pairs; j++) {
+                double abs_val = 0.0;
+                if (atom_gettype(abs_atoms + j) == A_FLOAT) {
+                    abs_val = atom_getfloat(abs_atoms + j);
+                } else if (atom_gettype(abs_atoms + j) == A_LONG) {
+                    abs_val = (double)atom_getlong(abs_atoms + j);
+                }
+
+                double score_val = 0.0;
+                if (atom_gettype(sc_atoms + j) == A_FLOAT) {
+                    score_val = atom_getfloat(sc_atoms + j);
+                } else if (atom_gettype(sc_atoms + j) == A_LONG) {
+                    score_val = (double)atom_getlong(sc_atoms + j);
+                }
+
+                double val = abs_val - offset;
+                t_atom_long floored_ts = (t_atom_long)floor(val / new_bar_length) * new_bar_length;
+
+                // Check if floored_ts is in ANY post-conversion bar of the track
+                int found_anywhere = 0;
+                for (long k = 0; k < total_post_bars; k++) {
+                    if (track_bars[k].ts == floored_ts) {
+                        // Insert pair into the scores/absolutes of that post-conversion bar
+                        if (track_bars[k].count >= track_bars[k].capacity) {
+                            track_bars[k].capacity = track_bars[k].capacity == 0 ? 4 : track_bars[k].capacity * 2;
+                            if (track_bars[k].scores == NULL) {
+                                track_bars[k].scores = (double *)sysmem_newptr(track_bars[k].capacity * sizeof(double));
+                                track_bars[k].absolutes = (double *)sysmem_newptr(track_bars[k].capacity * sizeof(double));
+                            } else {
+                                track_bars[k].scores = (double *)sysmem_resizeptr(track_bars[k].scores, track_bars[k].capacity * sizeof(double));
+                                track_bars[k].absolutes = (double *)sysmem_resizeptr(track_bars[k].absolutes, track_bars[k].capacity * sizeof(double));
+                            }
+                        }
+                        track_bars[k].scores[track_bars[k].count] = score_val;
+                        track_bars[k].absolutes[track_bars[k].count] = abs_val;
+                        track_bars[k].count++;
+
+                        found_anywhere = 1;
+                        break;
+                    }
+                }
+
+                if (!found_anywhere) {
+                    object_warn((t_object *)x, "rebar: pair (absolute: %.4f, score: %.4f) under old bar %lld mapped to floored timestamp %lld which is not in any post-conversion bar. Pre bar_length: %lld, Post bar_length: %lld",
+                                abs_val, score_val, (long long)old_ts, (long long)floored_ts, (long long)old_bar_length, (long long)new_bar_length);
+                }
+            }
+        }
+
+        // Third pass: Calculate mean for each post-conversion bar
+        for (long k = 0; k < total_post_bars; k++) {
+            if (track_bars[k].count > 0) {
+                double sum = 0.0;
+                for (long j = 0; j < track_bars[k].count; j++) {
+                    sum += track_bars[k].scores[j];
+                }
+                track_bars[k].mean = sum / track_bars[k].count;
+                track_bars[k].has_mean = 1;
+            } else {
+                track_bars[k].mean = 0.0;
+                track_bars[k].has_mean = 0;
+            }
+        }
+
+        // Calculate rating for each newly assembled span
+        for (long s_idx = 0; s_idx < span_count; s_idx++) {
+            t_rebar_temp_span *s_ptr = &spans[s_idx];
+            double lowest_mean = 0.0;
+            int has_any_valid_mean = 0;
+
+            for (long k = 0; k < total_post_bars; k++) {
+                if (track_bars[k].span == s_ptr) {
+                    if (track_bars[k].has_mean) {
+                        if (!has_any_valid_mean || track_bars[k].mean < lowest_mean) {
+                            lowest_mean = track_bars[k].mean;
+                            has_any_valid_mean = 1;
+                        }
+                    }
+                }
+            }
+
+            if (has_any_valid_mean) {
+                s_ptr->rating = lowest_mean * (double)s_ptr->new_span_count;
+            } else {
+                s_ptr->rating = 0.0;
+            }
+        }
+
+        // Build the final dictionary structures and copy to the track
+        for (long k = 0; k < total_post_bars; k++) {
+            t_dictionary *new_bar_dict = dictionary_new();
+            if (!new_bar_dict) continue;
+
+            // Set palette and offset from the nearest old bar
+            t_dictionary *nearest_old = track_bars[k].nearest_old;
+            if (nearest_old) {
+                copy_dict_key(nearest_old, new_bar_dict, gensym("palette"));
+                copy_dict_key(nearest_old, new_bar_dict, gensym("offset"));
+            }
+
+            // Build a fresh new span array of atoms for this specific bar to avoid sharing
+            t_rebar_temp_span *s_ptr = track_bars[k].span;
+            t_atom *new_span_atoms_to_append = (t_atom *)sysmem_newptr(s_ptr->new_span_count * sizeof(t_atom));
+            if (new_span_atoms_to_append) {
+                for (long j = 0; j < s_ptr->new_span_count; j++) {
+                    atom_setlong(new_span_atoms_to_append + j, s_ptr->new_span_ts[j]);
+                }
+                t_atomarray *new_span_array_obj = atomarray_new(s_ptr->new_span_count, new_span_atoms_to_append);
+                if (new_span_array_obj) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("span"), (t_object *)new_span_array_obj);
+                }
+                sysmem_freeptr(new_span_atoms_to_append);
+            }
+
+            // Set scores, absolutes, and mean
+            if (track_bars[k].count > 0) {
+                t_atom *sc_atoms_new = (t_atom *)sysmem_newptr(track_bars[k].count * sizeof(t_atom));
+                t_atom *abs_atoms_new = (t_atom *)sysmem_newptr(track_bars[k].count * sizeof(t_atom));
+                for (long j = 0; j < track_bars[k].count; j++) {
+                    atom_setfloat(sc_atoms_new + j, track_bars[k].scores[j]);
+                    atom_setfloat(abs_atoms_new + j, track_bars[k].absolutes[j]);
+                }
+                t_atomarray *sc_aa_new = atomarray_new(track_bars[k].count, sc_atoms_new);
+                t_atomarray *abs_aa_new = atomarray_new(track_bars[k].count, abs_atoms_new);
+                if (sc_aa_new) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)sc_aa_new);
+                }
+                if (abs_aa_new) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)abs_aa_new);
+                }
+
+                t_atom mean_atom;
+                atom_setfloat(&mean_atom, track_bars[k].mean);
+                dictionary_appendatom(new_bar_dict, gensym("mean"), &mean_atom);
+
+                sysmem_freeptr(sc_atoms_new);
+                sysmem_freeptr(abs_atoms_new);
+            } else {
+                t_atomarray *empty_sc = atomarray_new(0, NULL);
+                t_atomarray *empty_abs = atomarray_new(0, NULL);
+                t_atomarray *empty_mean = atomarray_new(0, NULL);
+                if (empty_sc) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("scores"), (t_object *)empty_sc);
+                }
+                if (empty_abs) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("absolutes"), (t_object *)empty_abs);
+                }
+                if (empty_mean) {
+                    dictionary_appendatomarray(new_bar_dict, gensym("mean"), (t_object *)empty_mean);
+                }
+            }
+
+            // Set rating
+            t_atom rating_atom;
+            atom_setfloat(&rating_atom, s_ptr->rating);
+            dictionary_appendatom(new_bar_dict, gensym("rating"), &rating_atom);
+
+            // Add outright to track key in new track dictionary
+            char new_ts_str[64];
+            snprintf(new_ts_str, 64, "%lld", (long long)track_bars[k].ts);
+            dictionary_appenddictionary(new_track_dict, gensym(new_ts_str), (t_object *)new_bar_dict);
         }
 
         // Append transformed track dict to the new incumbent dictionary
         dictionary_appenddictionary(new_incumbent_dict, track_sym, (t_object *)new_track_dict);
 
+        // Cleanup allocated memories for this track
+        for (long s_idx = 0; s_idx < span_count; s_idx++) {
+            sysmem_freeptr(spans[s_idx].new_span_ts);
+            sysmem_freeptr(spans[s_idx].nearest_old_dicts);
+        }
+        sysmem_freeptr(spans);
+
+        for (long k = 0; k < total_post_bars; k++) {
+            if (track_bars[k].scores) sysmem_freeptr(track_bars[k].scores);
+            if (track_bars[k].absolutes) sysmem_freeptr(track_bars[k].absolutes);
+        }
+        sysmem_freeptr(track_bars);
+
         if (bar_keys) sysmem_freeptr(bar_keys);
-        sysmem_freeptr(processed_bars);
     }
 
     // 10. Update stored bar_length
