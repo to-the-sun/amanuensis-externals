@@ -1225,9 +1225,9 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 }
 
                 if ((!tr->busy || main_looped) && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
-                    long long start = (track_looped || main_looped) ? 0 : r_last + 1;
+                    long long start = (track_looped || main_looped) ? (long long)floor(x->most_negative_bar) : r_last + 1;
                     long long end = r_scan;
-                    long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
+                    long long latest_j = (long long)floor((double)end / bar_len) * (long long)bar_len;
 
                     if (latest_j >= start) {
                         int nt = (x->fifo_tail + 1) % 4096;
