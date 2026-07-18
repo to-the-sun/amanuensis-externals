@@ -517,10 +517,11 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
     t_atom_long bar_length = crucible_get_bar_length(x);
+    object_post((t_object *)x, "crucible: entering crucible_process_span (utilizing bar_length %lld, incumbent dict: '%s')", (long long)bar_length, x->incumbent_dict_name->s_name);
     crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
-        object_error((t_object *)x, "could not find dictionary named %s", x->incumbent_dict_name->s_name);
+        object_error((t_object *)x, "crucible: could not find dictionary named %s", x->incumbent_dict_name->s_name);
         return;
     }
 
@@ -528,6 +529,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     t_atom *span_atoms = NULL;
     atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
 
+    object_post((t_object *)x, "crucible: processing span for track %s with %ld bars", track_sym->s_name, span_len);
     crucible_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
 
     int challenger_wins = 1;
@@ -600,20 +602,25 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             }
 
             if (incumbent_rating_len == 0) {
+                object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 continue;
             }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
+            object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
             crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
+                object_post((t_object *)x, "crucible: -> Challenger loses bar. Span comparison failed.");
                 crucible_log(x, "-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
             } else {
+                object_post((t_object *)x, "crucible: -> Challenger wins bar.");
                 crucible_log(x, "-> Challenger wins bar.");
             }
         } else {
+            object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
             crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
         }
     }
@@ -941,6 +948,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
+        object_post((t_object *)x, "crucible: Challenger span for track %s lost.", track_sym->s_name);
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
     }
 
@@ -2089,6 +2097,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             return;
         }
         t_atomarray *span_aa = atomarray_new(argc, argv);
+        object_post((t_object *)x, "crucible: Received span message for track %s. Triggering crucible_process_span...", x->last_track_id->s_name);
         crucible_process_span(x, x->last_track_id, span_aa);
         object_release((t_object *)span_aa);
         return;

@@ -125,6 +125,24 @@ void visualize_cleanup() {
     }
 }
 
+static const char *get_event_name_from_message(const char *message) {
+    if (!message) return "unknown";
+    if (strstr(message, "\"event\":\"repopulate\"")) {
+        return "repopulate";
+    } else if (strstr(message, "\"event\":\"new_span\"")) {
+        return "new_span";
+    } else if (strstr(message, "\"event\":\"replace\"")) {
+        return "replace";
+    } else if (strstr(message, "\"event\":\"cleanup\"")) {
+        return "cleanup";
+    } else if (strstr(message, "\"event\":\"fill_bar\"")) {
+        return "fill_bar";
+    } else if (message[0] == '{' && strstr(message, "\"tracks\":")) {
+        return "clear/tracks";
+    }
+    return "unknown";
+}
+
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
 static void ensure_connected(t_viz_socket *vs, void *x) {
@@ -187,13 +205,14 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
 // Internal helper for socket sending logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
+    const char *ev = get_event_name_from_message(message);
     if (x) {
-        object_post((t_object *)x, "visualize: calling ensure_connected...");
+        object_post((t_object *)x, "visualize: calling ensure_connected for event '%s'...", ev);
     }
     ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) {
         if (x) {
-            object_warn((t_object *)x, "visualize: perform_send aborting, not connected to visualizer server");
+            object_warn((t_object *)x, "visualize: perform_send aborting for event '%s', not connected to visualizer server", ev);
         }
         return -1;
     }
@@ -212,13 +231,13 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
     if (n <= 0 || n >= (int)buf_size) {
         sysmem_freeptr(buf);
         if (x) {
-            object_error((t_object *)x, "visualize: packet formatting error or truncation (length: %d)", n);
+            object_error((t_object *)x, "visualize: packet formatting error or truncation for event '%s' (length: %d)", ev, n);
         }
         return -1;
     }
 
     if (x) {
-        object_post((t_object *)x, "visualize: attempting socket send of %d bytes for type '%s'...", n, type);
+        object_post((t_object *)x, "visualize: attempting socket send of %d bytes for event '%s' (type '%s')...", n, ev, type);
     }
 
     int total_sent = 0;
@@ -229,7 +248,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAENOTCONN || err == WSAEINPROGRESS) {
                 if (x) {
-                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes)", err, total_sent, len);
+                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s'", err, total_sent, len, ev);
                 }
                 if (total_sent > 0) {
                     closesocket(vs->sock);
@@ -238,7 +257,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
                 break;
             }
             if (x) {
-                object_error((t_object *)x, "visualize: send failed with socket error %d", err);
+                object_error((t_object *)x, "visualize: send failed with socket error %d for event '%s'", err, ev);
             }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
@@ -246,7 +265,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         }
         if (sent == 0) {
             if (x) {
-                object_warn((t_object *)x, "visualize: connection closed by remote visualizer server");
+                object_warn((t_object *)x, "visualize: connection closed by remote visualizer server during event '%s'", ev);
             }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
@@ -257,7 +276,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
 
     sysmem_freeptr(buf);
     if (x) {
-        object_post((t_object *)x, "visualize: perform_send complete (sent %d of %d bytes)", total_sent, len);
+        object_post((t_object *)x, "visualize: perform_send complete for event '%s' (sent %d of %d bytes)", ev, total_sent, len);
     }
     return (total_sent == len) ? 0 : -1;
 }
@@ -311,7 +330,8 @@ void visualize(void *x, const char *message) {
         return;
     }
 
-    object_post((t_object *)x, "visualize: enqueuing packet (queue count: %d, type: '%s')", queue_count, type_static);
+    const char *ev = get_event_name_from_message(message);
+    object_post((t_object *)x, "visualize: enqueuing %s packet (queue count: %d, type: '%s')", ev, queue_count, type_static);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
