@@ -196,9 +196,10 @@ def generate_video(audio_path, data):
                 peak_search_ptr += 1
             for p in new_peaks:
                 debug_msg = f"[B{p['band_idx']}] {p['prominence']:.4f} > {p['thresh_val']:.4f} @ {p['time']:.2f}s"
-                active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
-                if len(active_debug_lines) > MAX_DEBUG_LINES:
-                    active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
+                # Disabling messages being sent to the Matplotlib in-graph console for the time being
+                # active_debug_lines.insert(0, {'text': debug_msg, 'lifetime': POPUP_LIFETIME, 'band_idx': p['band_idx']})
+                # if len(active_debug_lines) > MAX_DEBUG_LINES:
+                #     active_debug_lines = active_debug_lines[:MAX_DEBUG_LINES]
                 rolling_window_scores.append({'frame': p['p_idx'], 'score': p['total_score'], 'band_idx': p['band_idx']})
                 accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
                 active_qualifiers.clear()
