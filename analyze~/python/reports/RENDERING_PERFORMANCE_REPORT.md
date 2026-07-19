@@ -32,7 +32,7 @@ The rendering system has been overhauled to utilize Matplotlib's high-performanc
 ### Strategy 2: Pre-allocated Artist Pools (Object Pooling)
 The system no longer creates and removes artists on the fly.
 - **Implementation**: Fixed pools for score labels, qualifier lines, and debug console text are created during initialization.
-- **Usage**: The `update()` function updates the position, text, and visibility of existing pool members, eliminating the overhead of object creation.
+- **Usage**: The `update()` function updates the position, text, and visibility of existing pool members, eliminating the overhead of object creation. *(Note: Messages being sent to the Matplotlib in-graph debug console have been disabled for the time being, so these debug console texts are currently kept hidden.)*
 
 ### Strategy 3: Optimized Historical Buffer
 - **Fast Plotting**: The historical 5s buffer and current snapshot lines are updated using `set_ydata`, which is significantly faster than reconstructive plotting.
