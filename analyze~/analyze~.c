@@ -42,6 +42,7 @@ typedef struct _analyze {
     // Attributes
     long log_enabled;
     t_symbol* group_name;
+    long weighted_bar;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -97,6 +98,11 @@ void ext_main(void* r) {
     CLASS_ATTR_ACCESSORS(c, "group", NULL, (method)analyze_group_settor);
     CLASS_ATTR_LABEL(c, "group", 0, "Shared Group Name");
 
+    CLASS_ATTR_LONG(c, "weighted_bar", 0, t_analyze, weighted_bar);
+    CLASS_ATTR_FILTER_CLIP(c, "weighted_bar", 0, 1);
+    CLASS_ATTR_STYLE_LABEL(c, "weighted_bar", 0, "checkbox", "Weighted Bar Length Calculation");
+    CLASS_ATTR_DEFAULT(c, "weighted_bar", 0, "1");
+
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)analyze_clear, "clear", 0);
@@ -137,6 +143,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->log_enabled = 0;
+        x->weighted_bar = 1;
         x->sample_rate = 44100.0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
@@ -405,7 +412,30 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             atom_setfloat(out_args + 1, x->result_buffer->metrics.std_dev);
             atom_setfloat(out_args + 2, x->result_buffer->metrics.contrast);
             atom_setfloat(out_args + 3, x->result_buffer->metrics.stability_score);
-            float barlen = x->result_buffer->metrics.highest_peak_valid ? (float)fabs(x->result_buffer->metrics.highest_peak_ms) : 0.0f;
+
+            double max_score = -1.0;
+            int best_bar_length = 0;
+            critical_enter(x->lock);
+            if (x->analyzer) {
+                for (int i = 0; i <= 5000; i++) {
+                    int count = x->analyzer->bar_length_counts[i];
+                    if (count > 0) {
+                        double score = 0.0;
+                        if (x->weighted_bar) {
+                            score = (double)count * ((double)i / 5000.0);
+                        } else {
+                            score = (double)count;
+                        }
+                        if (score > max_score) {
+                            max_score = score;
+                            best_bar_length = i;
+                        }
+                    }
+                }
+            }
+            critical_exit(x->lock);
+            float barlen = (float)best_bar_length;
+
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
         }
