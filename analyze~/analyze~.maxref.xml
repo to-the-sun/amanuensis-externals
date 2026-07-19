@@ -31,7 +31,7 @@
 		</outlet>
 		<outlet id="1" type="float">
 			<digest>Bar Length (ms)</digest>
-			<description>Outputs the absolute time offset (ms) of the highest peak in the current cumulative history buffer.</description>
+			<description>Outputs the bar length (ms) determined from the analysis history histogram, optionally using a weighted calculation if `@weighted_bar` is enabled.</description>
 		</outlet>
 		<outlet id="2" type="float">
 			<digest>Rating Score</digest>
@@ -77,6 +77,12 @@
 			<digest>Log Diagnostics</digest>
 			<description>
 				Enables or disables detailed diagnostic logging. When enabled (1), internal analysis states, peak detection events, and performance metrics are sent to the rightmost outlet. This is useful for debugging and fine-tuning the analyzer's behavior.
+			</description>
+		</attribute>
+		<attribute name="weighted_bar" get="1" set="1" type="long" size="1">
+			<digest>Weighted Bar Length Calculation</digest>
+			<description>
+				Enables or disables the weighted multiplier applied when finding the bar length to output from the object. When enabled (1, default), the output bar length is determined by finding the bar length in the histogram that maximizes the count multiplied by a weight equal to the bar length divided by 5000. When disabled (0), the output bar length is determined by simply finding the bar length with the highest count in the histogram.
 			</description>
 		</attribute>
 	</attributelist>

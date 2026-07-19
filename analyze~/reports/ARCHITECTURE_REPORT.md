@@ -82,5 +82,19 @@ The `max_peak` value is a critical normalization constant representing the maxim
 
 ---
 
+## 5. Weighted Bar Length Calculation (`@weighted_bar`)
+
+The `analyze~` Max external provides a `@weighted_bar` attribute (default `1`, enabled) that controls how the output bar length (Outlet 1, `outlet_barlen`) is determined from the historical bar length counts histogram.
+
+*   **When `@weighted_bar` is enabled (1)**: The object scans the `bar_length_counts` histogram (indices 0 to 5000) and finds the bar length index `i` that maximizes:
+    $$\text{score} = \text{count} \times \left( \frac{i}{5000} \right)$$
+    This applies a progressive linear weight that favors longer, more complete bar lengths over shorter subdivisions.
+*   **When `@weighted_bar` is disabled (0)**: The object determines the bar length index `i` that maximizes the raw, unweighted count in the histogram:
+    $$\text{score} = \text{count}$$
+
+To respect architectural boundaries, this weighting logic resides purely within the host Max external layer (`analyze_worker_task` in `analyze~.c`) and does not alter the underlying C-core library.
+
+---
+
 ## Conclusion
 The system is built on a **Unified C-Core**. The host environments (Max and Python) serve as data providers and result consumers, while all critical DSP and transience logic is centralized in the C library to ensure bit-perfect parity across all use cases.
