@@ -917,9 +917,11 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         long num_tr = 0;
         dictionary_getkeys(x->track_reaches_dict, &num_tr, &tr_keys);
         for (long t = 0; t < num_tr; t++) {
+            t_symbol *tr_sym = tr_keys[t];
+            if (tr_sym == gensym("__song_min") || tr_sym == gensym("__song_min_valid")) continue;
             t_atom_long r = 0;
-            dictionary_getlong(x->track_reaches_dict, tr_keys[t], &r);
-            dictionary_appendlong(old_reaches, tr_keys[t], r);
+            dictionary_getlong(x->track_reaches_dict, tr_sym, &r);
+            dictionary_appendlong(old_reaches, tr_sym, r);
         }
         if (tr_keys) sysmem_freeptr(tr_keys);
 
@@ -929,6 +931,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
         dictionary_getkeys(x->track_reaches_dict, &num_tr, &tr_keys);
         for (long t = 0; t < num_tr; t++) {
             t_symbol *tr_sym = tr_keys[t];
+            if (tr_sym == gensym("__song_min") || tr_sym == gensym("__song_min_valid")) continue;
             t_atom_long new_r = 0;
             dictionary_getlong(x->track_reaches_dict, tr_sym, &new_r);
             t_atom_long old_r = 0;
@@ -980,6 +983,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 dictionary_getkeys(x->track_reaches_dict, &num_tr, &tr_keys);
                 for (long t = 0; t < num_tr; t++) {
                     t_symbol *tr_sym = tr_keys[t];
+                    if (tr_sym == gensym("__song_min") || tr_sym == gensym("__song_min_valid")) continue;
                     t_atom_long new_r = 0;
                     dictionary_getlong(x->track_reaches_dict, tr_sym, &new_r);
                     t_atom_long old_r = 0;
@@ -1924,6 +1928,13 @@ void crucible_recalculate_reaches(t_crucible *x) {
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
 
+    t_atom_long old_song_min = 0;
+    int has_old_song_min = 0;
+    if (x->track_reaches_dict && dictionary_hasentry(x->track_reaches_dict, gensym("__song_min_valid"))) {
+        dictionary_getlong(x->track_reaches_dict, gensym("__song_min"), &old_song_min);
+        has_old_song_min = 1;
+    }
+
     x->song_reach = 0;
     dictionary_clear(x->track_reaches_dict);
 
@@ -1960,12 +1971,16 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has) {
         x->song_reach = (song_max + bar_length) - song_min;
+        if (x->track_reaches_dict) {
+            dictionary_appendlong(x->track_reaches_dict, gensym("__song_min"), song_min);
+            dictionary_appendlong(x->track_reaches_dict, gensym("__song_min_valid"), 1);
+        }
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(incumbent_dict);
 
-    if (song_has && x->outlet_reach_int) {
+    if (song_has && x->outlet_reach_int && (!has_old_song_min || song_min != old_song_min)) {
         t_atom min_atom;
         atom_setlong(&min_atom, song_min);
         if (!x->async || systhread_ismainthread()) {
@@ -2106,6 +2121,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 dictionary_getkeys(x->track_reaches_dict, &numkeys, &keys);
                 for (long i = 0; i < numkeys; i++) {
                     t_symbol *track_id_sym = keys[i];
+                    if (track_id_sym == gensym("__song_min") || track_id_sym == gensym("__song_min_valid")) continue;
                     t_atom_long reach = 0;
                     dictionary_getlong(x->track_reaches_dict, track_id_sym, &reach);
                     t_atom reach_list[2];
