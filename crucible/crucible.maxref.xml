@@ -49,6 +49,7 @@
 				Outputs current reach information.
 				1. Song Reach: [song (symbol), reach (long)] - emitted when song growth occurs or in response to the 'reaches' message.
 				2. Track Reach: [track_id (long), reach (long)] - emitted when track growth occurs or in response to the 'reaches' message.
+				3. Minimum Bar: [min (symbol), min_bar (long)] - emitted whenever reaches are calculated (due to track growth, a 'reaches' message, etc.) to report the minimum bar present across any track.
 			</description>
 		</outlet>
 		<outlet id="4" type="anything">

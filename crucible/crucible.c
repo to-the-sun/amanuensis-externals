@@ -212,6 +212,8 @@ void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv)
         outlet_anything(x->outlet_reach_int, gensym("song"), argc, argv);
     } else if (s == gensym("reach_list")) {
         outlet_list(x->outlet_reach_int, NULL, argc, argv);
+    } else if (s == gensym("reach_min")) {
+        outlet_anything(x->outlet_reach_int, gensym("min"), argc, argv);
     } else if (s == gensym("fill")) {
         outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
     }
@@ -364,6 +366,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->visualize = 0;
         x->fill = 0;
         x->song_reach = 0;
+        x->song_min = 0;
         x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
@@ -1918,6 +1921,7 @@ void crucible_recalculate_reaches(t_crucible *x) {
     if (!incumbent_dict) return;
 
     x->song_reach = 0;
+    x->song_min = 0;
     dictionary_clear(x->track_reaches_dict);
 
     t_symbol **track_keys = NULL;
@@ -1959,10 +1963,21 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has) {
         x->song_reach = (song_max + bar_length) - song_min;
+        x->song_min = song_min;
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(incumbent_dict);
+
+    if (song_has && x->outlet_reach_int) {
+        t_atom min_atom;
+        atom_setlong(&min_atom, x->song_min);
+        if (!x->async || systhread_ismainthread()) {
+            outlet_anything(x->outlet_reach_int, gensym("min"), 1, &min_atom);
+        } else {
+            defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &min_atom);
+        }
+    }
 }
 
 void crucible_visualize_dump_all_spans(t_crucible *x) {
@@ -2050,6 +2065,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (s == gensym("clear")) {
         x->song_reach = 0;
+        x->song_min = 0;
         if (x->track_reaches_dict) {
             dictionary_clear(x->track_reaches_dict);
         }
@@ -2224,7 +2240,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data Outlet. Outputs bar data lists '[palette] [track] [bar] [offset]' and reach update notifications '[- track reach -999999.0]'."); break;
             case 1: sprintf(s, "Outlet 2: Fill Outlet. Outputs the symbol 'fill' whenever a song growth event is detected."); break;
-            case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]' or '[track_id] [reach]'. Triggered by growth or 'reaches' message."); break;
+            case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]', '[track_id] [reach]', or 'min [min_bar]'. Triggered by growth or 'reaches' message."); break;
             case 3: sprintf(s, "Outlet 4: Logging Outlet. Outputs verbose diagnostic and status messages when the @log attribute is enabled."); break;
         }
     }
