@@ -366,7 +366,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->visualize = 0;
         x->fill = 0;
         x->song_reach = 0;
-        x->song_min = 0;
         x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
@@ -1916,21 +1915,19 @@ t_dictionary *dictionary_deep_copy(t_dictionary *src) {
 }
 
 void crucible_recalculate_reaches(t_crucible *x) {
+    t_atom_long song_min = 0;
+    t_atom_long song_max = 0;
+    int song_has = 0;
+    t_symbol **track_keys = NULL;
+    long num_tracks = 0;
     t_atom_long bar_length = crucible_get_bar_length(x);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) return;
 
     x->song_reach = 0;
-    x->song_min = 0;
     dictionary_clear(x->track_reaches_dict);
 
-    t_symbol **track_keys = NULL;
-    long num_tracks = 0;
     dictionary_getkeys(incumbent_dict, &num_tracks, &track_keys);
-
-    t_atom_long song_min = 0;
-    t_atom_long song_max = 0;
-    int song_has = 0;
 
     for (long i = 0; i < num_tracks; i++) {
         t_symbol *track_sym = track_keys[i];
@@ -1963,7 +1960,6 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has) {
         x->song_reach = (song_max + bar_length) - song_min;
-        x->song_min = song_min;
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
@@ -1971,7 +1967,7 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has && x->outlet_reach_int) {
         t_atom min_atom;
-        atom_setlong(&min_atom, x->song_min);
+        atom_setlong(&min_atom, song_min);
         if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->outlet_reach_int, gensym("min"), 1, &min_atom);
         } else {
@@ -2065,7 +2061,6 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (s == gensym("clear")) {
         x->song_reach = 0;
-        x->song_min = 0;
         if (x->track_reaches_dict) {
             dictionary_clear(x->track_reaches_dict);
         }
