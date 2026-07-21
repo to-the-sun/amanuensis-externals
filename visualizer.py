@@ -627,6 +627,20 @@ def run_gui():
         with state_lock:
             bar_data = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
 
+        # Calculate most_negative_bar across all tracks in bar_data
+        most_negative_bar = 0.0
+        all_b_ts = []
+        for tid, bars_info in bar_data.items():
+            for b_ts_str in bars_info.keys():
+                try:
+                    all_b_ts.append(float(b_ts_str))
+                except (ValueError, TypeError):
+                    continue
+        if all_b_ts:
+            min_b_ts = min(all_b_ts)
+            if min_b_ts < 0:
+                most_negative_bar = min_b_ts
+
         for tid, bars_info in bar_data.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
@@ -669,7 +683,7 @@ def run_gui():
                     # Calculation per user: (absolute - offset).
                     # This gives song-relative timestamp (assuming offset is standard transcript offset).
                     # Map this ms value to pixels along the grid:
-                    rel_ms = abs_val - off_val
+                    rel_ms = abs_val - off_val + most_negative_bar
                     x_pos = margin_left + ((rel_ms - song_start) / bar_length) * cell_w
 
                     with state_lock:

@@ -282,8 +282,8 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 s.fill((90, 90, 130, 128))
                                 surface.blit(s, (bar_start_x, bar_y - bar_height / 2))
 
-                                # Display relative value modified by loop_start subtraction
-                                label_text = f"{(bar_relative_ts - loop_start):.0f}"
+                                # Display relative value directly
+                                label_text = f"{bar_relative_ts:.0f}"
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
                                 surface.blit(label, (bar_start_x + int(2 * SCALE), bar_y - bar_height / 2 - int(15 * SCALE)))
 
