@@ -853,7 +853,7 @@ void rebar_assist(t_rebar *x, void *b, long m, long a, char *s) {
     else {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Busy State (0 or 1)"); break;
-            case 1: sprintf(s, "Outlet 2: Reach messages (song/track reaches)"); break;
+            case 1: sprintf(s, "Outlet 2: Reach messages (song/track reaches or min)"); break;
             case 2: sprintf(s, "Outlet 3: Logging and Status messages"); break;
         }
     }

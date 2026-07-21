@@ -212,6 +212,8 @@ void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv)
         outlet_anything(x->outlet_reach_int, gensym("song"), argc, argv);
     } else if (s == gensym("reach_list")) {
         outlet_list(x->outlet_reach_int, NULL, argc, argv);
+    } else if (s == gensym("reach_min")) {
+        outlet_anything(x->outlet_reach_int, gensym("min"), argc, argv);
     } else if (s == gensym("fill")) {
         outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
     }
@@ -1963,6 +1965,16 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(incumbent_dict);
+
+    if (x->outlet_reach_int) {
+        t_atom song_min_atom;
+        atom_setlong(&song_min_atom, song_min);
+        if (systhread_ismainthread()) {
+            outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
+        } else {
+            defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
+        }
+    }
 }
 
 void crucible_visualize_dump_all_spans(t_crucible *x) {
@@ -2224,7 +2236,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data Outlet. Outputs bar data lists '[palette] [track] [bar] [offset]' and reach update notifications '[- track reach -999999.0]'."); break;
             case 1: sprintf(s, "Outlet 2: Fill Outlet. Outputs the symbol 'fill' whenever a song growth event is detected."); break;
-            case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]' or '[track_id] [reach]'. Triggered by growth or 'reaches' message."); break;
+            case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]', '[track_id] [reach]', or 'min [song_min]'. Triggered by growth or 'reaches' message."); break;
             case 3: sprintf(s, "Outlet 4: Logging Outlet. Outputs verbose diagnostic and status messages when the @log attribute is enabled."); break;
         }
     }

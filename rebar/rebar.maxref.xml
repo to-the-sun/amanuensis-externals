@@ -41,8 +41,8 @@
 			<description>Outputs a 1 when the processing sequence begins and a 0 when it completes and data has been committed back to the user dictionary.</description>
 		</outlet>
 		<outlet id="2" type="anything">
-			<digest>Outlet 2: Reach messages (song/track reaches)</digest>
-			<description>Outputs current reaches: 'song [reach]' or '[track_id] [reach]'. Triggered by growth or 'reaches' message.</description>
+			<digest>Outlet 2: Reach messages (song/track reaches or min)</digest>
+			<description>Outputs current reaches: 'song [reach]', '[track_id] [reach]', or 'min [min_bar]'. Triggered by growth or 'reaches' message.</description>
 		</outlet>
 		<outlet id="3" type="anything">
 			<digest>Outlet 3: Consolidated Logging</digest>
