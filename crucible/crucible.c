@@ -1961,9 +1961,6 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has) {
         x->song_reach = (song_max + bar_length) - song_min;
-        x->song_min = song_min;
-    } else {
-        x->song_min = 0;
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
@@ -1971,8 +1968,8 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (x->outlet_reach_int) {
         t_atom song_min_atom;
-        atom_setlong(&song_min_atom, x->song_min);
-        if (!x->async || systhread_ismainthread()) {
+        atom_setlong(&song_min_atom, song_min);
+        if (systhread_ismainthread()) {
             outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
         } else {
             defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
