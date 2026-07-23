@@ -195,7 +195,7 @@
 		<attribute name="monitor" get="1" set="1" type="long" size="1">
 			<digest>Enable Reaches Monitoring</digest>
 			<description>
-				When enabled (1, default), a dedicated background thread continuously monitors the transcript dictionary for any changes in song reach, track reaches, or minimum bar value, and automatically outputs them on Outlet 3. When disabled (0), continuous monitoring is stopped, which allows other dedicated instances of the object to act as the primary monitor in the patch.
+				When enabled (1), a dedicated background thread continuously monitors the transcript dictionary for any changes in song reach, track reaches, or minimum bar value, and automatically outputs them on Outlet 3. When disabled (0, default), continuous monitoring is stopped, which allows other dedicated instances of the object to act as the primary monitor in the patch.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
