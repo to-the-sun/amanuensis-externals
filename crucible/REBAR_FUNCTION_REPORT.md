@@ -31,6 +31,7 @@ The `rebar` feature is triggered by sending a `rebar` message to the first inlet
 - **Subdued Rating Rendering**: If the `@visualize` attribute is enabled, the object sends:
   1. A `repopulate` packet containing the entire re-barred incumbent dictionary structure to update the visualizer's state.
   2. A `replace` packet for every bar of every track to render the updated rating value in a subdued, non-flashing gray style on the visualizer without triggering popping animations.
+- **Rebar Status Outlet (Outlet 2)**: Outputs a `1` out of the second outlet immediately when a valid `rebar` message is received (before conversion begins), and immediately outputs a `0` out of this outlet once the `rebar` functionality completes (successfully or upon encountering an early-abort error).
 
 ---
 

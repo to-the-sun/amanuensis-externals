@@ -37,10 +37,10 @@
 				2. Reach Notification: [- (symbol), track (long), reach (long), -999999.0 (float)] - emitted when a new reach is detected that doesn't exist in the incumbent.
 			</description>
 		</outlet>
-		<outlet id="2" type="symbol">
-			<digest>Fill Outlet</digest>
+		<outlet id="2" type="int">
+			<digest>Rebar Status Outlet</digest>
 			<description>
-				Outputs the symbol 'fill' whenever the song's total reach grows. This can be used to trigger system-wide updates or notifications.
+				Outputs a '1' when the object receives a 'rebar' message and starts executing the rebar functionality, and outputs a '0' immediately after the rebar functionality completes.
 			</description>
 		</outlet>
 		<outlet id="3" type="list">

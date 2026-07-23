@@ -165,7 +165,7 @@ static void get_object_log_info(void *x, long *out_log, long *out_visualize, voi
                 t_symbol *last_track_id;
                 t_symbol *incumbent_dict_name;
                 void *outlet_data;
-                void *outlet_fill;
+                void *outlet_rebar;
                 void *outlet_reach_int;
                 void *log_outlet;
             } t_crucible_min_layout;
