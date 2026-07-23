@@ -2204,6 +2204,16 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(incumbent_dict);
+
+    if (x->outlet_reach_int) {
+        t_atom song_min_atom;
+        atom_setlong(&song_min_atom, x->song_min);
+        if (!x->async || systhread_ismainthread()) {
+            outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
+        } else {
+            defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
+        }
+    }
 }
 
 void crucible_visualize_dump_all_spans(t_crucible *x) {
@@ -2321,7 +2331,46 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (s == gensym("reaches")) {
-        object_warn((t_object *)x, "reaches message is obsolete and is now handled automatically by the asynchronous monitor thread");
+        // Mandatory kick
+        t_symbol *tmp = x->incumbent_dict_name;
+        x->incumbent_dict_name = _sym_nothing;
+        x->incumbent_dict_name = tmp;
+
+        crucible_recalculate_reaches(x);
+        if (x->visualize) {
+            crucible_visualize_repopulate(x);
+            crucible_visualize_dump_all_spans(x);
+        }
+
+        if (x->outlet_reach_int) {
+            t_atom song_reach_atom;
+            atom_setlong(&song_reach_atom, x->song_reach);
+            if (!x->async || systhread_ismainthread()) {
+                outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
+            } else {
+                defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &song_reach_atom);
+            }
+
+            if (x->track_reaches_dict) {
+                t_symbol **keys = NULL;
+                long numkeys = 0;
+                dictionary_getkeys(x->track_reaches_dict, &numkeys, &keys);
+                for (long i = 0; i < numkeys; i++) {
+                    t_symbol *track_id_sym = keys[i];
+                    t_atom_long reach = 0;
+                    dictionary_getlong(x->track_reaches_dict, track_id_sym, &reach);
+                    t_atom reach_list[2];
+                    atom_setlong(reach_list, (t_atom_long)atol(track_id_sym->s_name));
+                    atom_setlong(reach_list + 1, reach);
+                    if (!x->async || systhread_ismainthread()) {
+                        outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
+                    } else {
+                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                    }
+                }
+                if (keys) sysmem_freeptr(keys);
+            }
+        }
         return;
     }
 

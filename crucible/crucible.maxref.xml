@@ -86,9 +86,9 @@
 			</description>
 		</method>
 		<method name="reaches">
-			<digest>Obsolete - Report current song and track reaches</digest>
+			<digest>Report current song and track reaches</digest>
 			<description>
-				Warning: This message is obsolete. Song reaches, track reaches, and minimum bar values are now monitored continuously and output automatically by a dedicated, asynchronous worker thread.
+				Triggers an immediate output of the current song reach, track reaches, and minimum bar values through the third outlet. If the dedicated, asynchronous monitor thread is enabled (@monitor 1), these values are also continuously monitored and emitted automatically upon any changes.
 			</description>
 		</method>
 		<method name="clear">
