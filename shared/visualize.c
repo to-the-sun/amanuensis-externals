@@ -2,8 +2,6 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_systhread.h"
-#include "ext_buffer.h"
-#include "z_dsp.h"
 #include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
@@ -146,7 +144,7 @@ static const char *get_event_name_from_message(const char *message) {
     return "unknown";
 }
 
-// Structure layout mappings for objects dynamically checked
+// Extract attributes dynamically via Max API to prevent any structure layout/padding mismatches across objects
 static void get_object_log_info(void *x, long *out_log, long *out_visualize, void **out_log_outlet) {
     if (!x) {
         if (out_log) *out_log = 0;
@@ -154,81 +152,28 @@ static void get_object_log_info(void *x, long *out_log, long *out_visualize, voi
         if (out_log_outlet) *out_log_outlet = NULL;
         return;
     }
-    t_symbol *classname = object_classname(x);
-    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
-        struct min_crucible {
-            t_object s_obj;
-            t_dictionary *challenger_dict;
-            t_symbol *last_track_id;
-            t_symbol *incumbent_dict_name;
-            void *outlet_data;
-            void *outlet_fill;
-            void *outlet_reach_int;
-            void *log_outlet;
-            t_buffer_ref *buffer_ref;
-            long log;
-            long consume;
-            long defer;
-            long async;
-            void *worker;
-            long visualize;
-        } *obj = (struct min_crucible *)x;
-        if (out_log) *out_log = obj->log;
-        if (out_visualize) *out_visualize = obj->visualize;
-        if (out_log_outlet) *out_log_outlet = obj->log_outlet;
-    } else if (classname == gensym("smartloop~")) {
-        struct min_smartloop {
-            t_pxobject s_obj;
-            t_symbol *dict_name;
-            void *out_start;
-            void *out_end;
-            void *log_outlet;
-            t_clock *clock;
-            long interval;
-            t_buffer_ref *buffer_ref;
-            long bar_warn_sent;
-            long log;
-            long visualize;
-        } *obj = (struct min_smartloop *)x;
-        if (out_log) *out_log = obj->log;
-        if (out_visualize) *out_visualize = obj->visualize;
-        if (out_log_outlet) *out_log_outlet = obj->log_outlet;
-    } else if (classname == gensym("weaver~")) {
-        struct min_weaver {
-            t_pxobject t_obj;
-            t_symbol *poly_prefix;
-            long log;
-            long visualize;
-            void *log_outlet;
-        } *obj = (struct min_weaver *)x;
-        if (out_log) *out_log = obj->log;
-        if (out_visualize) *out_visualize = obj->visualize;
-        if (out_log_outlet) *out_log_outlet = obj->log_outlet;
-    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
-        struct min_buildspans {
-            t_object s_obj;
-            t_dictionary *building;
-            t_dictionary *tracks_ended_in_current_event;
-            long current_track;
-            double current_offset;
-            double loop_start;
-            t_buffer_ref *buffer_ref;
-            t_symbol *s_buffer_name;
-            t_symbol *current_palette;
-            void *span_outlet;
-            void *track_outlet;
-            void *out_bar_data;
-            void *log_outlet;
-            long log;
-            long visualize;
-        } *obj = (struct min_buildspans *)x;
-        if (out_log) *out_log = obj->log;
-        if (out_visualize) *out_visualize = obj->visualize;
-        if (out_log_outlet) *out_log_outlet = obj->log_outlet;
-    } else {
-        if (out_log) *out_log = 0;
-        if (out_visualize) *out_visualize = 0;
-        if (out_log_outlet) *out_log_outlet = NULL;
+
+    if (out_log) *out_log = (long)object_attr_getlong(x, gensym("log"));
+    if (out_visualize) *out_visualize = (long)object_attr_getlong(x, gensym("visualize"));
+
+    if (out_log_outlet) {
+        t_symbol *classname = object_classname(x);
+        if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+            typedef struct _crucible_min_layout {
+                t_object s_obj;
+                t_dictionary *challenger_dict;
+                t_symbol *last_track_id;
+                t_symbol *incumbent_dict_name;
+                void *outlet_data;
+                void *outlet_fill;
+                void *outlet_reach_int;
+                void *log_outlet;
+            } t_crucible_min_layout;
+            t_crucible_min_layout *cx = (t_crucible_min_layout *)x;
+            *out_log_outlet = cx->log_outlet;
+        } else {
+            *out_log_outlet = NULL;
+        }
     }
 }
 
@@ -238,7 +183,7 @@ static void viz_log(void *x, const char *fmt, ...) {
     void *log_outlet = NULL;
     get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
 
-    if (log_enabled && log_outlet) {
+    if (log_enabled) {
         char buf[4096];
         char final_buf[4200];
         va_list args;
@@ -248,7 +193,12 @@ static void viz_log(void *x, const char *fmt, ...) {
 
         t_symbol *classname = object_classname(x);
         snprintf(final_buf, 4200, "%s: %s", classname ? classname->s_name : "visualize", buf);
-        outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
+
+        if (log_outlet) {
+            outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
+        } else {
+            object_post((t_object *)x, "%s", final_buf);
+        }
     }
 }
 
