@@ -47,9 +47,9 @@
 			<digest>Reach Outlet</digest>
 			<description>
 				Outputs current reach information.
-				1. Song Reach: [song (symbol), reach (long)] - emitted when song growth occurs or in response to the 'reaches' message.
-				2. Track Reach: [track_id (long), reach (long)] - emitted when track growth occurs or in response to the 'reaches' message.
-				3. Minimum Bar: [min (symbol), min_bar (long)] - emitted when reaches are calculated.
+				1. Song Reach: [song (symbol), reach (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
+				2. Track Reach: [track_id (long), reach (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
+				3. Minimum Bar: [min (symbol), min_bar (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
 			</description>
 		</outlet>
 		<outlet id="4" type="anything">
@@ -86,9 +86,9 @@
 			</description>
 		</method>
 		<method name="reaches">
-			<digest>Report current song and track reaches</digest>
+			<digest>Obsolete - Report current song and track reaches</digest>
 			<description>
-				Triggers an immediate output of the current song reach and all individual track reaches through the third outlet.
+				Warning: This message is obsolete. Song reaches, track reaches, and minimum bar values are now monitored continuously and output automatically by a dedicated, asynchronous worker thread.
 			</description>
 		</method>
 		<method name="clear">

@@ -27,7 +27,7 @@ The `rebar` feature is triggered by sending a `rebar` message to the first inlet
 ## 2. Visualization and Integration
 
 - **Bar Length Update**: The object's internal stored `local_bar_length` is updated to the new `bar_length`.
-- **Reaches Recalculation**: Track reaches and song reaches are recalculated to adapt to the new bar length structure.
+- **Reaches Recalculation**: Track reaches, song reaches, and minimum bar values are monitored continuously and updated automatically in real time by the dedicated, asynchronous monitor thread.
 - **Subdued Rating Rendering**: If the `@visualize` attribute is enabled, the object sends:
   1. A `repopulate` packet containing the entire re-barred incumbent dictionary structure to update the visualizer's state.
   2. A `replace` packet for every bar of every track to render the updated rating value in a subdued, non-flashing gray style on the visualizer without triggering popping animations.

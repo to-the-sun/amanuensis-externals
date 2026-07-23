@@ -31,6 +31,12 @@ typedef struct _crucible {
     long instance_id;
     long bar_warn_sent;
     t_atom_long song_min;
+    t_systhread monitor_thread;
+    volatile int monitor_active;
+    t_systhread_mutex monitor_mutex;
+    t_atom_long monitor_last_song_reach;
+    t_atom_long monitor_last_song_min;
+    t_dictionary *monitor_last_track_reaches;
 } t_crucible;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
