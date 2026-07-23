@@ -47,9 +47,9 @@
 			<digest>Reach Outlet</digest>
 			<description>
 				Outputs current reach information.
-				1. Song Reach: [song (symbol), reach (long)] - emitted when song growth occurs or in response to the 'reaches' message.
-				2. Track Reach: [track_id (long), reach (long)] - emitted when track growth occurs or in response to the 'reaches' message.
-				3. Minimum Bar: [min (symbol), min_bar (long)] - emitted when reaches are calculated.
+				1. Song Reach: [song (symbol), reach (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
+				2. Track Reach: [track_id (long), reach (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
+				3. Minimum Bar: [min (symbol), min_bar (long)] - monitored continuously and emitted automatically by the dedicated asynchronous worker thread.
 			</description>
 		</outlet>
 		<outlet id="4" type="anything">
@@ -88,7 +88,7 @@
 		<method name="reaches">
 			<digest>Report current song and track reaches</digest>
 			<description>
-				Triggers an immediate output of the current song reach and all individual track reaches through the third outlet.
+				Triggers an immediate output of the current song reach, track reaches, and minimum bar values through the third outlet. If the dedicated, asynchronous monitor thread is enabled (@monitor 1), these values are also continuously monitored and emitted automatically upon any changes.
 			</description>
 		</method>
 		<method name="clear">
@@ -187,6 +187,15 @@
 			<digest>Enable Visualization</digest>
 			<description>
 				When enabled (1), the current state of the transcript and any new span entries are sent to the external visualization script via TCP on port 9999.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="monitor" get="1" set="1" type="long" size="1">
+			<digest>Enable Reaches Monitoring</digest>
+			<description>
+				When enabled (1), a dedicated background thread continuously monitors the transcript dictionary for any changes in song reach, track reaches, or minimum bar value, and automatically outputs them on Outlet 3. When disabled (0, default), continuous monitoring is stopped, which allows other dedicated instances of the object to act as the primary monitor in the patch.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
