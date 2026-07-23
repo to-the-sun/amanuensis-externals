@@ -214,8 +214,22 @@ void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv)
         outlet_list(x->outlet_reach_int, NULL, argc, argv);
     } else if (s == gensym("reach_min")) {
         outlet_anything(x->outlet_reach_int, gensym("min"), argc, argv);
-    } else if (s == gensym("fill")) {
-        outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
+    } else if (s == gensym("rebar_status")) {
+        if (argc > 0) {
+            outlet_int(x->outlet_rebar, atom_getlong(argv));
+        }
+    }
+}
+
+void crucible_send_rebar_status(t_crucible *x, t_atom_long status) {
+    if (x->outlet_rebar) {
+        if (systhread_ismainthread()) {
+            outlet_int(x->outlet_rebar, status);
+        } else {
+            t_atom a;
+            atom_setlong(&a, status);
+            defer(x, (method)crucible_defer_output, gensym("rebar_status"), 1, &a);
+        }
     }
 }
 
@@ -382,7 +396,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
         x->outlet_reach_int = outlet_new((t_object *)x, NULL);   // Index 2
-        x->outlet_fill = outlet_new((t_object *)x, NULL);        // Index 1
+        x->outlet_rebar = outlet_new((t_object *)x, NULL);       // Index 1
         x->outlet_data = outlet_new((t_object *)x, NULL);        // Index 0
 
         floatin((t_object *)x, 1);
@@ -997,13 +1011,6 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 }
                 if (tr_keys) sysmem_freeptr(tr_keys);
             }
-            if (song_grew && x->outlet_fill) {
-                if (!x->async || systhread_ismainthread()) {
-                    outlet_anything(x->outlet_fill, gensym("fill"), 0, NULL);
-                } else {
-                    defer(x, (method)crucible_defer_output, gensym("fill"), 0, NULL);
-                }
-            }
         }
         if (old_reaches) object_free(old_reaches);
 
@@ -1190,6 +1197,9 @@ void crucible_rebar(t_crucible *x, t_atom_long new_bar_length) {
         return;
     }
 
+    // Immediately send 1 out of the second outlet
+    crucible_send_rebar_status(x, 1);
+
     // Defer/async checks
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
@@ -1218,12 +1228,14 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     }
     if (old_bar_length <= 0) {
         object_error((t_object *)x, "rebar: old bar length not found or invalid");
+        crucible_send_rebar_status(x, 0);
         return;
     }
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "rebar: incumbent dictionary %s not found", x->incumbent_dict_name->s_name);
+        crucible_send_rebar_status(x, 0);
         return;
     }
 
@@ -1231,6 +1243,7 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     t_dictionary *new_incumbent_dict = dictionary_new();
     if (!new_incumbent_dict) {
         dictobj_release(incumbent_dict);
+        crucible_send_rebar_status(x, 0);
         return;
     }
 
@@ -1662,6 +1675,7 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
     dictobj_release(incumbent_dict);
     
+    crucible_send_rebar_status(x, 0);
     crucible_log(x, "rebar: finished transforming incumbent to new bar_length %lld", (long long)new_bar_length);
 }
 
@@ -2235,7 +2249,7 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
     } else { // ASSIST_OUTLET
         switch (a) {
             case 0: sprintf(s, "Outlet 1: Data Outlet. Outputs bar data lists '[palette] [track] [bar] [offset]' and reach update notifications '[- track reach -999999.0]'."); break;
-            case 1: sprintf(s, "Outlet 2: Fill Outlet. Outputs the symbol 'fill' whenever a song growth event is detected."); break;
+            case 1: sprintf(s, "Outlet 2: Rebar Status Outlet. Outputs '1' when rebar begins and '0' when it completes."); break;
             case 2: sprintf(s, "Outlet 3: Reach Outlet. Outputs current reaches: 'song [reach]', '[track_id] [reach]', or 'min [song_min]'. Triggered by growth or 'reaches' message."); break;
             case 3: sprintf(s, "Outlet 4: Logging Outlet. Outputs verbose diagnostic and status messages when the @log attribute is enabled."); break;
         }

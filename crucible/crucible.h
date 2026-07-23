@@ -14,7 +14,7 @@ typedef struct _crucible {
     t_symbol *last_track_id;
     t_symbol *incumbent_dict_name;
     void *outlet_data;
-    void *outlet_fill;
+    void *outlet_rebar;
     void *outlet_reach_int;
     void *log_outlet;
     t_buffer_ref *buffer_ref;
