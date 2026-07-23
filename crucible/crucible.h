@@ -30,6 +30,7 @@ typedef struct _crucible {
     double local_bar_length;
     long instance_id;
     long bar_warn_sent;
+    t_atom_long song_min;
 } t_crucible;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);

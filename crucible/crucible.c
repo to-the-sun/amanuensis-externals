@@ -384,6 +384,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
         x->bar_warn_sent = 0;
+        x->song_min = 0;
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -1975,6 +1976,9 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (song_has) {
         x->song_reach = (song_max + bar_length) - song_min;
+        x->song_min = song_min;
+    } else {
+        x->song_min = 0;
     }
 
     if (track_keys) sysmem_freeptr(track_keys);
@@ -1982,8 +1986,8 @@ void crucible_recalculate_reaches(t_crucible *x) {
 
     if (x->outlet_reach_int) {
         t_atom song_min_atom;
-        atom_setlong(&song_min_atom, song_min);
-        if (systhread_ismainthread()) {
+        atom_setlong(&song_min_atom, x->song_min);
+        if (!x->async || systhread_ismainthread()) {
             outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
         } else {
             defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
@@ -2086,6 +2090,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         x->last_track_id = gensym("");
         x->local_bar_length = 0;
         x->bar_warn_sent = 0;
+        x->song_min = 0;
         crucible_log(x, "Internal state cleared.");
 
         if (x->visualize) {
