@@ -37,6 +37,7 @@ typedef struct _crucible {
     t_atom_long monitor_last_song_reach;
     t_atom_long monitor_last_song_min;
     t_dictionary *monitor_last_track_reaches;
+    long monitor;
 } t_crucible;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);

@@ -31,6 +31,7 @@ void crucible_recalculate_reaches(t_crucible *x);
 void crucible_visualize_dump_all_spans(t_crucible *x);
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks);
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av);
+t_max_err crucible_attr_set_monitor(t_crucible *x, void *attr, long ac, t_atom *av);
 int compare_numerical_symbols(const void *a, const void *b);
 void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag);
 void *crucible_monitor_thread_proc(t_crucible *x);
@@ -353,6 +354,11 @@ static void crucible_main_hidden(void *r) {
     CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
     CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)crucible_attr_set_visualize);
 
+    CLASS_ATTR_LONG(c, "monitor", 0, t_crucible, monitor);
+    CLASS_ATTR_STYLE_LABEL(c, "monitor", 0, "onoff", "Enable Monitoring");
+    CLASS_ATTR_DEFAULT(c, "monitor", 0, "1");
+    CLASS_ATTR_ACCESSORS(c, "monitor", NULL, (method)crucible_attr_set_monitor);
+
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
@@ -388,12 +394,12 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->bar_warn_sent = 0;
         x->song_min = 0;
 
+        x->monitor = 1;
         x->monitor_active = 1;
         x->monitor_last_song_reach = 0;
         x->monitor_last_song_min = 0;
         x->monitor_last_track_reaches = dictionary_new();
         systhread_mutex_new(&x->monitor_mutex, 0);
-        systhread_create((method)crucible_monitor_thread_proc, x, 0, 0, 0, &x->monitor_thread);
 
         if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
             x->incumbent_dict_name = atom_getsym(argv);
@@ -402,6 +408,12 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         }
 
         attr_args_process(x, argc, argv);
+
+        if (x->monitor) {
+            systhread_create((method)crucible_monitor_thread_proc, x, 0, 0, 0, &x->monitor_thread);
+        } else {
+            x->monitor_active = 0;
+        }
 
         // Outlets are created from right to left
         x->log_outlet = outlet_new((t_object *)x, NULL);
@@ -1113,6 +1125,29 @@ t_max_err crucible_attr_set_async(t_crucible *x, void *attr, long ac, t_atom *av
         } else if (!x->async && x->worker) {
             async_worker_release(x->worker);
             x->worker = NULL;
+        }
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err crucible_attr_set_monitor(t_crucible *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long val = atom_getlong(av);
+        long old_val = x->monitor;
+        x->monitor = val;
+
+        if (val && !old_val) {
+            // Start thread
+            x->monitor_active = 1;
+            systhread_create((method)crucible_monitor_thread_proc, x, 0, 0, 0, &x->monitor_thread);
+        } else if (!val && old_val) {
+            // Stop thread
+            x->monitor_active = 0;
+            if (x->monitor_thread) {
+                unsigned int ret = 0;
+                systhread_join(x->monitor_thread, &ret);
+                x->monitor_thread = NULL;
+            }
         }
     }
     return MAX_ERR_NONE;
