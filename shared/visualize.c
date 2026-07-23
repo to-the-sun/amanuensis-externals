@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -143,17 +144,75 @@ static const char *get_event_name_from_message(const char *message) {
     return "unknown";
 }
 
+// Extract attributes dynamically via Max API to prevent any structure layout/padding mismatches across objects
+static void get_object_log_info(void *x, long *out_log, long *out_visualize, void **out_log_outlet) {
+    if (!x) {
+        if (out_log) *out_log = 0;
+        if (out_visualize) *out_visualize = 0;
+        if (out_log_outlet) *out_log_outlet = NULL;
+        return;
+    }
+
+    if (out_log) *out_log = (long)object_attr_getlong(x, gensym("log"));
+    if (out_visualize) *out_visualize = (long)object_attr_getlong(x, gensym("visualize"));
+
+    if (out_log_outlet) {
+        t_symbol *classname = object_classname(x);
+        if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+            typedef struct _crucible_min_layout {
+                t_object s_obj;
+                t_dictionary *challenger_dict;
+                t_symbol *last_track_id;
+                t_symbol *incumbent_dict_name;
+                void *outlet_data;
+                void *outlet_fill;
+                void *outlet_reach_int;
+                void *log_outlet;
+            } t_crucible_min_layout;
+            t_crucible_min_layout *cx = (t_crucible_min_layout *)x;
+            *out_log_outlet = cx->log_outlet;
+        } else {
+            *out_log_outlet = NULL;
+        }
+    }
+}
+
+static void viz_log(void *x, const char *fmt, ...) {
+    long log_enabled = 0;
+    long visualize_enabled = 0;
+    void *log_outlet = NULL;
+    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
+
+    if (log_enabled) {
+        char buf[4096];
+        char final_buf[4200];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, 4096, fmt, args);
+        va_end(args);
+
+        t_symbol *classname = object_classname(x);
+        snprintf(final_buf, 4200, "%s: %s", classname ? classname->s_name : "visualize", buf);
+
+        if (log_outlet) {
+            outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
+        } else {
+            object_post((t_object *)x, "%s", final_buf);
+        }
+    }
+}
+
 // Internal helper for socket connection logic
 // ASSUMES MUTEX FOR vs IS ALREADY HELD
 static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
         if (x) {
-            object_post((t_object *)x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
+            viz_log(x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
         }
         DWORD now = GetTickCount();
         if (now - vs->last_connect_attempt < 2000) {
             if (x) {
-                object_post((t_object *)x, "visualize: throttling connection attempt (too frequent)");
+                viz_log(x, "visualize: throttling connection attempt (too frequent)");
             }
             return;
         }
@@ -187,7 +246,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 vs->sock = INVALID_SOCKET;
             } else {
                 if (x) {
-                    object_post((t_object *)x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
+                    viz_log(x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
                 }
 
                 // Poll for handshake completion using select()
@@ -226,7 +285,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                             vs->sock = INVALID_SOCKET;
                         } else {
                             if (x) {
-                                object_post((t_object *)x, "visualize: TCP handshake completed successfully via select!");
+                                viz_log(x, "visualize: TCP handshake completed successfully via select!");
                             }
                         }
                     }
@@ -246,12 +305,12 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
             }
         } else {
             if (x) {
-                object_post((t_object *)x, "visualize: TCP socket connected immediately!");
+                viz_log(x, "visualize: TCP socket connected immediately!");
             }
         }
     } else {
         if (x) {
-            object_post((t_object *)x, "visualize: socket is already open and ready");
+            viz_log(x, "visualize: socket is already open and ready");
         }
     }
 }
@@ -261,7 +320,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
     const char *ev = get_event_name_from_message(message);
     if (x) {
-        object_post((t_object *)x, "visualize: calling ensure_connected for event '%s'...", ev);
+        viz_log(x, "visualize: calling ensure_connected for event '%s'...", ev);
     }
     ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) {
@@ -291,7 +350,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
     }
 
     if (x) {
-        object_post((t_object *)x, "visualize: attempting socket send of %d bytes for event '%s' (type '%s')...", n, ev, type);
+        viz_log(x, "visualize: attempting socket send of %d bytes for event '%s' (type '%s')...", n, ev, type);
     }
 
     int total_sent = 0;
@@ -302,7 +361,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
                 if (x) {
-                    object_post((t_object *)x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s', waiting for writability...", err, total_sent, len, ev);
+                    viz_log(x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s', waiting for writability...", err, total_sent, len, ev);
                 }
 
                 fd_set write_fds;
@@ -316,7 +375,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
                 int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, NULL, &tv);
                 if (sel_ret > 0 && FD_ISSET(vs->sock, &write_fds)) {
                     if (x) {
-                        object_post((t_object *)x, "visualize: socket became writable after WSAEWOULDBLOCK, retrying send...");
+                        viz_log(x, "visualize: socket became writable after WSAEWOULDBLOCK, retrying send...");
                     }
                     continue;
                 } else {
@@ -349,7 +408,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
 
     sysmem_freeptr(buf);
     if (x) {
-        object_post((t_object *)x, "visualize: perform_send complete for event '%s' (sent %d of %d bytes)", ev, total_sent, len);
+        viz_log(x, "visualize: perform_send complete for event '%s' (sent %d of %d bytes)", ev, total_sent, len);
     }
     return (total_sent == len) ? 0 : -1;
 }
@@ -396,6 +455,16 @@ void *viz_worker_thread(void *arg) {
 void visualize(void *x, const char *message) {
     if (!x || !message || !queue_mutex) return;
 
+    long log_enabled = 0;
+    long visualize_enabled = 0;
+    void *log_outlet = NULL;
+    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
+
+    // If visualize is not enabled, do not send at all
+    if (!visualize_enabled) {
+        return;
+    }
+
     const char *type_static = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type_static);
     if (!vs) {
@@ -404,7 +473,7 @@ void visualize(void *x, const char *message) {
     }
 
     const char *ev = get_event_name_from_message(message);
-    object_post((t_object *)x, "visualize: enqueuing %s packet (queue count: %d, type: '%s')", ev, queue_count, type_static);
+    viz_log(x, "visualize: enqueuing %s packet (queue count: %d, type: '%s')", ev, queue_count, type_static);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
@@ -450,6 +519,16 @@ void visualize(void *x, const char *message) {
 
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {
     if (!x || !message || !response || response_size == 0) return -1;
+
+    long log_enabled = 0;
+    long visualize_enabled = 0;
+    void *log_outlet = NULL;
+    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
+
+    // If visualize is not enabled, do not send/exchange at all
+    if (!visualize_enabled) {
+        return -1;
+    }
 
     const char *type = NULL;
     t_viz_socket *vs = get_socket_for_object(x, &type);

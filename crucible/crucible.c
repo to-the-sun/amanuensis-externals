@@ -519,7 +519,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
     t_atom_long bar_length = crucible_get_bar_length(x);
-    object_post((t_object *)x, "crucible: entering crucible_process_span (utilizing bar_length %lld, incumbent dict: '%s')", (long long)bar_length, x->incumbent_dict_name->s_name);
+    crucible_log(x, "crucible: entering crucible_process_span (utilizing bar_length %lld, incumbent dict: '%s')", (long long)bar_length, x->incumbent_dict_name->s_name);
     crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
@@ -531,7 +531,7 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     t_atom *span_atoms = NULL;
     atomarray_getatoms(span_atomarray, &span_len, &span_atoms);
 
-    object_post((t_object *)x, "crucible: processing span for track %s with %ld bars", track_sym->s_name, span_len);
+    crucible_log(x, "crucible: processing span for track %s with %ld bars", track_sym->s_name, span_len);
     crucible_log(x, "Processing span for track %s with %ld bars", track_sym->s_name, span_len);
 
     int challenger_wins = 1;
@@ -604,25 +604,25 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
             }
 
             if (incumbent_rating_len == 0) {
-                object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
+                crucible_log(x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, missing or empty rating). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
                 continue;
             }
 
             double incumbent_rating = atom_getfloat(incumbent_rating_atoms);
-            object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
+            crucible_log(x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
             crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent rating %.2f.", (long long)bar_ts_long, challenger_rating, incumbent_rating);
             if (challenger_rating <= incumbent_rating) {
-                object_post((t_object *)x, "crucible: -> Challenger loses bar. Span comparison failed.");
+                crucible_log(x, "crucible: -> Challenger loses bar. Span comparison failed.");
                 crucible_log(x, "-> Challenger loses bar. Span comparison failed.");
                 challenger_wins = 0;
                 break;
             } else {
-                object_post((t_object *)x, "crucible: -> Challenger wins bar.");
+                crucible_log(x, "crucible: -> Challenger wins bar.");
                 crucible_log(x, "-> Challenger wins bar.");
             }
         } else {
-            object_post((t_object *)x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
+            crucible_log(x, "crucible: Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
             crucible_log(x, "Bar %lld: Challenger rating %.2f vs Incumbent (no-contest, no entry). Challenger wins bar.", (long long)bar_ts_long, challenger_rating);
         }
     }
@@ -941,16 +941,16 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
 
         song_grew = (x->song_reach > old_song_reach);
 
-        object_post((t_object *)x, "crucible: Span won! Preparing visualizer packets. (visualize attribute status: %ld)", x->visualize);
+        crucible_log(x, "crucible: Span won! Preparing visualizer packets. (visualize attribute status: %ld)", x->visualize);
         if (x->visualize) {
             // Send entire repopulate dictionary first, then send the span packet to trigger animation/pop-up
-            object_post((t_object *)x, "crucible: Calling crucible_visualize_repopulate...");
+            crucible_log(x, "crucible: Calling crucible_visualize_repopulate...");
             crucible_visualize_repopulate(x);
-            object_post((t_object *)x, "crucible: Calling crucible_visualize_state (new_span)...");
+            crucible_log(x, "crucible: Calling crucible_visualize_state (new_span)...");
             crucible_visualize_state(x, gensym("new_span"), track_sym, span_atomarray, challenger_winning_rating, 0);
         }
     } else {
-        object_post((t_object *)x, "crucible: Challenger span for track %s lost.", track_sym->s_name);
+        crucible_log(x, "crucible: Challenger span for track %s lost.", track_sym->s_name);
         crucible_log(x, "Challenger span for track %s lost.", track_sym->s_name);
     }
 
@@ -1811,10 +1811,10 @@ void serialize_dict(t_dyn_str *ds, t_dictionary *dict) {
 
 void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
     if (!x->visualize) {
-        object_post((t_object *)x, "crucible repopulate: visualize attribute is disabled, skipping");
+        crucible_log(x, "crucible repopulate: visualize attribute is disabled, skipping");
         return;
     }
-    object_post((t_object *)x, "crucible repopulate: attempting to retain incumbent dictionary '%s'", x->incumbent_dict_name->s_name);
+    crucible_log(x, "crucible repopulate: attempting to retain incumbent dictionary '%s'", x->incumbent_dict_name->s_name);
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
         object_error((t_object *)x, "visualize: could not retain incumbent dictionary named '%s' for repopulate", x->incumbent_dict_name->s_name);
@@ -1834,12 +1834,12 @@ void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
     serialize_dict(&ds, incumbent_dict);
     dyn_str_append_char(&ds, '}');
 
-    object_post((t_object *)x, "crucible repopulate: serialization complete. JSON size: %ld chars. Enqueuing to visualize queue...", ds.size);
+    crucible_log(x, "crucible repopulate: serialization complete. JSON size: %ld chars. Enqueuing to visualize queue...", ds.size);
     visualize((t_object *)x, ds.data);
 
     dyn_str_free(&ds);
     dictobj_release(incumbent_dict);
-    object_post((t_object *)x, "crucible repopulate: dictionary released, repopulate process complete");
+    crucible_log(x, "crucible repopulate: dictionary released, repopulate process complete");
 }
 
 void crucible_visualize_repopulate(t_crucible *x) {
@@ -2039,13 +2039,13 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
-        object_post((t_object *)x, "crucible: enqueuing async task for message '%s'...", s->s_name);
+        crucible_log(x, "crucible: enqueuing async task for message '%s'...", s->s_name);
         async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
         return;
     }
 
     if (x->defer && !systhread_ismainthread()) {
-        object_post((t_object *)x, "crucible: deferring execution for message '%s' to main thread...", s->s_name);
+        crucible_log(x, "crucible: deferring execution for message '%s' to main thread...", s->s_name);
         defer(x, (method)crucible_do_anything, s, (short)argc, argv);
         return;
     }
@@ -2144,7 +2144,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             return;
         }
         t_atomarray *span_aa = atomarray_new(argc, argv);
-        object_post((t_object *)x, "crucible: Received span message for track %s. Triggering crucible_process_span...", x->last_track_id->s_name);
+        crucible_log(x, "crucible: Received span message for track %s. Triggering crucible_process_span...", x->last_track_id->s_name);
         crucible_process_span(x, x->last_track_id, span_aa);
         object_release((t_object *)span_aa);
         return;
@@ -2304,10 +2304,10 @@ static long json_append_atom_or_array(char *buffer, long offset, long buffer_siz
 
 void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *track_id_sym, t_atomarray *span_aa, double rating, int include_tracks) {
     if (!x->visualize) {
-        object_post((t_object *)x, "crucible state: visualize attribute is disabled, skipping");
+        crucible_log(x, "crucible state: visualize attribute is disabled, skipping");
         return;
     }
-    object_post((t_object *)x, "crucible state: preparing packet for event type '%s'", event_type ? event_type->s_name : "none");
+    crucible_log(x, "crucible state: preparing packet for event type '%s'", event_type ? event_type->s_name : "none");
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (!incumbent_dict) {
@@ -2399,11 +2399,11 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
 
     if (offset < buffer_size - 1) offset += snprintf(json_buffer + offset, buffer_size - offset, "}");
 
-    object_post((t_object *)x, "crucible state: packet formatting complete. JSON size: %ld chars. Enqueuing to visualize queue...", offset);
+    crucible_log(x, "crucible state: packet formatting complete. JSON size: %ld chars. Enqueuing to visualize queue...", offset);
     visualize((t_object *)x, json_buffer);
     sysmem_freeptr(json_buffer);
     dictobj_release(incumbent_dict);
-    object_post((t_object *)x, "crucible state: dictionary released, state packet process complete");
+    crucible_log(x, "crucible state: dictionary released, state packet process complete");
 }
 
 t_max_err crucible_attr_set_visualize(t_crucible *x, void *attr, long ac, t_atom *av) {
