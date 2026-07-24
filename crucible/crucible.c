@@ -1271,6 +1271,34 @@ void crucible_monitor_qfn(t_crucible *x) {
 
     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
     if (incumbent_dict) {
+        // Direct buffer lookup logic at every iteration during monitoring to ensure bar_length is updated
+        t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+        if (!b) {
+            // Kick the buffer reference to force re-binding
+            buffer_ref_set(x->buffer_ref, _sym_nothing);
+            buffer_ref_set(x->buffer_ref, gensym("bar"));
+            b = buffer_ref_getobject(x->buffer_ref);
+        }
+        if (b) {
+            t_atom_long new_bar_length = 0;
+            critical_enter(0);
+            float *samples = buffer_locksamples(b);
+            if (samples) {
+                if (buffer_getframecount(b) > 0) {
+                    new_bar_length = (t_atom_long)samples[0];
+                }
+                buffer_unlocksamples(b);
+            }
+            critical_exit(0);
+
+            if (new_bar_length > 0) {
+                if (new_bar_length != (t_atom_long)x->local_bar_length) {
+                    crucible_log(x, "monitor: bar_length changed to %lld", (long long)new_bar_length);
+                }
+                x->local_bar_length = (double)new_bar_length;
+            }
+        }
+
         t_atom_long bar_length = crucible_get_bar_length(x);
 
         if (bar_length > 0) {

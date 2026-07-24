@@ -177,3 +177,15 @@ Despite its immense performance advantages, adopting a shared memory model intro
   - If either Max or the Python visualizer crashes or terminates abnormally while holding the named mutex, the mutex enters an "abandoned" state or remains locked, permanently blocking the surviving process and requiring a full reboot or manual handle cleanup.
 - **Cross-Platform Divergence:**
   - Standard Win32 shared memory and mutex APIs (`CreateFileMappingA`, `CreateMutexA`) differ fundamentally from POSIX memory APIs (`shm_open`, `sem_open`). To keep both Windows (.mxe64) and macOS (.mxo) builds unified, a robust abstract cross-platform wrapper must be engineered and maintained.
+
+---
+
+## 7. Real-Time Monitor Buffer Polling and Bar Length Updates
+
+In previous iterations, when a standalone `crucible` object was set to `@monitor 1`, it relied on the cached or local `bar_length` value and did not update it frequently enough from the `bar` buffer during the polling cycle. This caused reach calculations to run against stale bar length values if the bar buffer's sample length changed on the fly.
+
+To resolve this issue, a direct buffer polling mechanism was integrated directly inside the continuous qelem qfn function `crucible_monitor_qfn` at every single iteration (interval of 50ms):
+- **Direct Reference Resolution:** The monitor checks the `bar` buffer reference at every tick. If the reference is lost, it kicks and re-binds the reference to find the `bar` buffer~.
+- **Critical Section Polling:** Under `critical_enter(0)` and standard locks, it reads the first sample value directly from the buffer's lockable memory segment to fetch the updated `bar_length`.
+- **Dynamic Local Cache Update:** If a new valid bar length is detected, the object's local `x->local_bar_length` cache is immediately updated. Subsequent calculation functions (like `crucible_get_bar_length` and standard reach boundary evaluations) can therefore run with the most current, precise frame sizes.
+- **Compatibility:** This logic has been scoped safely within `crucible_monitor_qfn` so that non-monitoring processes continue to execute without any modification or performance overhead.
