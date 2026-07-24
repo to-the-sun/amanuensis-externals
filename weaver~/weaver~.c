@@ -76,6 +76,7 @@ typedef struct _weaver_track {
     int last_busy_logged;
     int viz_busy;
     double last_viz_sent_ms;
+    double viz_absolute_ms;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -180,7 +181,7 @@ void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_dirty(t_weaver *x, t_buffer_obj *b);
 void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job);
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -390,6 +391,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->last_busy_logged = -1;
             tr->viz_busy = 0;
             tr->last_viz_sent_ms = -1000.0;
+            tr->viz_absolute_ms = 0.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -847,7 +849,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol) {
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms) {
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
 
@@ -856,6 +858,7 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
+    tr->viz_absolute_ms = absolute_ms; // Absolute timeline position for viz
     if (x->visualize) {
         tr->viz_control = tr->control;
         tr->viz_track_length = tr->track_length;
@@ -1521,19 +1524,19 @@ void weaver_audio_qtask(t_weaver *x) {
                         weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
                     }
 
-                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key);
+                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time);
                 }
             }
 
             if (!found_in_dict) {
                 // Trigger silence if bar missing from dictionary
-                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
+                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
+            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time);
         }
     }
 
@@ -1595,7 +1598,7 @@ void weaver_audio_qtask(t_weaver *x) {
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
                     snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
-                             t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
+                             t + 1, tr->viz_absolute_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
                 }
