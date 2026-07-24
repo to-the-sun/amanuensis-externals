@@ -324,9 +324,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
     }
     ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) {
-        if (x) {
-            object_warn((t_object *)x, "visualize: perform_send aborting for event '%s', not connected to visualizer server", ev);
-        }
         return -1;
     }
 

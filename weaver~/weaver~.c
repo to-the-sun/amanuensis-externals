@@ -52,6 +52,8 @@ typedef struct _weaver_track {
     double last_track_scan;
     long long last_f_dest;
     double last_visualize_ms;
+    double most_negative_bar;
+    double highest_bar;
 
     // Thread-safe state handover
     t_symbol *pending_palette;
@@ -76,6 +78,7 @@ typedef struct _weaver_track {
     int last_busy_logged;
     int viz_busy;
     double last_viz_sent_ms;
+    double viz_absolute_ms;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -180,7 +183,7 @@ void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_dirty(t_weaver *x, t_buffer_obj *b);
 void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job);
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol);
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -226,6 +229,8 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     // Reset all track lengths first
     for (long t = 0; t < x->track_cache_count; t++) {
         x->track_cache[t]->track_length = 0.0;
+        x->track_cache[t]->most_negative_bar = 0.0;
+        x->track_cache[t]->highest_bar = 0.0;
     }
 
     for (long i = 0; i < num_tracks_in_dict; i++) {
@@ -235,11 +240,22 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
 
             double track_length = 0;
+            double track_most_neg = 0.0;
+            double track_highest = 0.0;
+            int track_has_bars = 0;
             long num_bars = 0;
             t_symbol **bar_keys = NULL;
             dictionary_getkeys(track_dict, &num_bars, &bar_keys);
             for (long j = 0; j < num_bars; j++) {
                 double bar_ts = atof(bar_keys[j]->s_name);
+                if (!track_has_bars) {
+                    track_most_neg = bar_ts;
+                    track_highest = bar_ts;
+                    track_has_bars = 1;
+                } else {
+                    if (bar_ts < track_most_neg) track_most_neg = bar_ts;
+                    if (bar_ts > track_highest) track_highest = bar_ts;
+                }
                 if (bar_ts + job->bar_length > track_length) {
                     track_length = bar_ts + job->bar_length;
                 }
@@ -248,6 +264,8 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
 
             double absolute_track_length = track_length - local_most_negative;
             x->track_cache[track_id - 1]->track_length = absolute_track_length;
+            x->track_cache[track_id - 1]->most_negative_bar = track_most_neg;
+            x->track_cache[track_id - 1]->highest_bar = track_highest;
             if (absolute_track_length > song_length) song_length = absolute_track_length;
         }
     }
@@ -367,6 +385,8 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
             tr->last_visualize_ms = -1000.0;
+            tr->most_negative_bar = 0.0;
+            tr->highest_bar = 0.0;
 
             // Thread-safe state handover init
             tr->pending_palette = _sym_nothing;
@@ -390,6 +410,7 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->last_busy_logged = -1;
             tr->viz_busy = 0;
             tr->last_viz_sent_ms = -1000.0;
+            tr->viz_absolute_ms = 0.0;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -518,22 +539,50 @@ void weaver_update_most_negative_bar(t_weaver *x) {
     dictionary_getkeys(d, &num_tracks, &track_keys);
 
     double local_most_negative = 0.0;
+
+    // We can also update track-specific most_negative_bar and highest_bar here
+    critical_enter(x->lock);
+    for (long t = 0; t < x->track_cache_count; t++) {
+        x->track_cache[t]->most_negative_bar = 0.0;
+        x->track_cache[t]->highest_bar = 0.0;
+    }
+
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
+        long track_id = atol(track_keys[i]->s_name);
         if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
 
         long num_bars = 0;
         t_symbol **bar_keys = NULL;
         dictionary_getkeys(track_dict, &num_bars, &bar_keys);
 
+        double track_most_neg = 0.0;
+        double track_highest = 0.0;
+        int track_has_bars = 0;
+
         for (long j = 0; j < num_bars; j++) {
             double bar_ts = atof(bar_keys[j]->s_name);
             if (bar_ts < local_most_negative) {
                 local_most_negative = bar_ts;
             }
+            if (!track_has_bars) {
+                track_most_neg = bar_ts;
+                track_highest = bar_ts;
+                track_has_bars = 1;
+            } else {
+                if (bar_ts < track_most_neg) track_most_neg = bar_ts;
+                if (bar_ts > track_highest) track_highest = bar_ts;
+            }
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
+
+        if (track_id > 0 && track_id <= x->track_cache_count) {
+            x->track_cache[track_id - 1]->most_negative_bar = track_most_neg;
+            x->track_cache[track_id - 1]->highest_bar = track_highest;
+        }
     }
+    critical_exit(x->lock);
+
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(d);
 
@@ -847,7 +896,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol) {
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms) {
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
 
@@ -856,6 +905,7 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
+    tr->viz_absolute_ms = absolute_ms; // Absolute timeline position for viz
     if (x->visualize) {
         tr->viz_control = tr->control;
         tr->viz_track_length = tr->track_length;
@@ -955,6 +1005,8 @@ void weaver_clear(t_weaver *x) {
         if (tr) {
             tr->track_length = 0.0;
             tr->viz_track_length = 0.0;
+            tr->most_negative_bar = 0.0;
+            tr->highest_bar = 0.0;
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
             tr->busy = 0;
@@ -1207,8 +1259,22 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 continue;
             }
 
+            double current_scan_for_track = current_scan;
+            if (current_scan < tr->most_negative_bar) {
+                double T_content_length = tr->highest_bar - tr->most_negative_bar + bar_len;
+                if (T_content_length > 0) {
+                    double diff = tr->most_negative_bar - current_scan;
+                    double wrapped_diff = fmod(diff, T_content_length);
+                    if (wrapped_diff < 1e-5) {
+                        current_scan_for_track = tr->most_negative_bar;
+                    } else {
+                        current_scan_for_track = tr->highest_bar - (wrapped_diff - bar_len);
+                    }
+                }
+            }
+
             // 2. Continuous Bar Hit Detection (Outside samples_dest check)
-            double tr_scan = fmod(current_scan, tr->track_length);
+            double tr_scan = fmod(current_scan_for_track, tr->track_length);
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(tr->last_track_scan);
             int track_looped = (r_scan < r_last);
@@ -1225,9 +1291,9 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 }
 
                 if ((!tr->busy || main_looped) && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
-                    long long start = (track_looped || main_looped) ? (long long)floor(x->most_negative_bar) : r_last + 1;
+                    long long start = (track_looped || main_looped) ? 0 : r_last + 1;
                     long long end = r_scan;
-                    long long latest_j = (long long)floor((double)end / bar_len) * (long long)bar_len;
+                    long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
 
                     if (latest_j >= start) {
                         int nt = (x->fifo_tail + 1) % 4096;
@@ -1521,19 +1587,19 @@ void weaver_audio_qtask(t_weaver *x) {
                         weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset);
                     }
 
-                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key);
+                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time);
                 }
             }
 
             if (!found_in_dict) {
                 // Trigger silence if bar missing from dictionary
-                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
+                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key);
+            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time);
         }
     }
 
@@ -1595,7 +1661,7 @@ void weaver_audio_qtask(t_weaver *x) {
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
                     snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
-                             t + 1, tr->viz_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
+                             t + 1, tr->viz_absolute_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
                 }

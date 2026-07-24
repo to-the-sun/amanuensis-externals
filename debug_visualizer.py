@@ -96,14 +96,31 @@ def process_packet(text):
                         label_text = f"{pkt['palette']}@{pkt['offset']:.0f}"
                         if track_id not in state["labels_by_track"]:
                             state["labels_by_track"][track_id] = []
-                        pos_idx = len(state["labels_by_track"][track_id]) % 2
-                        state["labels_by_track"][track_id].append({
-                            "ms": pkt["ms"],
-                            "text": label_text,
-                            "bar": pkt.get("bar", ""),
-                            "len": pkt.get("len", 0),
-                            "pos_idx": pos_idx
-                        })
+
+                        existing = None
+                        for lb in state["labels_by_track"][track_id]:
+                            if abs(lb["ms"] - pkt["ms"]) < 1e-3:
+                                existing = lb
+                                break
+
+                        if existing:
+                            existing["text"] = label_text
+                            existing["bar"] = pkt.get("bar", "")
+                            existing["palette"] = pkt["palette"]
+                            existing["offset"] = pkt["offset"]
+                            if "len" in pkt:
+                                existing["len"] = pkt["len"]
+                        else:
+                            pos_idx = len(state["labels_by_track"][track_id]) % 2
+                            state["labels_by_track"][track_id].append({
+                                "ms": pkt["ms"],
+                                "text": label_text,
+                                "bar": pkt.get("bar", ""),
+                                "palette": pkt["palette"],
+                                "offset": pkt["offset"],
+                                "len": pkt.get("len", 0),
+                                "pos_idx": pos_idx
+                            })
                         if "len" in pkt:
                             state["track_lengths"][track_id] = float(pkt["len"])
                         if "busy" in pkt:
@@ -390,14 +407,42 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start
             lx = left_pad + ((l["ms"] - view_start_ms) / view_span_ms) * graph_w
             if left_pad <= lx <= left_pad + graph_w:
                 pygame.draw.line(surface, (100, 100, 120), (int(lx), row_top), (int(lx), row_bottom), 1)
-                txt_bar = fonts["weaver_tiny"].render(f"{l.get('bar', '')}", True, (220, 220, 255))
-                txt_label = fonts["weaver_tiny"].render(l["text"], True, (180, 180, 200))
+
+                bar_text = str(l.get('bar', ''))
+                palette_str = l.get('palette', '')
+                offset_val = l.get('offset', None)
+
+                if not palette_str and "text" in l:
+                    parts = l["text"].split("@", 1)
+                    palette_str = parts[0]
+                    if len(parts) > 1:
+                        try:
+                            offset_val = float(parts[1])
+                        except ValueError:
+                            pass
+
+                if offset_val is None:
+                    offset_val = 0.0
+
+                offset_text = f"@{offset_val:.0f}"
+
+                font_to_use = fonts.get("weaver_bar_label", fonts["weaver_tiny"])
+                txt_bar = font_to_use.render(bar_text, True, (220, 220, 255))
+                txt_palette = font_to_use.render(palette_str, True, (240, 240, 240))
+                txt_offset = font_to_use.render(offset_text, True, (180, 180, 200))
+
                 if l.get("pos_idx", 0) == 0:
-                    ty1, ty2 = row_top + int(2 * SCALE), row_top + int(13 * SCALE)
+                    ty1 = row_top + int(2 * SCALE)
+                    ty2 = row_top + int(16 * SCALE)
+                    ty3 = row_top + int(30 * SCALE)
                 else:
-                    ty2, ty1 = row_bottom - int(12 * SCALE), row_bottom - int(23 * SCALE)
+                    ty1 = row_bottom - int(44 * SCALE)
+                    ty2 = row_bottom - int(30 * SCALE)
+                    ty3 = row_bottom - int(16 * SCALE)
+
                 surface.blit(txt_bar, (int(lx) + int(3 * SCALE), ty1))
-                surface.blit(txt_label, (int(lx) + int(3 * SCALE), ty2))
+                surface.blit(txt_palette, (int(lx) + int(3 * SCALE), ty2))
+                surface.blit(txt_offset, (int(lx) + int(3 * SCALE), ty3))
 
     for t in range(1, num_rows + 1):
         i = t - 1
@@ -442,11 +487,12 @@ def run_gui():
             "building_small": pygame.font.SysFont("Arial", int(12 * SCALE)),
             "weaver_tiny": pygame.font.SysFont("Arial", int(10 * SCALE)),
             "weaver_label": pygame.font.SysFont("Arial", int(14 * SCALE)),
-            "weaver_status": pygame.font.SysFont("Arial", int(16 * SCALE))
+            "weaver_status": pygame.font.SysFont("Arial", int(16 * SCALE)),
+            "weaver_bar_label": pygame.font.SysFont("Arial", int(13 * SCALE))
         }
     except:
         default_font = pygame.font.Font(None, int(20 * SCALE))
-        fonts = {k: default_font for k in ["building_normal", "building_large", "building_small", "weaver_tiny", "weaver_label", "weaver_status"]}
+        fonts = {k: default_font for k in ["building_normal", "building_large", "building_small", "weaver_tiny", "weaver_label", "weaver_status", "weaver_bar_label"]}
 
     while True:
         for event in pygame.event.get():
