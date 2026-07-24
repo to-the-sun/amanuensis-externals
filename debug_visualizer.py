@@ -311,7 +311,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                             label = fonts["building_small"].render(f"{ts:.0f}", True, (200, 100, 100))
                             surface.blit(label, (x + int(2 * SCALE), p_top - int(15 * SCALE)))
 
-def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start_ms, view_end_ms, fonts):
+def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start_ms, view_end_ms, bar_length, fonts):
     w, h = surface.get_size()
     surface.fill((30, 30, 35)) # BACKGROUND_WEAVER
 
@@ -350,10 +350,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start
 
         for j, l in enumerate(track_labels):
             start_ms = l["ms"]
-            if j + 1 < len(track_labels):
-                end_ms = track_labels[j+1]["ms"]
-            else:
-                end_ms = view_end_ms
+            end_ms = start_ms + bar_length
 
             if start_ms >= view_end_ms: continue
 
@@ -512,7 +509,7 @@ def run_gui():
         weaver_surf = screen.subsurface((0, int(400 * SCALE), int(1200 * SCALE), int(600 * SCALE)))
         view_start_ms = p_min_ms
         view_end_ms = max(p_min_ms + p_ramp_dur, p_max_ms)
-        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, fonts)
+        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, p_bar_len, fonts)
 
         pygame.display.flip()
         clock.tick(FPS)
