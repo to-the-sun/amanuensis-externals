@@ -96,16 +96,31 @@ def process_packet(text):
                         label_text = f"{pkt['palette']}@{pkt['offset']:.0f}"
                         if track_id not in state["labels_by_track"]:
                             state["labels_by_track"][track_id] = []
-                        pos_idx = len(state["labels_by_track"][track_id]) % 2
-                        state["labels_by_track"][track_id].append({
-                            "ms": pkt["ms"],
-                            "text": label_text,
-                            "bar": pkt.get("bar", ""),
-                            "palette": pkt["palette"],
-                            "offset": pkt["offset"],
-                            "len": pkt.get("len", 0),
-                            "pos_idx": pos_idx
-                        })
+
+                        existing = None
+                        for lb in state["labels_by_track"][track_id]:
+                            if abs(lb["ms"] - pkt["ms"]) < 1e-3:
+                                existing = lb
+                                break
+
+                        if existing:
+                            existing["text"] = label_text
+                            existing["bar"] = pkt.get("bar", "")
+                            existing["palette"] = pkt["palette"]
+                            existing["offset"] = pkt["offset"]
+                            if "len" in pkt:
+                                existing["len"] = pkt["len"]
+                        else:
+                            pos_idx = len(state["labels_by_track"][track_id]) % 2
+                            state["labels_by_track"][track_id].append({
+                                "ms": pkt["ms"],
+                                "text": label_text,
+                                "bar": pkt.get("bar", ""),
+                                "palette": pkt["palette"],
+                                "offset": pkt["offset"],
+                                "len": pkt.get("len", 0),
+                                "pos_idx": pos_idx
+                            })
                         if "len" in pkt:
                             state["track_lengths"][track_id] = float(pkt["len"])
                         if "busy" in pkt:
