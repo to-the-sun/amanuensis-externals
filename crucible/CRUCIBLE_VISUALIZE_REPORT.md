@@ -189,3 +189,10 @@ To resolve this issue, a direct buffer polling mechanism was integrated directly
 - **Critical Section Polling:** Under `critical_enter(0)` and standard locks, it reads the first sample value directly from the buffer's lockable memory segment to fetch the updated `bar_length`.
 - **Dynamic Local Cache Update:** If a new valid bar length is detected, the object's local `x->local_bar_length` cache is immediately updated. Subsequent calculation functions (like `crucible_get_bar_length` and standard reach boundary evaluations) can therefore run with the most current, precise frame sizes.
 - **Compatibility:** This logic has been scoped safely within `crucible_monitor_qfn` so that non-monitoring processes continue to execute without any modification or performance overhead.
+
+### 7.1: Throttled Alerts for Missing External references (Buffer reference Warning/Error)
+During continuous monitoring, if the external `bar` buffer is not found, the `crucible` object historically spammed the Max console with warning and error logs at every polling tick.
+To resolve this, we implemented a stateful throttled alert system:
+- **State Flag (`bar_warn_sent`):** A flag `bar_warn_sent` is maintained on the object's state structure. If the buffer is not found during initial instantiation or during subsequent lookup attempts, warnings/errors are emitted only once and `bar_warn_sent` is set to `1`.
+- **Silent Retries:** Further missing buffer alerts are completely silenced while the buffer remains missing.
+- **State Recovery / Reset:** Only if the external buffer is successfully found and then subsequently lost again will the error or warning be posted. When the buffer is found (either during dynamic lookup or standard getter routines), the flag is reset to `0`, restoring warning readiness.

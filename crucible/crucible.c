@@ -377,9 +377,11 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->challenger_dict = dictionary_new();
         x->last_track_id = gensym("");
         x->incumbent_dict_name = gensym("");
+        x->bar_warn_sent = 0;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
         if (!buffer_ref_getobject(x->buffer_ref)) {
             object_error((t_object *)x, "bar buffer~ not found");
+            x->bar_warn_sent = 1;
         }
         x->log = 0;
         x->consume = 0;
@@ -392,7 +394,6 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
         x->instance_id = 1000 + (rand() % 9000);
-        x->bar_warn_sent = 0;
         x->song_min = 0;
 
         x->monitor = 0;
@@ -1080,7 +1081,6 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
     if (!b) {
         if (!x->bar_warn_sent) {
             object_warn((t_object *)x, "bar buffer~ not found, attempting to kick reference");
-            x->bar_warn_sent = 1;
         }
         // Kick the buffer reference to force re-binding
         buffer_ref_set(x->buffer_ref, _sym_nothing);
@@ -1088,7 +1088,10 @@ t_atom_long crucible_get_bar_length(t_crucible *x) {
         b = buffer_ref_getobject(x->buffer_ref);
     }
     if (!b) {
-        object_error((t_object *)x, "bar buffer~ not found");
+        if (!x->bar_warn_sent) {
+            object_error((t_object *)x, "bar buffer~ not found");
+            x->bar_warn_sent = 1;
+        }
         return 0;
     }
     x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
@@ -1280,6 +1283,7 @@ void crucible_monitor_qfn(t_crucible *x) {
             b = buffer_ref_getobject(x->buffer_ref);
         }
         if (b) {
+            x->bar_warn_sent = 0; // Reset flag when buffer is successfully found
             t_atom_long new_bar_length = 0;
             critical_enter(0);
             float *samples = buffer_locksamples(b);
