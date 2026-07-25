@@ -38,7 +38,6 @@ typedef struct _stoplight {
     t_queued_msg *last_items; // Size num_pairs - 1 (for cold data inlets 1..N-1)
     long log;
     void *out_log;
-    long inlet_num;
 } t_stoplight;
 
 // Helper functions
@@ -242,10 +241,9 @@ void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
         // Created right-to-left to appear left-to-right (Main, Cold1, ..., Control)
         x->proxies = (void **)sysmem_newptrclear(x->num_pairs * sizeof(void *));
         x->proxy_ids = (long *)sysmem_newptrclear(x->num_pairs * sizeof(long));
-        x->inlet_num = 0;
         for (long i = x->num_pairs; i >= 1; i--) {
             x->proxy_ids[i - 1] = i;
-            x->proxies[i - 1] = proxy_new((t_object *)x, x->proxy_ids[i - 1], &x->inlet_num);
+            x->proxies[i - 1] = proxy_new((t_object *)x, x->proxy_ids[i - 1], NULL);
         }
 
         // Last items for cold data inlets
