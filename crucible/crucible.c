@@ -1781,8 +1781,44 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 }
 
                 if (!found_anywhere) {
-                    object_warn((t_object *)x, "rebar: pair (absolute: %.4f, score: %.4f) under old bar %lld mapped to floored timestamp %lld which is not in any post-conversion bar. Pre bar_length: %lld, Post bar_length: %lld",
-                                abs_val, score_val, (long long)old_ts, (long long)floored_ts, (long long)old_bar_length, (long long)new_bar_length);
+                    double new_offset = 0.0;
+                    t_atom_long closest_old_ts = 0;
+                    int first_old = 1;
+                    for (long b_idx = 0; b_idx < num_bars; b_idx++) {
+                        t_atom_long old_bar_ts = atoll(bar_keys[b_idx]->s_name);
+                        if (first_old || llabs(old_bar_ts - floored_ts) < llabs(closest_old_ts - floored_ts)) {
+                            closest_old_ts = old_bar_ts;
+                            first_old = 0;
+                        }
+                    }
+                    if (!first_old) {
+                        char closest_ts_str[64];
+                        snprintf(closest_ts_str, 64, "%lld", (long long)closest_old_ts);
+                        t_dictionary *closest_old_bar_dict = NULL;
+                        if (dictionary_getdictionary(track_dict, gensym(closest_ts_str), (t_object **)&closest_old_bar_dict) == MAX_ERR_NONE && closest_old_bar_dict) {
+                            t_atom off_atom_new;
+                            if (dictionary_getatom(closest_old_bar_dict, gensym("offset"), &off_atom_new) == MAX_ERR_NONE) {
+                                if (atom_gettype(&off_atom_new) == A_FLOAT) {
+                                    new_offset = atom_getfloat(&off_atom_new);
+                                } else if (atom_gettype(&off_atom_new) == A_LONG) {
+                                    new_offset = (double)atom_getlong(&off_atom_new);
+                                } else if (atom_gettype(&off_atom_new) == A_OBJ) {
+                                    t_object *offset_obj_new = atom_getobj(&off_atom_new);
+                                    if (offset_obj_new && object_classname_compare(offset_obj_new, gensym("atomarray"))) {
+                                        long off_len_new = 0;
+                                        t_atom *off_atoms_new = NULL;
+                                        atomarray_getatoms((t_atomarray *)offset_obj_new, &off_len_new, &off_atoms_new);
+                                        if (off_len_new > 0) {
+                                            new_offset = atom_getfloat(off_atoms_new);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    object_warn((t_object *)x, "rebar: pair (absolute: %.4f, score: %.4f) under old bar %lld mapped to floored timestamp %lld which is not in any post-conversion bar. Pre bar_length: %lld, Post bar_length: %lld, Old offset: %.4f, New offset: %.4f",
+                                abs_val, score_val, (long long)old_ts, (long long)floored_ts, (long long)old_bar_length, (long long)new_bar_length, offset, new_offset);
                 }
             }
         }
