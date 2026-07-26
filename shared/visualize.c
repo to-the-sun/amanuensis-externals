@@ -134,8 +134,6 @@ static const char *get_event_name_from_message(const char *message) {
         return "new_span";
     } else if (strstr(message, "\"event\":\"replace\"")) {
         return "replace";
-    } else if (strstr(message, "\"event\":\"cleanup\"")) {
-        return "cleanup";
     } else if (strstr(message, "\"event\":\"fill_bar\"")) {
         return "fill_bar";
     } else if (message[0] == '{' && strstr(message, "\"tracks\":")) {
