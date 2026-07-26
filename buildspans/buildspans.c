@@ -220,6 +220,8 @@ void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *a
         // Here argv[0] was the selector
         t_symbol *sel = atom_getsym(argv);
         outlet_anything(x->out_bar_data, sel, (short)(argc - 1), argv + 1);
+    } else if (s == gensym("bang")) {
+        outlet_bang(x->span_outlet);
     }
 }
 
@@ -2104,6 +2106,14 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         sysmem_freeptr(keys);
     }
 
+    if (x->bound_crucible) {
+        if (!x->async || systhread_ismainthread()) {
+            outlet_bang(x->span_outlet);
+        } else {
+            defer(x, (method)buildspans_defer_output, gensym("bang"), 0, NULL);
+        }
+    }
+
     x->last_msg_type = gensym("bang");
 }
 
@@ -2198,7 +2208,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active."); break;
+            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active, but outputs a bang on bang when @bind is active."); break;
             case 1: sprintf(s, "Outlet 2: Track Number (track int). Bypassed if @bind is active."); break;
             case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything). Bypassed if @bind is active."); break;
             case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;

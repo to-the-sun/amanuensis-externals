@@ -49,7 +49,7 @@
 	<outletlist>
 		<outlet id="1" type="list">
 			<digest>Outlet 1: Span of bar timestamps</digest>
-			<description>Outputs a list of integers representing the bar timestamps of a completed span.</description>
+			<description>Outputs a list of integers representing the bar timestamps of a completed span. Bypassed if @bind is active, but outputs a bang once all spans have flushed through when @bind is active.</description>
 		</outlet>
 		<outlet id="2" type="int">
 			<digest>Outlet 2: Track number</digest>
@@ -74,7 +74,7 @@
 		</method>
 		<method name="bang">
 			<digest>Flush all spans</digest>
-			<description>Immediately ends and outputs all currently open spans for all tracks.</description>
+			<description>Immediately ends and outputs all currently open spans for all tracks. If @bind is active, Outlet 1 will emit a bang once all of the in-progress building spans have been successfully flushed all the way through the system.</description>
 		</method>
 		<method name="flush">
 			<arglist>
