@@ -352,18 +352,6 @@ def process_packet(text, client_sock=None):
                     state["spans_seen"] = new_spans_seen
                     dirty = True
 
-                if "tracks" in pkt:
-                    new_tracks = {}
-                    for tid, t_bars in pkt["tracks"].items():
-                        new_tracks[tid] = [snap_to_bar(b, state["bar_length"]) for b in t_bars]
-                    state["tracks"] = new_tracks
-
-                    if not state["tracks"]:
-                        state["bar_data"] = {}
-                        state["logged_hashes"].clear()
-                        state["bar_ratings"] = {}
-                        state["spans_seen"] = {}
-                    dirty = True
 
                 if pkt_event == "fill_bar":
                     track = pkt.get("track")
