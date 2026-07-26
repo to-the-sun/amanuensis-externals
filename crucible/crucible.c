@@ -1147,11 +1147,6 @@ void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom 
     }
     if ((long long)x->local_bar_length != old_bar_length) {
         crucible_log(x, "bar_length changed to %lld", (long long)x->local_bar_length);
-        if (x->visualize && x->local_bar_length > 0) {
-            char msg[128];
-            snprintf(msg, 128, "{\"event\":\"cleanup\",\"bar_length\":%lld}", (long long)x->local_bar_length);
-            visualize((t_object *)x, msg);
-        }
     }
 }
 
