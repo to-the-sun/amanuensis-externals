@@ -220,6 +220,10 @@ void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *a
         // Here argv[0] was the selector
         t_symbol *sel = atom_getsym(argv);
         outlet_anything(x->out_bar_data, sel, (short)(argc - 1), argv + 1);
+    } else if (s == gensym("span_int")) {
+        if (argc > 0) {
+            outlet_int(x->span_outlet, atom_getlong(argv));
+        }
     }
 }
 
@@ -2065,6 +2069,16 @@ void buildspans_bang(t_buildspans *x) {
 }
 
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->bound_crucible) {
+        if (!x->async || systhread_ismainthread()) {
+            outlet_int(x->span_outlet, 1);
+        } else {
+            t_atom a;
+            atom_setlong(&a, 1);
+            defer(x, (method)buildspans_defer_output, gensym("span_int"), 1, &a);
+        }
+    }
+
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "Decision: BANG flush. Outcome: Flush triggered by bang. Ending/flushing all currently open spans across all tracks/palettes. Utilizing bar_length: %ld", bar_length);
 
@@ -2102,6 +2116,16 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
         sysmem_freeptr(unique_palettes);
         sysmem_freeptr(keys);
+    }
+
+    if (x->bound_crucible) {
+        if (!x->async || systhread_ismainthread()) {
+            outlet_int(x->span_outlet, 0);
+        } else {
+            t_atom a;
+            atom_setlong(&a, 0);
+            defer(x, (method)buildspans_defer_output, gensym("span_int"), 1, &a);
+        }
     }
 
     x->last_msg_type = gensym("bang");
@@ -2198,7 +2222,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
         }
     } else { // ASSIST_OUTLET
         switch (a) {
-            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active."); break;
+            case 0: sprintf(s, "Outlet 1: Span Data (span list). Bypassed if @bind is active, but outputs a 1 before a bang flush begins and a 0 once it is complete when @bind is active."); break;
             case 1: sprintf(s, "Outlet 2: Track Number (track int). Bypassed if @bind is active."); break;
             case 2: sprintf(s, "Outlet 3: Bar Data for Ended Spans (anything). Bypassed if @bind is active."); break;
             case 3: sprintf(s, "Outlet 4: Logging & Visualization Outlet"); break;
