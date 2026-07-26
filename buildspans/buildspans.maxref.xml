@@ -42,7 +42,7 @@
 		</inlet>
 		<inlet id="5" type="float">
 			<digest>Inlet 5: Local Bar Length</digest>
-			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message or after a flush triggered by a 'bang'.</description>
+			<description>Sets a local bar length that is checked before the bar buffer. If this value is 0 or not set, the object retrieves the bar length from the bar buffer and caches it here for future use. A value &lt;= 0 received in this inlet resets the local bar length to 0. It is also reset to 0 upon receiving a 'clear' message (but is NOT reset after a flush triggered by a 'bang'). This inlet accepts both integers and floats (integers are automatically coerced to floats by Max).</description>
 		</inlet>
 	</inletlist>
 	<!--OUTLETS-->

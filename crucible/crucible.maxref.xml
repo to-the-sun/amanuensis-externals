@@ -23,7 +23,7 @@
 		<inlet id="2" type="float">
 			<digest>Local Bar Length override</digest>
 			<description>
-				Sets the local bar length in frames. This value is used for calculating song and track reaches. If set to 0 (default), the object attempts to retrieve the bar length from an external buffer~ named 'bar'.
+				Sets the local bar length in frames. This value is used for calculating song and track reaches. If set to 0 (default), the object attempts to retrieve the bar length from an external buffer~ named 'bar'. This inlet accepts both integers and floats (integers are automatically coerced to floats by Max).
 			</description>
 		</inlet>
 	</inletlist>

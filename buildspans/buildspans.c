@@ -2104,9 +2104,7 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         sysmem_freeptr(keys);
     }
 
-    x->local_bar_length = 0;
     x->last_msg_type = gensym("bang");
-    buildspans_log(x, "Bar length reset to zero after flush.");
 }
 
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
