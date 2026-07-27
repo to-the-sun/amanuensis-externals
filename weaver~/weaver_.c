@@ -1563,13 +1563,14 @@ void weaver_audio_qtask(t_weaver *x) {
                         }
 
                         if (buffer_ref_getobject(stems_ref)) {
+                            double fallback_offset = hit.value - x->most_negative_bar;
                             if (!tr->src_found[0]) {
-                                weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset 0.0)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
+                                weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name, fallback_offset);
                                 tr->src_found[0] = 1;
                                 tr->src_error_sent[0] = 0;
                             }
                             palette = s_stems;
-                            offset = 0.0;
+                            offset = fallback_offset;
                         } else {
                             tr->src_found[0] = 0;
                             if (!tr->src_error_sent[0]) {
