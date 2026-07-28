@@ -1416,9 +1416,16 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, f, tb[t].sr_dest, x->low_ms, x->high_ms, &f2);
                 tr->xf.direction = 0.0; // Direction is only applied once
 
+                int sample_r1_done = (tr->xf.ramp1.toggle > 0.5) ? (f1 <= 0.0) : (f1 >= 1.0);
+                int sample_r2_done = (tr->xf.ramp2.toggle > 0.5) ? (f2 <= 0.0) : (f2 >= 1.0);
+                int fade_active = !(sample_r1_done && sample_r2_done);
+
+                double g0 = fade_active ? 1.0 : tr->gain[0];
+                double g1 = fade_active ? 1.0 : tr->gain[1];
+
                 for (long c = 0; c < tb[t].n_chans_dest; c++) {
-                    double mix1 = (c < 16) ? interleaved_s[0][c] * f1 * tr->gain[0] : 0.0;
-                    double mix2 = (c < 16) ? interleaved_s[1][c] * f2 * tr->gain[1] : 0.0;
+                    double mix1 = (c < 16) ? interleaved_s[0][c] * f1 * g0 : 0.0;
+                    double mix2 = (c < 16) ? interleaved_s[1][c] * f2 * g1 : 0.0;
                     tb[t].samples_dest[f_wrapped * tb[t].n_chans_dest + c] = (float)(mix1 + mix2);
                 }
             }
