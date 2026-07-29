@@ -391,8 +391,12 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start
         f1_pts, f2_pts = [], []
         for p in track_points:
             x = left_pad + ((p["ms"] - view_start_ms) / view_span_ms) * graph_w
-            y_f1 = row_bottom - p["f1"] * row_graph_h
-            y_f2 = row_bottom - p["f2"] * row_graph_h
+
+            g1 = p.get("g1", 1.0) if p.get("dynamic_gain", 1) == 1 else 1.0
+            g2 = p.get("g2", 1.0) if p.get("dynamic_gain", 1) == 1 else 1.0
+
+            y_f1 = row_bottom - p["f1"] * g1 * row_graph_h
+            y_f2 = row_bottom - p["f2"] * g2 * row_graph_h
             f1_pts.append((int(x), int(y_f1)))
             f2_pts.append((int(x), int(y_f2)))
         if len(f1_pts) >= 2: pygame.draw.lines(surface, (100, 255, 100), False, f1_pts, 2)
@@ -453,16 +457,32 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start
         is_busy = busy_dict.get(t, False)
         t_len = state["track_lengths"].get(t, 0)
 
+        # Retrieve gain information from the most recent data point
+        track_points = points_dict.get(t, [])
+        g1_val, g2_val = 1.0, 1.0
+        dg_enabled = True
+        if track_points:
+            last_p = track_points[-1]
+            g1_val = last_p.get("g1", 1.0)
+            g2_val = last_p.get("g2", 1.0)
+            dg_enabled = (last_p.get("dynamic_gain", 1) == 1)
+
+        gain_text = f"G: {g1_val:.2f}/{g2_val:.2f}"
+
         if is_busy:
-            pygame.draw.rect(surface, (255, 255, 255), (int(5 * SCALE), y_graph + row_graph_h/2 - int(15 * SCALE), int(70 * SCALE), int(30 * SCALE)))
+            pygame.draw.rect(surface, (255, 255, 255), (int(5 * SCALE), y_graph + row_graph_h/2 - int(20 * SCALE), int(70 * SCALE), int(42 * SCALE)))
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (0, 0, 0))
             lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (0, 0, 0))
+            lbl_gain = fonts["weaver_tiny"].render(gain_text, True, (0, 0, 0))
         else:
             lbl = fonts["weaver_label"].render(f"Track {t}", True, (200, 200, 200))
             lbl_len = fonts["weaver_tiny"].render(f"L: {t_len:.0f}ms", True, (150, 150, 150))
+            gain_color = (150, 220, 150) if dg_enabled else (120, 120, 120)
+            lbl_gain = fonts["weaver_tiny"].render(gain_text, True, gain_color)
 
-        surface.blit(lbl, (int(10 * SCALE), y_graph + row_graph_h/2 - int(12 * SCALE)))
-        surface.blit(lbl_len, (int(10 * SCALE), y_graph + row_graph_h/2 + int(3 * SCALE)))
+        surface.blit(lbl, (int(10 * SCALE), y_graph + row_graph_h/2 - int(17 * SCALE)))
+        surface.blit(lbl_len, (int(10 * SCALE), y_graph + row_graph_h/2 - int(2 * SCALE)))
+        surface.blit(lbl_gain, (int(10 * SCALE), y_graph + row_graph_h/2 + int(10 * SCALE)))
 
     axis_y = top_pad + graph_h
     pygame.draw.line(surface, (200, 200, 200), (left_pad, axis_y), (left_pad + graph_w, axis_y), 2)

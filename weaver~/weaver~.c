@@ -81,6 +81,7 @@ typedef struct _weaver_track {
     double viz_absolute_ms;
     double pending_rating;
     double gain[2];
+    double viz_gain[2];
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -395,6 +396,8 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->pending_rating = 1.0;
             tr->gain[0] = 1.0;
             tr->gain[1] = 1.0;
+            tr->viz_gain[0] = 1.0;
+            tr->viz_gain[1] = 1.0;
 
             // Thread-safe state handover init
             tr->pending_palette = _sym_nothing;
@@ -1040,6 +1043,8 @@ void weaver_clear(t_weaver *x) {
             tr->pending_rating = 1.0;
             tr->gain[0] = 1.0;
             tr->gain[1] = 1.0;
+            tr->viz_gain[0] = 1.0;
+            tr->viz_gain[1] = 1.0;
 
             tr->palette[0] = _sym_dash;
             tr->palette[1] = _sym_dash;
@@ -1433,11 +1438,14 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             tr->dirty_dest = 1;
 
             if (x->visualize) {
+                int gain_changed = (tr->viz_gain[0] != tr->gain[0] || tr->viz_gain[1] != tr->gain[1]);
                 tr->viz_f1 = f1;
                 tr->viz_f2 = f2;
                 tr->viz_busy = tr->busy;
+                tr->viz_gain[0] = tr->gain[0];
+                tr->viz_gain[1] = tr->gain[1];
 
-                if (current_scan >= tr->last_viz_sent_ms + 333.33 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy) {
+                if (current_scan >= tr->last_viz_sent_ms + 333.33 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy || gain_changed) {
                     tr->viz_dirty = 1;
                     tr->last_viz_sent_ms = current_scan;
                 }
@@ -1718,8 +1726,8 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1]);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }
