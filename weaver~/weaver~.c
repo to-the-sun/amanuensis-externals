@@ -35,6 +35,13 @@ typedef struct _fifo_entry {
     int song_loop;
 } t_fifo_entry;
 
+typedef struct _rating_entry {
+    double timestamp;
+    double rating;
+} t_rating_entry;
+
+#define MAX_ROLLING_RATINGS 65536
+
 typedef struct _weaver_track {
     t_crossfade_state xf;
     t_symbol *palette[2];
@@ -163,6 +170,12 @@ typedef struct _weaver {
     double most_negative_bar;
     long dynamic_gain;
     double lowest_rating_seen;
+
+    // Rolling rating window fields
+    double song_length;
+    t_rating_entry *rolling_ratings;
+    int rolling_head;
+    int rolling_tail;
 } t_weaver;
 
 int compare_doubles(const void *a, const void *b) {
@@ -171,6 +184,60 @@ int compare_doubles(const void *a, const void *b) {
     if (arg1 < arg2) return -1;
     if (arg1 > arg2) return 1;
     return 0;
+}
+
+void weaver_add_rating(t_weaver *x, double timestamp, double rating) {
+    if (!x->rolling_ratings) return;
+    int next_tail = (x->rolling_tail + 1) % MAX_ROLLING_RATINGS;
+    if (next_tail == x->rolling_head) {
+        // Buffer full, advance head to overwrite oldest
+        x->rolling_head = (x->rolling_head + 1) % MAX_ROLLING_RATINGS;
+    }
+    x->rolling_ratings[x->rolling_tail].timestamp = timestamp;
+    x->rolling_ratings[x->rolling_tail].rating = rating;
+    x->rolling_tail = next_tail;
+}
+
+void weaver_expire_ratings(t_weaver *x, double current_time) {
+    if (!x->rolling_ratings) return;
+    double limit = current_time - x->song_length;
+    while (x->rolling_head != x->rolling_tail) {
+        if (x->rolling_ratings[x->rolling_head].timestamp < limit) {
+            x->rolling_head = (x->rolling_head + 1) % MAX_ROLLING_RATINGS;
+        } else {
+            break;
+        }
+    }
+}
+
+double weaver_get_rolling_min_rating(t_weaver *x) {
+    if (!x->rolling_ratings || x->rolling_head == x->rolling_tail) {
+        return 0.0;
+    }
+    double min_val = 0.0;
+    int idx = x->rolling_head;
+    int first = 1;
+    while (idx != x->rolling_tail) {
+        double r = x->rolling_ratings[idx].rating;
+        if (first) {
+            min_val = r;
+            first = 0;
+        } else if (r < min_val) {
+            min_val = r;
+        }
+        idx = (idx + 1) % MAX_ROLLING_RATINGS;
+    }
+    return min_val;
+}
+
+void weaver_recalculate_song_length(t_weaver *x) {
+    double max_len = 0.0;
+    for (long t = 0; t < x->track_cache_count; t++) {
+        if (x->track_cache[t] && x->track_cache[t]->track_length > max_len) {
+            max_len = x->track_cache[t]->track_length;
+        }
+    }
+    x->song_length = max_len;
 }
 
 void weaver_update_most_negative_bar(t_weaver *x);
@@ -275,6 +342,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             if (absolute_track_length > song_length) song_length = absolute_track_length;
         }
     }
+    x->song_length = song_length;
     critical_exit(x->lock);
 
     weaver_queue_log(x, "Consolidate started (Worker: %p). Song length: %.2f ms, Bar length: %.2f ms", systhread_self(), song_length, job->bar_length);
@@ -762,6 +830,12 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->dynamic_gain = 1;
         x->lowest_rating_seen = 0.0;
 
+        // Rolling window fields initialization
+        x->song_length = 0.0;
+        x->rolling_head = 0;
+        x->rolling_tail = 0;
+        x->rolling_ratings = (t_rating_entry *)sysmem_newptr(sizeof(t_rating_entry) * MAX_ROLLING_RATINGS);
+
         // 1. Initialize core structures and sync objects early
         critical_new(&x->lock);
         critical_new(&x->log_queue.lock);
@@ -812,6 +886,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         // 5. Setup initial state dependent on initialized refs and locks
         weaver_check_attachments(x);
         weaver_update_track_cache(x);
+        weaver_recalculate_song_length(x);
 
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
 
@@ -854,6 +929,11 @@ void weaver_free(t_weaver *x) {
     }
     critical_exit(x->log_queue.lock);
     critical_free(x->log_queue.lock);
+
+    if (x->rolling_ratings) {
+        sysmem_freeptr(x->rolling_ratings);
+        x->rolling_ratings = NULL;
+    }
 
     if (x->lock) critical_free(x->lock);
 }
@@ -967,6 +1047,7 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                         tr->viz_track_length = length;
                         tr->viz_dirty = 1;
                     }
+                    weaver_recalculate_song_length(x);
                     critical_exit(x->lock);
                     weaver_log(x, "Track %ld length manually updated to %.2f ms", track_id, length);
                 }
@@ -1020,6 +1101,9 @@ void weaver_clear(t_weaver *x) {
     x->fifo_tail = 0;
     x->most_negative_bar = 0.0;
     x->lowest_rating_seen = 0.0;
+    x->song_length = 0.0;
+    x->rolling_head = 0;
+    x->rolling_tail = 0;
 
     x->dict_found = 0;
     x->dict_error_sent = 0;
@@ -1161,6 +1245,7 @@ typedef struct {
 void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
     double last_scan = x->last_scan_val;
     double bar_len = round(weaver_get_bar_length(x));
+    double vector_time = (sampleframes > 0) ? (ramp_in[0] + x->most_negative_bar) : 0.0;
 
     t_track_buffers tb[MAX_WEAVER_TRACKS];
     memset(tb, 0, sizeof(tb));
@@ -1192,12 +1277,13 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
                 double target_gain = 1.0;
                 if (x->dynamic_gain) {
+                    weaver_expire_ratings(x, vector_time);
+                    weaver_add_rating(x, vector_time, tr->pending_rating);
+                    double min_rating = weaver_get_rolling_min_rating(x);
+
                     if (tr->pending_rating < 0.0) {
-                        if (tr->pending_rating < x->lowest_rating_seen) {
-                            x->lowest_rating_seen = tr->pending_rating;
-                        }
-                        if (x->lowest_rating_seen < 0.0) {
-                            target_gain = 1.0 - (tr->pending_rating / x->lowest_rating_seen);
+                        if (min_rating < 0.0) {
+                            target_gain = 1.0 - (tr->pending_rating / min_rating);
                         }
                     }
                 }
@@ -1253,6 +1339,10 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
         if (main_looped) {
             x->fifo_head = x->fifo_tail;
+            critical_enter(x->lock);
+            x->rolling_head = 0;
+            x->rolling_tail = 0;
+            critical_exit(x->lock);
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
                 if (tr) {

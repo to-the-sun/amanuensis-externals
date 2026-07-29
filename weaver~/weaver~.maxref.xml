@@ -130,7 +130,7 @@
 		</attribute>
 		<attribute name="dynamic_gain" type="long" get="1" set="1" opaque="0">
 			<digest>Enable Dynamic Gain</digest>
-			<description>When enabled (1), applies dynamic rating-based gain scaling on the fading-in side of crossfades for bars with negative ratings, scaled from the lowest rating yet seen to 0.</description>
+			<description>When enabled (1), applies dynamic rating-based gain scaling on the fading-in side of crossfades for bars with negative ratings, scaled from the rolling minimum rating seen in the last song_length to 0.</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
