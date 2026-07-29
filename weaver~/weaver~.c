@@ -1580,7 +1580,9 @@ void weaver_audio_qtask(t_weaver *x) {
                     }
 
                     int palette_exists = 0;
-                    if (palette != _sym_nothing && palette != _sym_dash) {
+                    int is_explicit_silence = (palette == _sym_nothing || palette == _sym_dash);
+
+                    if (!is_explicit_silence) {
                         t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, palette);
                         if (!buffer_ref_getobject(temp_ref)) {
                             if (!tr->src_error_sent[1]) {
@@ -1609,7 +1611,7 @@ void weaver_audio_qtask(t_weaver *x) {
                         object_free(temp_ref);
                     }
 
-                    if (!palette_exists) {
+                    if (!palette_exists && !is_explicit_silence) {
                         char stems_name[64];
                         snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
                         t_symbol *s_stems = gensym(stems_name);
@@ -1642,6 +1644,9 @@ void weaver_audio_qtask(t_weaver *x) {
                             offset = 0.0;
                         }
                         object_free(stems_ref);
+                    } else if (is_explicit_silence) {
+                        palette = _sym_dash;
+                        offset = 0.0;
                     } else {
                         weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
                     }
