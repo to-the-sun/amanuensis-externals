@@ -72,6 +72,8 @@ def process_packet(text):
         try:
             pkt = json.loads(line)
             pkt_type = pkt.get("type")
+            print(f"DEBUG_VIZ: Processed packet of type {pkt_type}: {pkt}")
+            sys.stdout.flush()
 
             with state_lock:
                 if pkt_type == "weaver":
@@ -558,8 +560,8 @@ def run_gui():
 
         # Save screenshot for headless runs
         if os.environ.get('HEADLESS') and not screenshot_saved and time.time() - start_time > 8:
-            pygame.image.save(screen, "weaver_bug_replication.png")
-            print("Successfully saved bug replication screenshot 'weaver_bug_replication.png'")
+            pygame.image.save(screen, "weaver_bug_fixed.png")
+            print("Successfully saved bug fixed screenshot 'weaver_bug_fixed.png'")
             sys.stdout.flush()
             screenshot_saved = True
 

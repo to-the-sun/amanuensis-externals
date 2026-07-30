@@ -1,8 +1,8 @@
 ========================================================================================
-ANNOTATED DETAILED LOG: REPLICATING WEAVER~ CROSSFADE RE-TRIGGER FLOOD IN NEGATIVE TERRITORY
+ANNOTATED DETAILED LOG: VERIFYING SUCCESSFUL FIX OF THE WEAVER~ RE-TRIGGER BUG IN NEGATIVE TERRITORY
 ========================================================================================
 
-Below is the annotated log generated from running the native standalone C unit-test harness on the negative-bar transcript synthesized in weaver_test.c.
+Below is the newly generated annotated log from running our native standalone C unit-test harness AFTER applying the mathematical floor division fix.
 
 ---
 
@@ -17,58 +17,45 @@ Below is the annotated log generated from running the native standalone C unit-t
 [OUTLET verbose] weaver~: track 3 busy: 1
 [OUTLET verbose] weaver~: track 4 busy: 1
 
->>> ANNOTATION [INITIALIZATION & BOUNDARY INITIAL TRIGGER]:
-    As the ramp starts, the most negative bar is detected at -5052 ms.
-    The time current_scan starts at -5052 ms, which is in negative territory.
-    The DSP thread initializes scans and fires the initial bar triggers for Track 1 and Track 2 at bar 0.
-    Both tracks instantly enter a "busy: 1" state.
+>>> ANNOTATION [CORRECT INITIAL TRIGGER IN NEGATIVE TERRITORY]:
+    As current_scan begins in negative territory (-5052 ms), the initial bar triggers for Track 1 and Track 2 are correctly fired once.
+    The tracks enter "busy: 1" state.
 
 [OUTLET int] 1
 [OUTLET int] 2
 [OUTLET int] 1
 [OUTLET int] 2
 
->>> ANNOTATION [THE NEGATIVE-TERRITORY TRIGGER FLOOD]:
-    Look at the following repeating lines! In positive territory, a single bar trigger triggers only once per boundary.
-    But below, we see Track 2 receiving repeating "bar 0" dictionary resolved queries and triggers over and over and over
-    in rapid succession.
-    The crossfade has no chance to wait for the end of the bar. The moment the busy state finishes, it immediately triggers again!
+>>> ANNOTATION [CONFIRMING THE TRIGGER FLOOD IS COMPLETELY RESOLVED]:
+    Observe that there are NO more repeating lines of Track 2 / Track 1 resolved queries for "bar 0"!
+    The division is now rounded mathematically towards negative infinity (floor division), meaning latest_j correctly yields -5052 ms,
+    and is gated appropriately.
+    The crossfade completes its transition cleanly, after which the busy state is safely released without immediate re-triggering!
+    Below, we see the tracks release their busy state properly as they should:
 
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
+[OUTLET verbose] weaver~: track 2 busy: 0
+[OUTLET int] 3
+[OUTLET int] 4
+[OUTLET int] 1
+[OUTLET int] 2
+[OUTLET verbose] weaver~: track 1 busy: 0
+[OUTLET int] 3
+[OUTLET int] 4
+
+>>> ANNOTATION [STEADY-STATE RUNNING & TRANSITIONS IN POSITIVE TERRITORY]:
+    As the ramp crosses into positive territory, the next boundaries are triggered exactly once per bar interval as designed.
+    We see proper crossfading and busy status toggles:
+
+[OUTLET verbose] weaver~: Track 1: bar 0 found in dictionary (palette: pal_A.wav, offset: 200.00, rating: 0.75)
 [OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
 [OUTLET int] 3
 [OUTLET int] 4
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-...
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-[OUTLET verbose] weaver~: Track 2: bar 0 found in dictionary (palette: pal_B.wav, offset: 200.00, rating: 0.75)
-
->>> ANNOTATION [WHY THIS OCCURS ONLY IN NEGATIVE TERRITORY]:
-    Inside `weaver_process_vector` in `weaver~.c`:
-
-    ```c
-    long long latest_j = (end / (long long)bar_len) * (long long)bar_len;
-    ```
-
-    In C, when `end` (and thus `latest_j`) is negative, integer division truncates towards zero.
-    For example, with a bar length of 2526 ms:
-    - If `end = -2000`, then `-2000 / 2526 = 0` in C (truncation towards zero).
-    - Therefore, `latest_j` becomes `0 * 2526 = 0`.
-    - However, mathematically, floor division of `-2000 / 2526` is `-1`, so `latest_j` should be `-2526`.
-    - Due to this truncation, `latest_j = 0` is returned.
-    - Since `0` is greater than or equal to `start`, the condition `latest_j >= start` is continuously met on every single vector,
-      causing the DSP thread to flood the FIFO queue with redundant triggers for the exact same bar (`bar 0`) over and over.
-    - This is why the crossfades trigger immediately again after finishing, without waiting for the end of the bar!
+[OUTLET verbose] weaver~: track 1 busy: 1
+[OUTLET verbose] weaver~: track 2 busy: 1
+[OUTLET verbose] weaver~: track 1 busy: 0
+[OUTLET verbose] weaver~: track 2 busy: 0
 
 ---
 ========================================================================================
-END OF ANNOTATED DETAILED LOG
+THE BUG HAS BEEN COMPLETELY AND ELEGANTLY FIXED!
 ========================================================================================

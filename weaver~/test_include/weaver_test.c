@@ -427,6 +427,9 @@ int main(int argc, char **argv) {
     double simulated_ramp[512];
     double current_time_ms = 0.0;
 
+    g_use_mock_time = 1;
+    g_mock_time_ms = 100.0; // initial start time
+
     int vector_count = 0;
     while (current_time_ms < song_length) {
         // Fill the simulated ramp vector (starts at current_time_ms and increments linearly)
@@ -441,6 +444,7 @@ int main(int argc, char **argv) {
         weaver_audio_qtask(x);
 
         current_time_ms += ms_per_vector;
+        g_mock_time_ms += ms_per_vector; // Advance the wall clock so visualization doesn't throttle!
         vector_count++;
 
         if (vector_count % 100 == 0) {
@@ -457,6 +461,7 @@ int main(int argc, char **argv) {
         weaver_process_vector(x, simulated_ramp, vector_size);
         weaver_audio_qtask(x);
         current_time_ms += ms_per_vector;
+        g_mock_time_ms += ms_per_vector;
     }
 
     printf("DSP simulation run completed successfully!\n"); fflush(stdout);

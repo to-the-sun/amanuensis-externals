@@ -640,7 +640,13 @@ double sys_getms(void) {
     return systime_ms();
 }
 
+double g_mock_time_ms = 0.0;
+int g_use_mock_time = 0;
+
 double systime_ms(void) {
+    if (g_use_mock_time) {
+        return g_mock_time_ms;
+    }
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;

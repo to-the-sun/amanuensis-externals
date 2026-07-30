@@ -222,6 +222,9 @@ void buffer_setdirty(t_buffer_obj *b);
 double sys_getsr(void);
 double systime_ms(void);
 
+extern double g_mock_time_ms;
+extern int g_use_mock_time;
+
 void dsp_setup(t_pxobject *x, long inputs);
 void dsp_free(t_pxobject *x);
 void dsp_add64(void *dsp64, t_object *x, t_perfroutine64 perform, long flags, void *userparam);
