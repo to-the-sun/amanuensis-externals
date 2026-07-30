@@ -1397,6 +1397,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 continue;
             }
 
+            // Individual track looping has been disabled for now
+            /*
             double current_scan_for_track = current_scan;
             if (current_scan < tr->most_negative_bar) {
                 double T_content_length = tr->highest_bar - tr->most_negative_bar + bar_len;
@@ -1410,9 +1412,12 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     }
                 }
             }
+            */
 
             // 2. Continuous Bar Hit Detection (Outside samples_dest check)
-            double tr_scan = fmod(current_scan_for_track, tr->track_length);
+            // Individual track looping has been disabled for now
+            // double tr_scan = fmod(current_scan_for_track, tr->track_length);
+            double tr_scan = current_scan;
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(tr->last_track_scan);
             int track_looped = (r_scan < r_last);
