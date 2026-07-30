@@ -500,6 +500,11 @@ def run_gui():
     pygame.display.set_caption("Combined Visualizer")
     clock = pygame.time.Clock()
 
+    # If HEADLESS is enabled, we'll want to save a screenshot of the replicated state
+    # after receiving packets and exit after some time so we can visualize it!
+    screenshot_saved = False
+    start_time = time.time()
+
     try:
         fonts = {
             "building_normal": pygame.font.SysFont("Arial", int(16 * SCALE)),
@@ -550,6 +555,14 @@ def run_gui():
         draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, fonts)
 
         pygame.display.flip()
+
+        # Save screenshot for headless runs
+        if os.environ.get('HEADLESS') and not screenshot_saved and time.time() - start_time > 8:
+            pygame.image.save(screen, "weaver_bug_replication.png")
+            print("Successfully saved bug replication screenshot 'weaver_bug_replication.png'")
+            sys.stdout.flush()
+            screenshot_saved = True
+
         clock.tick(FPS)
 
 if __name__ == "__main__":
