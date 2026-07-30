@@ -177,9 +177,9 @@ void *proxy_new(void *x, long id, long *proxy_id) {
     return calloc(1, 16);
 }
 
+long g_mock_inlet = 0;
 long proxy_getinlet(void *x) {
-    // Mock proxy lookup
-    return 0; // standard inlet
+    return g_mock_inlet;
 }
 
 // Qelem

@@ -398,6 +398,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Set Track 1 and Track 2 lengths to 10104.0 ms
+    t_atom list_args[2];
+    atom_setlong(&list_args[0], 1);
+    atom_setfloat(&list_args[1], 10104.0);
+    g_mock_inlet = 1; // Simulate proxy inlet 1 for track length messages
+    weaver_list(x, gensym("list"), 2, list_args);
+
+    atom_setlong(&list_args[0], 2);
+    atom_setfloat(&list_args[1], 10104.0);
+    weaver_list(x, gensym("list"), 2, list_args);
+    g_mock_inlet = 0; // Reset
+
     // Enable logging and visualization by modifying attributes directly on our mock-allocated object
     printf("Enabling log and visualize attributes...\n"); fflush(stdout);
     // Layout-agnostic attribute modification
@@ -476,6 +488,10 @@ int main(int argc, char **argv) {
     }
     printf("  poly.1 received written audio: %s\n", has_non_zero_1 ? "YES (SUCCESS)" : "NO"); fflush(stdout);
     printf("  poly.2 received written audio: %s\n", has_non_zero_2 ? "YES (SUCCESS)" : "NO"); fflush(stdout);
+
+    // Let the background visualization thread drain and send all queued packets
+    printf("\nWaiting for background visualizer queue to drain...\n"); fflush(stdout);
+    systhread_sleep(2500);
 
     // Free the weaver instance
     printf("\nFreeing weaver~ object...\n"); fflush(stdout);

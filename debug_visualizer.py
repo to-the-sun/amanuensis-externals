@@ -72,8 +72,6 @@ def process_packet(text):
         try:
             pkt = json.loads(line)
             pkt_type = pkt.get("type")
-            print(f"DEBUG_VIZ: Processed packet of type {pkt_type}: {pkt}")
-            sys.stdout.flush()
 
             with state_lock:
                 if pkt_type == "weaver":

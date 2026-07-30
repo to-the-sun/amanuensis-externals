@@ -149,6 +149,7 @@ void object_post(void *x, const char *fmt, ...);
 
 void *proxy_new(void *x, long id, long *proxy_id);
 long proxy_getinlet(void *x);
+extern long g_mock_inlet;
 
 t_qelem *qelem_new(void *obj, method fn);
 void qelem_set(t_qelem *q);
