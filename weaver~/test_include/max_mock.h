@@ -149,6 +149,7 @@ void object_post(void *x, const char *fmt, ...);
 
 void *proxy_new(void *x, long id, long *proxy_id);
 long proxy_getinlet(void *x);
+extern long g_mock_inlet;
 
 t_qelem *qelem_new(void *obj, method fn);
 void qelem_set(t_qelem *q);
@@ -221,6 +222,9 @@ void buffer_setdirty(t_buffer_obj *b);
 
 double sys_getsr(void);
 double systime_ms(void);
+
+extern double g_mock_time_ms;
+extern int g_use_mock_time;
 
 void dsp_setup(t_pxobject *x, long inputs);
 void dsp_free(t_pxobject *x);

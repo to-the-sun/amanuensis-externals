@@ -225,7 +225,7 @@ t_dictionary *load_transcript_from_json(const char *filepath) {
 }
 
 t_dictionary *synthesize_transcript() {
-    printf("Synthesizing transcript dictionary...\n");
+    printf("Synthesizing transcript dictionary with negative bars...\n");
     t_dictionary *root = dictionary_new();
 
     // We will create 2 tracks: Track 1 and Track 2
@@ -234,8 +234,8 @@ t_dictionary *synthesize_transcript() {
         char track_id_str[16];
         snprintf(track_id_str, sizeof(track_id_str), "%d", t);
 
-        // Add 4 bars per track at 2526 ms interval
-        for (int b = 0; b < 4; b++) {
+        // Add 4 bars per track at 2526 ms interval: -5052, -2526, 0, 2526
+        for (int b = -2; b <= 1; b++) {
             t_dictionary *bar_dict = dictionary_new();
             char bar_ts_str[16];
             snprintf(bar_ts_str, sizeof(bar_ts_str), "%d", b * 2526);
@@ -249,20 +249,20 @@ t_dictionary *synthesize_transcript() {
             // offset
             t_atom off;
             off.a_type = A_FLOAT;
-            off.a_w.w_float = (double)(b * 100);
+            off.a_w.w_float = (double)((b + 2) * 100);
             dictionary_appendatom(bar_dict, gensym("offset"), &off);
 
             // rating
             t_atom rat;
             rat.a_type = A_FLOAT;
-            rat.a_w.w_float = 0.95 - (double)b * 0.1; // rating decreases slightly
+            rat.a_w.w_float = 0.95 - (double)(b + 2) * 0.1; // rating decreases slightly
             dictionary_appendatom(bar_dict, gensym("rating"), &rat);
 
             // absolutes (either array or single atom)
-            if (b % 2 == 0) {
+            if ((b + 2) % 2 == 0) {
                 t_atom abs_atom;
                 abs_atom.a_type = A_FLOAT;
-                abs_atom.a_w.w_float = 12000.0 + b * 2526;
+                abs_atom.a_w.w_float = 12000.0 + (b + 2) * 2526;
                 dictionary_appendatom(bar_dict, gensym("absolutes"), &abs_atom);
 
                 t_atom sc_atom;
@@ -272,9 +272,9 @@ t_dictionary *synthesize_transcript() {
             } else {
                 t_atom abs_atoms[2];
                 abs_atoms[0].a_type = A_FLOAT;
-                abs_atoms[0].a_w.w_float = 12000.0 + b * 2526;
+                abs_atoms[0].a_w.w_float = 12000.0 + (b + 2) * 2526;
                 abs_atoms[1].a_type = A_FLOAT;
-                abs_atoms[1].a_w.w_float = 13000.0 + b * 2526;
+                abs_atoms[1].a_w.w_float = 13000.0 + (b + 2) * 2526;
                 t_atomarray *abs_aa = atomarray_new(2, abs_atoms);
                 dictionary_appendatomarray(bar_dict, gensym("absolutes"), (t_object *)abs_aa);
 
@@ -398,6 +398,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Set Track 1 and Track 2 lengths to 10104.0 ms
+    t_atom list_args[2];
+    atom_setlong(&list_args[0], 1);
+    atom_setfloat(&list_args[1], 10104.0);
+    g_mock_inlet = 1; // Simulate proxy inlet 1 for track length messages
+    weaver_list(x, gensym("list"), 2, list_args);
+
+    atom_setlong(&list_args[0], 2);
+    atom_setfloat(&list_args[1], 10104.0);
+    weaver_list(x, gensym("list"), 2, list_args);
+    g_mock_inlet = 0; // Reset
+
     // Enable logging and visualization by modifying attributes directly on our mock-allocated object
     printf("Enabling log and visualize attributes...\n"); fflush(stdout);
     // Layout-agnostic attribute modification
@@ -427,6 +439,9 @@ int main(int argc, char **argv) {
     double simulated_ramp[512];
     double current_time_ms = 0.0;
 
+    g_use_mock_time = 1;
+    g_mock_time_ms = 100.0; // initial start time
+
     int vector_count = 0;
     while (current_time_ms < song_length) {
         // Fill the simulated ramp vector (starts at current_time_ms and increments linearly)
@@ -441,6 +456,7 @@ int main(int argc, char **argv) {
         weaver_audio_qtask(x);
 
         current_time_ms += ms_per_vector;
+        g_mock_time_ms += ms_per_vector; // Advance the wall clock so visualization doesn't throttle!
         vector_count++;
 
         if (vector_count % 100 == 0) {
@@ -457,6 +473,7 @@ int main(int argc, char **argv) {
         weaver_process_vector(x, simulated_ramp, vector_size);
         weaver_audio_qtask(x);
         current_time_ms += ms_per_vector;
+        g_mock_time_ms += ms_per_vector;
     }
 
     printf("DSP simulation run completed successfully!\n"); fflush(stdout);
@@ -471,6 +488,10 @@ int main(int argc, char **argv) {
     }
     printf("  poly.1 received written audio: %s\n", has_non_zero_1 ? "YES (SUCCESS)" : "NO"); fflush(stdout);
     printf("  poly.2 received written audio: %s\n", has_non_zero_2 ? "YES (SUCCESS)" : "NO"); fflush(stdout);
+
+    // Let the background visualization thread drain and send all queued packets
+    printf("\nWaiting for background visualizer queue to drain...\n"); fflush(stdout);
+    systhread_sleep(2500);
 
     // Free the weaver instance
     printf("\nFreeing weaver~ object...\n"); fflush(stdout);
