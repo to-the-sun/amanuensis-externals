@@ -311,13 +311,22 @@ t_dictionary *synthesize_transcript() {
 int main(int argc, char **argv) {
     printf("DEBUG: Entering main...\n"); fflush(stdout);
 
+    double bar_len = 2526.0;
+    if (argc > 1 && strstr(argv[1], "transcript.json") != NULL) {
+        bar_len = 3459.0;
+    }
+
     // Static arrays to avoid stack overflow
-    static float pal_a_samples[2526 * 44];
-    static float pal_b_samples[2526 * 44];
+    static float pal_a_samples[5000 * 44];
+    static float pal_b_samples[5000 * 44];
     static float stems_1_samples[50000];
     static float stems_2_samples[50000];
+    static float stems_3_samples[50000];
+    static float stems_4_samples[50000];
     static float dest_poly_1[200000];
     static float dest_poly_2[200000];
+    static float dest_poly_3[200000];
+    static float dest_poly_4[200000];
 
     printf("DEBUG: Opening log file...\n"); fflush(stdout);
     // Open the log file
@@ -338,27 +347,34 @@ int main(int argc, char **argv) {
     printf("Registering mock audio buffers...\n"); fflush(stdout);
 
     // Bar buffer~: contains bar length in the first sample
-    float bar_length_sample[1] = { 2526.0f };
+    float bar_length_sample[1];
+    bar_length_sample[0] = (float)bar_len;
     mock_register_buffer("bar", bar_length_sample, 1, 1, 44100.0);
 
     // Fill with simple test signal (alternating positive/negative samples)
-    for (int i = 0; i < 2526 * 44; i++) {
+    for (int i = 0; i < (int)bar_len * 44; i++) {
         pal_a_samples[i] = (i % 2 == 0) ? 0.5f : -0.5f;
         pal_b_samples[i] = (i % 2 == 0) ? 0.3f : -0.3f;
     }
-    mock_register_buffer("pal_A.wav", pal_a_samples, 2526 * 44, 1, 44100.0);
-    mock_register_buffer("pal_B.wav", pal_b_samples, 2526 * 44, 1, 44100.0);
+    mock_register_buffer("pal_A.wav", pal_a_samples, (long long)bar_len * 44, 1, 44100.0);
+    mock_register_buffer("pal_B.wav", pal_b_samples, (long long)bar_len * 44, 1, 44100.0);
 
     // Fill fallback stems buffers with non-zero samples as well
     for (int i = 0; i < 50000; i++) {
         stems_1_samples[i] = (i % 2 == 0) ? 0.4f : -0.4f;
         stems_2_samples[i] = (i % 2 == 0) ? 0.2f : -0.2f;
+        stems_3_samples[i] = (i % 2 == 0) ? 0.15f : -0.15f;
+        stems_4_samples[i] = (i % 2 == 0) ? 0.1f : -0.1f;
     }
     mock_register_buffer("stems.1", stems_1_samples, 50000, 1, 44100.0);
     mock_register_buffer("stems.2", stems_2_samples, 50000, 1, 44100.0);
+    mock_register_buffer("stems.3", stems_3_samples, 50000, 1, 44100.0);
+    mock_register_buffer("stems.4", stems_4_samples, 50000, 1, 44100.0);
 
     mock_register_buffer("poly.1", dest_poly_1, 200000, 1, 44100.0);
     mock_register_buffer("poly.2", dest_poly_2, 200000, 1, 44100.0);
+    mock_register_buffer("poly.3", dest_poly_3, 200000, 1, 44100.0);
+    mock_register_buffer("poly.4", dest_poly_4, 200000, 1, 44100.0);
 
     // Step 2: Load or synthesize transcript dictionary
     t_dictionary *transcript = NULL;
@@ -398,16 +414,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Set Track 1 and Track 2 lengths to 10104.0 ms
+    double track_len = bar_len * 4.0;
+    if (argc > 1 && strstr(argv[1], "transcript.json") != NULL) {
+        track_len = 27672.0; // 8 bars total track length
+    }
+
+    // Set Track 1 and Track 2 lengths to track_len ms
     t_atom list_args[2];
     atom_setlong(&list_args[0], 1);
-    atom_setfloat(&list_args[1], 10104.0);
+    atom_setfloat(&list_args[1], track_len);
     g_mock_inlet = 1; // Simulate proxy inlet 1 for track length messages
     weaver_list(x, gensym("list"), 2, list_args);
 
     atom_setlong(&list_args[0], 2);
-    atom_setfloat(&list_args[1], 10104.0);
+    atom_setfloat(&list_args[1], track_len);
     weaver_list(x, gensym("list"), 2, list_args);
+
+    if (argc > 1 && strstr(argv[1], "transcript.json") != NULL) {
+        atom_setlong(&list_args[0], 3);
+        atom_setfloat(&list_args[1], 27672.0);
+        weaver_list(x, gensym("list"), 2, list_args);
+
+        atom_setlong(&list_args[0], 4);
+        atom_setfloat(&list_args[1], 17295.0);
+        weaver_list(x, gensym("list"), 2, list_args);
+    }
     g_mock_inlet = 0; // Reset
 
     // Enable logging and visualization by modifying attributes directly on our mock-allocated object
@@ -429,7 +460,10 @@ int main(int argc, char **argv) {
     min_w->visualize = 1;
 
     // Step 4: Run continuous simulated ramp signal to song end
-    double song_length = 2526.0 * 4.0; // 4 bars * 2526ms = 10104ms
+    double song_length = bar_len * 4.0;
+    if (argc > 1 && strstr(argv[1], "transcript.json") != NULL) {
+        song_length = 27672.0;
+    }
     double sr = 44100.0;
     long vector_size = 512;
     double ms_per_vector = (double)vector_size * 1000.0 / sr;

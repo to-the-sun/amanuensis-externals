@@ -840,6 +840,8 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         critical_new(&x->lock);
         critical_new(&x->log_queue.lock);
         _sym_buffer = gensym("buffer");
+        _sym_dash = gensym("-");
+        _sym_0 = gensym("0");
         x->log_queue.head = NULL;
         x->log_queue.tail = NULL;
         x->consolidate_running = 0;
@@ -884,8 +886,8 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         attr_args_process(x, argc, argv);
 
         // 5. Setup initial state dependent on initialized refs and locks
-        weaver_check_attachments(x);
         weaver_update_track_cache(x);
+        weaver_check_attachments(x);
         weaver_recalculate_song_length(x);
 
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);

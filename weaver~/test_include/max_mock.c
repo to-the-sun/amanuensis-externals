@@ -600,7 +600,9 @@ void buffer_ref_set(t_buffer_ref *br, t_symbol *name) {
 
 t_buffer_obj *buffer_ref_getobject(t_buffer_ref *br) {
     if (!br || !br->name) return NULL;
+    // printf("DEBUG LOOKUP: '%s' (registered count: %d)\n", br->name->s_name, g_buffer_count); fflush(stdout);
     for (int i = 0; i < g_buffer_count; i++) {
+        // printf("  reg[%d]: '%s'\n", i, g_buffers[i].name); fflush(stdout);
         if (strcmp(g_buffers[i].name, br->name->s_name) == 0) {
             return &g_buffers[i];
         }
