@@ -558,8 +558,8 @@ def run_gui():
 
         # Save screenshot for headless runs
         if os.environ.get('HEADLESS') and not screenshot_saved and time.time() - start_time > 8:
-            pygame.image.save(screen, "weaver_bug_fixed.png")
-            print("Successfully saved bug fixed screenshot 'weaver_bug_fixed.png'")
+            pygame.image.save(screen, "weaver~/test_include/weaver_bug_fixed.png")
+            print("Successfully saved bug fixed screenshot 'weaver~/test_include/weaver_bug_fixed.png'")
             sys.stdout.flush()
             screenshot_saved = True
 
