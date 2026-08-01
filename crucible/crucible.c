@@ -1300,7 +1300,7 @@ void crucible_monitor_qfn(t_crucible *x) {
 
         t_atom_long bar_length = crucible_get_bar_length(x);
 
-        if (bar_length > 0) {
+        if (bar_length >= 0) {
             t_dictionary *curr_track_reaches = dictionary_new();
             t_atom_long curr_song_reach = 0;
             t_atom_long curr_song_min = 0;
