@@ -57,6 +57,10 @@
 		<method name="anything">
 			<digest>Pass through anything else</digest>
 		</method>
+		<method name="clear">
+			<digest>Clear queue and reset state</digest>
+			<description>Clears the internal queue of message bundles, resets the active queuing state to 0, and re-initializes all stored cold inlet values back to integer 0.</description>
+		</method>
 		<method name="log">
 			<arglist>
 				<arg name="state" type="int" optional="0" />

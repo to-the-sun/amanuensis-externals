@@ -152,3 +152,19 @@ int async_worker_is_worker_thread(t_async_worker *worker) {
     return 0; // Not easily testable in standalone without more mocks
 #endif
 }
+
+void async_worker_clear_queue(t_async_worker *worker) {
+    if (!worker) return;
+
+    systhread_mutex_lock(worker->mutex);
+    t_async_task *task;
+    while (linklist_getsize(worker->queue) > 0) {
+        task = (t_async_task *)linklist_getindex(worker->queue, 0);
+        if (task) {
+            linklist_chuckindex(worker->queue, 0);
+            if (task->argv) sysmem_freeptr(task->argv);
+            sysmem_freeptr(task);
+        }
+    }
+    systhread_mutex_unlock(worker->mutex);
+}

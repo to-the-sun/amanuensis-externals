@@ -2364,6 +2364,17 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    if (s == gensym("clear")) {
+        if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
+            crucible_log(x, "crucible: clearing background worker queue for 'clear' message");
+            async_worker_clear_queue(x->worker);
+
+            crucible_log(x, "crucible: enqueuing async task for message 'clear'...");
+            async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
+            return;
+        }
+    }
+
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         crucible_log(x, "crucible: enqueuing async task for message '%s'...", s->s_name);
         async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);

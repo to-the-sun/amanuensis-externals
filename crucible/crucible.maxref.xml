@@ -94,7 +94,7 @@
 		<method name="clear">
 			<digest>Reset internal state</digest>
 			<description>
-				Clears the challenger dictionary, all track reaches, song reach, and internal track context.
+				Clears the challenger dictionary, all track reaches, song reach, and internal track context. In asynchronous mode (@async 1), also clears/discards any pending background worker tasks.
 			</description>
 		</method>
 		<method name="rebar">

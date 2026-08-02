@@ -844,6 +844,10 @@ void buildspans_free(t_buildspans *x) {
 
 void buildspans_clear(t_buildspans *x) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
+        buildspans_log(x, "buildspans: clearing background worker queue for 'clear' message");
+        async_worker_clear_queue(x->worker);
+
+        buildspans_log(x, "buildspans: enqueuing async task for message 'clear'...");
         async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
         return;
     }

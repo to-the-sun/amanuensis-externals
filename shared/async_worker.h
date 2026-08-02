@@ -41,5 +41,6 @@ void async_worker_retain(t_async_worker *worker);
 void async_worker_release(t_async_worker *worker);
 void async_worker_enqueue(t_async_worker *worker, void *x, method m, t_symbol *s, long argc, t_atom *argv);
 int async_worker_is_worker_thread(t_async_worker *worker);
+void async_worker_clear_queue(t_async_worker *worker);
 
 #endif // ASYNC_WORKER_H

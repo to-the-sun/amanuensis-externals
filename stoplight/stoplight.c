@@ -47,6 +47,7 @@ void stoplight_copy_msg(t_queued_msg *dest, t_msg_type type, t_symbol *s, long a
 void stoplight_clear_msg(t_queued_msg *msg);
 void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg);
 
+void stoplight_clear(t_stoplight *x);
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv);
 void stoplight_free(t_stoplight *x);
 t_max_err stoplight_attr_set_log(t_stoplight *x, void *attr, long ac, t_atom *av);
@@ -76,6 +77,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)stoplight_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)stoplight_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)stoplight_anything, "anything", A_GIMME, 0);
+    class_addmethod(c, (method)stoplight_clear, "clear", 0);
     class_addmethod(c, (method)stoplight_log_msg, "log", A_LONG, 0);
     class_addmethod(c, (method)stoplight_assist, "assist", A_CANT, 0);
 
@@ -209,6 +211,45 @@ void stoplight_output_msg(t_stoplight *x, void *outlet, t_queued_msg *msg) {
             outlet_anything(outlet, msg->s, (short)msg->argc, msg->argv);
             break;
     }
+}
+
+void stoplight_clear(t_stoplight *x) {
+    critical_enter(x->lock);
+
+    // 1. Clear the queue of bundles
+    if (x->queue) {
+        t_bundle *bundle;
+        while (linklist_getsize(x->queue) > 0) {
+            bundle = (t_bundle *)linklist_getindex(x->queue, 0);
+            linklist_chuckindex(x->queue, 0);
+            if (bundle) {
+                if (bundle->msgs) {
+                    for (long i = 0; i < x->num_pairs; i++) {
+                        stoplight_clear_msg(&bundle->msgs[i]);
+                    }
+                    sysmem_freeptr(bundle->msgs);
+                }
+                sysmem_freeptr(bundle);
+            }
+        }
+    }
+
+    // 2. Reset state
+    x->state = 0;
+    x->is_flushing = 0;
+
+    // 3. Reset the messages stored in cold inlets
+    if (x->last_items) {
+        for (long i = 0; i < x->num_pairs - 1; i++) {
+            stoplight_clear_msg(&x->last_items[i]);
+            t_atom a;
+            atom_setlong(&a, 0);
+            stoplight_copy_msg(&x->last_items[i], MSG_INT, NULL, 1, &a);
+        }
+    }
+
+    critical_exit(x->lock);
+    stoplight_log(x, "Cleared queue and reset internal state and cold inlets.");
 }
 
 void *stoplight_new(t_symbol *s, long argc, t_atom *argv) {
