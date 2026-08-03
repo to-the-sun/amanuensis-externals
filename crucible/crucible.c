@@ -207,6 +207,41 @@ void adjust_filled_bar_dict(t_dictionary *bar_dict, t_atom_long src_ts, t_atom_l
     // No-op: do not shift any internal values of the copied bar
 }
 
+void crucible_enqueue_task(t_crucible *x, method m, t_symbol *s, long argc, t_atom *argv) {
+    if (!x->worker) return;
+    systhread_mutex_lock(x->sequence_mutex);
+    long seq = x->enqueue_sequence++;
+    linklist_append(x->pending_sequences, (void *)(intptr_t)seq);
+    systhread_mutex_unlock(x->sequence_mutex);
+    async_worker_enqueue(x->worker, x, m, s, argc, argv);
+}
+
+long crucible_get_task_sequence(t_crucible *x) {
+    long seq = -1;
+    if (x->async && x->worker && async_worker_is_worker_thread(x->worker)) {
+        systhread_mutex_lock(x->sequence_mutex);
+        if (linklist_getsize(x->pending_sequences) > 0) {
+            seq = (long)(intptr_t)linklist_getindex(x->pending_sequences, 0);
+            linklist_chuckindex(x->pending_sequences, 0);
+        }
+        systhread_mutex_unlock(x->sequence_mutex);
+    }
+    return seq;
+}
+
+int crucible_is_task_cancelled(t_crucible *x, long seq) {
+    if (seq != -1) {
+        int cancelled = 0;
+        systhread_mutex_lock(x->sequence_mutex);
+        if (seq < x->last_clear_sequence) {
+            cancelled = 1;
+        }
+        systhread_mutex_unlock(x->sequence_mutex);
+        return cancelled;
+    }
+    return 0;
+}
+
 void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("-")) {
         outlet_anything(x->outlet_data, s, argc, argv);
@@ -376,6 +411,15 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         visualize_init();
         x->challenger_dict = dictionary_new();
         x->last_track_id = gensym("");
+
+        systhread_mutex_new(&x->sequence_mutex, 0);
+        systhread_mutex_new(&x->state_mutex, 0);
+        x->pending_sequences = linklist_new();
+        x->enqueue_sequence = 0;
+        x->last_clear_sequence = 0;
+        x->current_task_seq = -1;
+        x->rebar_in_progress = 0;
+
         x->incumbent_dict_name = gensym("");
         x->bar_warn_sent = 0;
         x->buffer_ref = buffer_ref_new((t_object *)x, gensym("bar"));
@@ -427,6 +471,12 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 void crucible_free(t_crucible *x) {
     visualize_cleanup();
 
+    if (x->pending_sequences) {
+        linklist_chuck(x->pending_sequences);
+    }
+    systhread_mutex_free(x->sequence_mutex);
+    systhread_mutex_free(x->state_mutex);
+
     // Stop and clean up the dedicated monitor thread
     x->monitor_active = 0;
     if (x->monitor_thread) {
@@ -458,6 +508,7 @@ void crucible_free(t_crucible *x) {
 }
 
 void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long bar_ts_long, t_symbol *track_sym, t_dictionary *incumbent_track_dict) {
+    if (crucible_is_task_cancelled(x, x->current_task_seq)) return;
     t_atom_long bar_length = crucible_get_bar_length(x);
     crucible_log(x, "crucible_output_bar_data: utilizing bar_length %lld", (long long)bar_length);
     if (!bar_dict) return;
@@ -569,6 +620,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 }
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
+    if (crucible_is_task_cancelled(x, x->current_task_seq)) return;
     t_atom_long bar_length = crucible_get_bar_length(x);
     crucible_log(x, "crucible: entering crucible_process_span (utilizing bar_length %lld, incumbent dict: '%s')", (long long)bar_length, x->incumbent_dict_name->s_name);
     crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
@@ -717,6 +769,9 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
     }
 
     if (challenger_wins) {
+        if (crucible_is_task_cancelled(x, x->current_task_seq)) {
+            goto cleanup;
+        }
         crucible_log(x, "Challenger span for track %s won. Overwriting incumbent dictionary.", track_sym->s_name);
 
         defeated_dict = dictionary_new();
@@ -1123,7 +1178,7 @@ void crucible_local_bar_length(t_crucible *x, double f) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
-        async_worker_enqueue(x->worker, x, (method)crucible_do_local_bar_length, NULL, 1, &a);
+        crucible_enqueue_task(x, (method)crucible_do_local_bar_length, NULL, 1, &a);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -1138,6 +1193,12 @@ void crucible_local_bar_length(t_crucible *x, double f) {
 }
 
 void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = crucible_get_task_sequence(x);
+    systhread_mutex_lock(x->state_mutex);
+    if (crucible_is_task_cancelled(x, seq)) {
+        systhread_mutex_unlock(x->state_mutex);
+        return;
+    }
     double f = atom_getfloat(argv);
     long long old_bar_length = (long long)x->local_bar_length;
     if (f <= 0) {
@@ -1148,6 +1209,7 @@ void crucible_do_local_bar_length(t_crucible *x, t_symbol *s, long argc, t_atom 
     if ((long long)x->local_bar_length != old_bar_length) {
         crucible_log(x, "bar_length changed to %lld", (long long)x->local_bar_length);
     }
+    systhread_mutex_unlock(x->state_mutex);
 }
 
 t_max_err crucible_attr_set_async(t_crucible *x, void *attr, long ac, t_atom *av) {
@@ -1472,12 +1534,13 @@ void crucible_rebar(t_crucible *x, t_atom_long new_bar_length) {
 
     // Immediately send 1 out of the second outlet
     crucible_send_rebar_status(x, 1);
+    x->rebar_in_progress = 1;
 
     // Defer/async checks
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, new_bar_length);
-        async_worker_enqueue(x->worker, x, (method)crucible_do_rebar, NULL, 1, &a);
+        crucible_enqueue_task(x, (method)crucible_do_rebar, NULL, 1, &a);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -1493,6 +1556,14 @@ void crucible_rebar(t_crucible *x, t_atom_long new_bar_length) {
 }
 
 void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = crucible_get_task_sequence(x);
+    x->current_task_seq = seq;
+    systhread_mutex_lock(x->state_mutex);
+    if (crucible_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        systhread_mutex_unlock(x->state_mutex);
+        return;
+    }
     t_atom_long new_bar_length = atom_getlong(argv);
     t_atom_long old_bar_length = crucible_get_bar_length(x);
     if (old_bar_length <= 0) {
@@ -1502,6 +1573,9 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (old_bar_length <= 0) {
         object_error((t_object *)x, "rebar: old bar length not found or invalid");
         crucible_send_rebar_status(x, 0);
+        x->rebar_in_progress = 0;
+        x->current_task_seq = -1;
+        systhread_mutex_unlock(x->state_mutex);
         return;
     }
 
@@ -1509,6 +1583,9 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (!incumbent_dict) {
         object_error((t_object *)x, "rebar: incumbent dictionary %s not found", x->incumbent_dict_name->s_name);
         crucible_send_rebar_status(x, 0);
+        x->rebar_in_progress = 0;
+        x->current_task_seq = -1;
+        systhread_mutex_unlock(x->state_mutex);
         return;
     }
 
@@ -1517,6 +1594,9 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     if (!new_incumbent_dict) {
         dictobj_release(incumbent_dict);
         crucible_send_rebar_status(x, 0);
+        x->rebar_in_progress = 0;
+        x->current_task_seq = -1;
+        systhread_mutex_unlock(x->state_mutex);
         return;
     }
 
@@ -1953,6 +2033,16 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
 
+    if (crucible_is_task_cancelled(x, seq)) {
+        if (track_keys) sysmem_freeptr(track_keys);
+        object_release((t_object *)new_incumbent_dict);
+        dictobj_release(incumbent_dict);
+        x->rebar_in_progress = 0;
+        x->current_task_seq = -1;
+        systhread_mutex_unlock(x->state_mutex);
+        return;
+    }
+
     // 10. Update stored bar_length
     x->local_bar_length = (double)new_bar_length;
 
@@ -1984,7 +2074,10 @@ void crucible_do_rebar(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
     dictobj_release(incumbent_dict);
     
+    x->rebar_in_progress = 0;
     crucible_send_rebar_status(x, 0);
+    x->current_task_seq = -1;
+    systhread_mutex_unlock(x->state_mutex);
     crucible_log(x, "rebar: finished transforming incumbent to new bar_length %lld", (long long)new_bar_length);
 }
 
@@ -2364,9 +2457,32 @@ void crucible_visualize_dump_all_spans(t_crucible *x) {
 }
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    if (s == gensym("clear")) {
+        systhread_mutex_lock(x->sequence_mutex);
+        x->last_clear_sequence = x->enqueue_sequence;
+        while (linklist_getsize(x->pending_sequences) > 0) {
+            linklist_chuckindex(x->pending_sequences, 0);
+        }
+        systhread_mutex_unlock(x->sequence_mutex);
+
+        if (x->worker) {
+            async_worker_clear_queue(x->worker);
+        }
+
+        if (x->rebar_in_progress) {
+            x->rebar_in_progress = 0;
+            crucible_send_rebar_status(x, 0);
+        }
+
+        systhread_mutex_lock(x->state_mutex);
+        crucible_do_anything(x, s, argc, argv);
+        systhread_mutex_unlock(x->state_mutex);
+        return;
+    }
+
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         crucible_log(x, "crucible: enqueuing async task for message '%s'...", s->s_name);
-        async_worker_enqueue(x->worker, x, (method)crucible_do_anything, s, argc, argv);
+        crucible_enqueue_task(x, (method)crucible_do_anything, s, argc, argv);
         return;
     }
 
@@ -2380,6 +2496,20 @@ void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = crucible_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (crucible_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
+
     if (x->log) {
         char *val_str = crucible_atoms_to_string(argc, argv);
         crucible_log(x, "Received message: %s %s", s->s_name, val_str ? val_str : "");
@@ -2413,6 +2543,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         if (x->visualize) {
             visualize((t_object *)x, "{\"tracks\":{}}");
+        }
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
         }
         return;
     }
@@ -2468,6 +2602,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 if (keys) sysmem_freeptr(keys);
             }
         }
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
@@ -2479,21 +2617,37 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         } else if (atom_gettype(argv) == A_SYM) {
             x->last_track_id = atom_getsym(argv);
         } else {
+            x->current_task_seq = -1;
+            if (on_worker) {
+                systhread_mutex_unlock(x->state_mutex);
+            }
             return;
         }
         crucible_log(x, "Last track ID set to: %s", x->last_track_id->s_name);
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
     if (s == gensym("span") && argc > 0) {
         if (x->last_track_id == _sym_nothing || x->last_track_id == gensym("")) {
             object_error((t_object *)x, "Received span message before track ID was set");
+            x->current_task_seq = -1;
+            if (on_worker) {
+                systhread_mutex_unlock(x->state_mutex);
+            }
             return;
         }
         t_atomarray *span_aa = atomarray_new(argc, argv);
         crucible_log(x, "crucible: Received span message for track %s. Triggering crucible_process_span...", x->last_track_id->s_name);
         crucible_process_span(x, x->last_track_id, span_aa);
         object_release((t_object *)span_aa);
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
@@ -2517,6 +2671,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 sysmem_freeptr(bar);
                 sysmem_freeptr(key);
             }
+        }
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
         }
         return;
     }
@@ -2569,6 +2727,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         sysmem_freeptr(key_str);
     } else {
         crucible_log(x, "Unparsable message selector: %s", s->s_name);
+    }
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
     }
 }
 
