@@ -45,6 +45,13 @@ typedef struct _buildspans {
     char **log_history;
     long log_history_count;
     long log_history_write_ptr;
+
+    t_systhread_mutex sequence_mutex;
+    t_systhread_mutex state_mutex;
+    t_linklist *pending_sequences;
+    long enqueue_sequence;
+    long last_clear_sequence;
+    long current_task_seq;
 } t_buildspans;
 
 // Function prototypes for direct module-to-module coordination

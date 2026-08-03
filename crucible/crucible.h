@@ -39,6 +39,14 @@ typedef struct _crucible {
     t_dictionary *monitor_last_track_reaches;
     long monitor;
     void *monitor_qelem;
+
+    t_systhread_mutex sequence_mutex;
+    t_systhread_mutex state_mutex;
+    t_linklist *pending_sequences;
+    long enqueue_sequence;
+    long last_clear_sequence;
+    long current_task_seq;
+    long rebar_in_progress;
 } t_crucible;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);

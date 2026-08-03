@@ -211,6 +211,41 @@ t_max_err buildspans_attr_set_bind(t_buildspans *x, void *attr, long ac, t_atom 
 
 
 // Helper function to send verbose log messages
+void buildspans_enqueue_task(t_buildspans *x, method m, t_symbol *s, long argc, t_atom *argv) {
+    if (!x->worker) return;
+    systhread_mutex_lock(x->sequence_mutex);
+    long seq = x->enqueue_sequence++;
+    linklist_append(x->pending_sequences, (void *)(intptr_t)seq);
+    systhread_mutex_unlock(x->sequence_mutex);
+    async_worker_enqueue(x->worker, x, m, s, argc, argv);
+}
+
+long buildspans_get_task_sequence(t_buildspans *x) {
+    long seq = -1;
+    if (x->async && x->worker && async_worker_is_worker_thread(x->worker)) {
+        systhread_mutex_lock(x->sequence_mutex);
+        if (linklist_getsize(x->pending_sequences) > 0) {
+            seq = (long)(intptr_t)linklist_getindex(x->pending_sequences, 0);
+            linklist_chuckindex(x->pending_sequences, 0);
+        }
+        systhread_mutex_unlock(x->sequence_mutex);
+    }
+    return seq;
+}
+
+int buildspans_is_task_cancelled(t_buildspans *x, long seq) {
+    if (seq != -1) {
+        int cancelled = 0;
+        systhread_mutex_lock(x->sequence_mutex);
+        if (seq < x->last_clear_sequence) {
+            cancelled = 1;
+        }
+        systhread_mutex_unlock(x->sequence_mutex);
+        return cancelled;
+    }
+    return 0;
+}
+
 void buildspans_defer_output(t_buildspans *x, t_symbol *s, short argc, t_atom *argv) {
     if (s == gensym("track")) {
         outlet_anything(x->track_outlet, s, argc, argv);
@@ -764,6 +799,13 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
     if (x) {
         x->building = dictionary_new();
         x->tracks_ended_in_current_event = dictionary_new();
+
+        systhread_mutex_new(&x->sequence_mutex, 0);
+        systhread_mutex_new(&x->state_mutex, 0);
+        x->pending_sequences = linklist_new();
+        x->enqueue_sequence = 0;
+        x->last_clear_sequence = 0;
+        x->current_task_seq = -1;
         x->current_track = 0;
         x->current_offset = 0.0;
         x->loop_start = 0.0;
@@ -816,6 +858,11 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
 
 void buildspans_free(t_buildspans *x) {
     visualize_cleanup();
+    if (x->pending_sequences) {
+        linklist_chuck(x->pending_sequences);
+    }
+    systhread_mutex_free(x->sequence_mutex);
+    systhread_mutex_free(x->state_mutex);
     if (x->worker) {
         async_worker_release(x->worker);
     }
@@ -843,16 +890,20 @@ void buildspans_free(t_buildspans *x) {
 }
 
 void buildspans_clear(t_buildspans *x) {
-    if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_clear, NULL, 0, NULL);
-        return;
+    systhread_mutex_lock(x->sequence_mutex);
+    x->last_clear_sequence = x->enqueue_sequence;
+    while (linklist_getsize(x->pending_sequences) > 0) {
+        linklist_chuckindex(x->pending_sequences, 0);
     }
-    if (x->defer && !systhread_ismainthread()) {
-        defer(x, (method)buildspans_do_clear, NULL, 0, NULL);
-        return;
+    systhread_mutex_unlock(x->sequence_mutex);
+
+    if (x->worker) {
+        async_worker_clear_queue(x->worker);
     }
 
+    systhread_mutex_lock(x->state_mutex);
     buildspans_do_clear(x, NULL, 0, NULL);
+    systhread_mutex_unlock(x->state_mutex);
 }
 
 void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
@@ -884,7 +935,7 @@ void buildspans_offset(t_buildspans *x, double f) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
-        async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, NULL, 1, &a);
+        buildspans_enqueue_task(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -897,6 +948,19 @@ void buildspans_offset(t_buildspans *x, double f) {
 }
 
 void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
 
     buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
 
@@ -908,6 +972,10 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         x->loop_start = loop_start;
         x->last_msg_type = gensym("offset");
         buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
@@ -918,6 +986,10 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         x->current_offset = f;
         x->loop_start = loop_start;
         buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
@@ -963,7 +1035,13 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
-    if (!keys) return;
+    if (!keys) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
 
     // --- GATHER PHASE ---
     buildspans_log(x, "Gathering notes for span duplication.");
@@ -1110,6 +1188,10 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
     sysmem_freeptr(manifest);
     if (keys) sysmem_freeptr(keys);
     buildspans_visualize_memory(x);
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
+    }
 }
 
 // Handler for int messages on the 3rd inlet (proxy #2, track number)
@@ -1121,7 +1203,7 @@ void buildspans_track(t_buildspans *x, long n) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setlong(&a, n);
-        async_worker_enqueue(x->worker, x, (method)buildspans_track_deferred, NULL, 1, &a);
+        buildspans_enqueue_task(x, (method)buildspans_track_deferred, NULL, 1, &a);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -1135,9 +1217,26 @@ void buildspans_track(t_buildspans *x, long n) {
 }
 
 void buildspans_do_track(t_buildspans *x, long n) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
     x->current_track = n;
     x->last_msg_type = gensym("track");
     buildspans_log(x, "Track updated to: %ld", n);
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
+    }
 }
 
 // Handler for various messages, including palette symbol
@@ -1149,7 +1248,7 @@ void buildspans_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
         if (new_argv) {
             atom_setlong(new_argv, inlet_num);
             for (long i = 0; i < argc; i++) new_argv[i+1] = argv[i];
-            async_worker_enqueue(x->worker, x, (method)buildspans_anything_deferred, s, argc + 1, new_argv);
+            buildspans_enqueue_task(x, (method)buildspans_anything_deferred, s, argc + 1, new_argv);
             sysmem_freeptr(new_argv);
         }
         return;
@@ -1177,6 +1276,19 @@ void buildspans_anything_deferred(t_buildspans *x, t_symbol *s, long argc, t_ato
 }
 
 void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
     // Inlet 3 is the palette symbol inlet
     if (inlet_num == 3) {
         // A standalone symbol is a message with argc=0
@@ -1197,6 +1309,10 @@ void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *arg
     } else {
         // Post an error for unhandled messages on other inlets to avoid silent failures.
         object_error((t_object *)x, "Message '%s' not understood in inlet %ld.", s->s_name, inlet_num);
+    }
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
     }
 }
 
@@ -1224,9 +1340,9 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         if (inlet_num == 1) {
-            async_worker_enqueue(x->worker, x, (method)buildspans_offset_deferred, s, argc, argv);
+            buildspans_enqueue_task(x, (method)buildspans_offset_deferred, s, argc, argv);
         } else {
-            async_worker_enqueue(x->worker, x, (method)buildspans_do_list, s, argc, argv);
+            buildspans_enqueue_task(x, (method)buildspans_do_list, s, argc, argv);
         }
         return;
     }
@@ -1261,10 +1377,27 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_list: utilizing bar_length %ld", bar_length);
     if (bar_length <= 0) {
         object_warn((t_object *)x, "Bar length is not positive. Ignoring input.");
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
     double calc_timestamp, store_timestamp, score;
@@ -1279,6 +1412,10 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         store_timestamp = atom_getfloat(argv + 2);
     } else {
         object_error((t_object *)x, "Input must be a list of two floats (timestamp, score) or three floats (synth_timestamp, score, orig_timestamp).");
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
         return;
     }
 
@@ -1410,6 +1547,10 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     x->last_note_score = score;
     x->last_msg_type = gensym("list");
     buildspans_run_cleanup(x);
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
+    }
 }
 
 void buildspans_flush_track(t_buildspans *x, long track_num) {
@@ -1576,6 +1717,7 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 }
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+    if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
     if (offset == 0.0) {
         object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
@@ -1857,6 +1999,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 }
 
 void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym) {
+    if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -2057,7 +2200,7 @@ void buildspans_run_cleanup(t_buildspans *x) {
 
 void buildspans_bang(t_buildspans *x) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_bang, NULL, 0, NULL);
+        buildspans_enqueue_task(x, (method)buildspans_do_bang, NULL, 0, NULL);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -2069,6 +2212,19 @@ void buildspans_bang(t_buildspans *x) {
 }
 
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
     if (x->bound_crucible) {
         if (!x->async || systhread_ismainthread()) {
             outlet_int(x->span_outlet, 1);
@@ -2129,6 +2285,10 @@ void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     x->last_msg_type = gensym("bang");
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
+    }
 }
 
 void buildspans_flush(t_buildspans *x, t_symbol *palette_sym) {
@@ -2251,7 +2411,7 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
     if (x->async && x->worker && !async_worker_is_worker_thread(x->worker)) {
         t_atom a;
         atom_setfloat(&a, f);
-        async_worker_enqueue(x->worker, x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
+        buildspans_enqueue_task(x, (method)buildspans_do_local_bar_length, NULL, 1, &a);
         return;
     }
     if (x->defer && !systhread_ismainthread()) {
@@ -2266,6 +2426,19 @@ void buildspans_local_bar_length(t_buildspans *x, double f) {
 }
 
 void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
+    long seq = buildspans_get_task_sequence(x);
+    x->current_task_seq = seq;
+    int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
+    if (on_worker) {
+        systhread_mutex_lock(x->state_mutex);
+    }
+    if (buildspans_is_task_cancelled(x, seq)) {
+        x->current_task_seq = -1;
+        if (on_worker) {
+            systhread_mutex_unlock(x->state_mutex);
+        }
+        return;
+    }
     double f = atom_getfloat(argv);
     long old_bar_length = (long)x->local_bar_length;
     if (f <= 0) {
@@ -2280,6 +2453,10 @@ void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_a
         }
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
+    x->current_task_seq = -1;
+    if (on_worker) {
+        systhread_mutex_unlock(x->state_mutex);
+    }
 }
 
 t_max_err buildspans_attr_set_async(t_buildspans *x, void *attr, long ac, t_atom *av) {
@@ -2438,6 +2615,7 @@ t_max_err buildspans_attr_set_visualize(t_buildspans *x, void *attr, long ac, t_
 }
 
 void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long bar_to_keep) {
+    if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
     long num_keys;
     t_symbol **keys;
     dictionary_getkeys(x->building, &num_keys, &keys);
@@ -2964,6 +3142,7 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
 }
 
 void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array) {
+    if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
     if (!span_atom_array) return;
 
     long track_num_to_output;
