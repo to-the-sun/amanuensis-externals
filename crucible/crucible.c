@@ -2543,6 +2543,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         if (x->visualize) {
             visualize((t_object *)x, "{\"tracks\":{}}");
+            visualize((t_object *)x, "{\"event\":\"clear\"}");
         }
         x->current_task_seq = -1;
         if (on_worker) {
