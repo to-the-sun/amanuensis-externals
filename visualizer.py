@@ -278,7 +278,7 @@ def process_packet(text, client_sock=None):
                     if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
-            if pkt_type != "crucible" and pkt_event not in ["fill_bar", "replace", "new_span", "repopulate"] and "bar_length" not in pkt:
+            if pkt_type != "crucible" and pkt_event not in ["fill_bar", "replace", "new_span", "repopulate", "clear"] and "bar_length" not in pkt:
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
@@ -292,6 +292,15 @@ def process_packet(text, client_sock=None):
                         state["bar_length"] = new_bl
 
                 dirty = False
+                if pkt_event == "clear":
+                    state["tracks"] = {}
+                    state["bar_data"] = {}
+                    state["bar_ratings"] = {}
+                    state["spans_seen"] = {}
+                    state["logged_hashes"].clear()
+                    state["events"] = []
+                    dirty = True
+
                 if pkt_event == "repopulate":
                     # Replace reference dictionaries in full
                     new_tracks = {}
