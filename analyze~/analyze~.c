@@ -349,7 +349,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     }
 
     int hop_samples = (int)(x->sample_rate * 0.1);
-    int ms_samples = (int)(x->sample_rate * 0.001);
+    int frame_samples = (int)(x->sample_rate * 0.009);
 
     int hops_processed = 0;
     // We process all hops that have accumulated since last_analysis_frame
@@ -377,11 +377,11 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         }
 
         int active_start_samples = (int)(target_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2));
-        int active_start_frame = active_start_samples / ms_samples;
+        int active_start_frame = active_start_samples / frame_samples;
 
         int window_start_samples = active_start_samples - (int)(x->sample_rate * 15.0);
         if (window_start_samples < 0) window_start_samples = 0;
-        int buffer_start_frame = window_start_samples / ms_samples;
+        int buffer_start_frame = window_start_samples / frame_samples;
 
         if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
             hops_processed++;
@@ -389,7 +389,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                 PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
                 if (x->clock_connected) {
-                    long long peak_sample = (long long)pr->p_idx * ms_samples;
+                    long long peak_sample = (long long)pr->p_idx * frame_samples;
                     long long samples_ago = cur_samples - peak_sample;
                     int clock_idx = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
                     double clock_val = x->clock_buffer[clock_idx];

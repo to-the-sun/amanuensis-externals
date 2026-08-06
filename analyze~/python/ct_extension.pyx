@@ -9,7 +9,7 @@ cdef extern from "cumulative_transience.h":
     ctypedef void (*ct_lock_func)(void* lock_obj)
 
     ctypedef struct SharedTransientBuffer:
-        double accumulated_buffer[5001]
+        double accumulated_buffer[556]
         double max_peak
         double min_score_seen
         double max_score_seen
@@ -33,7 +33,7 @@ cdef extern from "cumulative_transience.h":
         double prominence
         int num_qualifiers
         Qualifier qualifiers[256]
-        double snapshot[5001]
+        double snapshot[556]
 
     ctypedef struct AnalyzerMetrics:
         double std_dev
@@ -165,8 +165,8 @@ cdef class TransientAnalyzer:
     @property
     def accumulated_buffer(self):
         cdef double* buf_ptr = analyzer_get_buffer(self._c_analyzer)
-        cdef cnp.ndarray[double, ndim=1] res = np.zeros(5001, dtype=np.float64)
-        memcpy(res.data, buf_ptr, 5001 * sizeof(double))
+        cdef cnp.ndarray[double, ndim=1] res = np.zeros(556, dtype=np.float64)
+        memcpy(res.data, buf_ptr, 556 * sizeof(double))
         return res
 
     def push_audio(self, cnp.ndarray[float, ndim=1] y, int sr):
@@ -198,12 +198,12 @@ cdef class TransientAnalyzer:
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
                 'qualifiers': [],
-                'snapshot': np.zeros(5001, dtype=np.float64)
+                'snapshot': np.zeros(556, dtype=np.float64)
             }
             for j in range(pr.num_qualifiers):
                 peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
 
-            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
+            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 556 * sizeof(double))
             peaks.append(peak_data)
 
         m = res.metrics
@@ -393,11 +393,11 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
                 'qualifiers': [],
-                'snapshot': np.zeros(5001, dtype=np.float64)
+                'snapshot': np.zeros(556, dtype=np.float64)
             }
             for j in range(pr.num_qualifiers):
                 peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
-            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
+            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 556 * sizeof(double))
             band_peaks.append(peak_data)
         full_peaks_list.append(band_peaks)
 
