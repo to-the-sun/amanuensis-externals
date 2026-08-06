@@ -922,6 +922,11 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     x->local_bar_length = 0;
     x->last_msg_type = gensym("clear");
     buildspans_log(x, "Decision: CLEAR state. Outcome: Deleting all currently open spans across all tracks/palettes, and resetting all global parameters (current_offset reset to 0.0).");
+
+    if (x->bound_crucible) {
+        crucible_do_anything((t_crucible *)x->bound_crucible, gensym("clear"), argc, argv);
+    }
+
     buildspans_visualize_memory(x);
 }
 
