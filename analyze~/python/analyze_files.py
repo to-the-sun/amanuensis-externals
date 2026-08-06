@@ -107,6 +107,10 @@ def generate_video(audio_path, data):
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
     print(f"Generating video for {audio_path}...")
     try:
+        sr = data.get('sample_rate', 44100)
+        hop = int(sr * 0.029)
+        frame_duration = 1000.0 * hop / sr
+
         times = data['times']; onset_envs = data['onset_envs']
         rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings')
         rolling_prominences = data.get('rolling_prominences')
@@ -209,12 +213,12 @@ def generate_video(audio_path, data):
                     if not any(a[0] == i for a in active_scores): active_scores.append([i, POPUP_LIFETIME, p['peak_val'], p['total_score'], p['time']]); break
                 snapshot_line.set_ydata(p['snapshot'])
                 live_peaks_x.append(p['time']); live_peaks_y.append(p['peak_val']); live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
-            last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 39]
+            last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - (39.0 / frame_duration)]
 
             if rolling_window_scores:
                 current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores); latest_p_frame = max(s['frame'] for s in rolling_window_scores); segments = []; seg_colors = []; snap_data = []
                 for i, s in enumerate(rolling_window_scores[:MAX_SNAPSHOT_POOL]):
-                    rel_ms = float(s['frame'] - latest_p_frame); score_val = s['score']; band_idx = s['band_idx']; lane_y = band_idx; score_c = get_score_color(score_val, min_score_seen, max_score_seen)
+                    rel_ms = float(s['frame'] - latest_p_frame) * frame_duration; score_val = s['score']; band_idx = s['band_idx']; lane_y = band_idx; score_c = get_score_color(score_val, min_score_seen, max_score_seen)
                     segments.append([[rel_ms, lane_y - 0.4], [rel_ms, lane_y + 0.4]]); seg_colors.append(colors[band_idx])
                     snap_data.append(((rel_ms - 0.8, lane_y), f"{score_val:+.2f}", score_c))
                 last_snapshot_display = (segments, seg_colors, snap_data)
