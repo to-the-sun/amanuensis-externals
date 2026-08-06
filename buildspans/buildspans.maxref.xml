@@ -85,7 +85,7 @@
 		</method>
 		<method name="clear">
 			<digest>Reset internal state</digest>
-			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults.</description>
+			<description>Clears all working memory, track data, and resets track, offset, and palette to defaults. If bound to a crucible object, it will also clear the named incumbent transcript dictionary of the bound crucible object after all the processing has been flushed through the paired system.</description>
 		</method>
 		<method name="set_bar_buffer">
 			<arglist>

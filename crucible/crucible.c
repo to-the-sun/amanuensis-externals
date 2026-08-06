@@ -2541,6 +2541,15 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         crucible_log(x, "Internal state cleared.");
 
+        if (x->incumbent_dict_name && x->incumbent_dict_name != _sym_nothing && x->incumbent_dict_name->s_name[0] != '\0') {
+            t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+            if (incumbent_dict) {
+                dictionary_clear(incumbent_dict);
+                dictobj_release(incumbent_dict);
+                crucible_log(x, "Incumbent transcript dictionary '%s' cleared.", x->incumbent_dict_name->s_name);
+            }
+        }
+
         if (x->visualize) {
             visualize((t_object *)x, "{\"tracks\":{}}");
             visualize((t_object *)x, "{\"event\":\"clear\"}");
