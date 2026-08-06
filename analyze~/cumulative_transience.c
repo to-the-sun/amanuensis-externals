@@ -123,7 +123,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
         self->lookback_total_delta[b] = 0.0;
         self->lookback_p_count[b] = 0;
     }
-    self->frame_duration_ms = 9.0;
+    self->frame_duration_ms = 29.0;
     for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - (BUFFER_LEN - 1)) * self->frame_duration_ms;
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
     self->flux_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
@@ -232,7 +232,7 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
         self->sample_rate = sr; free(self->mel_filters);
         self->mel_filters = create_mel_filterbank(sr, N_FFT, N_MELS);
     }
-    int hop = (int)(sr * 0.009); self->frame_duration_ms = 1000.0 * (double)hop / (double)sr;
+    int hop = (int)(sr * 0.029); self->frame_duration_ms = 1000.0 * (double)hop / (double)sr;
     for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - (BUFFER_LEN - 1)) * self->frame_duration_ms;
 }
 
@@ -262,7 +262,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     for (int i = 0; i < BUFFER_LEN; i++) result_out->snapshot[i] *= norm;
     double q_sum = 0.0; bool found = false;
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
-    int m_len = BUFFER_LEN - 11; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
+    int m_len = BUFFER_LEN - 3; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
     if (m_len > 0) {
         max_v = acc_buf[0];
         min_v = acc_buf[0];
@@ -277,7 +277,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     for (int i = 0; i < all_valid_count; i++) {
         int s_idx = all_valid_peak_indices[i];
         // Qualifiers must be at least 99ms in the past to avoid self-reference.
-        if (s_idx >= p_idx - (BUFFER_LEN - 1) && s_idx <= p_idx - 11) {
+        if (s_idx >= p_idx - (BUFFER_LEN - 1) && s_idx <= p_idx - 3) {
             int sp_idx = (BUFFER_LEN - 1) - (p_idx - s_idx);
             double val = acc_buf[sp_idx];
             double q = 0.0;
@@ -354,7 +354,7 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
 
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
-    int m_len = BUFFER_LEN - 11; double sum = 0.0, sum_sq = 0.0, max_v = -DBL_MAX;
+    int m_len = BUFFER_LEN - 3; double sum = 0.0, sum_sq = 0.0, max_v = -DBL_MAX;
     if (m_len > 0) {
         max_v = acc_buf[0];
         for (int i = 0; i < m_len; i++) {
@@ -452,7 +452,7 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
         self->overlap_len = 0;
         self->total_samples_received = 0;
     }
-    int hop = (int)(sr * 0.009);
+    int hop = (int)(sr * 0.029);
     int combined_len = self->overlap_len + len;
     if (combined_len > self->combined_scratch_cap) {
         int ncap = combined_len + N_FFT * 2;
@@ -518,8 +518,8 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
             if (flux > prev_smooth) {
                 self->smoothing_states[b] = flux;
             } else {
-                // Decay by 9/200th of the distance to the flux per 9ms frame
-                self->smoothing_states[b] = prev_smooth - (prev_smooth - flux) * (9.0f / 200.0f);
+                // Decay by 29/200th of the distance to the flux per 29ms frame
+                self->smoothing_states[b] = prev_smooth - (prev_smooth - flux) * (29.0f / 200.0f);
             }
             self->dynamic_smoothings[b * CACHE_SIZE + f_idx] = self->smoothing_states[b];
         }
@@ -735,7 +735,7 @@ static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
 }
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out) {
-    int hop = (int)(sr * 0.009), num_f = (len + hop - 1) / hop;
+    int hop = (int)(sr * 0.029), num_f = (len + hop - 1) / hop;
     result_out->num_frames = num_f; result_out->times = (float*)malloc(sizeof(float) * num_f); if(!result_out->times) return 0;
     for (int i = 0; i < num_f; i++) result_out->times[i] = (float)i * (float)hop / (float)sr;
     result_out->ratings = (double*)malloc(sizeof(double) * num_f);

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define BUFFER_LEN 556
+#define BUFFER_LEN 173
 #define MAX_BANDS 4
 #define MAX_QUALIFIERS 256
 

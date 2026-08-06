@@ -349,7 +349,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     }
 
     int hop_samples = (int)(x->sample_rate * 0.1);
-    int frame_samples = (int)(x->sample_rate * 0.009);
+    int frame_samples = (int)(x->sample_rate * 0.029);
 
     int hops_processed = 0;
     // We process all hops that have accumulated since last_analysis_frame
