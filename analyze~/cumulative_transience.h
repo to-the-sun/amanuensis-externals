@@ -58,6 +58,8 @@ typedef struct {
     double band_flux_avgs[MAX_BANDS];
     double global_flux_avg;
     double global_smoothing_avg;
+    double running_min_avg;
+    double running_max_avg;
 } AnalyzerMetrics;
 
 #define MAX_PEAKS_PER_CHUNK 64
@@ -140,6 +142,16 @@ typedef struct {
     long long total_frames_pushed; // To track global frame index alignment
     long long total_samples_received;
     double tolerance;
+
+    double* min_history_buffer;
+    double* max_history_buffer;
+    int history_buffer_size;
+    int history_buffer_write_ptr;
+    int history_buffer_count;
+    double min_history_sum;
+    double max_history_sum;
+    double current_running_min_avg;
+    double current_running_max_avg;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func);
@@ -214,6 +226,8 @@ typedef struct {
     float* rolling_global_flux_avg;
     float* rolling_global_smoothing_avg;
     double tolerance;
+    double* running_min_averages;
+    double* running_max_averages;
 } FullAnalysisResult;
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);

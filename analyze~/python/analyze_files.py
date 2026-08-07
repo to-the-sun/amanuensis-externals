@@ -274,11 +274,18 @@ def generate_video(audio_path, data):
                 global_smoothing_avg_text.set_text(f"G:{gs_val:.2f}")
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
-            # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
-            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
-            current_min = np.min(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
+            # Retrieve the running min and max averages directly from the C-core analysis results
+            running_mins = data.get('running_min_averages')
+            running_maxs = data.get('running_max_averages')
+            if running_mins is not None and running_maxs is not None:
+                current_min = running_mins[frame]
+                current_max = running_maxs[frame]
+            else:
+                # Fallback if running averages are not populated (e.g., legacy data)
+                current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0
+                current_min = np.min(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0
             current_midpoint = (current_min + current_max) / 2.0;
-            ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([current_midpoint, current_midpoint]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
+            ax_buf.set_ylim(0, max(0.1, (np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0) * 1.1)); mean_line.set_ydata([current_midpoint, current_midpoint]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
             # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
             # However, we have access to means, std_devs, etc. We need highest_peak_ms.
             # Let's check if it's in data.
