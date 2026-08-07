@@ -43,6 +43,7 @@ typedef struct _analyze {
     long log_enabled;
     t_symbol* group_name;
     long weighted_bar;
+    double tolerance;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -103,6 +104,11 @@ void ext_main(void* r) {
     CLASS_ATTR_STYLE_LABEL(c, "weighted_bar", 0, "checkbox", "Weighted Bar Length Calculation");
     CLASS_ATTR_DEFAULT(c, "weighted_bar", 0, "1");
 
+    CLASS_ATTR_DOUBLE(c, "tolerance", 0, t_analyze, tolerance);
+    CLASS_ATTR_FILTER_CLIP(c, "tolerance", 0.0, 5000.0);
+    CLASS_ATTR_LABEL(c, "tolerance", 0, "Tolerance (ms)");
+    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "29.0");
+
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)analyze_clear, "clear", 0);
@@ -144,6 +150,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->pending_analysis = 0;
         x->log_enabled = 0;
         x->weighted_bar = 1;
+        x->tolerance = 29.0;
         x->sample_rate = 44100.0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
@@ -151,6 +158,9 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         if (!x->analyzer) {
             x->analyzer = analyzer_create(1.0, NULL, x->lock, (ct_lock_func)critical_enter, (ct_lock_func)critical_exit);
+        }
+        if (x->analyzer) {
+            x->analyzer->tolerance = x->tolerance;
         }
     }
     return x;
@@ -347,6 +357,12 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         x->pending_analysis = 0;
         return;
     }
+
+    critical_enter(x->lock);
+    if (x->analyzer) {
+        x->analyzer->tolerance = x->tolerance;
+    }
+    critical_exit(x->lock);
 
     int hop_samples = (int)(x->sample_rate * 0.1);
     int ms_samples = (int)(x->sample_rate * 0.001);

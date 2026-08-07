@@ -308,7 +308,7 @@ def generate_video(audio_path, data):
                     line.set_visible(True)
 
                     # Shaded vertical bar of width 2*tolerance centered at orig_ms
-                    tolerance = data.get('tolerance', 19.0)
+                    tolerance = data.get('tolerance', 29.0)
                     span.set_x(orig_ms - tolerance)
                     span.set_width(2.0 * tolerance)
                     span.set_facecolor(qc)
