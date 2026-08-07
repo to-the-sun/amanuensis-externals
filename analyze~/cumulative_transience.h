@@ -11,6 +11,7 @@
 typedef struct {
     double ms;
     double val;
+    double orig_ms;
 } Qualifier;
 
 typedef struct {
@@ -138,6 +139,7 @@ typedef struct {
 
     long long total_frames_pushed; // To track global frame index alignment
     long long total_samples_received;
+    double tolerance;
 } TransientAnalyzer;
 
 TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func);
@@ -211,6 +213,7 @@ typedef struct {
     double max_score_seen;
     float* rolling_global_flux_avg;
     float* rolling_global_smoothing_avg;
+    double tolerance;
 } FullAnalysisResult;
 
 int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);

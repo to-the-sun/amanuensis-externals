@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 max-sdk/
+*.o
+*.so
+analyze~/python/build/
+analyze~/python/ct_extension.c

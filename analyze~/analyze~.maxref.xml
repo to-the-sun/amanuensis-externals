@@ -85,6 +85,12 @@
 				Enables or disables the weighted multiplier applied when finding the bar length to output from the object. When enabled (1, default), the output bar length is determined by finding the bar length in the histogram that maximizes the count multiplied by a weight equal to the bar length divided by 5000. When disabled (0), the output bar length is determined by simply finding the bar length with the highest count in the histogram.
 			</description>
 		</attribute>
+		<attribute name="tolerance" get="1" set="1" type="double" size="1">
+			<digest>Snapping Tolerance (ms)</digest>
+			<description>
+				Defines the snapping tolerance in milliseconds for historical qualifier calculations (default 29.0 ms). When processing each qualifier, the analyzer searches within a window of 2*tolerance (one tolerance on each side) of the qualifier's original position to find the highest accumulated value in the 5-second buffer and snaps the qualifier to that peak.
+			</description>
+		</attribute>
 	</attributelist>
 	<!--SEEALSO-->
 	<seealsolist>

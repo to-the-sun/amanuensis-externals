@@ -166,8 +166,14 @@ def generate_video(audio_path, data):
         highest_peak_line = ax_buf.axvline(0, color='#f1c40f', lw=2, ls='--', visible=False, zorder=15)
         ax_snapshot.set_xlim(-45, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
         for i in range(3): ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
+        import matplotlib.patches as patches
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
         pool_scores = [ax_transient.text(0, 0, '', visible=False, zorder=22) for _ in range(MAX_POOL)]; pool_qualifier_lines = [ax_buf.axvline(0, visible=False, lw=3.0, ls=':', alpha=0.8) for _ in range(MAX_POOL)]; pool_qualifier_labels = [ax_buf.text(0, 0, '', visible=False, fontsize=8, transform=ax_buf.get_xaxis_transform()) for _ in range(MAX_POOL)]; snapshot_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#2ecc71', lw=2, label='Current Snapshot', zorder=10)
+        pool_qualifier_spans = []
+        for _ in range(MAX_POOL):
+            rect = patches.Rectangle((0, 0), 0, 1e9, visible=False, alpha=0.15)
+            ax_buf.add_patch(rect)
+            pool_qualifier_spans.append(rect)
         MAX_SNAPSHOT_POOL = 32; from matplotlib.collections import LineCollection; pool_snap_lines = LineCollection([], colors=[], linewidths=3, visible=False); ax_snapshot.add_collection(pool_snap_lines); pool_snap_texts = [ax_snapshot.text(0, 0, '', visible=False, fontsize=13, va='center', ha='right', fontweight='bold') for _ in range(MAX_SNAPSHOT_POOL)]
         active_scores = []; active_qualifiers = []; live_peaks_x = []; live_peaks_y = []
         live_peaks_scatter = ax_transient.scatter([], [], color='#f1c40f', marker='x', s=50, alpha=1.0, zorder=25)
@@ -182,6 +188,7 @@ def generate_video(audio_path, data):
             nonlocal last_frame_processed, current_snapshot_avg, rolling_window_scores, active_debug_lines, peak_search_ptr, accumulated_buffer, last_snapshot_display, active_buffer_peaks
             for s in pool_scores: s.set_visible(False)
             for l in pool_qualifier_lines: l.set_visible(False)
+            for sp in pool_qualifier_spans: sp.set_visible(False)
             for t in pool_qualifier_labels: t.set_visible(False)
             for d in debug_console_pool: d.set_visible(False)
             pool_snap_lines.set_visible(False)
@@ -204,7 +211,14 @@ def generate_video(audio_path, data):
                 accumulated_buffer += p['snapshot']; active_buffer_peaks.append(p); q_sum = sum(q['val'] for q in p['qualifiers']); f_val = p.get('detected_peak_val', p['peak_val'])
                 active_qualifiers.clear()
                 for q_info in p['qualifiers']:
-                    if len(active_qualifiers) < MAX_POOL: active_qualifiers.append([len(active_qualifiers), POPUP_LIFETIME, q_info['ms'], q_info['val']])
+                    if len(active_qualifiers) < MAX_POOL:
+                        active_qualifiers.append([
+                            len(active_qualifiers),
+                            POPUP_LIFETIME,
+                            q_info['ms'],
+                            q_info['val'],
+                            q_info.get('orig_ms', q_info['ms'])
+                        ])
                 for i in range(MAX_POOL):
                     if not any(a[0] == i for a in active_scores): active_scores.append([i, POPUP_LIFETIME, p['peak_val'], p['total_score'], p['time']]); break
                 snapshot_line.set_ydata(p['snapshot'])
@@ -279,9 +293,37 @@ def generate_video(audio_path, data):
                 if life > 0: progress = (POPUP_LIFETIME - life) / float(POPUP_LIFETIME); txt.set_position((p_time, initial_y + (progress * 0.1 * current_ylim))); txt.set_text(f"{val:+.2f}"); txt.set_alpha(life / float(POPUP_LIFETIME)); txt.set_color(get_score_color(val, min_score_seen, max_score_seen)); txt.set_visible(True); score[1] -= 1
                 else: active_scores.remove(score)
             for q in active_qualifiers[:]:
-                idx, life, ms, val = q; line = pool_qualifier_lines[idx]; label = pool_qualifier_labels[idx]
-                if life > 0: alpha = life / float(POPUP_LIFETIME); qc = get_score_color(val, -1.0, 1.0); line.set_xdata([ms, ms]); line.set_color(qc); line.set_alpha(alpha * 0.8); line.set_visible(True); label.set_position((ms, (val + 1) / 2)); label.set_text(f"{val:+.2f}"); label.set_color(qc); label.set_alpha(alpha); label.set_visible(True); q[1] -= 1
-                else: active_qualifiers.remove(q)
+                idx, life, ms, val, orig_ms = q
+                line = pool_qualifier_lines[idx]
+                span = pool_qualifier_spans[idx]
+                label = pool_qualifier_labels[idx]
+                if life > 0:
+                    alpha = life / float(POPUP_LIFETIME)
+                    qc = get_score_color(val, -1.0, 1.0)
+
+                    # Normal vertical bar drawn at the highest snapped point (ms)
+                    line.set_xdata([ms, ms])
+                    line.set_color(qc)
+                    line.set_alpha(alpha * 0.8)
+                    line.set_visible(True)
+
+                    # Shaded vertical bar of width 2*tolerance centered at orig_ms
+                    tolerance = data.get('tolerance', 29.0)
+                    span.set_x(orig_ms - tolerance)
+                    span.set_width(2.0 * tolerance)
+                    span.set_facecolor(qc)
+                    span.set_alpha(alpha * 0.15)
+                    span.set_visible(True)
+
+                    label.set_position((ms, (val + 1) / 2))
+                    label.set_text(f"{val:+.2f}")
+                    label.set_color(qc)
+                    label.set_alpha(alpha)
+                    label.set_visible(True)
+
+                    q[1] -= 1
+                else:
+                    active_qualifiers.remove(q)
             for i, debug in enumerate(active_debug_lines[:]):
                 if debug['lifetime'] > 0: txt_artist = debug_console_pool[i]; txt_artist.set_text(debug['text']); txt_artist.set_color(colors[debug['band_idx']]); txt_artist.set_alpha(min(1.0, debug['lifetime'] / 10.0)); txt_artist.set_visible(True); debug['lifetime'] -= 1
                 else: active_debug_lines.remove(debug)
@@ -293,6 +335,8 @@ def generate_video(audio_path, data):
                 if s.get_visible(): changed_artists.append(s)
             for l in pool_qualifier_lines:
                 if l.get_visible(): changed_artists.append(l)
+            for sp in pool_qualifier_spans:
+                if sp.get_visible(): changed_artists.append(sp)
             for t in pool_qualifier_labels:
                 if t.get_visible(): changed_artists.append(t)
             for st in pool_snap_texts:
