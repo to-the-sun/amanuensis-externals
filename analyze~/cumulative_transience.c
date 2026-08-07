@@ -116,6 +116,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
     }
 
     self->highest_peak_ms = -999.0;
+    self->tolerance = 19.0;
     memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
@@ -274,12 +275,31 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         }
     }
     double avg = (m_len > 0) ? (sum / (double)m_len) : 0.0;
+    int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
+    if (tol_idx < 0) tol_idx = 0;
+
     for (int i = 0; i < all_valid_count; i++) {
         int s_idx = all_valid_peak_indices[i];
         // Qualifiers must be at least 99ms in the past to avoid self-reference.
         if (s_idx >= p_idx - 5000 && s_idx <= p_idx - 99) {
             int sp_idx = 5000 - (p_idx - s_idx);
-            double val = acc_buf[sp_idx];
+
+            // Apply snapping within 2*tolerance (one tolerance on each side)
+            int start_k = sp_idx - tol_idx;
+            if (start_k < 0) start_k = 0;
+            int end_k = sp_idx + tol_idx;
+            if (end_k >= BUFFER_LEN) end_k = BUFFER_LEN - 1;
+
+            int snap_idx = sp_idx;
+            double max_snap_val = acc_buf[sp_idx];
+            for (int k = start_k; k <= end_k; k++) {
+                if (acc_buf[k] > max_snap_val) {
+                    max_snap_val = acc_buf[k];
+                    snap_idx = k;
+                }
+            }
+
+            double val = acc_buf[snap_idx];
             double q = 0.0;
             if (val > avg) {
                 if (max_v > avg) {
@@ -291,7 +311,8 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
                 }
             }
             if (result_out->num_qualifiers < MAX_QUALIFIERS) {
-                result_out->qualifiers[result_out->num_qualifiers].ms = self->buffer_times[sp_idx];
+                result_out->qualifiers[result_out->num_qualifiers].ms = self->buffer_times[snap_idx];
+                result_out->qualifiers[result_out->num_qualifiers].orig_ms = self->buffer_times[sp_idx];
                 result_out->qualifiers[result_out->num_qualifiers].val = q;
                 result_out->num_qualifiers++;
             }
@@ -808,6 +829,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->max_peak_value = (float)analyzer_get_max_peak(a);
     result_out->min_score_seen = a->private_min_score_seen;
     result_out->max_score_seen = a->private_max_score_seen;
+    result_out->tolerance = a->tolerance;
     for(int b=0; b<MAX_BANDS; b++) {
         int n = result_out->bands[b].num_peaks; result_out->bands[b].peaks = (PeakResult*)malloc(sizeof(PeakResult) * n);
         if(result_out->bands[b].peaks) memcpy(result_out->bands[b].peaks, pband[b], sizeof(PeakResult) * n);

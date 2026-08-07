@@ -19,6 +19,7 @@ cdef extern from "cumulative_transience.h":
     ctypedef struct Qualifier:
         double ms
         double val
+        double orig_ms
 
     ctypedef struct PeakResult:
         int p_idx
@@ -70,7 +71,7 @@ cdef extern from "cumulative_transience.h":
         float last_prominence[4][100]
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
-        pass
+        double tolerance
 
     TransientAnalyzer_c* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func)
     void analyzer_destroy(TransientAnalyzer_c* self)
@@ -135,6 +136,7 @@ cdef extern from "cumulative_transience.h":
         double max_score_seen
         float* rolling_global_flux_avg
         float* rolling_global_smoothing_avg
+        double tolerance
 
     int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
@@ -161,6 +163,14 @@ cdef class TransientAnalyzer:
     def __dealloc__(self):
         if self._c_analyzer != NULL:
             analyzer_destroy(self._c_analyzer)
+
+    @property
+    def tolerance(self):
+        return self._c_analyzer.tolerance
+
+    @tolerance.setter
+    def tolerance(self, double value):
+        self._c_analyzer.tolerance = value
 
     @property
     def accumulated_buffer(self):
@@ -201,7 +211,11 @@ cdef class TransientAnalyzer:
                 'snapshot': np.zeros(5001, dtype=np.float64)
             }
             for j in range(pr.num_qualifiers):
-                peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
+                peak_data['qualifiers'].append({
+                    'ms': pr.qualifiers[j].ms,
+                    'orig_ms': pr.qualifiers[j].orig_ms,
+                    'val': pr.qualifiers[j].val
+                })
 
             memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
             peaks.append(peak_data)
@@ -396,7 +410,11 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
                 'snapshot': np.zeros(5001, dtype=np.float64)
             }
             for j in range(pr.num_qualifiers):
-                peak_data['qualifiers'].append({'ms': pr.qualifiers[j].ms, 'val': pr.qualifiers[j].val})
+                peak_data['qualifiers'].append({
+                    'ms': pr.qualifiers[j].ms,
+                    'orig_ms': pr.qualifiers[j].orig_ms,
+                    'val': pr.qualifiers[j].val
+                })
             memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 5001 * sizeof(double))
             band_peaks.append(peak_data)
         full_peaks_list.append(band_peaks)
@@ -428,6 +446,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef float max_peak_value = res.max_peak_value
     cdef double min_score_seen = res.min_score_seen
     cdef double max_score_seen = res.max_score_seen
+    cdef double tolerance = res.tolerance
 
     analyzer_free_analysis(&res)
 
@@ -437,6 +456,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "max_peak_value": float(max_peak_value),
         "min_score_seen": float(min_score_seen),
         "max_score_seen": float(max_score_seen),
+        "tolerance": float(tolerance),
         "onset_envs": onset_envs,
         "rolling_dynamic_smoothings": rolling_dynamic_smoothings,
         "rolling_prominences": rolling_prominences,
