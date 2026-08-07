@@ -6,6 +6,27 @@ import time
 import os
 import sys
 import traceback
+import math
+
+def should_pulse_red(b_dict):
+    """
+    Checks if a bar has a palette value of "dictionary_entry", "hashtab_entry",
+    or an array [] inside of the palette array itself.
+    """
+    if not isinstance(b_dict, dict):
+        return False
+    p = b_dict.get("palette")
+    if p is None:
+        return False
+    if p == "dictionary_entry" or p == "hashtab_entry":
+        return True
+    if isinstance(p, list):
+        for item in p:
+            if item == "dictionary_entry" or item == "hashtab_entry":
+                return True
+            if isinstance(item, list) and len(item) == 0:
+                return True
+    return False
 
 # Set dummy video driver for headless environments
 if os.environ.get('HEADLESS'):
@@ -503,6 +524,7 @@ def run_gui():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("Arial", 12)
     big_font = pygame.font.SysFont("Arial", 20)
+    excl_font = pygame.font.SysFont("Arial", 18, bold=True)
 
     while True:
         now = time.time()
@@ -592,6 +614,7 @@ def run_gui():
             mi = state["min_rating"]
             ma = state["max_rating"]
             bar_ratings = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
+            bar_data_copy = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
 
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
@@ -602,6 +625,23 @@ def run_gui():
                     b_ts = int(snapped_ts)
                 except (ValueError, TypeError): continue
                 if bar_length <= 0: continue
+
+                col = int((b_ts - song_start) // bar_length)
+                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+
+                # Check if this bar has a bad palette that requires pulsing red with exclamation point
+                b_dict = bar_data_copy.get(tid, {}).get(str(float(b_ts)))
+                if should_pulse_red(b_dict):
+                    pulse = (math.sin(time.time() * 10) + 1.0) / 2.0  # pulse factor 0 to 1
+                    r_val = int(100 + 155 * pulse)
+                    color = (r_val, 0, 0)
+                    pygame.draw.rect(screen, color, rect)
+
+                    # Draw fat exclamation point in the middle of it
+                    excl_text = excl_font.render("!", True, (255, 255, 255))
+                    text_rect = excl_text.get_rect(center=rect.center)
+                    screen.blit(excl_text, text_rect)
+                    continue
 
                 # Determine color tint
                 color = [80, 80, 100]
@@ -625,8 +665,6 @@ def run_gui():
                         color[0] = int(80 + (200 - 80) * factor)
                         color[2] = int(100 + (80 - 100) * factor)
 
-                col = int((b_ts - song_start) // bar_length)
-                rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                 pygame.draw.rect(screen, tuple(color), rect)
 
         # Draw note hash marks
