@@ -161,7 +161,7 @@ def generate_video(audio_path, data):
         def format_time(x, pos):
             m = int(abs(x) // 60); s = int(abs(x) % 60); prefix = "-" if x < 0 else ""; return f"{prefix}{m}:{s:02d}"
         ax_transient.xaxis.set_major_formatter(ticker.FuncFormatter(format_time)); ax_transient.set_ylim(0, max_peak * 1.1 if max_peak > 0 else 1)
-        buffer_times = np.linspace(-5000, 0, 5001); buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2); mean_line, = ax_buf.plot([-5000, 0], [0, 0], color='#808080', lw=1, ls='--', alpha=0.5, label='Mean Energy')
+        buffer_times = np.linspace(-5000, 0, 5001); buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2); mean_line, = ax_buf.plot([-5000, 0], [0, 0], color='#808080', lw=1, ls='--', alpha=0.5, label='Midpoint (Min/Max)')
         ax_buf.set_title("Accumulated 5s Historical Buffer"); ax_buf.set_xlabel("Time Relative to Peak (ms)"); ax_buf.set_ylabel("Accumulated Energy"); ax_buf.grid(True, alpha=0.3); ax_buf.set_xlim(-5000, 0); ax_buf.set_ylim(0, 1)
         highest_peak_line = ax_buf.axvline(0, color='#f1c40f', lw=2, ls='--', visible=False, zorder=15)
         ax_snapshot.set_xlim(-45, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("39ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
@@ -275,7 +275,10 @@ def generate_video(audio_path, data):
 
             playhead_transient.set_xdata([current_time, current_time]); cleanup_transient.set_xdata([current_time - 15, current_time - 15]); buffer_line.set_ydata(accumulated_buffer);
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
-            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0; ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([means[frame], means[frame]]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
+            current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
+            current_min = np.min(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
+            current_midpoint = (current_min + current_max) / 2.0;
+            ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([current_midpoint, current_midpoint]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
             # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
             # However, we have access to means, std_devs, etc. We need highest_peak_ms.
             # Let's check if it's in data.

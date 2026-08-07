@@ -274,7 +274,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
             if (v < min_v) min_v = v;
         }
     }
-    double avg = (m_len > 0) ? (sum / (double)m_len) : 0.0;
+    double midpoint = (m_len > 0) ? ((min_v + max_v) / 2.0) : 0.0;
     int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
     if (tol_idx < 0) tol_idx = 0;
 
@@ -301,13 +301,13 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
 
             double val = acc_buf[snap_idx];
             double q = 0.0;
-            if (val > avg) {
-                if (max_v > avg) {
-                    q = (val - avg) / (max_v - avg);
+            if (val > midpoint) {
+                if (max_v > midpoint) {
+                    q = (val - midpoint) / (max_v - midpoint);
                 }
-            } else if (val < avg) {
-                if (avg > min_v) {
-                    q = (val - avg) / (avg - min_v);
+            } else if (val < midpoint) {
+                if (midpoint > min_v) {
+                    q = (val - midpoint) / (midpoint - min_v);
                 }
             }
             if (result_out->num_qualifiers < MAX_QUALIFIERS) {
