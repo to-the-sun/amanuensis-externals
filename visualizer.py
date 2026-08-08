@@ -24,7 +24,7 @@ def should_pulse_red(b_dict):
         for item in p:
             if item == "dictionary_entry" or item == "hashtab_entry":
                 return True
-            if isinstance(item, list) and len(item) == 0:
+            if isinstance(item, list):
                 return True
     return False
 
