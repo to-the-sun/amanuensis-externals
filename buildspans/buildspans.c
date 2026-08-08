@@ -602,7 +602,7 @@ void buildspans_visualize_memory(t_buildspans *x) {
     }
 
     // 2. Generate JSON
-    long buffer_size = 65536;
+    long buffer_size = 262144;
     char *json_buffer = (char *)sysmem_newptr(buffer_size);
     long offset = 0;
     offset += snprintf(json_buffer + offset, buffer_size, "{\"palettes\":{");
@@ -687,6 +687,30 @@ void buildspans_visualize_memory(t_buildspans *x) {
                     offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(av+k));
                 }
             }
+
+            // b2. Append scores aligned with absolutes
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"scores\":[");
+            int first_score = 1;
+            for (long j = 0; j < bar_count; j++) {
+                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+                t_symbol* scores_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("scores"));
+                t_atom *av;
+                long ac = 0;
+                t_atomarray *aa = NULL;
+                t_atom a;
+                if (dictionary_getatomarray(x->building, scores_key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+                    atomarray_getatoms(aa, &ac, &av);
+                } else if (dictionary_getatom(x->building, scores_key, &a) == MAX_ERR_NONE) {
+                    av = &a;
+                    ac = 1;
+                }
+                for (long k = 0; k < ac; k++) {
+                    if (!first_score) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    first_score = 0;
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "%.4f", atom_getfloat(av+k));
+                }
+            }
+
             offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"offsets\":[");
 
             // c. Append offsets
@@ -702,7 +726,23 @@ void buildspans_visualize_memory(t_buildspans *x) {
                      offset += snprintf(json_buffer + offset, buffer_size - offset, "%.2f", atom_getfloat(&a));
                  }
             }
-            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"span\":[");
+
+            // c2. Append ratings dictionary
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "],\"ratings\":{");
+            int first_rating = 1;
+            for (long j = 0; j < bar_count; j++) {
+                char bar_str[32]; snprintf(bar_str, 32, "%ld", bar_timestamps[j]);
+                t_symbol* rating_key = generate_hierarchical_key(palette_sym, track_sym, gensym(bar_str), gensym("rating"));
+                if (dictionary_hasentry(x->building, rating_key)) {
+                    t_atom a;
+                    dictionary_getatom(x->building, rating_key, &a);
+                    if (!first_rating) offset += snprintf(json_buffer + offset, buffer_size - offset, ",");
+                    first_rating = 0;
+                    offset += snprintf(json_buffer + offset, buffer_size - offset, "\"%ld\":%.4f", bar_timestamps[j], atom_getfloat(&a));
+                }
+            }
+
+            offset += snprintf(json_buffer + offset, buffer_size - offset, "},\"span\":[");
 
             // d. Append span data
             int first_span = 1;
