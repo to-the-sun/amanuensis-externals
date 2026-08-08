@@ -289,6 +289,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                             s.fill((60, 60, 100, 128))
                             surface.blit(s, (start_x, bar_y - bar_height / 2))
 
+                            ratings_dict = track_data.get("ratings", {})
                             for bar_relative_ts in span_data:
                                 # Subtract loop_start for visual position calculation only
                                 bar_abs_start_ts = (bar_relative_ts - loop_start) + offset_val
@@ -304,14 +305,47 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
                                 surface.blit(label, (bar_start_x + int(2 * SCALE), bar_y - bar_height / 2 - int(15 * SCALE)))
 
+                                # Draw bar rating centered in the cell in bigger bold
+                                bar_rating = ratings_dict.get(str(bar_relative_ts), 0.0)
+                                rating_text = f"{bar_rating:.3f}"
+                                rating_surf = fonts.get("building_bold", fonts["building_large"]).render(rating_text, True, (255, 255, 255))
+
+                                cell_center_x = bar_start_x + bar_width_pixels / 2
+                                cell_center_y = bar_y
+                                rx = cell_center_x - rating_surf.get_width() / 2
+                                ry = cell_center_y - rating_surf.get_height() / 2
+                                surface.blit(rating_surf, (rx, ry))
+
                         except (ValueError, IndexError): pass
 
                     # Draw hash marks for absolutes
-                    for ts in track_data.get("absolutes", []):
+                    absolutes = track_data.get("absolutes", [])
+                    scores = track_data.get("scores", [])
+                    for idx, ts in enumerate(absolutes):
                         x = grid_left + grid_w * (ts - min_ts) / span_ts
                         pygame.draw.line(surface, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
+
+                        # Timestamp label
                         label = fonts["building_small"].render(f"{ts:.2f}", True, (100, 200, 100))
                         surface.blit(label, (x + int(2 * SCALE), track_y + int(5 * SCALE)))
+
+                        # Pop-up score drawing above the track line
+                        if idx < len(scores):
+                            score_val = scores[idx]
+                            score_text = f"S:{score_val:.3f}"
+                            score_surf = fonts.get("score_font", fonts["building_small"]).render(score_text, True, (255, 255, 180))
+
+                            box_w = score_surf.get_width() + int(6 * SCALE)
+                            box_h = score_surf.get_height() + int(4 * SCALE)
+                            box_x = x - box_w / 2
+                            box_y = track_y - box_h - int(2 * SCALE)
+
+                            # Draw pop-up background and border
+                            pygame.draw.rect(surface, (40, 40, 50), (box_x, box_y, box_w, box_h))
+                            pygame.draw.rect(surface, (100, 200, 100), (box_x, box_y, box_w, box_h), 1)
+
+                            # Draw score text
+                            surface.blit(score_surf, (box_x + int(3 * SCALE), box_y + int(2 * SCALE)))
 
                 palette_offsets = set()
                 for track_data in working_memory.values():
@@ -510,6 +544,8 @@ def run_gui():
             "building_normal": pygame.font.SysFont("Arial", int(16 * SCALE)),
             "building_large": pygame.font.SysFont("Arial", int(20 * SCALE)),
             "building_small": pygame.font.SysFont("Arial", int(12 * SCALE)),
+            "building_bold": pygame.font.SysFont("Arial", int(22 * SCALE), bold=True),
+            "score_font": pygame.font.SysFont("Arial", int(11 * SCALE), bold=True),
             "weaver_tiny": pygame.font.SysFont("Arial", int(10 * SCALE)),
             "weaver_label": pygame.font.SysFont("Arial", int(14 * SCALE)),
             "weaver_status": pygame.font.SysFont("Arial", int(16 * SCALE)),
@@ -517,7 +553,7 @@ def run_gui():
         }
     except:
         default_font = pygame.font.Font(None, int(20 * SCALE))
-        fonts = {k: default_font for k in ["building_normal", "building_large", "building_small", "weaver_tiny", "weaver_label", "weaver_status", "weaver_bar_label"]}
+        fonts = {k: default_font for k in ["building_normal", "building_large", "building_small", "building_bold", "score_font", "weaver_tiny", "weaver_label", "weaver_status", "weaver_bar_label"]}
 
     while True:
         for event in pygame.event.get():
