@@ -85,32 +85,41 @@ The standard `visualizer.py` aligns note hash marks with negative bar boundaries
 
 ---
 
-## 5. Completed Fixes
+## 5. Hash Mark Positioning in `debug_visualizer.py`
 
-### Fix 1: Coordinate System Realignment in `buildspans.c` (Implemented)
-To resolve the immediate premature discontiguity bug, `relative_f` has been modified to incorporate `loop_start` to match the coordinate system of the stored keys.
+In `debug_visualizer.py`, the layout and coordinate mapping of individual note hash marks (depicting absolute note arrival times and parallel scores) are drawn using a linear timeline mapping.
 
-In `buildspans_do_offset()`:
-```c
-                    const char *dash = strchr(track_str, '-');
-                    if (dash) {
-                        double track_offset = (double)atol(dash + 1);
-                        double relative_f = f - track_offset + x->loop_start;
-                        buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
-                    }
-```
-This aligns the baseline offset check cleanly.
-
-### Fix 2: Debug Visualizer Coordinate Simplification (Implemented)
-To make visualization completely intuitive, the visualizer drawing logic in `debug_visualizer.py` was simplified to display the raw relative bar timestamps stored under the `span` key directly. Since these values are necessarily relative (and this relative offset is mathematically correct), removing the visualizer's artificial subtraction of `loop_start` aligns the visual coordinate system perfectly with the internal dictionary values.
-
-The visualizer's drawing calculations now display spans naturally:
+### Coordinate Boundaries (`min_ts`, `max_ts`)
+First, the visualizer gathers all absolute note timestamps (`absolutes`) and bar offsets (`offsets`) across all active tracks and the current playhead offset (`current_offset`) to find the global minimum and maximum timeline boundaries:
 ```python
-min_abs_span_ts = min(span_data) + offset_val
-max_abs_span_ts = max(span_data) + offset_val + bar_length
+all_ts = [
+    ts
+    for track_data in working_memory.values()
+    for key, ts_list in track_data.items()
+    if key in ("absolutes", "offsets")
+    for ts in ts_list
+]
+if current_offset is not None:
+    all_ts.append(current_offset)
 ```
-And cell labels display the raw relative values directly:
+These values establish the overall timeline span (`span_ts = max_ts - min_ts`).
+
+### Mapped X Coordinates
+Every note stored in a bar's `absolutes` array contains its high-precision timestamp `ts`. The visualizer projects this time value to an X pixel coordinate using a linear ratio:
 ```python
-label_text = f"{bar_relative_ts:.0f}"
+x = grid_left + grid_w * (ts - min_ts) / span_ts
 ```
-This creates a clean, 1-to-1 match between the logged span lists, the C memory states, and the GUI timeline cells.
+Where:
+* `grid_left`: The visual left margin boundary of the timeline grid.
+* `grid_w`: The total drawable pixel width of the timeline grid (`grid_right - grid_left`).
+* `ts - min_ts`: The relative distance of the note from the start of the visible timeline.
+* `span_ts`: The total time duration currently spanning the visible timeline.
+
+### Note Rendition
+At the calculated pixel coordinate `x`, the visualizer renders:
+1. **Vertical Ticks:** A solid green vertical tick is drawn across the full height of the track row to align notes accurately on the timeline:
+   ```python
+   pygame.draw.line(surface, (100, 200, 100), (x, track_y), (x, track_y + track_h), 1)
+   ```
+2. **Text Labels:** A text label representing the note's precise double timestamp value (`f"{ts:.2f}"`) is rendered directly adjacent to the tick mark.
+3. **Score Pop-up Boxes:** To render score data associated with the note (`S: score_val`), the visualizer retrieves the parallel `scores` array element. A custom pop-up box is constructed with a dark background and a solid green border, centered horizontally on coordinate `x` and positioned directly above the track baseline.
