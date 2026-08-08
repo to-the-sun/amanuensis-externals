@@ -1902,7 +1902,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
         dictionary_appendatom(x->building, absolutes_key, &a);
     }
-    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
+    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp + x->loop_start);
     atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {

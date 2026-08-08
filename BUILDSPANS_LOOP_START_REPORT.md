@@ -123,3 +123,13 @@ At the calculated pixel coordinate `x`, the visualizer renders:
    ```
 2. **Text Labels:** A text label representing the note's precise double timestamp value (`f"{ts:.2f}"`) is rendered directly adjacent to the tick mark.
 3. **Score Pop-up Boxes:** To render score data associated with the note (`S: score_val`), the visualizer retrieves the parallel `scores` array element. A custom pop-up box is constructed with a dark background and a solid green border, centered horizontally on coordinate `x` and positioned directly above the track baseline.
+
+---
+
+## 6. Update: Absolute Timestamps Fix
+To ensure absolute timestamps are correctly aligned when `buildspans` adds them to `absolutes` keys in the `building` dictionary, the current `loop_start` is added to each absolute timestamp first.
+In `buildspans_process_and_add_note()`:
+```c
+t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp + x->loop_start);
+```
+This correctly compensates for the `loop_start` offset in downstream consumers.
