@@ -107,7 +107,7 @@ void ext_main(void* r) {
     CLASS_ATTR_DOUBLE(c, "tolerance", 0, t_analyze, tolerance);
     CLASS_ATTR_FILTER_CLIP(c, "tolerance", 0.0, 5000.0);
     CLASS_ATTR_LABEL(c, "tolerance", 0, "Tolerance (ms)");
-    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "29.0");
+    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "39.0");
 
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
@@ -150,7 +150,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->pending_analysis = 0;
         x->log_enabled = 0;
         x->weighted_bar = 1;
-        x->tolerance = 29.0;
+        x->tolerance = 39.0;
         x->sample_rate = 44100.0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
