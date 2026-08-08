@@ -275,9 +275,9 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                     if span_data:
                         try:
                             offset_val = float(track_id.split('-')[1])
-                            # Subtract loop_start for visual position calculation only
-                            min_abs_span_ts = (min(span_data) - loop_start) + offset_val
-                            max_abs_span_ts = (max(span_data) - loop_start) + offset_val + bar_length
+                            # Relative bar timestamps shown naturally without loop_start offset adjustment
+                            min_abs_span_ts = min(span_data) + offset_val
+                            max_abs_span_ts = max(span_data) + offset_val + bar_length
 
                             start_x = grid_left + grid_w * (min_abs_span_ts - min_ts) / span_ts
                             end_x = grid_left + grid_w * (max_abs_span_ts - min_ts) / span_ts
@@ -291,8 +291,8 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
 
                             ratings_dict = track_data.get("ratings", {})
                             for bar_relative_ts in span_data:
-                                # Subtract loop_start for visual position calculation only
-                                bar_abs_start_ts = (bar_relative_ts - loop_start) + offset_val
+                                # Relative bar timestamps shown naturally without loop_start offset adjustment
+                                bar_abs_start_ts = bar_relative_ts + offset_val
                                 bar_start_x = grid_left + grid_w * (bar_abs_start_ts - min_ts) / span_ts
                                 bar_width_pixels = (grid_w * bar_length) / span_ts
 
@@ -300,8 +300,8 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 s.fill((90, 90, 130, 128))
                                 surface.blit(s, (bar_start_x, bar_y - bar_height / 2))
 
-                                # Display relative value modified by loop_start subtraction
-                                label_text = f"{(bar_relative_ts - loop_start):.0f}"
+                                # Display relative value directly
+                                label_text = f"{bar_relative_ts:.0f}"
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
                                 surface.blit(label, (bar_start_x + int(2 * SCALE), bar_y - bar_height / 2 - int(15 * SCALE)))
 

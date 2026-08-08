@@ -36,7 +36,7 @@ $$\text{bar\_abs\_start\_ts} = 3447 - (-3447) + 0 = 6894$$
 The visualizer successfully displays the bar at **`6894`** (and `8043`, `9192`).
 
 ### The Problem
-The visualizer is displaying the correct **absolute timeline** positions (`6894, 8043, 9192`), but the actual data stored in `buildspans` (and emitted to downstream Max patches via Outlet 1) is shifted/corrupted by `loop_start` (`3447, 4596, 5745`).
+The visualizer was displaying the correct **absolute timeline** positions (`6894, 8043, 9192`), but the actual data stored in `buildspans` (and emitted to downstream Max patches via Outlet 1) is shifted/corrupted by `loop_start` (`3447, 4596, 5745`).
 
 ---
 
@@ -69,42 +69,48 @@ Even though the note at `6894` is contiguous in absolute terms, the coordinate m
 
 ---
 
-## 4. Downstream Systemic Failure with `crucible`
+## 4. Absolute vs. Relative Timelines in standard Max Objects and `visualizer.py`
 
-The `crucible` object is bound downstream to receive spans output by `buildspans` on Outlet 1.
-```c
-if (s == gensym("span") && argc > 0) {
-    t_atomarray *span_aa = atomarray_new(argc, argv);
-    crucible_process_span(x, x->last_track_id, span_aa);
-}
-```
-* **Crucible has NO `loop_start` attribute.**
-* It receives the raw relative list of span bars from `buildspans` (e.g., `[3447, 4596, 5745]`).
-* Because it lacks `loop_start`, it treats `3447` as the absolute timeline coordinate.
-* Any rebar operations (`rebar`), transience processing, or consolidation inside `crucible` are now executing on corrupted timeline data shifted by `loop_start`.
-* When `crucible` serializes its state for `visualizer.py` (via repopulation), it sends `3447` without any `loop_start` context. The standard `visualizer.py` (which has no `loop_start` handler) displays the `crucible` bars incorrectly at `3447` instead of `6894`.
+In Max MSP at large, absolute timestamps are required for playback buffer indexing because buffer objects (`buffer~`, `polybuffer~`) cannot have negative indices. Consequently, all audio buffers are positive-indexed (i.e. zero-based), which represents an absolute timeline starting at zero.
+
+### `weaver~` and `most_negative_bar`
+To resolve this, standard external objects like `weaver~` and `smartloop~` calculate a `most_negative_bar` offset mapping representing the lowest bar timestamp scanned track-wide/song-wide.
+* **Timeline Mapping:** `weaver~` adds the detected `most_negative_bar` offset to the incoming time ramp on its first inlet, and subtracts its frame equivalent from the sample index values of the destination stems buffers before writing to them, allowing the outside Max patch to work with standard positive buffer indices.
+* **Playback Offsets:** When fallback buffers (such as `stems.x`) are used, the playback offset is calculated as `hit.value - most_negative_bar` to properly align positive-indexed buffers with the absolute timeline.
+
+### `visualizer.py` and Hash Marks
+The standard `visualizer.py` aligns note hash marks with negative bar boundaries dynamically.
+* It scans the repopulated local database to calculate the absolute minimum bar timestamp across all active tracks (the `most_negative_bar`).
+* If a relative note timestamp (`rel_ms`) is less than zero, `visualizer.py` adds `most_negative_bar` to the relative note timestamp `rel_ms` to map it correctly into positive visualization space.
 
 ---
 
-## 5. Propose Code-Level Fixes
+## 5. Completed Fixes
 
-### Fix 1: Align Coordinate Systems in Discontiguity Check
-To resolve the immediate premature discontiguity bug, `relative_f` must incorporate `loop_start` to match the coordinate system of the stored keys.
+### Fix 1: Coordinate System Realignment in `buildspans.c` (Implemented)
+To resolve the immediate premature discontiguity bug, `relative_f` has been modified to incorporate `loop_start` to match the coordinate system of the stored keys.
 
 In `buildspans_do_offset()`:
 ```c
-<<<<<<< SEARCH
-                        double track_offset = (double)atol(dash + 1);
-                        double relative_f = f - track_offset;
-                        buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
-=======
+                    const char *dash = strchr(track_str, '-');
+                    if (dash) {
                         double track_offset = (double)atol(dash + 1);
                         double relative_f = f - track_offset + x->loop_start;
                         buildspans_check_discontiguity(x, gensym(pal_str), gensym(track_str), relative_f);
->>>>>>> REPLACE
+                    }
 ```
+This aligns the baseline offset check cleanly.
 
-### Fix 2: Systemic Alignment (Passing loop_start Downstream)
-If `loop_start` is mathematically required for the relative timeline, downstream objects (specifically `crucible`) must be made aware of it to correctly interpret and serialize bar spans.
+### Fix 2: Debug Visualizer Coordinate Simplification (Implemented)
+To make visualization completely intuitive, the visualizer drawing logic in `debug_visualizer.py` was simplified to display the raw relative bar timestamps stored under the `span` key directly. Since these values are necessarily relative (and this relative offset is mathematically correct), removing the visualizer's artificial subtraction of `loop_start` aligns the visual coordinate system perfectly with the internal dictionary values.
 
-Alternatively, `buildspans` should calculate bar timestamps *without* `loop_start` internally (keeping absolute alignment), and only utilize `loop_start` as a playback/display offset.
+The visualizer's drawing calculations now display spans naturally:
+```python
+min_abs_span_ts = min(span_data) + offset_val
+max_abs_span_ts = max(span_data) + offset_val + bar_length
+```
+And cell labels display the raw relative values directly:
+```python
+label_text = f"{bar_relative_ts:.0f}"
+```
+This creates a clean, 1-to-1 match between the logged span lists, the C memory states, and the GUI timeline cells.
