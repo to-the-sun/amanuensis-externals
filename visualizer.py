@@ -670,6 +670,35 @@ def run_gui():
         # Draw note hash marks
         with state_lock:
             bar_data = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
+            tracks_copy = {tid: bars[:] for tid, bars in state["tracks"].items()}
+
+        # Calculate most_negative_bar and most_positive_bar (+ bar_length) across all active tracks
+        most_negative_bar = None
+        most_positive_bar_plus_len = None
+        for track_bars in tracks_copy.values():
+            for bar_ts in track_bars:
+                try:
+                    b_ts = float(bar_ts)
+                    if most_negative_bar is None or b_ts < most_negative_bar:
+                        most_negative_bar = b_ts
+                    if most_positive_bar_plus_len is None or b_ts + bar_length > most_positive_bar_plus_len:
+                        most_positive_bar_plus_len = b_ts + bar_length
+                except (ValueError, TypeError):
+                    continue
+
+        if most_negative_bar is None:
+            most_negative_bar = song_start
+        if most_positive_bar_plus_len is None:
+            most_positive_bar_plus_len = song_reach
+
+        # Calculate start_px and pixel_width of the known most negative bar to most positive bar (+ bar_length)
+        if bar_length > 0:
+            start_px = margin_left + ((most_negative_bar - song_start) / bar_length) * cell_w
+            end_px = margin_left + ((most_positive_bar_plus_len - song_start) / bar_length) * cell_w
+            pixel_width = end_px - start_px
+        else:
+            start_px = margin_left
+            pixel_width = 0
 
         for tid, bars_info in bar_data.items():
             if tid not in track_to_row: continue
@@ -714,7 +743,13 @@ def run_gui():
                     # This gives song-relative timestamp (assuming offset is standard transcript offset).
                     # Map this ms value to pixels along the grid:
                     rel_ms = abs_val - off_val
-                    x_pos = margin_left + ((rel_ms - song_start) / bar_length) * cell_w
+
+                    # Scale that number (ms) across the pixel width of the known most negative bar to most positive bar (+ bar_length)
+                    total_time_span = most_positive_bar_plus_len - most_negative_bar
+                    if total_time_span > 0:
+                        x_pos = start_px + ((rel_ms - most_negative_bar) / total_time_span) * pixel_width
+                    else:
+                        x_pos = margin_left
 
                     with state_lock:
                         if hash_key not in state["logged_hashes"]:
