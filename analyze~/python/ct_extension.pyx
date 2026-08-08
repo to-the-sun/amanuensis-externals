@@ -58,6 +58,8 @@ cdef extern from "cumulative_transience.h":
         double band_flux_avgs[4]
         double global_flux_avg
         double global_smoothing_avg
+        double running_min_avg
+        double running_max_avg
 
     ctypedef struct PeakResultList:
         PeakResult peaks[64]
@@ -137,6 +139,8 @@ cdef extern from "cumulative_transience.h":
         float* rolling_global_flux_avg
         float* rolling_global_smoothing_avg
         double tolerance
+        double* running_min_averages
+        double* running_max_averages
 
     int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
@@ -269,7 +273,9 @@ cdef class TransientAnalyzer:
                 'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]],
                 'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]],
                 'global_flux_avg': m.global_flux_avg,
-                'global_smoothing_avg': m.global_smoothing_avg
+                'global_smoothing_avg': m.global_smoothing_avg,
+                'running_min_avg': m.running_min_avg,
+                'running_max_avg': m.running_max_avg
             }
         }
         free(res)
@@ -301,7 +307,9 @@ cdef class TransientAnalyzer:
             'band_smoothing_avgs': [m.band_smoothing_avgs[0], m.band_smoothing_avgs[1], m.band_smoothing_avgs[2], m.band_smoothing_avgs[3]],
             'band_flux_avgs': [m.band_flux_avgs[0], m.band_flux_avgs[1], m.band_flux_avgs[2], m.band_flux_avgs[3]],
             'global_flux_avg': m.global_flux_avg,
-            'global_smoothing_avg': m.global_smoothing_avg
+            'global_smoothing_avg': m.global_smoothing_avg,
+            'running_min_avg': m.running_min_avg,
+            'running_max_avg': m.running_max_avg
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
@@ -443,6 +451,12 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[float, ndim=1] rolling_global_smoothing_avgs = np.zeros(num_frames, dtype=np.float32)
     memcpy(rolling_global_smoothing_avgs.data, res.rolling_global_smoothing_avg, num_frames * sizeof(float))
 
+    cdef cnp.ndarray[double, ndim=1] running_min_averages = np.zeros(num_frames, dtype=np.float64)
+    memcpy(running_min_averages.data, res.running_min_averages, num_frames * sizeof(double))
+
+    cdef cnp.ndarray[double, ndim=1] running_max_averages = np.zeros(num_frames, dtype=np.float64)
+    memcpy(running_max_averages.data, res.running_max_averages, num_frames * sizeof(double))
+
     cdef float max_peak_value = res.max_peak_value
     cdef double min_score_seen = res.min_score_seen
     cdef double max_score_seen = res.max_score_seen
@@ -466,6 +480,8 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "rolling_flux_avgs": rolling_flux_avgs,
         "rolling_global_flux_avgs": rolling_global_flux_avgs,
         "rolling_global_smoothing_avgs": rolling_global_smoothing_avgs,
+        "running_min_averages": running_min_averages,
+        "running_max_averages": running_max_averages,
         "rolling_thresholds": rolling_thresholds,
         "rolling_lookbacks": rolling_lookbacks,
         "rolling_avg_deltas": rolling_avg_deltas,

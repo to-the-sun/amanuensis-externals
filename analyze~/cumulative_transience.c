@@ -118,6 +118,16 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
     self->highest_peak_ms = -999.0;
     self->tolerance = 29.0;
     memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
+
+    self->min_history_buffer = NULL;
+    self->max_history_buffer = NULL;
+    self->history_buffer_size = 0;
+    self->history_buffer_write_ptr = 0;
+    self->history_buffer_count = 0;
+    self->min_history_sum = 0.0;
+    self->max_history_sum = 0.0;
+    self->current_running_min_avg = 0.0;
+    self->current_running_max_avg = 0.0;
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;
         self->lookback_avg_delta[b] = 0.0;
@@ -165,7 +175,10 @@ void analyzer_destroy(TransientAnalyzer* self) {
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) { SnapshotEntry* next = curr->next; free(curr); curr = next; }
     }
-    free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters); free(self);
+    free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters);
+    if (self->min_history_buffer) free(self->min_history_buffer);
+    if (self->max_history_buffer) free(self->max_history_buffer);
+    free(self);
 }
 
 void analyzer_clear(TransientAnalyzer* self) {
@@ -219,6 +232,19 @@ void analyzer_clear(TransientAnalyzer* self) {
     self->cache_count = 0;
     self->max_mel_db = 0.0;
 
+    self->history_buffer_write_ptr = 0;
+    self->history_buffer_count = 0;
+    self->min_history_sum = 0.0;
+    self->max_history_sum = 0.0;
+    self->current_running_min_avg = 0.0;
+    self->current_running_max_avg = 0.0;
+    if (self->min_history_buffer && self->history_buffer_size > 0) {
+        memset(self->min_history_buffer, 0, sizeof(double) * self->history_buffer_size);
+    }
+    if (self->max_history_buffer && self->history_buffer_size > 0) {
+        memset(self->max_history_buffer, 0, sizeof(double) * self->history_buffer_size);
+    }
+
     if (self->overlap_buffer) memset(self->overlap_buffer, 0, sizeof(float) * N_FFT * 4);
     self->overlap_len = 0;
 
@@ -235,6 +261,23 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
     }
     int hop = (int)(sr * 0.001); self->frame_duration_ms = 1000.0 * (double)hop / (double)sr;
     for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - 5000) * self->frame_duration_ms;
+
+    // Dynamically update/allocate running min/max history buffers for 5 seconds duration
+    int new_history_size = (int)round(5000.0 / self->frame_duration_ms);
+    if (new_history_size < 1) new_history_size = 1;
+    if (self->history_buffer_size != new_history_size) {
+        self->min_history_buffer = (double*)realloc(self->min_history_buffer, sizeof(double) * new_history_size);
+        self->max_history_buffer = (double*)realloc(self->max_history_buffer, sizeof(double) * new_history_size);
+        if (self->min_history_buffer) memset(self->min_history_buffer, 0, sizeof(double) * new_history_size);
+        if (self->max_history_buffer) memset(self->max_history_buffer, 0, sizeof(double) * new_history_size);
+        self->history_buffer_size = new_history_size;
+        self->history_buffer_write_ptr = 0;
+        self->history_buffer_count = 0;
+        self->min_history_sum = 0.0;
+        self->max_history_sum = 0.0;
+        self->current_running_min_avg = 0.0;
+        self->current_running_max_avg = 0.0;
+    }
 }
 
 double analyzer_get_max_peak(TransientAnalyzer* self) {
@@ -274,7 +317,9 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
             if (v < min_v) min_v = v;
         }
     }
-    double midpoint = (m_len > 0) ? ((min_v + max_v) / 2.0) : 0.0;
+    double midpoint = (self->history_buffer_count > 0) ? ((self->current_running_min_avg + self->current_running_max_avg) / 2.0) : ((m_len > 0) ? ((min_v + max_v) / 2.0) : 0.0);
+    double effective_min_v = (self->history_buffer_count > 0) ? self->current_running_min_avg : min_v;
+    double effective_max_v = (self->history_buffer_count > 0) ? self->current_running_max_avg : max_v;
     int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
     if (tol_idx < 0) tol_idx = 0;
 
@@ -302,12 +347,12 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
             double val = acc_buf[snap_idx];
             double q = 0.0;
             if (val > midpoint) {
-                if (max_v > midpoint) {
-                    q = (val - midpoint) / (max_v - midpoint);
+                if (effective_max_v > midpoint) {
+                    q = (val - midpoint) / (effective_max_v - midpoint);
                 }
             } else if (val < midpoint) {
-                if (midpoint > min_v) {
-                    q = (val - midpoint) / (midpoint - min_v);
+                if (midpoint > effective_min_v) {
+                    q = (val - midpoint) / (midpoint - effective_min_v);
                 }
             }
             if (result_out->num_qualifiers < MAX_QUALIFIERS) {
@@ -397,6 +442,8 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     }
 
     metrics_out->buffer_updated = updated; metrics_out->highest_peak_valid = false;
+    metrics_out->running_min_avg = self->current_running_min_avg;
+    metrics_out->running_max_avg = self->current_running_max_avg;
     if (max_v > 0.1) {
         int hi_idx = -1; double hi_val = -DBL_MAX;
         for (int i = 0; i < m_len; i++) {
@@ -547,6 +594,50 @@ void analyzer_push_audio(TransientAnalyzer* self, const float* y, int len, int s
         self->cache_write_ptr = (self->cache_write_ptr + 1) % CACHE_SIZE;
         if (self->cache_count < CACHE_SIZE) self->cache_count++;
         self->total_frames_pushed++;
+
+        // Calculate and update running average history of min & max seen in cumulative history
+        if (self->min_history_buffer && self->max_history_buffer && self->history_buffer_size > 0) {
+            double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
+            int m_len = BUFFER_LEN - 99;
+            double cur_max_v = -DBL_MAX, cur_min_v = DBL_MAX;
+            if (m_len > 0) {
+                cur_max_v = acc_buf[0];
+                cur_min_v = acc_buf[0];
+                for (int i = 0; i < m_len; i++) {
+                    double v = acc_buf[i];
+                    if (v > cur_max_v) cur_max_v = v;
+                    if (v < cur_min_v) cur_min_v = v;
+                }
+            } else {
+                cur_max_v = 0.0;
+                cur_min_v = 0.0;
+            }
+
+            // Exiting values
+            if (self->history_buffer_count == self->history_buffer_size) {
+                double old_min = self->min_history_buffer[self->history_buffer_write_ptr];
+                double old_max = self->max_history_buffer[self->history_buffer_write_ptr];
+                self->min_history_sum -= old_min;
+                self->max_history_sum -= old_max;
+            } else {
+                self->history_buffer_count++;
+            }
+
+            self->min_history_buffer[self->history_buffer_write_ptr] = cur_min_v;
+            self->max_history_buffer[self->history_buffer_write_ptr] = cur_max_v;
+            self->min_history_sum += cur_min_v;
+            self->max_history_sum += cur_max_v;
+
+            self->history_buffer_write_ptr = (self->history_buffer_write_ptr + 1) % self->history_buffer_size;
+
+            if (self->history_buffer_count > 0) {
+                self->current_running_min_avg = self->min_history_sum / self->history_buffer_count;
+                self->current_running_max_avg = self->max_history_sum / self->history_buffer_count;
+            } else {
+                self->current_running_min_avg = 0.0;
+                self->current_running_max_avg = 0.0;
+            }
+        }
     }
 
     self->total_samples_received = current_total_samples;
@@ -767,6 +858,8 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
     result_out->rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
     result_out->rolling_global_smoothing_avg = (float*)calloc(num_f, sizeof(float));
+    result_out->running_min_averages = (double*)malloc(sizeof(double) * num_f);
+    result_out->running_max_averages = (double*)malloc(sizeof(double) * num_f);
     for (int b = 0; b < MAX_BANDS; b++) {
         result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float));
         result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
@@ -818,7 +911,21 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
+        for (int i = 0; i < 100; i++) {
+            int f = act_s / hop + i;
+            if (f >= 0 && f < num_f) {
+                result_out->ratings[f] = res->metrics.rating;
+                result_out->std_devs[f] = res->metrics.std_dev;
+                result_out->means[f] = res->metrics.mean;
+                result_out->contrasts[f] = res->metrics.contrast;
+                result_out->stability_scores[f] = res->metrics.stability_score;
+                result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0;
+                result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg;
+                result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg;
+                result_out->running_min_averages[f] = res->metrics.running_min_avg;
+                result_out->running_max_averages[f] = res->metrics.running_max_avg;
+            }
+        }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
@@ -865,4 +972,10 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     free(result->contrasts);
     free(result->stability_scores);
     free(result->highest_peaks_ms);
+    if (result->running_min_averages) {
+        free(result->running_min_averages);
+    }
+    if (result->running_max_averages) {
+        free(result->running_max_averages);
+    }
 }
