@@ -116,7 +116,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
     }
 
     self->highest_peak_ms = -999.0;
-    self->tolerance = 29.0;
+    self->tolerance = 39.0;
     memset(self->bar_length_counts, 0, sizeof(self->bar_length_counts));
     for (int b = 0; b < MAX_BANDS; b++) {
         self->midpoint_lookback[b] = 15000.0;

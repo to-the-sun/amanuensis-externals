@@ -88,7 +88,7 @@
 		<attribute name="tolerance" get="1" set="1" type="double" size="1">
 			<digest>Snapping Tolerance (ms)</digest>
 			<description>
-				Defines the snapping tolerance in milliseconds for historical qualifier calculations (default 29.0 ms). When processing each qualifier, the analyzer searches within a window of 2*tolerance (one tolerance on each side) of the qualifier's original position to find the highest accumulated value in the 5-second buffer and snaps the qualifier to that peak.
+				Defines the snapping tolerance in milliseconds for historical qualifier calculations (default 39.0 ms). When processing each qualifier, the analyzer searches within a window of 2*tolerance (one tolerance on each side) of the qualifier's original position to find the highest accumulated value in the 5-second buffer and snaps the qualifier to that peak.
 			</description>
 		</attribute>
 	</attributelist>
