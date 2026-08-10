@@ -14,6 +14,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Look at the `temporal_data` arrays to understand how existing sounds evolve over time.
 
 ### 2. Formulate a Distinct Timbre
+- First of all, you are allowed and encouraged to be creative.
 - Choose a synthesis strategy that departs from existing ones (e.g., if existing sounds are mostly additive, try FM, subtractive with resonant filters, etc.).
 - Aim for a different area of the frequency spectrum or a different temporal envelope.
 - Sounds can be made distinct from each other by varying them over time. This can mean different ADSR envelopes, or modulating the timbre itself from one thing to another, all during a single note.
