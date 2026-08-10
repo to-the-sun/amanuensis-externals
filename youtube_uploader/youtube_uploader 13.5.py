@@ -28,7 +28,6 @@ HOUR_INTERVAL = 4               # How many hours to wait between cycles.
 MAX_TIMEOUT_ATTEMPTS = 24       # How many retries to give failed API requests.
 TIMEOUT_INTERVAL = 5            # How long to wait, in seconds, between retry attempts.
 DELETE_REUSED_VIDEOS = True     # Delete videos from disk if they've been uploaded before.
-DEBUG_MODE = True               # Allows more print statements to appear.
 
 
 FULL_BODY_TEXT = (
@@ -80,24 +79,17 @@ SCOPES = [
 
 DISPLAY_NAME = DISPLAY_NAME.lower()     # converts display_name to lowercase
 
-# httplib2.debuglevel = 1     # may help get more detailed http errors
-def debug(*args, **kwargs):
-    # prints out debug messages when debug mode is on
-    if DEBUG_MODE: print(*args, **kwargs)
-
 
 class UploadBot:
     API_KEY = ""
 
     def run(self):
         ''' Start bot, setup variables, api, and database, then start main loop. '''
-        debug(f'(d) Initializing UploadBot...')
+        print('Initializing UploadBot...')
         self.setup()
 
         while True:                     # main loop (runs main function at launch once before waiting)
-            debug(f'(d) Entering self.main...')
             self.main()                 # run main function
-            debug(f'(d) Exiting self.main and entering interval...')
             self.wait_for_interval()    # wait for <HOUR_INTERVAL> long interval
 
 
@@ -159,7 +151,7 @@ class UploadBot:
         try: self.cur.execute('ALTER TABLE videos ADD COLUMN credits text')
         except sqlite3.OperationalError: pass
         self.conn.commit()                                                  # save the data
-        debug(f'Initalization complete.\n')
+        print('Initialization complete.\n')
 
 
     def main(self, sleep_delay=60):
@@ -190,7 +182,6 @@ class UploadBot:
             print('Uploading process complete, returning to main loop.')
             self.delete_videos_from_disk()                                  # delete videos
         except Exception as error:
-            debug(f'\n(d) MAIN LOOP ({self.func}): {type(error)} {error}')
             print('\nMAIN LOOP ERROR:\n  ', error)
         finally:
             print(f'\nself.main loop complete, sleeping for {sleep_delay} seconds...\n')
@@ -219,12 +210,11 @@ class UploadBot:
 
     def refresh_token(self):
         ''' Refreshing tokens now uses the timeout-system. '''
-        debug('\n(d) Expired token detected. Refreshing...')
+        print('\nExpired token detected. Refreshing...')
         while self.credentials.expired and self.attempts <= MAX_TIMEOUT_ATTEMPTS:   # loop while token is still expired and we have attempts left
             try: return self.credentials.refresh(self.request)                      # attempt to refresh token
             except Exception as error:                                              # failure, use timeout
-                debug('(d) REFRESH ERROR:', type(error), error)
-                print(f'An unexpected token-refresh error occurred, trying again in {TIMEOUT_INTERVAL} seconds...')
+                print(f'Token refresh error ({error}), trying again in {TIMEOUT_INTERVAL} seconds...')
                 self.attempts += 1
                 time.sleep(TIMEOUT_INTERVAL)
         if self.credentials.expired: return self.credentials.refresh(self.request)  # loop failed + token still expired -> try again and let it raise error
@@ -245,8 +235,7 @@ class UploadBot:
         for path in paths:                                              # loop over video paths
             try: os.remove(path)                                        # try to delete video path
             except Exception as error:
-                debug('(d)', type(error), error)
-                print('Video was NOT successfully deleted from disk:', path)
+                print(f'Video was NOT successfully deleted from disk: {path} - Error: {error}')
             if not os.path.exists(path):                                # check if the video is gone
                 print('Video successfully deleted from disk:', path)
                 cur.execute("UPDATE videos SET deleted=1 WHERE path=?", (path,))  # update database
@@ -257,7 +246,6 @@ class UploadBot:
 
 
     def handle_yt_errors(self, error, func_name, ignore_errors=False):
-        debug('\n(d) ERROR:', type(error), error)
         if isinstance(error, googleapiclient.errors.ResumableUploadError):
             try: print(error._get_reason())
             except: print('(!) Unknown ResumableUploadError')
@@ -272,11 +260,11 @@ class UploadBot:
                 self.refresh_token()                            # if so, refresh and try again
                 return
             if not ignore_errors and self.attempts <= MAX_TIMEOUT_ATTEMPTS:
-                print(f'An unexpected error occurred, trying again in {TIMEOUT_INTERVAL} seconds...')
+                print(f'An unexpected error occurred ({error}), trying again in {TIMEOUT_INTERVAL} seconds...')
                 self.attempts += 1
                 time.sleep(TIMEOUT_INTERVAL)
             else:
-                print('An unexpected error occured and could not be resolved, giving up.')
+                print(f'An unexpected error occurred and could not be resolved: {error}')
                 raise error
 
 
@@ -287,7 +275,6 @@ class UploadBot:
     def get_yt_request(self, func, kwargs={}, ignore_errors=False):  # gets and returns a request
         self.attempts = 1
         while True:
-            debug(f"(d) Getting a YouTube request: '{self.func}' (creating video upload request)")
             try: return func(**kwargs)
             except Exception as error: self.handle_yt_errors(error, 'get_yt_request', ignore_errors)
 
@@ -295,7 +282,6 @@ class UploadBot:
     def execute_yt_request(self, func, kwargs={}, ignore_errors=False):  # gets, executes, and returns a request
         self.attempts = 1
         while True:
-            debug(f"(d) Executing a YouTube request: '{self.func}' {kwargs}")
             try: return func(**kwargs).execute()
             except Exception as error: self.handle_yt_errors(error, 'execute_yt_request', ignore_errors)
 
@@ -303,11 +289,8 @@ class UploadBot:
     def chunk_yt_request(self, request):    # uses the "next_chunk" thing for uploading
         self.attempts = 1
         while True:
-            debug(f"(d) Chunking a YouTube upload request: '{self.func}' {request}")
             try:
                 status, response = request.next_chunk()
-                try: debug(f"(d) Chunk status and response: {status} {response.get('id')}, {response.get('publishedAt')}")
-                except: debug(f'(d) Chunk status and response: {status}, None')
                 return status, response
             except Exception as error:
                 status = self.handle_yt_errors(error, 'chunk_yt_request')
@@ -321,7 +304,7 @@ class UploadBot:
 
     def get_channel_videos(self):   # get list of all channel uploads (now uses direct HTTP)
         self.func = 'get_channel_videos'
-        debug(f'(d) Getting list of channel videos (direct HTTP)...')
+        print('Retrieving channel videos...')
         api_key = self.API_KEY
         # Get uploads playlist id using the client library (since this is account-specific)
         response = self.execute_yt_request(self.youtube.channels().list, dict(id=CHANNEL_ID, part="contentDetails"))
@@ -335,35 +318,27 @@ class UploadBot:
             "key": api_key
         }
         videos = []
-        page = 1
         while True:
-            debug(f"(d) Requesting page {page} with params: {params}")
             resp = requests.get(url, params=params)
-            debug(f"(d) Status code: {resp.status_code}")
             if resp.status_code != 200:
-                print("Error:", resp.text)
+                print("Error retrieving channel videos:", resp.text)
                 break
             data = resp.json()
             items = data.get("items", [])
-            debug(f"(d) Fetched {len(items)} items")
             videos.extend(items)
             next_token = data.get("nextPageToken")
             if not next_token:
                 break
             params["pageToken"] = next_token
-            page += 1
 
-        if DEBUG_MODE:
-            videoId_list = [v['snippet']['resourceId']['videoId'] for v in videos]
-            print(f"(d) Returning list of channel videos: {videoId_list}")
-        print(len(videos))
+        print(f'Retrieved {len(videos)} channel videos.')
         return videos                                   # return the list of videos
 
 
 
     def get_disliked_videos(self):                      # get list of disliked channel videos
         self.func = 'get_disliked_videos'
-        debug(f'\n(d) Getting list of disliked videos...')
+        print('Checking for disliked videos...')
         disliked = []                                   # create empty list for storing disliked videos
 
         for video in self.channel_videos:               # go through all videos
@@ -371,21 +346,18 @@ class UploadBot:
             vid = self.execute_yt_request(self.youtube.videos().getRating, dict(id=vid_id))     # check the rating on the video
             rating = vid["items"][0]['rating']
             if rating == 'dislike':  # if its dislike then add it to the list
-                debug(f'(d) Adding videoID {vid_id} to disliked list...')
+                print(f"Found disliked video: {video['snippet']['title']} ({vid_id})")
                 disliked.append(vid_id)
-        debug(f'(d) Returning list of disliked videos: {disliked}')
         return disliked                                 # return the list
 
 
 
     def get_duplicate_videos(self, video_title, playlist_id):                      # get list of duplicate videos
         self.func = 'get_duplicate_videos'
-        debug(f'\n(d) Getting list of duplicate videos...')
         duplicates = []
         next_page_token = None      # empty variable to store the next page token to access more videos
 
         while True:                 # Only look at 100 at a time
-            debug(f'(d) Loading next page of channel videos...')
             response = self.execute_yt_request(self.youtube.playlistItems().list, dict(
                 playlistId=playlist_id,
                 part='snippet',
@@ -395,7 +367,6 @@ class UploadBot:
             for item in response["items"]:
                 # Check if video title matches the search title (case-insensitive)
                 if item["snippet"]["title"].lower() == video_title.lower():
-                    #debug(f'\n(d) found a duplicate video named ' + video_title)
                     duplicates.append(item["snippet"]["resourceId"]["videoId"])
             next_page_token = response.get('nextPageToken') # get next page token
             if next_page_token is None:                 # if there is no next page break the loop
@@ -406,21 +377,17 @@ class UploadBot:
 
     def check_if_video_liked_by_me(self, videoId):   # check if I liked a video
         self.func = 'check_if_video_liked_by_me'
-        debug(f'(d) Checking if I liked video {videoId}')
         try:
             response = self.execute_yt_request(self.youtube.videos().getRating, dict(id=videoId))
             if response['items'][0]['rating'] == 'like':
-                debug(f'(d) Video {videoId} was liked by me')
                 return True
             return False
         except Exception as error:
-            debug('\n(d)', type(error), error)
             print('check_if_video_liked_by_me raised the following error:', error)
             return False
 
     def like_video(self, videoId):    # like a video
         self.func = 'like_video'
-        debug(f'(d) Liking video {videoId}')
         try:
             response = self.execute_yt_request(self.youtube.videos().getRating, dict(id=videoId))
             current_rating = response['items'][0]['rating']
@@ -429,16 +396,13 @@ class UploadBot:
                 print(f'Video {videoId} was successfully liked.')
                 return True
             else:
-                debug(f'(d) Video {videoId} was already liked by me')
                 return True
         except Exception as error:
-            debug('\n(d)', type(error), error)
             print('like_video raised the following error:', error)
             return False
 
     def extract_featured_artists(self, description_text):    # extract featured artists from description text
         self.func = 'extract_featured_artists'
-        debug(f'(d) Extracting featured artists from description')
         featured_artists = []
 
         lines = description_text.split('\n')
@@ -459,23 +423,21 @@ class UploadBot:
                     if artist_part and artist_part.lower() != DISPLAY_NAME:
                         if artist_part not in featured_artists:
                             featured_artists.append(artist_part)
-                            debug(f'(d) Found featured artist: {artist_part}')
+                            print(f'Found featured artist: {artist_part}')
 
         return featured_artists
 
     def get_comment_body(self, videoId):    # retrieves body of the most recent comment on the given video
         self.func = 'get_comment_body'
-        debug(f'(d) Getting most recent comment from {videoId}')
         try:                                # retrieve most recent comment on a video
             response = self.execute_yt_request(self.youtube.commentThreads().list, dict(part="snippet", videoId=videoId))
             for item in response['items']:
                 author = item['snippet']['topLevelComment']['snippet']['authorDisplayName'].lower()
-                print(f'Comment author: {author} <{author == DISPLAY_NAME}>')
                 if author == DISPLAY_NAME:
+                    print(f"Found comment by {DISPLAY_NAME} on video {videoId}.")
                     return item['snippet']['topLevelComment']['snippet']['textDisplay']     # return the body of the comment
             return ''       # return nothing if no comment was made by the correct user
         except Exception as error:
-            debug('\n(d)', type(error), error)
             print('get_comment_body raised the following error:', error)
             return ''
 
@@ -483,9 +445,8 @@ class UploadBot:
 
     def check_for_likes_and_comments(self):                     # check for likes and comments
         self.func = 'check_for_likes_and_comments'
-        debug(f'(d) Checking channel for new likes and comments...')
+        print('Checking channel for comments...')
         for video in self.channel_videos:                       # go through all videos
-            print(video)
             videoTitle = video['snippet']['title']
             videoID = video['snippet']['resourceId']['videoId']
 
@@ -497,9 +458,7 @@ class UploadBot:
                              ''',
                              (videoID,))  # find video in database
             videoInfo = self.cur.fetchone()                     # fetch the info
-            print('\nvideoInfo from database:', videoID, videoInfo)
 
-            print('Checking video for likes and comments:', videoID, videoTitle)
             commentCount = 0
             response = self.execute_yt_request(self.youtube.videos().list, dict(
                 part="id,  statistics", id=videoID
@@ -512,11 +471,8 @@ class UploadBot:
             if videoInfo is not None:                           # if it is already in the db
                 dbVideoLikes, dbCommentCount, dbVideoUsed, dbTitle, dbCredits = videoInfo
                 if dbVideoUsed == 0:                            # if it hasn't been used
-                    debug(
-                        f'(d) Checking "{videoTitle}":\n  '
-                        f'{commentCount} current comments, {dbCommentCount} comments in database.'
-                    )
                     if dbCommentCount != commentCount:         # check if the comment count has changed
+                        print(f"Comment count changed from {dbCommentCount} to {commentCount} on '{videoTitle}' ({videoID})")
                         if dbCommentCount < commentCount:      # check if it has risen
                             if self.comment_titleIdBody[0] == '':
                                 self.comment_titleIdBody = [videoTitle, videoID, self.get_comment_body(videoID)]   # choose this video
@@ -530,7 +486,7 @@ class UploadBot:
                         self.conn.commit()                      # save the data
 
             else:                                               # if the video is not already in database, add it
-                print('VIDEO NOT IN DATABASE\n')
+                print(f"Adding new video '{videoTitle}' ({videoID}) to database.")
 
                 videoDescription = video['snippet']['description']
                 credits = [c for c in CREDITS.values() if c in videoDescription]
@@ -552,12 +508,10 @@ class UploadBot:
         invalid_paths = [video[4] for video in to_delete]
 
         for entry in os.scandir(VIDEOS_PATH):                               # go through the contents of the folder
-            debug('(d)', entry)
             if entry.is_file() and entry.path not in invalid_paths:         # if its a file and isn't marked for deletion
                 title = entry.name
                 isVideo = False
                 for extension in (".mp4", ".mkv", ".m4v"):                  #NOT mov
-                    print(title, extension, title.endswith(extension))
                     if title.endswith(extension):           # if file ends with the above extensions...
                         title = title.replace(extension, '')     # ...remove extension and mark as video
                         isVideo = True
@@ -615,7 +569,6 @@ class UploadBot:
                             print('\n(u) Uploading temporarily skipped.\n')
                             break
                         else:
-                            debug('\n(d) Upload process complete.')
                             # After upload, get the new video ID from the database
                             upload_cur.execute("SELECT videoId FROM videos WHERE path=? ORDER BY ROWID DESC LIMIT 1", (entry.path,))
                             row = upload_cur.fetchone()
@@ -627,8 +580,7 @@ class UploadBot:
                             # Now delete only previous duplicates
                             self.delete_videos(duplicate_videos)
                     except Exception as error:
-                        debug('\n(d)', type(error), error)
-                        print('Upload attempt on', entry, 'failed with the following error:', error)
+                        print(f'Upload attempt on {entry.name} failed with error: {error}')
         upload_conn.close()                                 # close thread's database connection
         return
 
@@ -744,14 +696,13 @@ class UploadBot:
             print('Deleting videos...')
             for user_playlist_id in USER_PLAYLIST_IDS:      # check every playlist
                 try:
-                    print('Checking user_playlist for videos to delete:', user_playlist_id)
+                    print(f'Checking playlist {user_playlist_id} for videos to delete...')
 
                     # Sort by every <maxResults> results
                     playlistItems = []                      # create empty list to store the videos
                     next_page_token = None                  # empty variable to store the next page token to access more videos
 
                     while True:                             # Only look at 100 at a time
-                        debug(f'(d) Loading next page of playlist {user_playlist_id}...')
                         response = self.execute_yt_request(self.youtube.playlistItems().list, dict(
                             playlistId=user_playlist_id,
                             part='contentDetails',
@@ -765,7 +716,6 @@ class UploadBot:
 
                     for item in playlistItems:
                         try:
-                            print('Checking playlist item', item['contentDetails'])
                             playlistItemID = item['id']     # unique playlist-specific id for video
                             videoID = item['contentDetails']['videoId']       # video's original id
                             if videoID in disliked_videos:
@@ -773,11 +723,9 @@ class UploadBot:
                                 self.execute_yt_request(self.youtube.playlistItems().delete, dict(id=playlistItemID))
                                 print('Successfully deleted from playlist.\n')
                         except Exception as error:
-                            debug('\n(d)', type(error), error)
-                            print('playlistItem raised the following error:', item, error)
+                            print(f'playlistItem error on video {videoID}: {error}')
                 except Exception as error:
-                    debug('\n(d)', type(error), error)
-                    print('Playlist raised the following error:', user_playlist_id, error)
+                    print(f'Playlist error on {user_playlist_id}: {error}')
 
         # Actually delete videos from YouTube AFTER removing them from playlists
         for vID in disliked_videos:
@@ -795,8 +743,7 @@ class UploadBot:
                             self.delete_associated_files(video_title)
                             break
             except Exception as error:
-                debug('\n(d)', type(error), error)
-                print('Video-deletion attempt failed with the following error:', vID, error)
+                print(f'Video-deletion attempt failed for {vID} with error: {error}')
 
 
 
