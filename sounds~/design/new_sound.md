@@ -16,7 +16,8 @@ The primary objective is to design a sound that is **as perceptually different a
 ### 2. Formulate a Distinct Timbre
 - Choose a synthesis strategy that departs from existing ones (e.g., if existing sounds are mostly additive, try FM, subtractive with resonant filters, etc.).
 - Aim for a different area of the frequency spectrum or a different temporal envelope.
-- Sounds can be made distinct from each other by varying them over time. This can mean different ADSR envelopes, or modulating the timbre itself from one thing to another, all during a single note. 
+- Sounds can be made distinct from each other by varying them over time. This can mean different ADSR envelopes, or modulating the timbre itself from one thing to another, all during a single note.
+- Effects are not out of the question, as long as they can be implemented efficiently in C.
 
 ### 3. Implement the Design
 - **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside existing `sounds/` subfolders.
