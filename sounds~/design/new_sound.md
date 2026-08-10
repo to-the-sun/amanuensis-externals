@@ -18,7 +18,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Aim for a different area of the frequency spectrum or a different temporal envelope.
 
 ### 3. Implement the Design
-- **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside the `sounds/` subfolders.
+- **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside existing `sounds/` subfolders.
 - Update the `SOUND_DESIGN_VERSION` macro in `sound_design.h` to the next increment (find the highest numbered folder in `sounds/` and add 1).
 - Implement your synthesis logic in the `render_midi` function within `sound_design.c`.
 
