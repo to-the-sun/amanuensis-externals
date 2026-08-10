@@ -63,7 +63,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - **MIDI Consistency:** Always use the same MIDI sequence for all sounds to ensure a fair "timbre" comparison.
 - **Distance Metric:** The system uses Euclidean distance on MFCC means as the primary "difference" score.
 - **MIDI Handling:** Modules must be polyphonic and correctly handle sustained notes (e.g., by rendering any notes remaining in `active_notes` at the end of the `duration` without a release phase). This ensures compatibility with both listed sequences and potential live MIDI streams.
-- **MIDI Pitch:** The tonal element of each sound must be modular in the sense that it takes on the MIDI pitch being used (with a standard A4 = 440Hz tuning). Again, there may be an atonal portion to the sound as well, which this would not apply to. 
+- **MIDI Pitch:** The tonal element of each sound must be able to take on the MIDI pitch being used (with a standard A4 = 440Hz tuning). Again, there may be an atonal portion to the sound as well, which this would not apply to. 
 
 ## Subjective Judgment
 While the distance metric provides a quantitative guide, prioritize **human perception**. If two sounds have a high statistical distance but sound similar to a person, iterate further on the design to achieve true variety.
