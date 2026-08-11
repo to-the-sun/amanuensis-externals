@@ -440,10 +440,3 @@ if __name__ == "__main__":
     except BaseException:
         # Catch KeyboardInterrupt, SystemExit, etc.
         traceback.print_exc()
-    finally:
-        # Keep window open for user to see output/errors
-        print("\nPersistence check: The script will remain open until you press Enter.")
-        try:
-            input("\nPress Enter to exit...")
-        except (EOFError, KeyboardInterrupt):
-            pass
