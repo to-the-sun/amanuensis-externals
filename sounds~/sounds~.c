@@ -143,7 +143,7 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
                         x->modules[x->num_modules].render_midi = ptr;
                         strncpy(x->modules[x->num_modules].name, findData.cFileName, 256);
                         x->num_modules++;
-                        object_post((t_object*)x, "Loaded module %d: %s", x->num_modules - 1, findData.cFileName);
+                        object_post((t_object*)x, "Loaded module %d: %s", x->num_modules, findData.cFileName);
                     } else {
                         FreeLibrary(h);
                     }
@@ -177,16 +177,17 @@ void sounds_free(t_sounds* x) {
 
 void sounds_preset(t_sounds* x, long n) {
     if (x->num_modules == 0) return;
-    x->current_module = (int)n % x->num_modules;
-    if (x->current_module < 0) x->current_module += x->num_modules;
-    object_post((t_object*)x, "Switched to preset %d: %s", x->current_module, x->modules[x->current_module].name);
+    long zero_based = (n - 1) % x->num_modules;
+    if (zero_based < 0) zero_based += x->num_modules;
+    x->current_module = (int)zero_based;
+    object_post((t_object*)x, "Switched to preset %d: %s", x->current_module + 1, x->modules[x->current_module].name);
 }
 
 void sounds_random(t_sounds* x) {
     if (x->num_modules <= 1) return;
     int next = rand() % x->num_modules;
     while (next == x->current_module) next = rand() % x->num_modules;
-    sounds_preset(x, next);
+    sounds_preset(x, next + 1);
 }
 
 void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {

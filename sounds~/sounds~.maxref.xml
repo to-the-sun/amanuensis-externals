@@ -26,9 +26,9 @@
 			<arglist>
 				<arg name="index" optional="0" type="int" />
 			</arglist>
-			<digest>Switch to a specific sound module</digest>
+			<digest>Switch to a specific sound module (1-based)</digest>
 			<description>
-				Sets the active sound module to the one at the specified index. Indices are assigned based on the alphabetical order of the DLL files in the <inline>modules/</inline> directory.
+				Sets the active sound module to the one at the specified 1-based index (e.g., 1 for the first module <inline>sound_00001.dll</inline>, 2 for <inline>sound_00002.dll</inline>, etc.). Indices are assigned based on the alphabetical order of the five-digit padded DLL files in the <inline>modules/</inline> directory.
 			</description>
 		</method>
 		<method name="random">
