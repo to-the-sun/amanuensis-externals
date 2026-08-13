@@ -165,7 +165,7 @@ def generate_video_raylib(audio_path, data):
             output_video
         ])
 
-        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         duration = times[-1]
         fps = 30
