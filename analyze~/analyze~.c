@@ -5,6 +5,7 @@
 #include "z_dsp.h"
 #include "cumulative_transience.h"
 #include "../shared/async_worker.h"
+#include "../shared/visualize.h"
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -44,6 +45,7 @@ typedef struct _analyze {
     t_symbol* group_name;
     long weighted_bar;
     double tolerance;
+    long visualize_enabled;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -84,6 +86,69 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
 void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam);
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s);
 
+#ifndef MAX_PATH_CHARS
+#define MAX_PATH_CHARS 1024
+#endif
+
+void get_object_directory(char *dir_out, size_t max_len) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    HMODULE hModule = NULL;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)get_object_directory, &hModule)) {
+        char path[MAX_PATH_CHARS];
+        DWORD len = GetModuleFileNameA(hModule, path, MAX_PATH_CHARS);
+        if (len > 0 && len < MAX_PATH_CHARS) {
+            char *last_sep = strrchr(path, '\\');
+            if (!last_sep) {
+                last_sep = strrchr(path, '/');
+            }
+            if (last_sep) {
+                *last_sep = '\0';
+                strncpy(dir_out, path, max_len);
+                dir_out[max_len - 1] = '\0';
+                return;
+            }
+        }
+    }
+#endif
+    strncpy(dir_out, ".", max_len);
+    dir_out[max_len - 1] = '\0';
+}
+
+static void launch_visualizer(t_analyze *x) {
+    char dir[MAX_PATH_CHARS];
+    get_object_directory(dir, sizeof(dir));
+    char cmd[MAX_PATH_CHARS * 2];
+    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\"", dir);
+
+#if defined(WIN_VERSION) || defined(_WIN32)
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        object_post((t_object *)x, "analyze~: Launched companion visualizer successfully.");
+    } else {
+        object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
+    }
+#endif
+}
+
+t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long prev = x->visualize_enabled;
+        x->visualize_enabled = atom_getlong(av);
+        if (x->visualize_enabled && !prev) {
+            launch_visualizer(x);
+        }
+    }
+    return MAX_ERR_NONE;
+}
+
 static t_class* analyze_class;
 
 void ext_main(void* r) {
@@ -108,6 +173,12 @@ void ext_main(void* r) {
     CLASS_ATTR_FILTER_CLIP(c, "tolerance", 0.0, 5000.0);
     CLASS_ATTR_LABEL(c, "tolerance", 0, "Tolerance (ms)");
     CLASS_ATTR_DEFAULT(c, "tolerance", 0, "29.0");
+
+    CLASS_ATTR_LONG(c, "visualize", 0, t_analyze, visualize_enabled);
+    CLASS_ATTR_FILTER_CLIP(c, "visualize", 0, 1);
+    CLASS_ATTR_LABEL(c, "visualize", 0, "Enable Real-Time Visualization");
+    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)analyze_attr_set_visualize);
+    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
 
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
@@ -152,7 +223,10 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->weighted_bar = 1;
         x->tolerance = 29.0;
         x->sample_rate = 44100.0;
+        x->visualize_enabled = 0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+
+        visualize_init();
 
         attr_args_process(x, argc, argv);
 
@@ -208,6 +282,8 @@ void analyze_free(t_analyze* x) {
     free(x->audio_buffer);
     free(x->clock_buffer);
     critical_free(x->lock);
+
+    visualize_cleanup();
 }
 
 void analyze_clear(t_analyze* x) {
@@ -454,6 +530,120 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
+
+            if (x->visualize_enabled) {
+                char *json_buf = (char *)malloc(131072);
+                if (json_buf) {
+                    char *ptr = json_buf;
+                    int remaining = 131072;
+                    int n;
+
+                    double p_time = (double)target_analysis_frame / x->sample_rate;
+
+                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"time\":%.4f,", p_time);
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
+                    n = snprintf(ptr, remaining, "\"rating\":%.4f,\"std_dev\":%.4f,\"contrast\":%.4f,\"stability\":%.4f,\"max_peak_value\":%.4f,\"min_score_seen\":%.4f,\"max_score_seen\":%.4f,\"tolerance\":%.4f,\"highest_peak_ms\":%.4f,",
+                                 x->result_buffer->metrics.rating,
+                                 x->result_buffer->metrics.std_dev,
+                                 x->result_buffer->metrics.contrast,
+                                 x->result_buffer->metrics.stability_score,
+                                 analyzer_get_max_peak(x->analyzer),
+                                 x->result_buffer->metrics.min_score_seen,
+                                 x->result_buffer->metrics.max_score_seen,
+                                 x->tolerance,
+                                 hp_ms);
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"global_smoothing_avg\":%.4f,", x->result_buffer->metrics.global_smoothing_avg);
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"smoothing_avgs\":[%.4f,%.4f,%.4f,%.4f],",
+                                 x->result_buffer->metrics.band_smoothing_avgs[0],
+                                 x->result_buffer->metrics.band_smoothing_avgs[1],
+                                 x->result_buffer->metrics.band_smoothing_avgs[2],
+                                 x->result_buffer->metrics.band_smoothing_avgs[3]);
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"flux\":[");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    for (int b = 0; b < 4; b++) {
+                        n = snprintf(ptr, remaining, "[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int j = 0; j < 100; j++) {
+                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_flux[b][j], (j == 99) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    }
+                    n = snprintf(ptr, remaining, "],");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"smooth\":[");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    for (int b = 0; b < 4; b++) {
+                        n = snprintf(ptr, remaining, "[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int j = 0; j < 100; j++) {
+                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_dynamic_smoothing[b][j], (j == 99) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    }
+                    n = snprintf(ptr, remaining, "],");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"prominence\":[");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    for (int b = 0; b < 4; b++) {
+                        n = snprintf(ptr, remaining, "[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int j = 0; j < 100; j++) {
+                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_prominence[b][j], (j == 99) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    }
+                    n = snprintf(ptr, remaining, "],");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"accumulated_buffer\":[");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    double *acc_buf = analyzer_get_buffer(x->analyzer);
+                    for (int i = 0; i < 5001; i++) {
+                        n = snprintf(ptr, remaining, "%.4f%s", acc_buf[i], (i == 5000) ? "" : ",");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    }
+                    n = snprintf(ptr, remaining, "],");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    n = snprintf(ptr, remaining, "\"peaks\":[");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+                        PeakResult *p_res = &x->result_buffer->peak_list.peaks[i];
+                        n = snprintf(ptr, remaining, "{\"time\":%.4f,\"peak_val\":%.4f,\"total_score\":%.4f,\"band_idx\":%d,\"p_idx\":%d,\"qualifiers\":[",
+                                     p_res->time, p_res->peak_val, p_res->total_score, p_res->band_idx, p_res->p_idx);
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int q = 0; q < p_res->num_qualifiers; q++) {
+                            n = snprintf(ptr, remaining, "{\"ms\":%.4f,\"val\":%.4f,\"orig_ms\":%.4f}%s",
+                                         p_res->qualifiers[q].ms, p_res->qualifiers[q].val, p_res->qualifiers[q].orig_ms,
+                                         (q == p_res->num_qualifiers - 1) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "]}%s", (i == x->result_buffer->peak_list.num_peaks - 1) ? "" : ",");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                    }
+                    n = snprintf(ptr, remaining, "]}");
+                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                    visualize(x, json_buf);
+                    free(json_buf);
+                }
+            }
         }
 
         free(hop_audio);

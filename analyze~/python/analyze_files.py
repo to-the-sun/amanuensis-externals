@@ -102,10 +102,190 @@ def get_score_color(score, min_score, max_score):
         b = int(0x80 + (0x00 - 0x80) * t)
     return f"#{r:02x}{g:02x}{b:02x}"
 
+def generate_video_raylib(audio_path, data):
+    try:
+        import pyray as pr
+        import raylib_renderer
+    except ImportError:
+        print("Raylib (pyray) or raylib_renderer not available. Cannot use Raylib generator.")
+        return None
+
+    print(f"Generating high-speed Raylib video for {audio_path}...")
+    try:
+        times = data['times']
+        onset_envs = data['onset_envs']
+        rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings')
+        rolling_prominences = data.get('rolling_prominences')
+        rolling_smoothing_avgs = data.get('rolling_smoothing_avgs')
+        rolling_global_smoothing_avgs = data.get('rolling_global_smoothing_avgs')
+        rolling_thresholds = data['rolling_thresholds']
+
+        all_peaks = []
+        for b_peaks in data['peaks']: all_peaks.extend(b_peaks)
+        all_peaks.sort(key=lambda x: x['p_idx'])
+
+        max_peak = data['max_peak_value']
+        min_score_seen = data['min_score_seen']
+        max_score_seen = data['max_score_seen']
+        ratings = data['ratings']
+        std_devs = data['std_devs']
+        means = data['means']
+        contrasts = data['contrasts']
+        stability_scores = data['stability_scores']
+
+        W, H = 1920, 1080
+        pr.set_trace_log_level(pr.LOG_WARNING)
+        pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
+        pr.init_window(W, H, "Headless Renderer")
+        target = pr.load_render_texture(W, H)
+
+        codec = get_best_encoder()
+        output_video = os.path.splitext(audio_path)[0] + ".mp4"
+
+        # One-pass FFmpeg command: muxing raw video stream and audio WAV directly
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', f'{W}x{H}', '-r', '30',
+            '-i', '-',          # Piped raw video input (index 0)
+            '-i', audio_path,   # Audio input (index 1)
+            '-c:v', codec,      # Video codec
+        ]
+        if codec == "h264_nvenc":
+            ffmpeg_cmd.extend(['-preset', 'p1', '-tune', 'ull', '-delay', '0', '-pix_fmt', 'yuv420p'])
+        elif codec == "h264_amf":
+            ffmpeg_cmd.extend(['-quality', 'speed', '-usage', 'ultralowlatency', '-pix_fmt', 'yuv420p'])
+        else:
+            ffmpeg_cmd.extend(['-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
+
+        ffmpeg_cmd.extend([
+            '-c:a', 'aac', '-ac', '1',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-shortest',
+            output_video
+        ])
+
+        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+        duration = times[-1]
+        fps = 30
+        num_video_frames = int(duration * fps)
+        video_frame_times = np.arange(num_video_frames) / float(fps)
+        frame_indices = np.searchsorted(np.array(times), video_frame_times)
+
+        accumulated_buffer = np.zeros(5001)
+        peak_search_ptr = 0
+        active_buffer_peaks = []
+        last_frame_processed = -1
+
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video (Raylib)", unit="frame")
+
+        for v_idx in range(len(frame_indices)):
+            frame = frame_indices[v_idx]
+            current_time = video_frame_times[v_idx]
+
+            cleanup_frame = frame - 15000
+            while active_buffer_peaks and active_buffer_peaks[0]['p_idx'] <= cleanup_frame:
+                p_old = active_buffer_peaks.pop(0)
+                accumulated_buffer -= p_old['snapshot']
+
+            new_peaks = []
+            while peak_search_ptr < len(all_peaks) and all_peaks[peak_search_ptr]['p_idx'] <= frame:
+                if all_peaks[peak_search_ptr]['p_idx'] > last_frame_processed:
+                    new_peaks.append(all_peaks[peak_search_ptr])
+                peak_search_ptr += 1
+
+            for p in new_peaks:
+                accumulated_buffer += p['snapshot']
+                active_buffer_peaks.append(p)
+
+            last_frame_processed = frame
+
+            pr.begin_texture_mode(target)
+
+            frame_data = {
+                'times': times,
+                'onset_envs': onset_envs,
+                'smooth_envs': rolling_dynamic_smoothings,
+                'prominences': rolling_prominences,
+                'rolling_smoothing_avgs': [rolling_smoothing_avgs[b][frame] for b in range(4)] if rolling_smoothing_avgs is not None else [0.0]*4,
+                'rolling_global_smoothing_avg': rolling_global_smoothing_avgs[frame] if rolling_global_smoothing_avgs is not None else 0.0,
+                'rating': ratings[frame],
+                'overall_rating': ratings[-1],
+                'std_dev': std_devs[frame],
+                'contrast': contrasts[frame],
+                'stability': stability_scores[frame],
+                'max_peak_value': max_peak,
+                'min_score_seen': min_score_seen,
+                'max_score_seen': max_score_seen,
+                'tolerance': data.get('tolerance', 29.0),
+                'highest_peak_ms': data.get('highest_peaks_ms')[frame] if data.get('highest_peaks_ms') is not None else -999.0,
+                'peaks': all_peaks,
+                'accumulated_buffer': accumulated_buffer,
+                'title': f"4-Band Transient Analysis - {os.path.basename(audio_path)}"
+            }
+
+            raylib_renderer.draw_renderer(W, H, current_time, frame_data)
+            pr.end_texture_mode()
+
+            img = pr.load_image_from_texture(target.texture)
+            pr.image_flip_vertical(img)
+
+            # Directly retrieve raw uncompressed RGBA pixel data from image.data pointer
+            pixels_bytes = pr.ffi.buffer(img.data, W * H * 4)[:]
+            pipe.stdin.write(pixels_bytes)
+
+            pr.unload_image(img)
+            pbar.update(1)
+
+        pbar.close()
+        pr.unload_render_texture(target)
+        pr.close_window()
+
+        pipe.stdin.close()
+        pipe.wait()
+
+        try:
+            song_name = os.path.splitext(os.path.basename(audio_path))[0]
+            project_dir = rf'D:\[Library]\[Audio]\[Works]\[Projects]\{song_name}'
+            if os.path.exists(project_dir):
+                ratings_file = os.path.join(project_dir, 'ratings.txt')
+                with open(ratings_file, 'w', encoding='utf-8') as f:
+                    f.write(f"Rating: {ratings[-1]:.2f}\n")
+                    f.write(f"Standard Deviation: {std_devs[-1]:.3f}\n")
+                    f.write(f"Contrast: {contrasts[-1]:.3f}\n")
+                    f.write(f"Bar Length Stability: {stability_scores[-1]:.0f}\n")
+                print(f"Metrics recorded to {ratings_file}")
+        except Exception as e:
+            print(f"Error recording metrics: {e}")
+
+        if os.path.exists(output_video):
+            print(f"Video generated successfully: {output_video}")
+            return output_video
+        else:
+            print("Error: Output video file not found.")
+            return None
+    except Exception as e:
+        traceback.print_exc()
+        return None
+
 def generate_video(audio_path, data):
     ensure_initialized()
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
-    print(f"Generating video for {audio_path}...")
+
+    # Try Raylib first
+    try:
+        res = generate_video_raylib(audio_path, data)
+        if res is not None:
+            return res
+    except Exception as e:
+        print(f"Raylib video generation failed: {e}. Falling back to Matplotlib...")
+        traceback.print_exc()
+
+    return generate_video_matplotlib(audio_path, data)
+
+def generate_video_matplotlib(audio_path, data):
+    print(f"Generating Matplotlib video for {audio_path}...")
     try:
         times = data['times']; onset_envs = data['onset_envs']
         rolling_dynamic_smoothings = data.get('rolling_dynamic_smoothings')
