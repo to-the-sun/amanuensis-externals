@@ -1,35 +1,32 @@
 import pyray as pr
 import math
 
-def make_color(r, g, b, a=255):
-    return pr.Color(int(r), int(g), int(b), int(a))
-
 # Color constants
-COLOR_BG = make_color(18, 18, 22, 255)       # Deep charcoal background
-COLOR_GRID = make_color(40, 40, 48, 255)     # Grid lines
-COLOR_TEXT_MUTED = make_color(140, 140, 150, 255)
+COLOR_BG = pr.Color(18, 18, 22, 255)       # Deep charcoal background
+COLOR_GRID = pr.Color(40, 40, 48, 255)     # Grid lines
+COLOR_TEXT_MUTED = pr.Color(140, 140, 150, 255)
 
 # Band colors (Flux/Smooth)
 BAND_COLORS = [
-    make_color(27, 79, 114, 255),    # Sub-Bass
-    make_color(52, 152, 219, 255),   # Bass/Low-Mid
-    make_color(46, 204, 113, 255),   # High-Mid
-    make_color(169, 223, 191, 255)   # Treble
+    pr.Color(27, 79, 114, 255),    # Sub-Bass
+    pr.Color(52, 152, 219, 255),   # Bass/Low-Mid
+    pr.Color(46, 204, 113, 255),   # High-Mid
+    pr.Color(169, 223, 191, 255)   # Treble
 ]
 
 # Prominence colors (Distinguishable Red/Orange shades)
 PROMINENCE_COLORS = [
-    make_color(255, 0, 0, 255),      # Red
-    make_color(255, 69, 0, 255),     # OrangeRed
-    make_color(255, 99, 71, 255),    # Tomato
-    make_color(205, 92, 92, 255)     # IndianRed
+    pr.Color(255, 0, 0, 255),      # Red
+    pr.Color(255, 69, 0, 255),     # OrangeRed
+    pr.Color(255, 99, 71, 255),    # Tomato
+    pr.Color(205, 92, 92, 255)     # IndianRed
 ]
 
-COLOR_PLAYHEAD = make_color(230, 126, 34, 255)     # Orange
-COLOR_CLEANUP = make_color(155, 89, 182, 255)      # Purple
-COLOR_PEAK_MARKER = make_color(241, 196, 15, 255)  # Yellow
-COLOR_HIST_WAVE = make_color(241, 196, 15, 255)    # Yellow
-COLOR_MIDPOINT = make_color(128, 128, 128, 255)    # Gray
+COLOR_PLAYHEAD = pr.Color(230, 126, 34, 255)     # Orange
+COLOR_CLEANUP = pr.Color(155, 89, 182, 255)      # Purple
+COLOR_PEAK_MARKER = pr.Color(241, 196, 15, 255)  # Yellow
+COLOR_HIST_WAVE = pr.Color(241, 196, 15, 255)    # Yellow
+COLOR_MIDPOINT = pr.Color(128, 128, 128, 255)    # Gray
 
 BAND_LABELS = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
 SNAP_LABELS = ['Sub', 'Bass', 'Mid', 'Hi']
@@ -39,10 +36,10 @@ def hex_to_color(hex_str, alpha=255):
     r = int(hex_str[0:2], 16)
     g = int(hex_str[2:4], 16)
     b = int(hex_str[4:6], 16)
-    return make_color(r, g, b, alpha)
+    return pr.Color(r, g, b, alpha)
 
 def get_score_color(score, min_score, max_score):
-    if score == 0: return make_color(128, 128, 128, 255)
+    if score == 0: return pr.Color(128, 128, 128, 255)
     if score < 0:
         t = score / min_score if min_score < 0 else 0.0
         t = max(0.0, min(1.0, t))
@@ -55,7 +52,7 @@ def get_score_color(score, min_score, max_score):
         r = int(128 + (0 - 128) * t)
         g = int(128 + (255 - 128) * t)
         b = int(128 + (0 - 128) * t)
-    return make_color(r, g, b, 255)
+    return pr.Color(r, g, b, 255)
 
 def draw_dashed_line(x1, y1, x2, y2, color, thickness=1, dash_len=5, gap_len=5):
     dx = x2 - x1
@@ -172,11 +169,11 @@ def draw_renderer(W, H, current_time, frame_data):
 
             # Draw Flux
             for i in range(len(env_pts) - 1):
-                pr.draw_line_ex(env_pts[i], env_pts[i+1], 1.0, make_color(BAND_COLORS[b].r, BAND_COLORS[b].g, BAND_COLORS[b].b, 76))
+                pr.draw_line_ex(env_pts[i], env_pts[i+1], 1.0, pr.Color(BAND_COLORS[b].r, BAND_COLORS[b].g, BAND_COLORS[b].b, 76))
 
             # Draw Smoothings
             for i in range(len(sm_pts) - 1):
-                pr.draw_line_ex(sm_pts[i], sm_pts[i+1], 1.5, make_color(BAND_COLORS[b].r, BAND_COLORS[b].g, BAND_COLORS[b].b, 128))
+                pr.draw_line_ex(sm_pts[i], sm_pts[i+1], 1.5, pr.Color(BAND_COLORS[b].r, BAND_COLORS[b].g, BAND_COLORS[b].b, 128))
 
             # Draw Prominences
             for i in range(len(pr_pts) - 1):
@@ -199,7 +196,7 @@ def draw_renderer(W, H, current_time, frame_data):
         sy_g = margin_top + graph_h_top - int(graph_h_top * g_smooth_avg / max_peak)
         if margin_top <= sy_g <= margin_top + graph_h_top:
             pr.draw_line_ex(pr.Vector2(margin_left, sy_g), pr.Vector2(margin_left + graph_w, sy_g), 1.5, pr.BLACK)
-            draw_text_safe(f"G:{g_smooth_avg:.2f}", margin_left + graph_w + 50, sy_g - 6, 12, make_color(20, 20, 20, 255))
+            draw_text_safe(f"G:{g_smooth_avg:.2f}", margin_left + graph_w + 50, sy_g - 6, 12, pr.Color(20, 20, 20, 255))
 
     # Playhead Line (current_time)
     px = margin_left + int(graph_w * (current_time - x_min_t) / x_span_t)
@@ -230,7 +227,7 @@ def draw_renderer(W, H, current_time, frame_data):
                     alpha = int(255 * (1.0 - progress))
                     score = p.get('total_score', 0.0)
                     clr = get_score_color(score, min_score, max_score)
-                    clr = make_color(clr.r, clr.g, clr.b, alpha)
+                    clr = pr.Color(clr.r, clr.g, clr.b, alpha)
                     draw_text_safe(f"{score:+.2f}", pk_x - 10, float_y, 14, clr)
 
     # Overlays in top-left
@@ -264,9 +261,9 @@ def draw_renderer(W, H, current_time, frame_data):
     for b in range(4):
         ly = Y_mid + int(b * lane_h)
         if b % 2 == 0:
-            pr.draw_rectangle(margin_left, ly, graph_w, int(lane_h), make_color(25, 25, 30, 255))
+            pr.draw_rectangle(margin_left, ly, graph_w, int(lane_h), pr.Color(25, 25, 30, 255))
         else:
-            pr.draw_rectangle(margin_left, ly, graph_w, int(lane_h), make_color(20, 20, 24, 255))
+            pr.draw_rectangle(margin_left, ly, graph_w, int(lane_h), pr.Color(20, 20, 24, 255))
 
         pr.draw_line(margin_left, ly, margin_left + graph_w, ly, COLOR_GRID)
         draw_text_safe(SNAP_LABELS[b], margin_left - 45, ly + int(lane_h * 0.2), 12, pr.WHITE)
@@ -363,7 +360,7 @@ def draw_renderer(W, H, current_time, frame_data):
                     span_w = (margin_left + graph_w) - span_x
 
                 if span_w > 0:
-                    pr.draw_rectangle(span_x, Y_bot, span_w, graph_h_bot, make_color(qc.r, qc.g, qc.b, 38))
+                    pr.draw_rectangle(span_x, Y_bot, span_w, graph_h_bot, pr.Color(qc.r, qc.g, qc.b, 38))
 
                 lbl_y = Y_bot + int(graph_h_bot * (1.0 - (q_val + 1.0)/2.0))
                 draw_text_safe(f"{q_val:+.2f}", qx + 4, lbl_y, 10, qc)

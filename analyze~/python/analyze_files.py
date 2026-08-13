@@ -134,20 +134,21 @@ def generate_video_raylib(audio_path, data):
         stability_scores = data['stability_scores']
 
         W, H = 1920, 1080
+        pr.set_trace_log_level(pr.LOG_WARNING)
         pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
         pr.init_window(W, H, "Headless Renderer")
         target = pr.load_render_texture(W, H)
 
         codec = get_best_encoder()
         output_video = os.path.splitext(audio_path)[0] + ".mp4"
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            temp_video_path = tmp.name
 
+        # One-pass FFmpeg command: muxing raw video stream and audio WAV directly
         ffmpeg_cmd = [
             'ffmpeg', '-y',
             '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', f'{W}x{H}', '-r', '30',
-            '-i', '-',
-            '-c:v', codec,
+            '-i', '-',          # Piped raw video input (index 0)
+            '-i', audio_path,   # Audio input (index 1)
+            '-c:v', codec,      # Video codec
         ]
         if codec == "h264_nvenc":
             ffmpeg_cmd.extend(['-preset', 'p1', '-tune', 'ull', '-delay', '0', '-pix_fmt', 'yuv420p'])
@@ -155,9 +156,16 @@ def generate_video_raylib(audio_path, data):
             ffmpeg_cmd.extend(['-quality', 'speed', '-usage', 'ultralowlatency', '-pix_fmt', 'yuv420p'])
         else:
             ffmpeg_cmd.extend(['-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
-        ffmpeg_cmd.append(temp_video_path)
 
-        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ffmpeg_cmd.extend([
+            '-c:a', 'aac', '-ac', '1',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-shortest',
+            output_video
+        ])
+
+        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
         duration = times[-1]
         fps = 30
@@ -223,10 +231,8 @@ def generate_video_raylib(audio_path, data):
             img = pr.load_image_from_texture(target.texture)
             pr.image_flip_vertical(img)
 
-            file_size_ptr = pr.ffi.new("int *")
-            pixels_ptr = pr.export_image_to_memory(img, ".raw", file_size_ptr)
-
-            pixels_bytes = pr.ffi.buffer(pixels_ptr, file_size_ptr[0])[:]
+            # Directly retrieve raw uncompressed RGBA pixel data from image.data pointer
+            pixels_bytes = pr.ffi.buffer(img.data, W * H * 4)[:]
             pipe.stdin.write(pixels_bytes)
 
             pr.unload_image(img)
@@ -253,14 +259,11 @@ def generate_video_raylib(audio_path, data):
         except Exception as e:
             print(f"Error recording metrics: {e}")
 
-        if shutil.which("ffmpeg"):
-            cmd = ['ffmpeg', '-y', '-i', temp_video_path, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-ac', '1', '-shortest', output_video]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(temp_video_path): os.remove(temp_video_path)
-            print(f"Video generated: {output_video}")
+        if os.path.exists(output_video):
+            print(f"Video generated successfully: {output_video}")
             return output_video
         else:
-            print("Error: ffmpeg not found.")
+            print("Error: Output video file not found.")
             return None
     except Exception as e:
         traceback.print_exc()
