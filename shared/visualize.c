@@ -302,9 +302,6 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                         }
                     }
                 } else if (sel_ret == 0) {
-                    if (x) {
-                        object_error((t_object *)x, "visualize: TCP handshake timed out (500ms)");
-                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 } else {
