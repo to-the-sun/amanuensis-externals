@@ -270,22 +270,29 @@ def draw_renderer(W, H, current_time, frame_data):
 
     pr.draw_line(margin_left, Y_mid + graph_h_mid, margin_left + graph_w, Y_mid + graph_h_mid, COLOR_GRID)
 
-    for p in peaks:
-        pt = p.get('time', 0.0)
-        if abs(current_time - pt) < 0.1:
-            rel_idx = p.get('p_idx', 0)
-            band = p.get('band_idx', 0)
-            score = p.get('total_score', 0.0)
+    valid_peaks = [p for p in peaks if p.get('time', 0.0) <= current_time]
+    if valid_peaks:
+        latest_p_idx = max(p.get('p_idx', 0) for p in valid_peaks)
+        for p in valid_peaks:
+            p_idx = p.get('p_idx', 0)
+            rel_ms = float(p_idx - latest_p_idx)
+            if -45.0 <= rel_ms <= 1.0:
+                band = p.get('band_idx', 0)
+                score = p.get('total_score', 0.0)
 
-            bx = margin_left + int(graph_w * (0.0 - x_min_s) / x_span_s)
-            by = Y_mid + int(band * lane_h) + 2
-            bw = int(graph_w * 2.0 / x_span_s)
-            if bw < 5: bw = 5
+                bx = margin_left + int(graph_w * (rel_ms - x_min_s) / x_span_s)
+                by = Y_mid + int(band * lane_h) + 2
+                bw = int(graph_w * 2.0 / x_span_s)
+                if bw < 5: bw = 5
 
-            pr.draw_rectangle(bx - bw//2, by, bw, int(lane_h) - 4, BAND_COLORS[band])
+                pr.draw_rectangle(bx - bw//2, by, bw, int(lane_h) - 4, BAND_COLORS[band])
 
-            score_c = get_score_color(score, min_score, max_score)
-            draw_text_safe(f"{score:+.2f}", bx - 45, by + int(lane_h*0.1), 12, score_c)
+                score_c = get_score_color(score, min_score, max_score)
+                if rel_ms < -40.0:
+                    text_x = bx + bw // 2 + 5
+                else:
+                    text_x = bx - bw // 2 - 40
+                draw_text_safe(f"{score:+.2f}", text_x, by + int(lane_h*0.1), 12, score_c)
 
     draw_text_safe("39ms Rolling Window Snapshot", margin_left, Y_mid - 15, 12, pr.WHITE)
 
@@ -331,9 +338,8 @@ def draw_renderer(W, H, current_time, frame_data):
         if Y_bot <= wy_mid <= Y_bot + graph_h_bot:
             draw_dashed_line(margin_left, wy_mid, margin_left + graph_w, wy_mid, COLOR_MIDPOINT, 1.2, 5, 5)
 
-    active_peaks_in_chunk = [p for p in peaks if abs(current_time - p.get('time', 0.0)) < 0.1]
-    if active_peaks_in_chunk:
-        latest_active_peak = active_peaks_in_chunk[-1]
+    if valid_peaks:
+        latest_active_peak = max(valid_peaks, key=lambda p: p.get('time', 0.0))
         qualifiers = latest_active_peak.get('qualifiers', [])
         tolerance = frame_data.get('tolerance', 29.0)
 
