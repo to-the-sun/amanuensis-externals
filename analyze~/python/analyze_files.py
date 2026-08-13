@@ -222,9 +222,11 @@ def generate_video_raylib(audio_path, data):
 
             img = pr.load_image_from_texture(target.texture)
             pr.image_flip_vertical(img)
-            pixels_ptr = pr.export_image_to_memory(img, ".raw", 4)
 
-            pixels_bytes = pr.ffi.buffer(pixels_ptr, W * H * 4)[:]
+            file_size_ptr = pr.ffi.new("int *")
+            pixels_ptr = pr.export_image_to_memory(img, ".raw", file_size_ptr)
+
+            pixels_bytes = pr.ffi.buffer(pixels_ptr, file_size_ptr[0])[:]
             pipe.stdin.write(pixels_bytes)
 
             pr.unload_image(img)
