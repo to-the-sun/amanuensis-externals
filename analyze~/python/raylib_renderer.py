@@ -2,32 +2,9 @@ import pyray as pr
 import math
 
 def make_color(r, g, b, a=255):
-    # Dynamic self-healing Color constructor that adapts to any installed Python Raylib binding variation
-    if hasattr(pr, 'Color'):
-        try:
-            return pr.Color(int(r), int(g), int(b), int(a))
-        except Exception:
-            pass
-    if hasattr(pr, 'color'):
-        try:
-            return pr.color(int(r), int(g), int(b), int(a))
-        except Exception:
-            pass
-    # Pack into 32-bit int and try get_color / GetColor
-    val = ((int(r) & 0xff) << 24) | ((int(g) & 0xff) << 16) | ((int(b) & 0xff) << 8) | (int(a) & 0xff)
-    if hasattr(pr, 'get_color'):
-        try:
-            return pr.get_color(val)
-        except Exception:
-            pass
-    if hasattr(pr, 'GetColor'):
-        try:
-            return pr.GetColor(val)
-        except Exception:
-            pass
-    raise AttributeError("Could not find a valid Color constructor in the installed 'pyray' module. Please ensure the standard 'raylib' package is installed: pip install raylib")
+    return pr.Color(int(r), int(g), int(b), int(a))
 
-# Color constants using the dynamic constructor
+# Color constants
 COLOR_BG = make_color(18, 18, 22, 255)       # Deep charcoal background
 COLOR_GRID = make_color(40, 40, 48, 255)     # Grid lines
 COLOR_TEXT_MUTED = make_color(140, 140, 150, 255)
@@ -331,12 +308,12 @@ def draw_renderer(W, H, current_time, frame_data):
         pr.draw_line(bx, Y_bot, bx, Y_bot + graph_h_bot, COLOR_GRID)
         draw_text_safe(f"{s_idx}ms" if s_idx != 0 else "0ms", bx - 20, Y_bot + graph_h_bot + 5, 11, COLOR_TEXT_MUTED)
 
-    accum_buffer = frame_data.get('accumulated_buffer', [])
-    if accum_buffer:
+    accum_buffer = frame_data.get('accumulated_buffer', None)
+    if accum_buffer is not None and len(accum_buffer) > 0:
         cutoff_idx = int(5001 - (99.0 / 5000.0 * 5000.0))
         visible_sub = accum_buffer[:cutoff_idx] if len(accum_buffer) >= cutoff_idx else accum_buffer
-        cur_max = max(visible_sub) if visible_sub else 1.0
-        cur_min = min(visible_sub) if visible_sub else 0.0
+        cur_max = max(visible_sub) if len(visible_sub) > 0 else 1.0
+        cur_min = min(visible_sub) if len(visible_sub) > 0 else 0.0
         if cur_max <= 0: cur_max = 1.0
 
         wave_pts = []
