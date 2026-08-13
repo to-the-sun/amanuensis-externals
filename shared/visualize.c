@@ -11,6 +11,7 @@
 
 #define PORT_CRUCIBLE 9999
 #define PORT_WEAVER   8999
+#define PORT_ANALYZE  9001
 #define SERVER "127.0.0.1"
 #define MAX_QUEUE_SIZE 100
 
@@ -31,6 +32,7 @@ typedef struct _viz_queue_item {
 
 static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
+static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -55,6 +57,9 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
         if (type_out) *type_out = "building";
         return &weaver_viz;
+    } else if (classname == gensym("analyze~")) {
+        if (type_out) *type_out = "analyze";
+        return &analyze_viz;
     }
     return NULL;
 }
@@ -80,6 +85,7 @@ int visualize_init() {
         }
         viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
         viz_socket_init(&weaver_viz, PORT_WEAVER);
+        viz_socket_init(&analyze_viz, PORT_ANALYZE);
 
         systhread_mutex_new(&queue_mutex, 0);
         systhread_cond_new(&viz_cond, 0);
@@ -120,6 +126,12 @@ void visualize_cleanup() {
         weaver_viz.sock = INVALID_SOCKET;
         systhread_mutex_unlock(weaver_viz.mutex);
         systhread_mutex_free(weaver_viz.mutex);
+
+        systhread_mutex_lock(analyze_viz.mutex);
+        if (analyze_viz.sock != INVALID_SOCKET) closesocket(analyze_viz.sock);
+        analyze_viz.sock = INVALID_SOCKET;
+        systhread_mutex_unlock(analyze_viz.mutex);
+        systhread_mutex_free(analyze_viz.mutex);
 
         WSACleanup();
         ref_count = 0;
