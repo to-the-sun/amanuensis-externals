@@ -87,41 +87,64 @@ To bridge the gap between Python scripts and a native C Max external, we propose
 
 ---
 
-## 5. Key Technology Options
+## 5. Key Technology Options & Hardware Acceleration Analysis
+
+Each technology option offers a distinct balance of GPU vs. CPU workload division. No option is 100% exclusive to the GPU because the preparatory steps (audio DSP, transience detection, coordinate projection calculations, data streaming, and frame pacing) must inevitably run on the CPU. However, the graphics operations (vector drawing, texture synthesis, layout compositing, rasterization, and pixel transfer) can be completely offloaded.
+
+The following sections analyze this distribution in detail for each candidate.
 
 ### Option A: Raylib (Recommended for Pure Speed and Simplicity)
 **Raylib** is an incredibly lightweight, hardware-accelerated C library for graphics and game development. It wraps OpenGL (1.1, 2.1, 3.3, or ES 2.0) and has no external dependencies.
 
-* **Advantages:**
-  * Extremely simple C API, compileable to a tiny standalone `.dll`/`.dylib`.
-  * Superb support for Offscreen Framebuffer Objects (`LoadRenderTexture()`), making headless rendering easy.
-  * Native text rendering, fast line plotting, custom shaders, and GUI widgets out-of-the-box.
-  * Raylib Python bindings (`raylib-py` or `pyray`) allow the exact same codebase to be imported directly in Python or loaded natively in C.
-* **Headless Integration:** We can run Raylib in a headless configuration by using its support for custom GLFW window hints or custom build flags (`PLATFORM_DRM` / `PLATFORM_HEADLESS`). Alternatively, a tiny hidden window can render to a texture, and pixels can be pulled via `ReadScreenPixels()` or `GetFrameBufferPixels()`.
+* **Workload Distribution:**
+  * **GPU Workload (approx. 85% of rendering overhead):**
+    * *Vertex Processing & Rasterization:* Raylib transfers primitive line and triangle coordinates (representing grids, lines, waveforms, and filled lanes) to the GPU in batches. The actual drawing and antialiasing of lines and curves occur 100% on the GPU.
+    * *Texture Rendering & Composition:* Offscreen headless buffers are allocated directly as Texture objects on the GPU. Rendering is redirected to the active Framebuffer Object (FBO), keeping the pixel arrays in high-speed GPU memory.
+    * *Text/Font Atlas Rendering:* Fonts are stored as texture atlases inside GPU memory. Drawing characters consists of binding the texture atlas and drawing textured quads, which is 100% GPU-accelerated.
+  * **CPU Workload (approx. 15% of rendering overhead):**
+    * *Coordinate Preparation:* Raylib's C API calculates the screen-space coordinates of the 5001-sample cumulative buffer wave and the transient curves. This simple linear interpolation math occurs on the CPU before copying vertices to the GPU.
+    * *Pixel Readback (Offscreen video mode only):* To pipe raw frames to FFmpeg, the CPU must invoke `glGetTexImage` or `glReadPixels` to copy the finished frame buffer from VRAM back to System RAM. This memory copy (VRAM-to-RAM) is a minor CPU bottleneck but is heavily minimized by GPU-side asynchronous transfer techniques (PBOs).
 
 ### Option B: SDL2 + NanoVG (Industry Standard for Embedded Rendering)
 **SDL2** manages window creation and events, while **NanoVG** is a clean, lightweight vector graphics rendering library on top of OpenGL.
 
-* **Advantages:**
-  * NanoVG provides an HTML5 Canvas-like API, making it trivial to port smooth curves, glowing lines, grids, and antialiased text.
-  * SDL2 is already heavily optimized, cross-platform, and has robust headless options (using dummy video drivers like `SDL_VIDEODRIVER=dummy`).
-  * Direct access to underlying OpenGL textures and raw pixel buffers.
-* **Drawbacks:** Requires linking and managing both SDL2 and NanoVG, which is slightly higher complexity than Raylib.
+* **Workload Distribution:**
+  * **GPU Workload (approx. 70-80% of rendering overhead):**
+    * *Primitive Rendering:* NanoVG translates path-based vector drawings (smooth lines, rectangles, fills, gradients) into OpenGL triangles and fans, drawing them with customized shaders. All color blending, anti-aliased edges, and geometric fills occur on the GPU.
+    * *Target FBO Operations:* Like Raylib, all subplots, grids, and waveforms are drawn directly onto an offscreen OpenGL render target/texture.
+  * **CPU Workload (approx. 20-30% of rendering overhead):**
+    * *Tessellation:* NanoVG performs path triangulation (tessellation) on the CPU. If there are thousands of highly complex curved lines or shapes redrawn every frame, calculating the triangle meshes on the CPU can lead to moderate CPU overhead before sending the final buffer objects to OpenGL.
+    * *Frame Readback & IPC:* Similar to Raylib, copying final pixels back to RAM for FFmpeg or passing them via IPC to Max MSP requires CPU-bound buffer copying.
 
 ### Option C: Pure OpenGL (Embedded custom renderer)
 Write a minimal custom OpenGL renderer that leverages raw VBOs (Vertex Buffer Objects) to plot the waveforms and cumulative buffers as optimized line strips or triangle strips.
 
-* **Advantages:**
-  * Absolute minimum footprint and zero dependency overhead.
-  * Waveform scrolling and dynamic ranges can be updated via custom Vertex Shaders on the GPU, completely offloading the CPU.
-  * Seamless embedding inside Max MSP's OpenGL context (`jit.gl` integration).
-* **Drawbacks:** Writing text renderers, grid ticks, and standard GUI components from scratch in pure OpenGL is time-consuming and labor-intensive.
+* **Workload Distribution:**
+  * **GPU Workload (approx. 95% of rendering overhead):**
+    * *Maximal GPU Utilization:* With custom GLSL vertex and fragment shaders, we can pass the raw data (e.g., the 5001-float cumulative buffer array) directly into a texture or 1D buffer, allowing the **Vertex Shader** to handle coordinate mapping, horizontal scaling, and vertical scaling directly on the GPU.
+    * *Geometric Transformation:* Scaling axes, grids, envelopes, and playhead positions is computed directly in the shader via matrix multiplication.
+  * **CPU Workload (approx. 5% of rendering overhead):**
+    * *Minimal Overhead:* The CPU's role is strictly limited to calling binding functions (`glBindBuffer`, `glBufferSubData`) to stream the raw data array, and issuing draw calls (`glDrawArrays`).
+  * **Drawbacks:** Writing text renderers, grid ticks, and standard GUI components from scratch in pure OpenGL is time-consuming and labor-intensive, requiring CPU-bound text rasterization or manual font sheet processing.
 
 ---
 
-## 6. Implementation Blueprints
+## 6. Speculative Workload Comparison Summary
 
-### 6.1 Real-Time Data Streaming Protocol (IPC / Sockets)
+The following table summarizes how much work can be pushed directly to the GPU vs. what must remain on the CPU for each rendering option:
+
+| Framework | GPU Workload | CPU Workload | Primary GPU Tasks | Primary CPU Tasks |
+| :--- | :--- | :--- | :--- | :--- |
+| **Matplotlib (Current)** | **0%** (Agg Backend) | **100%** | None (All CPU software rasterization) | Curve math, line plotting, text rendering, rasterization, frame array copying |
+| **Raylib** | **approx. 85%** | **approx. 15%** | Rasterization, line draw, alpha blending, text atlas, offscreen FBO compositing | Linear layout/axis projection, VRAM-to-RAM pixel extraction |
+| **SDL2 + NanoVG** | **approx. 75%** | **approx. 25%** | Path fill rasterization, anti-aliasing shaders, texture composition | Vector path tessellation (calculating triangle meshes from curves), VRAM-to-RAM copies |
+| **Pure OpenGL** | **approx. 95%** | **approx. 5%** | Vertex projection, coordinate scaling, line drawing, multi-panel frame composition | Stream buffer binding, GPU draw triggers, pixel extraction |
+
+---
+
+## 7. Implementation Blueprints
+
+### 7.1 Real-Time Data Streaming Protocol (IPC / Sockets)
 For real-time decoupling between the DSP processing code (`analyze~` C external or `analyze_files.py` analysis worker) and the visualizer, a lightweight ring-buffer or socket-based serialization protocol can be used.
 
 Using **JSON-over-TCP** (similar to `shared/visualize.c` and `visualizer.py` inside this repository) or a **binary UDP/Shared Memory** payload:
@@ -149,7 +172,7 @@ typedef struct {
 * **Max MSP Mode:** `analyze~` writes this binary structure directly into a thread-safe lock-free ring buffer (SPSC), and a dedicated GUI thread or local WebSocket server reads it to update the display.
 * **Python Mode:** The `cumulative_transience` Cython extension pumps these structures directly to python's memory, or writes to a subprocess stdin.
 
-### 6.2 Ultra-Fast Headless Video Generation (FFmpeg Pipe)
+### 7.2 Ultra-Fast Headless Video Generation (FFmpeg Pipe)
 Instead of Matplotlib rendering frame-by-frame and utilizing costly disk writes or complex API wrappers, the visualizer runs offscreen.
 
 Using Python with Raylib/OpenGL bindings:
@@ -177,18 +200,18 @@ pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 for frame_data in analysis_results:
     pr.begin_texture_mode(target)
     pr.clear_background(pr.BLACK)
-
+    
     # Fast GPU Drawing
     draw_waveform_grid(frame_data)
     draw_accumulated_buffer(frame_data.accumulated_buffer)
     draw_qualifiers_and_metrics(frame_data)
-
+    
     pr.end_texture_mode()
-
+    
     # Retrieve raw pixel bytes from GPU VRAM directly to RAM
     img = pr.load_image_from_texture(target.texture)
     pixels = pr.export_image_to_memory(img, ".raw", 4) # RGBA raw bytes
-
+    
     # Pipe to FFmpeg
     pipe.stdin.write(pixels)
     pr.unload_image(img)
@@ -199,7 +222,7 @@ pipe.wait()
 
 **Performance Estimate:** Matplotlib is bottlenecked at around ~15–30 FPS. A Raylib-based offscreen pipeline can easily render and pipe 1080p frames at **300–600 FPS**, turning a 5-minute video generation from a multi-minute chore into an instantaneous 5-second process.
 
-### 6.3 Integrating with the `analyze~` Max MSP External
+### 7.3 Integrating with the `analyze~` Max MSP External
 To bring real-time visual monitoring to the Max external, two distinct modular integration approaches are viable:
 
 #### Approach A: Dedicated IPC External Window (Modular Executable)
@@ -212,19 +235,6 @@ When `analyze~` receives a `@visualize 1` attribute, it launches a tiny companio
 If a separate window is undesirable and the visualizer must live directly inside the Max patcher:
 * **JGraphics API:** Max's standard UI objects utilize `jgraphics` (a 2D vector drawing API wrapping Cairo). While faster than Matplotlib, it is still CPU-bound and can lag with huge datasets.
 * **OpenGL Texture Sharing:** `analyze~` can expose a texture index or bind directly to a `jit.gl.texture` object. Using standard OpenGL Framebuffers, the C-core of `cumulative_transience` writes the visual representation into an OpenGL texture in a separate thread and binds it to a standard jitter GL context.
-
----
-
-## 7. Speculative Comparison Matrix
-
-| Metric | Matplotlib (Current) | Raylib (OpenGL C/Python) | SDL2 + NanoVG | Pure OpenGL |
-| :--- | :--- | :--- | :--- | :--- |
-| **Render Engine** | CPU Agg Vector | GPU OpenGL 3.3 | GPU Canvas-API | Raw GL Shaders |
-| **Real-time Performance** | Poor (<30 FPS CPU) | Extreme (500+ FPS) | High (300+ FPS) | Extreme (1000+ FPS) |
-| **Batch Video Speedup** | baseline (1x) | **15x - 30x speedup** | **12x - 25x speedup** | **20x - 40x speedup** |
-| **Max MSP Safety** | Non-viable (blocking) | Excellent (IPC Mode) | Excellent (IPC Mode) | Moderate (context lock) |
-| **Development Overhead**| Minimal (Built-in) | Low-Medium (C/Python) | Medium | High (No text/grid support) |
-| **Binary Size** | Massive (Heavy Python) | ~1.2 MB standalone | ~2.5 MB (SDL2 deps) | **<100 KB** |
 
 ---
 
