@@ -165,7 +165,7 @@ def generate_video_raylib(audio_path, data):
             output_video
         ])
 
-        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+        pipe = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         duration = times[-1]
         fps = 30
@@ -178,7 +178,7 @@ def generate_video_raylib(audio_path, data):
         active_buffer_peaks = []
         last_frame_processed = -1
 
-        pbar = tqdm(total=len(frame_indices), desc="Rendering Video (Raylib)", unit="frame")
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video (Raylib)", unit="frame", dynamic_ncols=True, ascii=os.name == 'nt')
 
         for v_idx in range(len(frame_indices)):
             frame = frame_indices[v_idx]
@@ -541,7 +541,7 @@ def generate_video_matplotlib(audio_path, data):
             extra_args.extend(['-preset', 'ultrafast'])
 
         print(f"Using H.264 encoder: {codec} with args: {' '.join(extra_args)}")
-        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame"); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
+        pbar = tqdm(total=len(frame_indices), desc="Rendering Video", unit="frame", dynamic_ncols=True, ascii=os.name == 'nt'); writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
         fig.tight_layout(pad=1.5)
         try:
             ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
@@ -553,7 +553,7 @@ def generate_video_matplotlib(audio_path, data):
                 _best_encoder = "libx264"
                 codec = "libx264"
                 extra_args = ['-pix_fmt', 'yuv420p', '-preset', 'ultrafast']
-                pbar = tqdm(total=len(frame_indices), desc="Rendering Video (CPU Fallback)", unit="frame")
+                pbar = tqdm(total=len(frame_indices), desc="Rendering Video (CPU Fallback)", unit="frame", dynamic_ncols=True, ascii=os.name == 'nt')
                 writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Transient Analysis Tool'), bitrate=2000, codec=codec, extra_args=extra_args)
                 ani.save(temp_video_path, writer=writer, progress_callback=lambda i, n: pbar.update(1))
             else:

@@ -231,7 +231,20 @@ def draw_renderer(W, H, current_time, frame_data):
                     draw_text_safe(f"{score:+.2f}", pk_x - 10, float_y, 14, clr)
 
     # Overlays in top-left
-    score_avg = frame_data.get('rating', 0.0)
+    valid_peaks = [p for p in frame_data.get('peaks', []) if p.get('time', 0.0) <= current_time]
+    if valid_peaks:
+        latest_p_idx = max(p.get('p_idx', 0) for p in valid_peaks)
+        window_peaks = [
+            p for p in valid_peaks
+            if -45.0 <= float(p.get('p_idx', 0) - latest_p_idx) <= 1.0
+        ]
+        if window_peaks:
+            score_avg = sum(p.get('total_score', 0.0) for p in window_peaks) / len(window_peaks)
+        else:
+            score_avg = 0.0
+    else:
+        score_avg = 0.0
+
     rating_val = frame_data.get('overall_rating', 0.0)
     score_clr = get_score_color(score_avg, min_score, max_score)
 
