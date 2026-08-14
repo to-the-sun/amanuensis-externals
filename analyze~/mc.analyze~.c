@@ -181,7 +181,7 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
     if (ac && av) {
         long prev = x->visualize_enabled;
         x->visualize_enabled = atom_getlong(av);
-        if (x->visualize_enabled && !prev) {
+        if (x->visualize_enabled && !prev && x->analyzers_count > 0) {
             launch_visualizers(x);
         }
     }
