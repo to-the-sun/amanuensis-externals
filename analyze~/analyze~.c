@@ -46,6 +46,7 @@ typedef struct _analyze {
     long weighted_bar;
     double tolerance;
     long visualize_enabled;
+    int viz_port;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -116,10 +117,14 @@ void get_object_directory(char *dir_out, size_t max_len) {
 }
 
 static void launch_visualizer(t_analyze *x) {
+    if (x->viz_port == 0) {
+        x->viz_port = visualize_allocate_port(9001);
+    }
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
     char cmd[MAX_PATH_CHARS * 2];
-    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\"", dir);
+    const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\"", dir, x->viz_port, grp);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
     STARTUPINFOA si;
@@ -131,7 +136,7 @@ static void launch_visualizer(t_analyze *x) {
     if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        object_post((t_object *)x, "analyze~: Launched companion visualizer successfully.");
+        object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);
     } else {
         object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
     }
@@ -224,6 +229,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->tolerance = 29.0;
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
+        x->viz_port = 0;
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         visualize_init();
@@ -282,6 +288,10 @@ void analyze_free(t_analyze* x) {
     free(x->audio_buffer);
     free(x->clock_buffer);
     critical_free(x->lock);
+
+    if (x->viz_port > 0) {
+        visualize_close_port(x->viz_port);
+    }
 
     visualize_cleanup();
 }
@@ -404,6 +414,10 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
         x->last_analysis_frame = 0;
     }
 
+    if (x->visualize_enabled) {
+        launch_visualizer(x);
+    }
+
     dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)analyze_perform64, 0, NULL);
 }
 
@@ -444,9 +458,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     int ms_samples = (int)(x->sample_rate * 0.001);
 
     int hops_processed = 0;
-    // We process all hops that have accumulated since last_analysis_frame
     while (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
-        // Capture current state for consistent indexing within this hop
         long long cur_samples = x->current_sample_count;
         int cur_write_ptr = x->audio_buffer_write_ptr;
 
@@ -458,8 +470,6 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
         if (!hop_audio) break;
 
-        // Calculate read pointer relative to current write pointer
-        // We need the data that was at [hop_start_samples, target_analysis_frame]
         long long samples_ago = x->current_sample_count - hop_start_samples;
         int read_ptr = (int)((x->audio_buffer_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
 
@@ -531,7 +541,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)analyze_output_metrics, NULL, 5, out_args);
 
-            if (x->visualize_enabled) {
+            if (x->visualize_enabled && x->viz_port > 0) {
                 char *json_buf = (char *)malloc(131072);
                 if (json_buf) {
                     char *ptr = json_buf;
@@ -539,8 +549,9 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     int n;
 
                     double p_time = (double)target_analysis_frame / x->sample_rate;
+                    const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
 
-                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"time\":%.4f,", p_time);
+                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"group\":\"%s\",\"time\":%.4f,", grp, p_time);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                     double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
@@ -640,7 +651,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     n = snprintf(ptr, remaining, "]}");
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
-                    visualize(x, json_buf);
+                    visualize_to_port(x, x->viz_port, "analyze", json_buf);
                     free(json_buf);
                 }
             }
