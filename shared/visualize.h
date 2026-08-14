@@ -20,4 +20,7 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
 // Get the port number associated with the object's visualization target
 int visualize_get_port(void *x);
 
+// Unregister an object's socket/port mapping when it is freed
+void visualize_unregister_object(void *x);
+
 #endif // VISUALIZE_H

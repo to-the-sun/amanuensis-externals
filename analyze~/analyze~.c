@@ -290,6 +290,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
 void analyze_free(t_analyze* x) {
     dsp_free((t_pxobject*)x);
+    visualize_unregister_object(x);
 
     critical_enter(x->lock);
     x->invalidated = 1;

@@ -34,14 +34,16 @@ static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static int ref_count = 0;
 
-typedef struct _analyze_group_socket {
+typedef struct _analyze_instance_socket {
+    void *x;
     t_symbol *group_name;
+    int instance_index;
     int port;
     t_viz_socket vs;
-    struct _analyze_group_socket *next;
-} t_analyze_group_socket;
+    struct _analyze_instance_socket *next;
+} t_analyze_instance_socket;
 
-static t_analyze_group_socket *g_analyze_group_sockets = NULL;
+static t_analyze_instance_socket *g_analyze_instance_sockets = NULL;
 static t_systhread_mutex g_analyze_sockets_lock = NULL;
 
 static t_systhread viz_thread = NULL;
@@ -77,15 +79,31 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
         }
 
         systhread_mutex_lock(g_analyze_sockets_lock);
-        t_analyze_group_socket *curr = g_analyze_group_sockets;
+        t_analyze_instance_socket *curr = g_analyze_instance_sockets;
         while (curr) {
-            if (curr->group_name == group_name) {
+            if (curr->x == x) {
                 break;
             }
             curr = curr->next;
         }
 
         if (!curr) {
+            // Find the first unused instance_index for this group
+            int idx = 0;
+            while (1) {
+                int used = 0;
+                t_analyze_instance_socket *chk = g_analyze_instance_sockets;
+                while (chk) {
+                    if (chk->group_name == group_name && chk->instance_index == idx) {
+                        used = 1;
+                        break;
+                    }
+                    chk = chk->next;
+                }
+                if (!used) break;
+                idx++;
+            }
+
             int port = 9001;
             if (group_name && group_name != gensym("")) {
                 unsigned int hash = 5381;
@@ -95,11 +113,12 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
                 }
                 port = 9001 + (hash % 100);
             }
+            port += idx; // Coordinated index-based port assignment!
 
-            // Ensure uniqueness in our list
+            // Ensure uniqueness across ALL active instances (just in case)
             int attempts = 0;
             while (attempts < 100) {
-                t_analyze_group_socket *chk = g_analyze_group_sockets;
+                t_analyze_instance_socket *chk = g_analyze_instance_sockets;
                 int conflict = 0;
                 while (chk) {
                     if (chk->port == port) {
@@ -114,12 +133,14 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
                 attempts++;
             }
 
-            curr = (t_analyze_group_socket *)malloc(sizeof(t_analyze_group_socket));
+            curr = (t_analyze_instance_socket *)malloc(sizeof(t_analyze_instance_socket));
+            curr->x = x;
             curr->group_name = group_name;
+            curr->instance_index = idx;
             curr->port = port;
             viz_socket_init(&curr->vs, port);
-            curr->next = g_analyze_group_sockets;
-            g_analyze_group_sockets = curr;
+            curr->next = g_analyze_instance_sockets;
+            g_analyze_instance_sockets = curr;
         }
         systhread_mutex_unlock(g_analyze_sockets_lock);
 
@@ -192,9 +213,9 @@ void visualize_cleanup() {
         systhread_mutex_free(weaver_viz.mutex);
 
         systhread_mutex_lock(g_analyze_sockets_lock);
-        t_analyze_group_socket *curr = g_analyze_group_sockets;
+        t_analyze_instance_socket *curr = g_analyze_instance_sockets;
         while (curr) {
-            t_analyze_group_socket *next = curr->next;
+            t_analyze_instance_socket *next = curr->next;
             systhread_mutex_lock(curr->vs.mutex);
             if (curr->vs.sock != INVALID_SOCKET) {
                 closesocket(curr->vs.sock);
@@ -204,7 +225,7 @@ void visualize_cleanup() {
             free(curr);
             curr = next;
         }
-        g_analyze_group_sockets = NULL;
+        g_analyze_instance_sockets = NULL;
         systhread_mutex_unlock(g_analyze_sockets_lock);
         systhread_mutex_free(g_analyze_sockets_lock);
         g_analyze_sockets_lock = NULL;
@@ -603,14 +624,11 @@ int visualize_get_port(void *x) {
     if (!x) return 0;
     t_symbol *classname = object_classname(x);
     if (classname == gensym("analyze~")) {
-        t_symbol *group_name = (t_symbol *)object_attr_getsym(x, gensym("group"));
-        if (!group_name) group_name = gensym("");
-
         int port = 0;
         systhread_mutex_lock(g_analyze_sockets_lock);
-        t_analyze_group_socket *curr = g_analyze_group_sockets;
+        t_analyze_instance_socket *curr = g_analyze_instance_sockets;
         while (curr) {
-            if (curr->group_name == group_name) {
+            if (curr->x == x) {
                 port = curr->port;
                 break;
             }
@@ -625,9 +643,9 @@ int visualize_get_port(void *x) {
         get_socket_for_object(x, &type);
 
         systhread_mutex_lock(g_analyze_sockets_lock);
-        curr = g_analyze_group_sockets;
+        curr = g_analyze_instance_sockets;
         while (curr) {
-            if (curr->group_name == group_name) {
+            if (curr->x == x) {
                 port = curr->port;
                 break;
             }
@@ -641,6 +659,38 @@ int visualize_get_port(void *x) {
         return PORT_WEAVER;
     }
     return 0;
+}
+
+void visualize_unregister_object(void *x) {
+    if (!x || !g_analyze_sockets_lock) return;
+
+    systhread_mutex_lock(g_analyze_sockets_lock);
+    t_analyze_instance_socket *curr = g_analyze_instance_sockets;
+    t_analyze_instance_socket *prev = NULL;
+    while (curr) {
+        if (curr->x == x) {
+            if (prev) {
+                prev->next = curr->next;
+            } else {
+                g_analyze_instance_sockets = curr->next;
+            }
+
+            // Clean up the socket
+            systhread_mutex_lock(curr->vs.mutex);
+            if (curr->vs.sock != INVALID_SOCKET) {
+                closesocket(curr->vs.sock);
+                curr->vs.sock = INVALID_SOCKET;
+            }
+            systhread_mutex_unlock(curr->vs.mutex);
+            systhread_mutex_free(curr->vs.mutex);
+
+            free(curr);
+            break;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    systhread_mutex_unlock(g_analyze_sockets_lock);
 }
 
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {
