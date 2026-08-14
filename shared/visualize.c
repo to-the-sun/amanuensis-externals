@@ -51,12 +51,14 @@ typedef struct {
     int ports[MAX_DYNAMIC_SOCKETS];
 } t_shared_port_map;
 
+#if defined(_WIN32)
 static HANDLE g_hSharedMap = NULL;
 static t_shared_port_map *g_pSharedPortMap = NULL;
 static HANDLE g_hSharedMutex = NULL;
+#endif
 
 static void shared_port_map_init(void) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (!g_hSharedMutex) {
         g_hSharedMutex = CreateMutexA(NULL, FALSE, SHARED_MUTEX_NAME);
     }
@@ -82,7 +84,7 @@ static void shared_port_map_init(void) {
 }
 
 static void shared_port_map_lock(void) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (g_hSharedMutex) {
         WaitForSingleObject(g_hSharedMutex, INFINITE);
     }
@@ -90,7 +92,7 @@ static void shared_port_map_lock(void) {
 }
 
 static void shared_port_map_unlock(void) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (g_hSharedMutex) {
         ReleaseMutex(g_hSharedMutex);
     }
@@ -98,7 +100,7 @@ static void shared_port_map_unlock(void) {
 }
 
 static int is_port_in_shared_map(int port) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (g_pSharedPortMap) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == port) {
@@ -111,7 +113,7 @@ static int is_port_in_shared_map(int port) {
 }
 
 static void add_port_to_shared_map(int port) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (g_pSharedPortMap) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == 0) {
@@ -124,7 +126,7 @@ static void add_port_to_shared_map(int port) {
 }
 
 static void remove_port_from_shared_map(int port) {
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
     if (g_pSharedPortMap) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == port) {
@@ -259,7 +261,7 @@ void visualize_cleanup() {
         systhread_mutex_unlock(analyze_viz.mutex);
         systhread_mutex_free(analyze_viz.mutex);
 
-#if defined(WIN_VERSION) || defined(_WIN32)
+#if defined(_WIN32)
         if (g_pSharedPortMap) {
             UnmapViewOfFile(g_pSharedPortMap);
             g_pSharedPortMap = NULL;
@@ -437,7 +439,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
             viz_log(x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
         }
         DWORD now = GetTickCount();
-        if (now - vs->last_connect_attempt < 2000) {
+        if (now - vs->last_connect_attempt < 250) {
             if (x) {
                 viz_log(x, "visualize: throttling connection attempt (too frequent)");
             }
@@ -479,7 +481,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 fd_set write_fds, except_fds;
                 struct timeval tv;
                 tv.tv_sec = 0;
-                tv.tv_usec = 50000; // 50ms timeout
+                tv.tv_usec = 200000; // 200ms timeout
 
                 FD_ZERO(&write_fds);
                 FD_ZERO(&except_fds);

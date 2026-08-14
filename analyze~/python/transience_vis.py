@@ -123,10 +123,18 @@ def process_packet(line):
 def tcp_server():
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server_sock.bind(("", TCP_PORT))
-    except Exception as e:
-        print(f"ERROR: Failed to bind to port {TCP_PORT}: {e}", file=sys.stderr)
+    bound = False
+    last_err = None
+    for attempt in range(20):
+        try:
+            server_sock.bind(("", TCP_PORT))
+            bound = True
+            break
+        except Exception as e:
+            last_err = e
+            time.sleep(0.1)
+    if not bound:
+        print(f"ERROR: Failed to bind to port {TCP_PORT} after 20 attempts: {last_err}", file=sys.stderr)
         sys.exit(1)
     server_sock.listen(5)
     print(f"Cumulative Transience Companion Visualizer: Listening on port {TCP_PORT}", flush=True)

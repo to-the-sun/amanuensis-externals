@@ -150,6 +150,31 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
+static const char *get_object_scripting_name(void *x, char *buf, size_t buf_size) {
+    if (!x || !buf || buf_size == 0) return "";
+    buf[0] = '\0';
+
+    t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+    if (s_name && s_name != gensym("")) {
+        strncpy(buf, s_name->s_name, buf_size - 1);
+        buf[buf_size - 1] = '\0';
+        return buf;
+    }
+
+    t_object *patcher = NULL;
+    object_obex_lookup(x, gensym("#P"), &patcher);
+    if (patcher) {
+        t_symbol *p_name = (t_symbol *)object_attr_getsym(patcher, gensym("name"));
+        if (p_name && p_name != gensym("")) {
+            strncpy(buf, p_name->s_name, buf_size - 1);
+            buf[buf_size - 1] = '\0';
+            return buf;
+        }
+    }
+
+    return "";
+}
+
 static void launch_visualizer(t_analyze *x) {
     if (x->viz_port == 0) {
         x->viz_port = visualize_allocate_port(9001);
@@ -158,8 +183,8 @@ static void launch_visualizer(t_analyze *x) {
         get_object_directory(dir, sizeof(dir));
         char cmd[MAX_PATH_CHARS * 2];
         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+        char scripting_name[256];
+        get_object_scripting_name(x, scripting_name, sizeof(scripting_name));
         snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\"", dir, x->viz_port, grp, scripting_name);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
@@ -576,8 +601,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
                     double p_time = (double)target_analysis_frame / x->sample_rate;
                     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-                    t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-                    const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+                    char scripting_name[256];
+                    get_object_scripting_name(x, scripting_name, sizeof(scripting_name));
 
                     n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"time\":%.4f,", grp, scripting_name, p_time);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
