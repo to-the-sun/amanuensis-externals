@@ -2,6 +2,7 @@ import pyray as pr
 import math
 import bisect
 import numpy as np
+import os
 
 # Color constants
 COLOR_BG = pr.Color(18, 18, 22, 255)       # Deep charcoal background
@@ -32,6 +33,53 @@ COLOR_MIDPOINT = pr.Color(128, 128, 128, 255)    # Gray
 
 BAND_LABELS = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
 SNAP_LABELS = ['Sub', 'Bass', 'Mid', 'Hi']
+
+_FONT_CACHE = None
+
+def get_font():
+    global _FONT_CACHE
+    if _FONT_CACHE is not None:
+        return _FONT_CACHE
+
+    font_candidates = [
+        os.path.join(os.path.dirname(__file__), "arial.ttf"),
+        os.path.join(os.path.dirname(__file__), "Arial.ttf"),
+        os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf"),
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+
+    try:
+        import matplotlib.font_manager as fm
+        import matplotlib
+        fpath = fm.findfont('Arial')
+        if fpath and os.path.exists(fpath):
+            font_candidates.insert(0, fpath)
+        fpath_default = fm.findfont(fm.FontProperties(family=matplotlib.rcParams.get('font.sans-serif', ['sans-serif'])))
+        if fpath_default and os.path.exists(fpath_default):
+            font_candidates.append(fpath_default)
+    except Exception:
+        pass
+
+    for path in font_candidates:
+        if path and os.path.exists(path):
+            try:
+                f = pr.load_font_ex(path, 48, None, 0)
+                if f and hasattr(f, 'baseSize') and f.baseSize > 0:
+                    pr.set_texture_filter(f.texture, pr.TEXTURE_FILTER_BILINEAR)
+                    _FONT_CACHE = f
+                    return _FONT_CACHE
+            except Exception:
+                pass
+
+    _FONT_CACHE = pr.get_font_default()
+    return _FONT_CACHE
 
 def hex_to_color(hex_str, alpha=255):
     hex_str = hex_str.lstrip('#')
@@ -75,7 +123,12 @@ def draw_dashed_line(x1, y1, x2, y2, color, thickness=1, dash_len=5, gap_len=5):
 
 def draw_text_safe(text, x, y, size, color):
     if text is None: return
-    pr.draw_text(str(text), int(x), int(y), int(size), color)
+    font = get_font()
+    if font and hasattr(font, 'baseSize') and font.baseSize > 0:
+        pos = pr.Vector2(float(x), float(y))
+        pr.draw_text_ex(font, str(text), pos, float(size), 1.0, color)
+    else:
+        pr.draw_text(str(text), int(x), int(y), int(size), color)
 
 def draw_renderer(W, H, current_time, frame_data):
     """
@@ -315,7 +368,7 @@ def draw_renderer(W, H, current_time, frame_data):
     # -------------------------------------------------------------
     # 2. MIDDLE PANEL: 39ms Rolling Window Snapshot (Lanes)
     # -------------------------------------------------------------
-    graph_h_mid = H_mid - int(H_mid * 0.15)
+    graph_h_mid = H_mid - int(H_mid * 0.20)
     lane_h = graph_h_mid / 4.0
 
     x_min_s = -45.0
@@ -333,6 +386,12 @@ def draw_renderer(W, H, current_time, frame_data):
         draw_text_safe(SNAP_LABELS[b], margin_left - 45, ly + int(lane_h * 0.2), 12, pr.WHITE)
 
     pr.draw_line(margin_left, Y_mid + graph_h_mid, margin_left + graph_w, Y_mid + graph_h_mid, COLOR_GRID)
+
+    # X-axis ticks, vertical grid lines, and millisecond legend labels (-45ms to 0ms)
+    for ms_val in range(-45, 1, 5):
+        bx = margin_left + int(graph_w * (ms_val - x_min_s) / x_span_s)
+        pr.draw_line(bx, Y_mid, bx, Y_mid + graph_h_mid, COLOR_GRID)
+        draw_text_safe(f"{ms_val}ms" if ms_val != 0 else "0ms", bx - 12, Y_mid + graph_h_mid + 4, 11, COLOR_TEXT_MUTED)
 
     valid_peaks = [p for p in peaks if p.get('time', 0.0) <= current_time]
     if valid_peaks:
