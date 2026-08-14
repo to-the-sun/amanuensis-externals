@@ -44,6 +44,98 @@ static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_dynamic_socket dynamic_sockets[MAX_DYNAMIC_SOCKETS];
 static t_systhread_mutex dynamic_sockets_mutex = NULL;
 
+#define SHARED_PORT_MAP_NAME "Local\\MaxAnalyzeVizSharedPorts"
+#define SHARED_MUTEX_NAME    "Local\\MaxAnalyzeVizPortMutex"
+
+typedef struct {
+    int ports[MAX_DYNAMIC_SOCKETS];
+} t_shared_port_map;
+
+static HANDLE g_hSharedMap = NULL;
+static t_shared_port_map *g_pSharedPortMap = NULL;
+static HANDLE g_hSharedMutex = NULL;
+
+static void shared_port_map_init(void) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (!g_hSharedMutex) {
+        g_hSharedMutex = CreateMutexA(NULL, FALSE, SHARED_MUTEX_NAME);
+    }
+    if (!g_hSharedMap) {
+        g_hSharedMap = CreateFileMappingA(
+            INVALID_HANDLE_VALUE,
+            NULL,
+            PAGE_READWRITE,
+            0,
+            sizeof(t_shared_port_map),
+            SHARED_PORT_MAP_NAME
+        );
+        if (g_hSharedMap) {
+            g_pSharedPortMap = (t_shared_port_map *)MapViewOfFile(
+                g_hSharedMap,
+                FILE_MAP_ALL_ACCESS,
+                0, 0,
+                sizeof(t_shared_port_map)
+            );
+        }
+    }
+#endif
+}
+
+static void shared_port_map_lock(void) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_hSharedMutex) {
+        WaitForSingleObject(g_hSharedMutex, INFINITE);
+    }
+#endif
+}
+
+static void shared_port_map_unlock(void) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_hSharedMutex) {
+        ReleaseMutex(g_hSharedMutex);
+    }
+#endif
+}
+
+static int is_port_in_shared_map(int port) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_pSharedPortMap) {
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (g_pSharedPortMap->ports[i] == port) {
+                return 1;
+            }
+        }
+    }
+#endif
+    return 0;
+}
+
+static void add_port_to_shared_map(int port) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_pSharedPortMap) {
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (g_pSharedPortMap->ports[i] == 0) {
+                g_pSharedPortMap->ports[i] = port;
+                break;
+            }
+        }
+    }
+#endif
+}
+
+static void remove_port_from_shared_map(int port) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_pSharedPortMap) {
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (g_pSharedPortMap->ports[i] == port) {
+                g_pSharedPortMap->ports[i] = 0;
+                break;
+            }
+        }
+    }
+#endif
+}
+
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -96,6 +188,8 @@ int visualize_init() {
         viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
         viz_socket_init(&weaver_viz, PORT_WEAVER);
         viz_socket_init(&analyze_viz, PORT_ANALYZE);
+
+        shared_port_map_init();
 
         systhread_mutex_new(&dynamic_sockets_mutex, 0);
         memset(dynamic_sockets, 0, sizeof(dynamic_sockets));
@@ -165,6 +259,21 @@ void visualize_cleanup() {
         systhread_mutex_unlock(analyze_viz.mutex);
         systhread_mutex_free(analyze_viz.mutex);
 
+#if defined(WIN_VERSION) || defined(_WIN32)
+        if (g_pSharedPortMap) {
+            UnmapViewOfFile(g_pSharedPortMap);
+            g_pSharedPortMap = NULL;
+        }
+        if (g_hSharedMap) {
+            CloseHandle(g_hSharedMap);
+            g_hSharedMap = NULL;
+        }
+        if (g_hSharedMutex) {
+            CloseHandle(g_hSharedMutex);
+            g_hSharedMutex = NULL;
+        }
+#endif
+
         WSACleanup();
         ref_count = 0;
     }
@@ -176,6 +285,8 @@ int visualize_allocate_port(int start_port) {
         return start_port;
     }
 
+    shared_port_map_init();
+    shared_port_map_lock();
     systhread_mutex_lock(dynamic_sockets_mutex);
 
     for (int port = start_port; port < start_port + 500; port++) {
@@ -186,7 +297,7 @@ int visualize_allocate_port(int start_port) {
                 break;
             }
         }
-        if (already_used) continue;
+        if (already_used || is_port_in_shared_map(port)) continue;
 
         SOCKET test_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (test_sock != INVALID_SOCKET) {
@@ -205,7 +316,9 @@ int visualize_allocate_port(int start_port) {
                         dynamic_sockets[i].port = port;
                         dynamic_sockets[i].in_use = 1;
                         viz_socket_init(&dynamic_sockets[i].vs, port);
+                        add_port_to_shared_map(port);
                         systhread_mutex_unlock(dynamic_sockets_mutex);
+                        shared_port_map_unlock();
                         return port;
                     }
                 }
@@ -214,12 +327,14 @@ int visualize_allocate_port(int start_port) {
     }
 
     systhread_mutex_unlock(dynamic_sockets_mutex);
+    shared_port_map_unlock();
     return start_port;
 }
 
 void visualize_close_port(int port) {
     if (port <= 0 || !dynamic_sockets_mutex) return;
 
+    shared_port_map_lock();
     systhread_mutex_lock(dynamic_sockets_mutex);
     for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
         if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
@@ -233,10 +348,12 @@ void visualize_close_port(int port) {
 
             dynamic_sockets[i].in_use = 0;
             dynamic_sockets[i].port = 0;
+            remove_port_from_shared_map(port);
             break;
         }
     }
     systhread_mutex_unlock(dynamic_sockets_mutex);
+    shared_port_map_unlock();
 }
 
 static const char *get_event_name_from_message(const char *message) {
