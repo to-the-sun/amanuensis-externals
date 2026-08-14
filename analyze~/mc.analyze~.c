@@ -136,31 +136,44 @@ static void launch_visualizers(t_mc_analyze *x) {
     get_object_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
 
-    for (long ch = 0; ch < x->num_audio_chans; ch++) {
-        if (ch >= x->allocated_viz_ports) break;
+    long n_chans = x->num_audio_chans;
+    if (n_chans <= 0) n_chans = 1;
 
+    if (x->allocated_viz_ports < n_chans) {
+        int *new_ports = (int*)calloc(n_chans, sizeof(int));
+        if (x->viz_ports) {
+            for (long i = 0; i < x->allocated_viz_ports; i++) {
+                new_ports[i] = x->viz_ports[i];
+            }
+            free(x->viz_ports);
+        }
+        x->viz_ports = new_ports;
+        x->allocated_viz_ports = n_chans;
+    }
+
+    for (long ch = 0; ch < n_chans; ch++) {
         if (x->viz_ports[ch] == 0) {
             x->viz_ports[ch] = visualize_allocate_port(9001);
-        }
 
-        char cmd[MAX_PATH_CHARS * 2];
-        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld", dir, x->viz_ports[ch], grp, ch);
+            char cmd[MAX_PATH_CHARS * 2];
+            snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld", dir, x->viz_ports[ch], grp, ch);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-        STARTUPINFOA si;
-        PROCESS_INFORMATION pi;
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        ZeroMemory(&pi, sizeof(pi));
+            STARTUPINFOA si;
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+            ZeroMemory(&pi, sizeof(pi));
 
-        if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
-        } else {
-            object_error((t_object *)x, "mc.analyze~: Failed to launch visualizer for Ch %ld: %s", ch, cmd);
-        }
+            if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
+            } else {
+                object_error((t_object *)x, "mc.analyze~: Failed to launch visualizer for Ch %ld: %s", ch, cmd);
+            }
 #endif
+        }
     }
 }
 
@@ -557,6 +570,10 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
             analyzer_set_sample_rate(x->analyzers[i], (int)samplerate);
             x->analyzers[i]->tolerance = x->tolerance;
         }
+    }
+
+    if (x->visualize_enabled) {
+        launch_visualizers(x);
     }
 
     critical_exit(x->lock);

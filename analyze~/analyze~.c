@@ -414,6 +414,10 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
         x->last_analysis_frame = 0;
     }
 
+    if (x->visualize_enabled) {
+        launch_visualizer(x);
+    }
+
     dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)analyze_perform64, 0, NULL);
 }
 

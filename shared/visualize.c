@@ -350,7 +350,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
             int err = WSAGetLastError();
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
                 if (x) {
-                    object_error((t_object *)x, "visualize: TCP connect failed with error %d", err);
+                    viz_log(x, "visualize: TCP connect failed with error %d", err);
                 }
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
@@ -362,7 +362,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 fd_set write_fds, except_fds;
                 struct timeval tv;
                 tv.tv_sec = 0;
-                tv.tv_usec = 500000; // 500ms timeout
+                tv.tv_usec = 50000; // 50ms timeout
 
                 FD_ZERO(&write_fds);
                 FD_ZERO(&except_fds);
@@ -373,7 +373,7 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 if (sel_ret > 0) {
                     if (FD_ISSET(vs->sock, &except_fds)) {
                         if (x) {
-                            object_error((t_object *)x, "visualize: TCP handshake failed (exception set)");
+                            viz_log(x, "visualize: TCP handshake failed (exception set)");
                         }
                         closesocket(vs->sock);
                         vs->sock = INVALID_SOCKET;
@@ -382,13 +382,13 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                         int lon = sizeof(int);
                         if (getsockopt(vs->sock, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0) {
                             if (x) {
-                                object_error((t_object *)x, "visualize: getsockopt failed during handshake");
+                                viz_log(x, "visualize: getsockopt failed during handshake");
                             }
                             closesocket(vs->sock);
                             vs->sock = INVALID_SOCKET;
                         } else if (valopt != 0) {
                             if (x) {
-                                object_error((t_object *)x, "visualize: TCP handshake failed with socket error %d", valopt);
+                                viz_log(x, "visualize: TCP handshake failed with socket error %d", valopt);
                             }
                             closesocket(vs->sock);
                             vs->sock = INVALID_SOCKET;
@@ -399,11 +399,14 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                         }
                     }
                 } else if (sel_ret == 0) {
+                    if (x) {
+                        viz_log(x, "visualize: TCP handshake timed out (50ms)");
+                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 } else {
                     if (x) {
-                        object_error((t_object *)x, "visualize: select failed during TCP handshake");
+                        viz_log(x, "visualize: select failed during TCP handshake");
                     }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
