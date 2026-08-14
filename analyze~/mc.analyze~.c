@@ -22,11 +22,7 @@ typedef struct _shared_buffer_entry {
     SharedTransientBuffer* buffer;
     t_critical lock;
     int ref_count;
-    struct _shared_buffer_entry* next;
 } t_shared_buffer_entry;
-
-static t_shared_buffer_entry* g_shared_buffers = NULL;
-static t_critical g_shared_buffers_lock;
 
 typedef struct _mc_analyze {
     t_pxobject obj;
@@ -135,6 +131,8 @@ static void launch_visualizers(t_mc_analyze *x) {
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+    t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+    const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
 
     long n_chans = x->num_audio_chans;
     if (n_chans <= 0) n_chans = 1;
@@ -156,7 +154,7 @@ static void launch_visualizers(t_mc_analyze *x) {
             x->viz_ports[ch] = visualize_allocate_port(9001);
 
             char cmd[MAX_PATH_CHARS * 2];
-            snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld", dir, x->viz_ports[ch], grp, ch);
+            snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld --name \"%s\"", dir, x->viz_ports[ch], grp, ch, scripting_name);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
             STARTUPINFOA si;
@@ -192,8 +190,6 @@ static t_class* mc_analyze_class;
 
 void ext_main(void* r) {
     t_class* c = class_new("mc.analyze~", (method)mc_analyze_new, (method)mc_analyze_free, sizeof(t_mc_analyze), 0L, A_GIMME, 0);
-
-    critical_new(&g_shared_buffers_lock);
 
     CLASS_ATTR_LONG(c, "log", 0, t_mc_analyze, log_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
@@ -293,17 +289,12 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         }
 
         if (x->group_name && x->group_name != gensym("")) {
-            critical_enter(g_shared_buffers_lock);
-            t_shared_buffer_entry* curr = g_shared_buffers;
-            while (curr) {
-                if (curr->name == x->group_name) {
-                    curr->ref_count++;
-                    break;
-                }
-                curr = curr->next;
-            }
-            if (!curr) {
-                t_shared_buffer_entry* entry = (t_shared_buffer_entry*)malloc(sizeof(t_shared_buffer_entry));
+            t_symbol* ns = gensym("analyze_shared_buffers");
+            t_shared_buffer_entry* entry = (t_shared_buffer_entry*)object_findregistered(ns, x->group_name);
+            if (entry) {
+                entry->ref_count++;
+            } else {
+                entry = (t_shared_buffer_entry*)malloc(sizeof(t_shared_buffer_entry));
                 entry->name = x->group_name;
                 entry->buffer = (SharedTransientBuffer*)calloc(1, sizeof(SharedTransientBuffer));
                 entry->buffer->min_score_seen = DBL_MAX;
@@ -311,10 +302,8 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
                 entry->buffer->max_peak = 1.0;
                 critical_new(&entry->lock);
                 entry->ref_count = 1;
-                entry->next = g_shared_buffers;
-                g_shared_buffers = entry;
+                object_register(ns, x->group_name, entry);
             }
-            critical_exit(g_shared_buffers_lock);
         }
     }
     return x;
@@ -341,25 +330,17 @@ void mc_analyze_free(t_mc_analyze* x) {
     }
 
     if (x->group_name && x->group_name != gensym("")) {
-        critical_enter(g_shared_buffers_lock);
-        t_shared_buffer_entry* curr = g_shared_buffers;
-        t_shared_buffer_entry* prev = NULL;
-        while (curr) {
-            if (curr->name == x->group_name) {
-                curr->ref_count--;
-                if (curr->ref_count <= 0) {
-                    if (prev) prev->next = curr->next;
-                    else g_shared_buffers = curr->next;
-                    critical_free(curr->lock);
-                    free(curr->buffer);
-                    free(curr);
-                }
-                break;
+        t_symbol* ns = gensym("analyze_shared_buffers");
+        t_shared_buffer_entry* entry = (t_shared_buffer_entry*)object_findregistered(ns, x->group_name);
+        if (entry) {
+            entry->ref_count--;
+            if (entry->ref_count <= 0) {
+                object_unregister(entry);
+                critical_free(entry->lock);
+                free(entry->buffer);
+                free(entry);
             }
-            prev = curr;
-            curr = curr->next;
         }
-        critical_exit(g_shared_buffers_lock);
     }
 
     if (x->local_shared_buffer) {
@@ -548,17 +529,12 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
         t_critical shared_lock = NULL;
 
         if (x->group_name && x->group_name != gensym("")) {
-            critical_enter(g_shared_buffers_lock);
-            t_shared_buffer_entry* curr = g_shared_buffers;
-            while (curr) {
-                if (curr->name == x->group_name) {
-                    shared_buf = curr->buffer;
-                    shared_lock = curr->lock;
-                    break;
-                }
-                curr = curr->next;
+            t_symbol* ns = gensym("analyze_shared_buffers");
+            t_shared_buffer_entry* entry = (t_shared_buffer_entry*)object_findregistered(ns, x->group_name);
+            if (entry) {
+                shared_buf = entry->buffer;
+                shared_lock = entry->lock;
             }
-            critical_exit(g_shared_buffers_lock);
         } else {
             shared_buf = x->local_shared_buffer;
             shared_lock = x->local_shared_buffer_lock;
@@ -694,8 +670,10 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
 
                         double p_time = (double)target_analysis_frame / x->sample_rate;
                         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+                        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+                        const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
 
-                        n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"group\":\"%s\",\"channel\":%ld,\"time\":%.4f,", grp, ch, p_time);
+                        n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld,\"time\":%.4f,", grp, scripting_name, ch, p_time);
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                         double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
