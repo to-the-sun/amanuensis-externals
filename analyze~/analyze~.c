@@ -1,3 +1,7 @@
+#if defined(WIN_VERSION) || defined(_WIN32)
+#include <winsock2.h>
+#include <windows.h>
+#endif
 #include "ext.h"
 #include "ext_obex.h"
 #include "ext_critical.h"
@@ -6,7 +10,6 @@
 #include "cumulative_transience.h"
 #include "../shared/async_worker.h"
 #include "../shared/visualize.h"
-#include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,11 +118,56 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
+static int is_server_running_on_port(int port) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return 0;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
+
+    // Set to non-blocking to connect quickly
+    u_long mode = 1;
+    ioctlsocket(s, FIONBIO, &mode);
+
+    connect(s, (struct sockaddr *)&addr, sizeof(addr));
+
+    fd_set write_fds;
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000; // 100ms timeout
+
+    FD_ZERO(&write_fds);
+    FD_SET(s, &write_fds);
+
+    int ret = select((int)s + 1, NULL, &write_fds, NULL, &tv);
+    closesocket(s);
+
+    return (ret > 0);
+#else
+    return 0;
+#endif
+}
+
 static void launch_visualizer(t_analyze *x) {
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
     char cmd[MAX_PATH_CHARS * 2];
-    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\"", dir);
+
+    int port = visualize_get_port(x);
+    t_symbol *group_sym = x->group_name;
+    if (!group_sym) group_sym = gensym("");
+
+    if (is_server_running_on_port(port)) {
+        object_post((t_object *)x, "analyze~: Companion visualizer is already running on port %d, reusing it.", port);
+        return;
+    }
+
+    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\"",
+             dir, port, group_sym->s_name);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
     STARTUPINFOA si;
@@ -131,7 +179,7 @@ static void launch_visualizer(t_analyze *x) {
     if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        object_post((t_object *)x, "analyze~: Launched companion visualizer successfully.");
+        object_post((t_object *)x, "analyze~: Launched companion visualizer successfully on port %d for group '%s'.", port, group_sym->s_name);
     } else {
         object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
     }
@@ -540,7 +588,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
                     double p_time = (double)target_analysis_frame / x->sample_rate;
 
-                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"time\":%.4f,", p_time);
+                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"client_id\":\"%p\",\"event\":\"update\",\"time\":%.4f,", x, p_time);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                     double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;

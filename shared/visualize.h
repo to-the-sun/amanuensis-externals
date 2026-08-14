@@ -17,4 +17,7 @@ void visualize(void *x, const char *message);
 // Returns the number of bytes received, or -1 on error.
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size);
 
+// Get the port number associated with the object's visualization target
+int visualize_get_port(void *x);
+
 #endif // VISUALIZE_H
