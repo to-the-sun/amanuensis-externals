@@ -51,6 +51,10 @@ typedef struct _mc_analyze {
     long num_audio_chans;
     long num_clock_chans;
 
+    // Visualizer ports per channel
+    int* viz_ports;
+    long allocated_viz_ports;
+
     // Shared buffer for local channel accumulation (when no @group is specified)
     SharedTransientBuffer* local_shared_buffer;
     t_critical local_shared_buffer_lock;
@@ -102,7 +106,6 @@ long mc_analyze_inputchanged(t_mc_analyze* x, long index, long count);
 #define MAX_PATH_CHARS 1024
 #endif
 
-// We use the same get_object_directory from analyze~.c to find python path
 void get_object_directory(char *dir_out, size_t max_len) {
 #if defined(WIN_VERSION) || defined(_WIN32)
     HMODULE hModule = NULL;
@@ -128,27 +131,37 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
-static void launch_visualizer(t_mc_analyze *x) {
+static void launch_visualizers(t_mc_analyze *x) {
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
-    char cmd[MAX_PATH_CHARS * 2];
-    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\"", dir);
+    const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+
+    for (long ch = 0; ch < x->num_audio_chans; ch++) {
+        if (ch >= x->allocated_viz_ports) break;
+
+        if (x->viz_ports[ch] == 0) {
+            x->viz_ports[ch] = visualize_allocate_port(9001);
+        }
+
+        char cmd[MAX_PATH_CHARS * 2];
+        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld", dir, x->viz_ports[ch], grp, ch);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
 
-    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        object_post((t_object *)x, "mc.analyze~: Launched companion visualizer successfully.");
-    } else {
-        object_error((t_object *)x, "mc.analyze~: Failed to launch companion visualizer: %s", cmd);
-    }
+        if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
+        } else {
+            object_error((t_object *)x, "mc.analyze~: Failed to launch visualizer for Ch %ld: %s", ch, cmd);
+        }
 #endif
+    }
 }
 
 t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_atom *av) {
@@ -156,7 +169,7 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
         long prev = x->visualize_enabled;
         x->visualize_enabled = atom_getlong(av);
         if (x->visualize_enabled && !prev) {
-            launch_visualizer(x);
+            launch_visualizers(x);
         }
     }
     return MAX_ERR_NONE;
@@ -227,6 +240,8 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->group_name = gensym("");
         x->analyzers = NULL;
         x->analyzers_count = 0;
+        x->viz_ports = NULL;
+        x->allocated_viz_ports = 0;
         x->worker = async_worker_create();
 
         x->audio_buffers = NULL;
@@ -348,6 +363,15 @@ void mc_analyze_free(t_mc_analyze* x) {
         free(x->audio_buffers);
     }
     free(x->clock_buffer);
+
+    if (x->viz_ports) {
+        for (long i = 0; i < x->allocated_viz_ports; i++) {
+            if (x->viz_ports[i] > 0) {
+                visualize_close_port(x->viz_ports[i]);
+            }
+        }
+        free(x->viz_ports);
+    }
 
     critical_free(x->lock);
 
@@ -476,6 +500,19 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
         x->audio_buffer_write_ptr = 0;
         x->current_sample_count = 0;
         x->last_analysis_frame = 0;
+    }
+
+    if (x->allocated_viz_ports != num_audio_chans) {
+        if (x->viz_ports) {
+            for (long i = 0; i < x->allocated_viz_ports; i++) {
+                if (x->viz_ports[i] > 0) {
+                    visualize_close_port(x->viz_ports[i]);
+                }
+            }
+            free(x->viz_ports);
+        }
+        x->viz_ports = (int*)calloc(num_audio_chans, sizeof(int));
+        x->allocated_viz_ports = num_audio_chans;
     }
 
     if (x->analyzers_count != num_audio_chans) {
@@ -624,6 +661,121 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         defer(x, (method)mc_analyze_output_peak, NULL, 2, out_args);
                     }
                 }
+
+                if (x->visualize_enabled && ch < x->allocated_viz_ports && x->viz_ports[ch] > 0) {
+                    char *json_buf = (char *)malloc(131072);
+                    if (json_buf) {
+                        char *ptr = json_buf;
+                        int remaining = 131072;
+                        int n;
+
+                        double p_time = (double)target_analysis_frame / x->sample_rate;
+                        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+
+                        n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"group\":\"%s\",\"channel\":%ld,\"time\":%.4f,", grp, ch, p_time);
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
+                        n = snprintf(ptr, remaining, "\"rating\":%.4f,\"std_dev\":%.4f,\"contrast\":%.4f,\"stability\":%.4f,\"max_peak_value\":%.4f,\"min_score_seen\":%.4f,\"max_score_seen\":%.4f,\"tolerance\":%.4f,\"highest_peak_ms\":%.4f,",
+                                     x->result_buffer->metrics.rating,
+                                     x->result_buffer->metrics.std_dev,
+                                     x->result_buffer->metrics.contrast,
+                                     x->result_buffer->metrics.stability_score,
+                                     analyzer_get_max_peak(x->analyzers[ch]),
+                                     x->result_buffer->metrics.min_score_seen,
+                                     x->result_buffer->metrics.max_score_seen,
+                                     x->tolerance,
+                                     hp_ms);
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"global_smoothing_avg\":%.4f,", x->result_buffer->metrics.global_smoothing_avg);
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"smoothing_avgs\":[%.4f,%.4f,%.4f,%.4f],",
+                                     x->result_buffer->metrics.band_smoothing_avgs[0],
+                                     x->result_buffer->metrics.band_smoothing_avgs[1],
+                                     x->result_buffer->metrics.band_smoothing_avgs[2],
+                                     x->result_buffer->metrics.band_smoothing_avgs[3]);
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"flux\":[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int b = 0; b < 4; b++) {
+                            n = snprintf(ptr, remaining, "[");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            for (int j = 0; j < 100; j++) {
+                                n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_flux[b][j], (j == 99) ? "" : ",");
+                                if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            }
+                            n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "],");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"smooth\":[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int b = 0; b < 4; b++) {
+                            n = snprintf(ptr, remaining, "[");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            for (int j = 0; j < 100; j++) {
+                                n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_dynamic_smoothing[b][j], (j == 99) ? "" : ",");
+                                if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            }
+                            n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "],");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"prominence\":[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int b = 0; b < 4; b++) {
+                            n = snprintf(ptr, remaining, "[");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            for (int j = 0; j < 100; j++) {
+                                n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_prominence[b][j], (j == 99) ? "" : ",");
+                                if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            }
+                            n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "],");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"accumulated_buffer\":[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        double *acc_buf = analyzer_get_buffer(x->analyzers[ch]);
+                        for (int i = 0; i < 5001; i++) {
+                            n = snprintf(ptr, remaining, "%.4f%s", acc_buf[i], (i == 5000) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "],");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        n = snprintf(ptr, remaining, "\"peaks\":[");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+                            PeakResult *p_res = &x->result_buffer->peak_list.peaks[i];
+                            n = snprintf(ptr, remaining, "{\"time\":%.4f,\"peak_val\":%.4f,\"total_score\":%.4f,\"band_idx\":%d,\"p_idx\":%d,\"qualifiers\":[",
+                                         p_res->time, p_res->peak_val, p_res->total_score, p_res->band_idx, p_res->p_idx);
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            for (int q = 0; q < p_res->num_qualifiers; q++) {
+                                n = snprintf(ptr, remaining, "{\"ms\":%.4f,\"val\":%.4f,\"orig_ms\":%.4f}%s",
+                                             p_res->qualifiers[q].ms, p_res->qualifiers[q].val, p_res->qualifiers[q].orig_ms,
+                                             (q == p_res->num_qualifiers - 1) ? "" : ",");
+                                if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                            }
+                            n = snprintf(ptr, remaining, "]}%s", (i == x->result_buffer->peak_list.num_peaks - 1) ? "" : ",");
+                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+                        }
+                        n = snprintf(ptr, remaining, "]}");
+                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
+
+                        visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
+                        free(json_buf);
+                    }
+                }
             }
         }
 
@@ -668,120 +820,6 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             float barlen = (float)best_bar_length;
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)mc_analyze_output_metrics, NULL, 5, out_args);
-
-            if (x->visualize_enabled) {
-                char *json_buf = (char *)malloc(131072);
-                if (json_buf) {
-                    char *ptr = json_buf;
-                    int remaining = 131072;
-                    int n;
-
-                    double p_time = (double)target_analysis_frame / x->sample_rate;
-
-                    n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"time\":%.4f,", p_time);
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
-                    n = snprintf(ptr, remaining, "\"rating\":%.4f,\"std_dev\":%.4f,\"contrast\":%.4f,\"stability\":%.4f,\"max_peak_value\":%.4f,\"min_score_seen\":%.4f,\"max_score_seen\":%.4f,\"tolerance\":%.4f,\"highest_peak_ms\":%.4f,",
-                                 x->result_buffer->metrics.rating,
-                                 x->result_buffer->metrics.std_dev,
-                                 x->result_buffer->metrics.contrast,
-                                 x->result_buffer->metrics.stability_score,
-                                 analyzer_get_max_peak(x->analyzers[0]),
-                                 x->result_buffer->metrics.min_score_seen,
-                                 x->result_buffer->metrics.max_score_seen,
-                                 x->tolerance,
-                                 hp_ms);
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"global_smoothing_avg\":%.4f,", x->result_buffer->metrics.global_smoothing_avg);
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"smoothing_avgs\":[%.4f,%.4f,%.4f,%.4f],",
-                                 x->result_buffer->metrics.band_smoothing_avgs[0],
-                                 x->result_buffer->metrics.band_smoothing_avgs[1],
-                                 x->result_buffer->metrics.band_smoothing_avgs[2],
-                                 x->result_buffer->metrics.band_smoothing_avgs[3]);
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"flux\":[");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    for (int b = 0; b < 4; b++) {
-                        n = snprintf(ptr, remaining, "[");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        for (int j = 0; j < 100; j++) {
-                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_flux[b][j], (j == 99) ? "" : ",");
-                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        }
-                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    }
-                    n = snprintf(ptr, remaining, "],");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"smooth\":[");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    for (int b = 0; b < 4; b++) {
-                        n = snprintf(ptr, remaining, "[");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        for (int j = 0; j < 100; j++) {
-                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_dynamic_smoothing[b][j], (j == 99) ? "" : ",");
-                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        }
-                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    }
-                    n = snprintf(ptr, remaining, "],");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"prominence\":[");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    for (int b = 0; b < 4; b++) {
-                        n = snprintf(ptr, remaining, "[");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        for (int j = 0; j < 100; j++) {
-                            n = snprintf(ptr, remaining, "%.4f%s", x->result_buffer->last_prominence[b][j], (j == 99) ? "" : ",");
-                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        }
-                        n = snprintf(ptr, remaining, "]%s", (b == 3) ? "" : ",");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    }
-                    n = snprintf(ptr, remaining, "],");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"accumulated_buffer\":[");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    double *acc_buf = analyzer_get_buffer(x->analyzers[0]);
-                    for (int i = 0; i < 5001; i++) {
-                        n = snprintf(ptr, remaining, "%.4f%s", acc_buf[i], (i == 5000) ? "" : ",");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    }
-                    n = snprintf(ptr, remaining, "],");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    n = snprintf(ptr, remaining, "\"peaks\":[");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
-                        PeakResult *p_res = &x->result_buffer->peak_list.peaks[i];
-                        n = snprintf(ptr, remaining, "{\"time\":%.4f,\"peak_val\":%.4f,\"total_score\":%.4f,\"band_idx\":%d,\"p_idx\":%d,\"qualifiers\":[",
-                                     p_res->time, p_res->peak_val, p_res->total_score, p_res->band_idx, p_res->p_idx);
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        for (int q = 0; q < p_res->num_qualifiers; q++) {
-                            n = snprintf(ptr, remaining, "{\"ms\":%.4f,\"val\":%.4f,\"orig_ms\":%.4f}%s",
-                                         p_res->qualifiers[q].ms, p_res->qualifiers[q].val, p_res->qualifiers[q].orig_ms,
-                                         (q == p_res->num_qualifiers - 1) ? "" : ",");
-                            if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                        }
-                        n = snprintf(ptr, remaining, "]}%s", (i == x->result_buffer->peak_list.num_peaks - 1) ? "" : ",");
-                        if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-                    }
-                    n = snprintf(ptr, remaining, "]}");
-                    if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
-
-                    visualize(x, json_buf);
-                    free(json_buf);
-                }
-            }
         }
 
         free(hop_audio);

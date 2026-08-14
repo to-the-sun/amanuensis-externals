@@ -5,19 +5,30 @@ import threading
 import time
 import sys
 import os
+import argparse
 import traceback
 
-# Configuration
-TCP_PORT = 9001
+# Parse CLI arguments
+parser = argparse.ArgumentParser(description="Cumulative Transience Real-Time Visualizer")
+parser.add_argument('--port', type=int, default=9001, help="TCP port to listen on")
+parser.add_argument('--group', type=str, default="", help="Shared group name")
+parser.add_argument('--channel', type=int, default=-1, help="Channel index (-1 for single channel)")
+args, _ = parser.parse_known_args()
+
+TCP_PORT = args.port
+INITIAL_GROUP = args.group
+INITIAL_CHANNEL = args.channel
+
 FPS = 60
 W, H = 1200, 1000
 
-# Set headless environment options if requested
 if os.environ.get('HEADLESS'):
     pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
 
 # Global Visualizer State
 state = {
+    'group': INITIAL_GROUP,
+    'channel': INITIAL_CHANNEL,
     'times': [],               # Rolling timestamps (last 25 seconds)
     'onset_envs': [[],[],[],[]], # 4 bands flux
     'smooth_envs': [[],[],[],[]], # 4 bands smooth
@@ -46,21 +57,22 @@ def process_packet(line):
     if not line: return
     try:
         pkt = json.loads(line)
-        if pkt.get('type') != 'analyze':
+        pkt_type = pkt.get('type')
+        if pkt_type not in ('analyze', 'mc_analyze'):
             return
 
-        # Merge incoming data into state
         with state_lock:
-            # Playhead time
+            if 'group' in pkt and pkt['group']:
+                state['group'] = pkt['group']
+            if 'channel' in pkt and pkt['channel'] is not None:
+                state['channel'] = pkt['channel']
+
             current_time = pkt.get('time', 0.0)
             state['current_time'] = current_time
 
-            # Recompute timestamps for the 100 incoming frames
-            # 1ms frame duration
             chunk_times = [current_time - (99 - i) * 0.001 for i in range(100)]
             state['times'].extend(chunk_times)
 
-            # Envelopes
             flux_chunk = pkt.get('flux', [])
             smooth_chunk = pkt.get('smooth', [])
             prom_chunk = pkt.get('prominence', [])
@@ -73,8 +85,6 @@ def process_packet(line):
                 if b < len(prom_chunk):
                     state['prominences'][b].extend(prom_chunk[b])
 
-            # Prune histories older than 25 seconds
-            # 25 seconds * 1000 frames/sec = 25000 frames
             max_history = 25000
             if len(state['times']) > max_history:
                 pop_count = len(state['times']) - max_history
@@ -84,7 +94,6 @@ def process_packet(line):
                     state['smooth_envs'][b] = state['smooth_envs'][b][pop_count:]
                     state['prominences'][b] = state['prominences'][b][pop_count:]
 
-            # Metrics and averages
             state['rolling_smoothing_avgs'] = pkt.get('smoothing_avgs', [0.0]*4)
             state['rolling_global_smoothing_avg'] = pkt.get('global_smoothing_avg', 0.0)
             state['rating'] = pkt.get('rating', 0.0)
@@ -99,11 +108,8 @@ def process_packet(line):
             state['highest_peak_ms'] = pkt.get('highest_peak_ms', -999.0)
             state['accumulated_buffer'] = pkt.get('accumulated_buffer', [0.0]*5001)
 
-            # Append new peaks
             new_peaks = pkt.get('peaks', [])
             state['peaks'].extend(new_peaks)
-
-            # Prune peaks older than 30 seconds to avoid memory growth
             state['peaks'] = [p for p in state['peaks'] if current_time - p.get('time', 0.0) <= 30.0]
 
     except Exception as e:
@@ -149,15 +155,22 @@ def handle_client(sock):
 def run_gui():
     import raylib_renderer
 
-    pr.init_window(W, H, "Cumulative Transience Real-Time Visualizer")
+    ch_idx = state['channel']
+    if ch_idx >= 0:
+        win_title = f"Cumulative Transience Real-Time Visualizer (Ch {ch_idx}, Port {TCP_PORT})"
+    else:
+        win_title = f"Cumulative Transience Real-Time Visualizer (Port {TCP_PORT})"
+
+    pr.init_window(W, H, win_title)
     pr.set_target_fps(FPS)
 
     while not pr.window_should_close():
         with state_lock:
             if state['exit_flag']:
                 break
-            # Copy snapshot of state for renderer
             frame_data = {
+                'group': state['group'],
+                'channel': state['channel'],
                 'times': list(state['times']),
                 'onset_envs': [list(x) for x in state['onset_envs']],
                 'smooth_envs': [list(x) for x in state['smooth_envs']],
@@ -176,7 +189,7 @@ def run_gui():
                 'highest_peak_ms': state['highest_peak_ms'],
                 'peaks': list(state['peaks']),
                 'accumulated_buffer': list(state['accumulated_buffer']),
-                'title': "Cumulative Transience Real-Time Visualizer"
+                'title': win_title
             }
             current_time = state['current_time']
 
@@ -188,6 +201,5 @@ def run_gui():
     sys.exit(0)
 
 if __name__ == "__main__":
-    # Start TCP server in background
     threading.Thread(target=tcp_server, daemon=True).start()
     run_gui()

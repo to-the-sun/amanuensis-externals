@@ -14,6 +14,7 @@
 #define PORT_ANALYZE  9001
 #define SERVER "127.0.0.1"
 #define MAX_QUEUE_SIZE 100
+#define MAX_DYNAMIC_SOCKETS 64
 
 typedef struct {
     SOCKET sock;
@@ -21,6 +22,12 @@ typedef struct {
     DWORD last_connect_attempt;
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
+
+typedef struct {
+    int port;
+    t_viz_socket vs;
+    int in_use;
+} t_dynamic_socket;
 
 typedef struct _viz_queue_item {
     t_viz_socket *vs;
@@ -33,6 +40,10 @@ typedef struct _viz_queue_item {
 static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, NULL };
+
+static t_dynamic_socket dynamic_sockets[MAX_DYNAMIC_SOCKETS];
+static t_systhread_mutex dynamic_sockets_mutex = NULL;
+
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -57,8 +68,8 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
         if (type_out) *type_out = "building";
         return &weaver_viz;
-    } else if (classname == gensym("analyze~")) {
-        if (type_out) *type_out = "analyze";
+    } else if (classname == gensym("analyze~") || classname == gensym("mc.analyze~")) {
+        if (type_out) *type_out = (classname == gensym("mc.analyze~")) ? "mc_analyze" : "analyze";
         return &analyze_viz;
     }
     return NULL;
@@ -74,7 +85,6 @@ static void viz_socket_init(t_viz_socket *vs, int port) {
     systhread_mutex_new(&vs->mutex, 0);
 }
 
-// Background thread function prototype
 void *viz_worker_thread(void *arg);
 
 int visualize_init() {
@@ -86,6 +96,9 @@ int visualize_init() {
         viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
         viz_socket_init(&weaver_viz, PORT_WEAVER);
         viz_socket_init(&analyze_viz, PORT_ANALYZE);
+
+        systhread_mutex_new(&dynamic_sockets_mutex, 0);
+        memset(dynamic_sockets, 0, sizeof(dynamic_sockets));
 
         systhread_mutex_new(&queue_mutex, 0);
         systhread_cond_new(&viz_cond, 0);
@@ -115,6 +128,25 @@ void visualize_cleanup() {
         queue_mutex = NULL;
         viz_cond = NULL;
 
+        if (dynamic_sockets_mutex) {
+            systhread_mutex_lock(dynamic_sockets_mutex);
+            for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+                if (dynamic_sockets[i].in_use) {
+                    systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
+                    if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
+                        closesocket(dynamic_sockets[i].vs.sock);
+                        dynamic_sockets[i].vs.sock = INVALID_SOCKET;
+                    }
+                    systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
+                    systhread_mutex_free(dynamic_sockets[i].vs.mutex);
+                    dynamic_sockets[i].in_use = 0;
+                }
+            }
+            systhread_mutex_unlock(dynamic_sockets_mutex);
+            systhread_mutex_free(dynamic_sockets_mutex);
+            dynamic_sockets_mutex = NULL;
+        }
+
         systhread_mutex_lock(crucible_viz.mutex);
         if (crucible_viz.sock != INVALID_SOCKET) closesocket(crucible_viz.sock);
         crucible_viz.sock = INVALID_SOCKET;
@@ -138,6 +170,75 @@ void visualize_cleanup() {
     }
 }
 
+int visualize_allocate_port(int start_port) {
+    if (start_port <= 0) start_port = 9001;
+    if (!dynamic_sockets_mutex) {
+        return start_port;
+    }
+
+    systhread_mutex_lock(dynamic_sockets_mutex);
+
+    for (int port = start_port; port < start_port + 500; port++) {
+        int already_used = 0;
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+                already_used = 1;
+                break;
+            }
+        }
+        if (already_used) continue;
+
+        SOCKET test_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (test_sock != INVALID_SOCKET) {
+            struct sockaddr_in addr;
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(port);
+            addr.sin_addr.S_un.S_addr = inet_addr(SERVER);
+
+            int res = bind(test_sock, (struct sockaddr*)&addr, sizeof(addr));
+            closesocket(test_sock);
+
+            if (res == 0) {
+                for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+                    if (!dynamic_sockets[i].in_use) {
+                        dynamic_sockets[i].port = port;
+                        dynamic_sockets[i].in_use = 1;
+                        viz_socket_init(&dynamic_sockets[i].vs, port);
+                        systhread_mutex_unlock(dynamic_sockets_mutex);
+                        return port;
+                    }
+                }
+            }
+        }
+    }
+
+    systhread_mutex_unlock(dynamic_sockets_mutex);
+    return start_port;
+}
+
+void visualize_close_port(int port) {
+    if (port <= 0 || !dynamic_sockets_mutex) return;
+
+    systhread_mutex_lock(dynamic_sockets_mutex);
+    for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+        if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+            systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
+            if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
+                closesocket(dynamic_sockets[i].vs.sock);
+                dynamic_sockets[i].vs.sock = INVALID_SOCKET;
+            }
+            systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
+            systhread_mutex_free(dynamic_sockets[i].vs.mutex);
+
+            dynamic_sockets[i].in_use = 0;
+            dynamic_sockets[i].port = 0;
+            break;
+        }
+    }
+    systhread_mutex_unlock(dynamic_sockets_mutex);
+}
+
 static const char *get_event_name_from_message(const char *message) {
     if (!message) return "unknown";
     if (strstr(message, "\"event\":\"repopulate\"")) {
@@ -156,7 +257,6 @@ static const char *get_event_name_from_message(const char *message) {
     return "unknown";
 }
 
-// Extract attributes dynamically via Max API to prevent any structure layout/padding mismatches across objects
 static void get_object_log_info(void *x, long *out_log, long *out_visualize, void **out_log_outlet) {
     if (!x) {
         if (out_log) *out_log = 0;
@@ -214,8 +314,6 @@ static void viz_log(void *x, const char *fmt, ...) {
     }
 }
 
-// Internal helper for socket connection logic
-// ASSUMES MUTEX FOR vs IS ALREADY HELD
 static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
         if (x) {
@@ -261,7 +359,6 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                     viz_log(x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
                 }
 
-                // Poll for handshake completion using select()
                 fd_set write_fds, except_fds;
                 struct timeval tv;
                 tv.tv_sec = 0;
@@ -324,8 +421,6 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
     }
 }
 
-// Internal helper for socket sending logic
-// ASSUMES MUTEX FOR vs IS ALREADY HELD
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
     const char *ev = get_event_name_from_message(message);
     if (x) {
@@ -372,7 +467,7 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
 
                 fd_set write_fds;
                 struct timeval tv;
-                tv.tv_sec = 1; // Wait up to 1 second
+                tv.tv_sec = 1;
                 tv.tv_usec = 0;
 
                 FD_ZERO(&write_fds);
@@ -466,7 +561,6 @@ void visualize(void *x, const char *message) {
     void *log_outlet = NULL;
     get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
 
-    // If visualize is not enabled, do not send at all
     if (!visualize_enabled) {
         return;
     }
@@ -479,7 +573,6 @@ void visualize(void *x, const char *message) {
     }
 
     const char *ev = get_event_name_from_message(message);
-    viz_log(x, "visualize: enqueuing %s packet (queue count: %d, type: '%s')", ev, queue_count, type_static);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
@@ -498,7 +591,7 @@ void visualize(void *x, const char *message) {
     item->x = x;
     item->type = (char *)sysmem_newptr(strlen(type_static) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
-    
+
     if (!item->type || !item->message) {
         if (item->type) sysmem_freeptr(item->type);
         if (item->message) sysmem_freeptr(item->message);
@@ -523,6 +616,87 @@ void visualize(void *x, const char *message) {
     systhread_mutex_unlock(queue_mutex);
 }
 
+void visualize_to_port(void *x, int port, const char *type, const char *message) {
+    if (!x || !message || !queue_mutex || port <= 0) return;
+
+    long log_enabled = 0;
+    long visualize_enabled = 0;
+    void *log_outlet = NULL;
+    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
+
+    if (!visualize_enabled) {
+        return;
+    }
+
+    t_viz_socket *vs = NULL;
+    if (dynamic_sockets_mutex) {
+        systhread_mutex_lock(dynamic_sockets_mutex);
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+                vs = &dynamic_sockets[i].vs;
+                break;
+            }
+        }
+        if (!vs) {
+            for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+                if (!dynamic_sockets[i].in_use) {
+                    dynamic_sockets[i].port = port;
+                    dynamic_sockets[i].in_use = 1;
+                    viz_socket_init(&dynamic_sockets[i].vs, port);
+                    vs = &dynamic_sockets[i].vs;
+                    break;
+                }
+            }
+        }
+        systhread_mutex_unlock(dynamic_sockets_mutex);
+    }
+
+    if (!vs) {
+        object_warn((t_object *)x, "visualize_to_port: could not resolve socket for port %d", port);
+        return;
+    }
+
+    systhread_mutex_lock(queue_mutex);
+    if (queue_count >= MAX_QUEUE_SIZE) {
+        systhread_mutex_unlock(queue_mutex);
+        return;
+    }
+
+    t_viz_queue_item *item = (t_viz_queue_item *)sysmem_newptr(sizeof(t_viz_queue_item));
+    if (!item) {
+        systhread_mutex_unlock(queue_mutex);
+        return;
+    }
+
+    item->vs = vs;
+    item->x = x;
+    item->type = (char *)sysmem_newptr(strlen(type) + 1);
+    item->message = (char *)sysmem_newptr(strlen(message) + 1);
+
+    if (!item->type || !item->message) {
+        if (item->type) sysmem_freeptr(item->type);
+        if (item->message) sysmem_freeptr(item->message);
+        sysmem_freeptr(item);
+        systhread_mutex_unlock(queue_mutex);
+        return;
+    }
+
+    strcpy(item->type, type);
+    strcpy(item->message, message);
+    item->next = NULL;
+
+    if (queue_tail) {
+        queue_tail->next = item;
+    } else {
+        queue_head = item;
+    }
+    queue_tail = item;
+    queue_count++;
+
+    systhread_cond_signal(viz_cond);
+    systhread_mutex_unlock(queue_mutex);
+}
+
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {
     if (!x || !message || !response || response_size == 0) return -1;
 
@@ -531,7 +705,6 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
     void *log_outlet = NULL;
     get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
 
-    // If visualize is not enabled, do not send/exchange at all
     if (!visualize_enabled) {
         return -1;
     }
@@ -545,7 +718,7 @@ int visualize_exchange(void *x, const char *message, char *response, size_t resp
 
     int received = -1;
     systhread_mutex_lock(vs->mutex);
-    
+
     if (perform_send(vs, x, type, message) == 0) {
         fd_set read_fds;
         struct timeval tv;
