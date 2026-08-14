@@ -1,5 +1,7 @@
 import pyray as pr
 import math
+import bisect
+import numpy as np
 
 # Color constants
 COLOR_BG = pr.Color(18, 18, 22, 255)       # Deep charcoal background
@@ -146,26 +148,83 @@ def draw_renderer(W, H, current_time, frame_data):
             sm_pts = []
             pr_pts = []
 
-            step = max(1, len(times_arr) // 1000)
-            for idx in range(0, len(times_arr), step):
-                t = times_arr[idx]
-                if t < x_min_t or t > x_max_t: continue
+            # Find visible range in times_arr
+            idx_start = bisect.bisect_left(times_arr, x_min_t)
+            idx_end = bisect.bisect_right(times_arr, x_max_t)
+            num_visible = idx_end - idx_start
 
-                sx = margin_left + int(graph_w * (t - x_min_t) / x_span_t)
+            if num_visible > 0:
+                if num_visible <= 1000:
+                    for idx in range(idx_start, idx_end):
+                        t = times_arr[idx]
+                        sx = margin_left + int(graph_w * (t - x_min_t) / x_span_t)
 
-                f_val = onset_envs[b][idx] if b < len(onset_envs) else 0.0
-                sy_f = margin_top + graph_h_top - int(graph_h_top * f_val / max_peak)
-                env_pts.append(pr.Vector2(sx, sy_f))
+                        f_val = onset_envs[b][idx] if b < len(onset_envs) else 0.0
+                        sy_f = margin_top + graph_h_top - int(graph_h_top * f_val / max_peak)
+                        env_pts.append(pr.Vector2(sx, sy_f))
 
-                if smooth_envs and b < len(smooth_envs):
-                    s_val = smooth_envs[b][idx]
-                    sy_s = margin_top + graph_h_top - int(graph_h_top * s_val / max_peak)
-                    sm_pts.append(pr.Vector2(sx, sy_s))
+                        if smooth_envs and b < len(smooth_envs):
+                            s_val = smooth_envs[b][idx]
+                            sy_s = margin_top + graph_h_top - int(graph_h_top * s_val / max_peak)
+                            sm_pts.append(pr.Vector2(sx, sy_s))
 
-                if prom_envs and b < len(prom_envs):
-                    p_val = prom_envs[b][idx]
-                    sy_p = margin_top + graph_h_top - int(graph_h_top * p_val / max_peak)
-                    pr_pts.append(pr.Vector2(sx, sy_p))
+                        if prom_envs and b < len(prom_envs):
+                            p_val = prom_envs[b][idx]
+                            sy_p = margin_top + graph_h_top - int(graph_h_top * p_val / max_peak)
+                            pr_pts.append(pr.Vector2(sx, sy_p))
+                else:
+                    bin_size = num_visible / 1000.0
+                    for k in range(1000):
+                        bin_start = idx_start + int(k * bin_size)
+                        bin_end = idx_start + int((k + 1) * bin_size)
+                        bin_end = min(bin_end, idx_end)
+                        if bin_end <= bin_start:
+                            bin_end = bin_start + 1
+
+                        # Flux
+                        if b < len(onset_envs):
+                            slice_f = onset_envs[b][bin_start:bin_end]
+                            if len(slice_f) > 0:
+                                if hasattr(slice_f, 'tolist'):
+                                    max_idx_f = int(np.argmax(slice_f))
+                                    max_f = slice_f[max_idx_f]
+                                else:
+                                    max_f = max(slice_f)
+                                    max_idx_f = slice_f.index(max_f)
+                                t_f = times_arr[bin_start + max_idx_f]
+                                sx_f = margin_left + int(graph_w * (t_f - x_min_t) / x_span_t)
+                                sy_f = margin_top + graph_h_top - int(graph_h_top * max_f / max_peak)
+                                env_pts.append(pr.Vector2(sx_f, sy_f))
+
+                        # Smooth
+                        if smooth_envs and b < len(smooth_envs):
+                            slice_s = smooth_envs[b][bin_start:bin_end]
+                            if len(slice_s) > 0:
+                                if hasattr(slice_s, 'tolist'):
+                                    max_idx_s = int(np.argmax(slice_s))
+                                    max_s = slice_s[max_idx_s]
+                                else:
+                                    max_s = max(slice_s)
+                                    max_idx_s = slice_s.index(max_s)
+                                t_s = times_arr[bin_start + max_idx_s]
+                                sx_s = margin_left + int(graph_w * (t_s - x_min_t) / x_span_t)
+                                sy_s = margin_top + graph_h_top - int(graph_h_top * max_s / max_peak)
+                                sm_pts.append(pr.Vector2(sx_s, sy_s))
+
+                        # Prominences
+                        if prom_envs and b < len(prom_envs):
+                            slice_p = prom_envs[b][bin_start:bin_end]
+                            if len(slice_p) > 0:
+                                if hasattr(slice_p, 'tolist'):
+                                    max_idx_p = int(np.argmax(slice_p))
+                                    max_p = slice_p[max_idx_p]
+                                else:
+                                    max_p = max(slice_p)
+                                    max_idx_p = slice_p.index(max_p)
+                                t_p = times_arr[bin_start + max_idx_p]
+                                sx_p = margin_left + int(graph_w * (t_p - x_min_t) / x_span_t)
+                                sy_p = margin_top + graph_h_top - int(graph_h_top * max_p / max_peak)
+                                pr_pts.append(pr.Vector2(sx_p, sy_p))
 
             # Draw Flux
             for i in range(len(env_pts) - 1):
