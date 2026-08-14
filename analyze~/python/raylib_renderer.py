@@ -295,8 +295,7 @@ def draw_renderer(W, H, current_time, frame_data):
 
                 bx = margin_left + int(graph_w * (rel_ms - x_min_s) / x_span_s)
                 by = Y_mid + int(band * lane_h) + 2
-                bw = int(graph_w * 2.0 / x_span_s)
-                if bw < 5: bw = 5
+                bw = 2
 
                 pr.draw_rectangle(bx - bw//2, by, bw, int(lane_h) - 4, BAND_COLORS[band])
 
