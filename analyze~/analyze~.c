@@ -119,28 +119,29 @@ void get_object_directory(char *dir_out, size_t max_len) {
 static void launch_visualizer(t_analyze *x) {
     if (x->viz_port == 0) {
         x->viz_port = visualize_allocate_port(9001);
-    }
-    char dir[MAX_PATH_CHARS];
-    get_object_directory(dir, sizeof(dir));
-    char cmd[MAX_PATH_CHARS * 2];
-    const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\"", dir, x->viz_port, grp);
+
+        char dir[MAX_PATH_CHARS];
+        get_object_directory(dir, sizeof(dir));
+        char cmd[MAX_PATH_CHARS * 2];
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\"", dir, x->viz_port, grp);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
 
-    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);
-    } else {
-        object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
-    }
+        if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);
+        } else {
+            object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
+        }
 #endif
+    }
 }
 
 t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *av) {
