@@ -13,11 +13,13 @@ parser = argparse.ArgumentParser(description="Cumulative Transience Real-Time Vi
 parser.add_argument('--port', type=int, default=9001, help="TCP port to listen on")
 parser.add_argument('--group', type=str, default="", help="Shared group name")
 parser.add_argument('--channel', type=int, default=-1, help="Channel index (-1 for single channel)")
+parser.add_argument('--name', type=str, default="", help="Object scripting name")
 args, _ = parser.parse_known_args()
 
 TCP_PORT = args.port
 INITIAL_GROUP = args.group
 INITIAL_CHANNEL = args.channel
+INITIAL_NAME = args.name
 
 FPS = 60
 W, H = 1200, 1000
@@ -29,6 +31,7 @@ if os.environ.get('HEADLESS'):
 state = {
     'group': INITIAL_GROUP,
     'channel': INITIAL_CHANNEL,
+    'scripting_name': INITIAL_NAME,
     'times': [],               # Rolling timestamps (last 25 seconds)
     'onset_envs': [[],[],[],[]], # 4 bands flux
     'smooth_envs': [[],[],[],[]], # 4 bands smooth
@@ -66,6 +69,8 @@ def process_packet(line):
                 state['group'] = pkt['group']
             if 'channel' in pkt and pkt['channel'] is not None:
                 state['channel'] = pkt['channel']
+            if 'scripting_name' in pkt and pkt['scripting_name'] is not None:
+                state['scripting_name'] = pkt['scripting_name']
 
             current_time = pkt.get('time', 0.0)
             state['current_time'] = current_time
@@ -152,25 +157,48 @@ def handle_client(sock):
     with state_lock:
         state['exit_flag'] = True
 
+def build_title(scripting_name, channel, port):
+    prefix_parts = []
+    if scripting_name:
+        prefix_parts.append(scripting_name)
+    if channel >= 0:
+        ch_1based = channel + 1
+        prefix_parts.append(f"Ch {ch_1based}")
+
+    if prefix_parts:
+        prefix_str = " ".join(prefix_parts) + ", "
+    else:
+        prefix_str = ""
+
+    return f"Cumulative Transience Real-Time Visualizer ({prefix_str}Port {port})"
+
 def run_gui():
     import raylib_renderer
 
-    ch_idx = state['channel']
-    if ch_idx >= 0:
-        win_title = f"Cumulative Transience Real-Time Visualizer (Ch {ch_idx}, Port {TCP_PORT})"
-    else:
-        win_title = f"Cumulative Transience Real-Time Visualizer (Port {TCP_PORT})"
+    with state_lock:
+        s_name = state['scripting_name']
+        ch_idx = state['channel']
+
+    win_title = build_title(s_name, ch_idx, TCP_PORT)
 
     pr.init_window(W, H, win_title)
     pr.set_target_fps(FPS)
+
+    current_title = win_title
 
     while not pr.window_should_close():
         with state_lock:
             if state['exit_flag']:
                 break
+
+            s_name = state['scripting_name']
+            ch_idx = state['channel']
+            win_title = build_title(s_name, ch_idx, TCP_PORT)
+
             frame_data = {
                 'group': state['group'],
                 'channel': state['channel'],
+                'scripting_name': state['scripting_name'],
                 'times': list(state['times']),
                 'onset_envs': [list(x) for x in state['onset_envs']],
                 'smooth_envs': [list(x) for x in state['smooth_envs']],
@@ -192,6 +220,10 @@ def run_gui():
                 'title': win_title
             }
             current_time = state['current_time']
+
+        if win_title != current_title:
+            pr.set_window_title(win_title)
+            current_title = win_title
 
         pr.begin_drawing()
         raylib_renderer.draw_renderer(W, H, current_time, frame_data)
