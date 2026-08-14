@@ -516,15 +516,21 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
     }
 
     if (x->allocated_viz_ports != num_audio_chans) {
+        int *new_ports = (int*)calloc(num_audio_chans, sizeof(int));
+        long min_ch = (x->allocated_viz_ports < num_audio_chans) ? x->allocated_viz_ports : num_audio_chans;
+
         if (x->viz_ports) {
-            for (long i = 0; i < x->allocated_viz_ports; i++) {
+            for (long i = 0; i < min_ch; i++) {
+                new_ports[i] = x->viz_ports[i];
+            }
+            for (long i = min_ch; i < x->allocated_viz_ports; i++) {
                 if (x->viz_ports[i] > 0) {
                     visualize_close_port(x->viz_ports[i]);
                 }
             }
             free(x->viz_ports);
         }
-        x->viz_ports = (int*)calloc(num_audio_chans, sizeof(int));
+        x->viz_ports = new_ports;
         x->allocated_viz_ports = num_audio_chans;
     }
 
