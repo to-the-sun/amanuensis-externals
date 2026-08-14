@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="mc.analyze~" module="msp" category="Analysis">
+	<digest>Performs spectral transience analysis on a single-channel or multi-channel audio signal</digest>
+	<description>
+		The `mc.analyze~` object performs real-time spectral analysis of an incoming single-channel or multi-channel audio signal. It utilizes an STFT-based Mel-spectrogram and Spectral Flux to detect transient peaks and calculate various transience-related metrics. Each channel in the multi-channel signal is processed independently but contributes to the same internal accumulated history, resulting in a single set of ratings and scores.
+
+		If part of an `@group`, each channel contributes independently to that group's shared history. This object uses a unified 15.2-second stateful analysis window per channel, ensuring parity with offline Python-based analysis. Transients are detected across four frequency bands (Sub, Bass/Low-Mid, High-Mid, Treble) and assigned a "Resonance Score" based on their historical relationship with other peaks in a 5-second lookback buffer. The adaptive midpoint threshold for peak detection is calculated using a specialized dynamic historical peak-based sub-window.
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Analysis</metadata>
+		<metadata name="tag">Multichannel</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="signal/multichannelsignal">
+			<digest>Audio Input (signal/multichannelsignal)</digest>
+			<description>Accepts a single-channel or multi-channel audio signal to be analyzed.</description>
+		</inlet>
+		<inlet id="1" type="signal">
+			<digest>Transport Clock Input (signal)</digest>
+			<description>Accepts a single-channel signal representing the current transport clock time. This value is buffered and used to provide compensated timestamps for detected peaks on any channel. If no signal is connected to this inlet, the clock value is omitted from the output.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="list">
+			<digest>Peak Scores [(clock), band, score]</digest>
+			<description>Outputs a list whenever a transient peak is detected on any of the audio channels. If a signal is connected to the second inlet, the list contains three elements: [compensated clock value, band index, transience score]. If no signal is connected, it outputs the two-element list: [band index, transience score].</description>
+		</outlet>
+		<outlet id="1" type="float">
+			<digest>Bar Length (ms)</digest>
+			<description>Outputs the single bar length (ms) determined from the combined analysis history histogram, optionally using a weighted calculation if `@weighted_bar` is enabled.</description>
+		</outlet>
+		<outlet id="2" type="float">
+			<digest>Rating Score</digest>
+			<description>Outputs the single average rating score calculated over the combined analysis history of all channels.</description>
+		</outlet>
+		<outlet id="3" type="float">
+			<digest>Standard Deviation</digest>
+			<description>Outputs the current standard deviation of the combined analysis scores.</description>
+		</outlet>
+		<outlet id="4" type="float">
+			<digest>Contrast Score</digest>
+			<description>Outputs a score representing the combined spectral contrast detected in the signal.</description>
+		</outlet>
+		<outlet id="5" type="float">
+			<digest>Bar Length Stability</digest>
+			<description>Outputs a score representing the stability of the rhythmic center across all channels. It maintains a combined histogram of the frequency of "highest peak" positions (Bar Lengths). The output value is the average of the counts for all Bar Length integers observed during the current analysis session. A higher value indicates a more stable rhythmic center.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="dsp64">
+			<digest>DSP method</digest>
+		</method>
+		<method name="clear">
+			<digest>Clear internal state</digest>
+			<description>
+				Clears the internal historical buffers for all channels, including the cumulative transience history and the audio/clock buffers. All calculated metrics (Rating, Standard Deviation, etc.) are reset to their initialized values. If the object is part of a shared group, the shared group's buffer is also cleared.
+			</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name="group" get="1" set="1" type="symbol" size="1">
+			<digest>Shared Group Name</digest>
+			<description>
+				Sets the name of the shared memory group. If specified, each channel of this `mc.analyze~` instance will contribute independently to that group's shared history, allowing the multi-channel transience analysis to be context-aware of other objects in the same group. If no group is specified, all channels of this instance contribute to a single local shared history. Note: This attribute can only be set during object instantiation.
+			</description>
+		</attribute>
+		<attribute name="log" get="1" set="1" type="long" size="1">
+			<digest>Log Diagnostics</digest>
+			<description>
+				Enables or disables detailed diagnostic logging. When enabled (1), internal analysis states, peak detection events, and performance metrics are sent to the rightmost outlet.
+			</description>
+		</attribute>
+		<attribute name="weighted_bar" get="1" set="1" type="long" size="1">
+			<digest>Weighted Bar Length Calculation</digest>
+			<description>
+				Enables or disables the weighted multiplier applied when finding the bar length to output from the object. When enabled (1, default), the output bar length is determined by finding the bar length in the histogram that maximizes the count multiplied by a weight equal to the bar length divided by 5000.
+			</description>
+		</attribute>
+		<attribute name="tolerance" get="1" set="1" type="double" size="1">
+			<digest>Snapping Tolerance (ms)</digest>
+			<description>
+				Defines the snapping tolerance in milliseconds for historical qualifier calculations (default 29.0 ms). When processing each qualifier, the analyzer searches within a window of 2*tolerance of the qualifier's original position to find the highest accumulated value in the 5-second buffer and snaps the qualifier to that peak.
+			</description>
+		</attribute>
+		<attribute name="visualize" get="1" set="1" type="long" size="1">
+			<digest>Enable Real-Time Visualization</digest>
+			<description>
+				Enables or disables real-time visualization. When enabled (1), the object automatically launches the companion visualizer process (transience_vis.py) in the background and streams highly detailed, real-time transient analysis frames over localhost TCP port 9001.
+			</description>
+		</attribute>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="analyze~" />
+		<seealso name="sounds~" />
+		<seealso name="weaver~" />
+	</seealsolist>
+</c74object>
