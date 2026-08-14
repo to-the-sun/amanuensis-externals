@@ -5,10 +5,16 @@ import threading
 import time
 import sys
 import os
+import argparse
 import traceback
 
-# Configuration
-TCP_PORT = 9001
+# CLI Argument Parsing
+parser = argparse.ArgumentParser(description="Cumulative Transience Companion Visualizer")
+parser.add_argument("--port", type=int, default=9001, help="TCP port to listen on")
+parser.add_argument("--group", type=str, default="", help="Group name")
+args, _ = parser.parse_known_args()
+
+TCP_PORT = args.port
 FPS = 60
 W, H = 1200, 1000
 
@@ -37,6 +43,7 @@ state = {
     'peaks': [],
     'accumulated_buffer': [0.0]*5001,
     'current_time': 0.0,
+    'group': args.group,
     'exit_flag': False
 }
 state_lock = threading.Lock()
@@ -54,6 +61,9 @@ def process_packet(line):
             # Playhead time
             current_time = pkt.get('time', 0.0)
             state['current_time'] = current_time
+
+            if 'group' in pkt:
+                state['group'] = pkt['group']
 
             # Recompute timestamps for the 100 incoming frames
             # 1ms frame duration
@@ -149,7 +159,8 @@ def handle_client(sock):
 def run_gui():
     import raylib_renderer
 
-    pr.init_window(W, H, "Cumulative Transience Real-Time Visualizer")
+    win_title = f"Cumulative Transience Real-Time Visualizer (Port {TCP_PORT})"
+    pr.init_window(W, H, win_title)
     pr.set_target_fps(FPS)
 
     while not pr.window_should_close():
@@ -157,6 +168,11 @@ def run_gui():
             if state['exit_flag']:
                 break
             # Copy snapshot of state for renderer
+            group_str = state.get('group', '')
+            full_title = f"Cumulative Transience Real-Time Visualizer (Port {TCP_PORT})"
+            if group_str:
+                full_title += f" [@group: {group_str}]"
+
             frame_data = {
                 'times': list(state['times']),
                 'onset_envs': [list(x) for x in state['onset_envs']],
@@ -176,7 +192,8 @@ def run_gui():
                 'highest_peak_ms': state['highest_peak_ms'],
                 'peaks': list(state['peaks']),
                 'accumulated_buffer': list(state['accumulated_buffer']),
-                'title': "Cumulative Transience Real-Time Visualizer"
+                'group': group_str,
+                'title': full_title
             }
             current_time = state['current_time']
 

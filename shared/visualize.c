@@ -30,9 +30,16 @@ typedef struct _viz_queue_item {
     struct _viz_queue_item *next;
 } t_viz_queue_item;
 
-static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
-static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
-static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, NULL };
+typedef struct _viz_object_entry {
+    void *x;
+    char type[32];
+    int port;
+    t_viz_socket vs;
+    struct _viz_object_entry *next;
+} t_viz_object_entry;
+
+static t_viz_object_entry *g_object_entries = NULL;
+static t_systhread_mutex registry_mutex = NULL;
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -42,27 +49,6 @@ static t_viz_queue_item *queue_head = NULL;
 static t_viz_queue_item *queue_tail = NULL;
 static int queue_count = 0;
 static int viz_exit_flag = 0;
-
-static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
-    t_symbol *classname = object_classname(x);
-    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
-        if (type_out) *type_out = "crucible";
-        return &crucible_viz;
-    } else if (classname == gensym("smartloop~")) {
-        if (type_out) *type_out = "smartloop";
-        return &crucible_viz;
-    } else if (classname == gensym("weaver~")) {
-        if (type_out) *type_out = "weaver";
-        return &weaver_viz;
-    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
-        if (type_out) *type_out = "building";
-        return &weaver_viz;
-    } else if (classname == gensym("analyze~")) {
-        if (type_out) *type_out = "analyze";
-        return &analyze_viz;
-    }
-    return NULL;
-}
 
 static void viz_socket_init(t_viz_socket *vs, int port) {
     memset((char *) &vs->addr, 0, sizeof(vs->addr));
@@ -74,6 +60,171 @@ static void viz_socket_init(t_viz_socket *vs, int port) {
     systhread_mutex_new(&vs->mutex, 0);
 }
 
+static int is_port_in_use(int port) {
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return 1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.S_un.S_addr = inet_addr(SERVER);
+
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        closesocket(s);
+        return 1;
+    }
+    closesocket(s);
+    return 0;
+}
+
+static void get_base_port_and_type(void *x, const char **type_out, int *base_port_out) {
+    t_symbol *classname = object_classname(x);
+    if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
+        if (type_out) *type_out = "crucible";
+        if (base_port_out) *base_port_out = PORT_CRUCIBLE;
+    } else if (classname == gensym("smartloop~")) {
+        if (type_out) *type_out = "smartloop";
+        if (base_port_out) *base_port_out = PORT_CRUCIBLE;
+    } else if (classname == gensym("weaver~")) {
+        if (type_out) *type_out = "weaver";
+        if (base_port_out) *base_port_out = PORT_WEAVER;
+    } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
+        if (type_out) *type_out = "building";
+        if (base_port_out) *base_port_out = PORT_WEAVER;
+    } else if (classname == gensym("analyze~")) {
+        if (type_out) *type_out = "analyze";
+        if (base_port_out) *base_port_out = PORT_ANALYZE;
+    } else {
+        if (type_out) *type_out = "unknown";
+        if (base_port_out) *base_port_out = 9001;
+    }
+}
+
+int visualize_get_port(void *x) {
+    if (!x) return 0;
+    if (!registry_mutex) {
+        systhread_mutex_new(&registry_mutex, 0);
+    }
+
+    systhread_mutex_lock(registry_mutex);
+
+    t_viz_object_entry *curr = g_object_entries;
+    while (curr) {
+        if (curr->x == x) {
+            int p = curr->port;
+            systhread_mutex_unlock(registry_mutex);
+            return p;
+        }
+        curr = curr->next;
+    }
+
+    const char *type_str = NULL;
+    int base_port = 9001;
+    get_base_port_and_type(x, &type_str, &base_port);
+
+    int cand_port = base_port;
+    while (1) {
+        int in_use_by_entry = 0;
+        t_viz_object_entry *check = g_object_entries;
+        while (check) {
+            if (check->port == cand_port) {
+                in_use_by_entry = 1;
+                break;
+            }
+            check = check->next;
+        }
+
+        if (!in_use_by_entry && !is_port_in_use(cand_port)) {
+            break;
+        }
+        cand_port++;
+    }
+
+    t_viz_object_entry *entry = (t_viz_object_entry *)sysmem_newptr(sizeof(t_viz_object_entry));
+    if (!entry) {
+        systhread_mutex_unlock(registry_mutex);
+        return base_port;
+    }
+
+    entry->x = x;
+    strncpy(entry->type, type_str ? type_str : "unknown", sizeof(entry->type) - 1);
+    entry->type[sizeof(entry->type) - 1] = '\0';
+    entry->port = cand_port;
+    viz_socket_init(&entry->vs, cand_port);
+    entry->next = g_object_entries;
+    g_object_entries = entry;
+
+    systhread_mutex_unlock(registry_mutex);
+    return cand_port;
+}
+
+void visualize_unregister_object(void *x) {
+    if (!x || !registry_mutex) return;
+
+    systhread_mutex_lock(registry_mutex);
+    t_viz_object_entry *curr = g_object_entries;
+    t_viz_object_entry *prev = NULL;
+
+    while (curr) {
+        if (curr->x == x) {
+            if (prev) prev->next = curr->next;
+            else g_object_entries = curr->next;
+
+            systhread_mutex_lock(curr->vs.mutex);
+            if (curr->vs.sock != INVALID_SOCKET) {
+                closesocket(curr->vs.sock);
+                curr->vs.sock = INVALID_SOCKET;
+            }
+            systhread_mutex_unlock(curr->vs.mutex);
+            systhread_mutex_free(curr->vs.mutex);
+
+            sysmem_freeptr(curr);
+            break;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    systhread_mutex_unlock(registry_mutex);
+}
+
+static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
+    if (!x) return NULL;
+
+    if (!registry_mutex) {
+        systhread_mutex_new(&registry_mutex, 0);
+    }
+
+    systhread_mutex_lock(registry_mutex);
+    t_viz_object_entry *curr = g_object_entries;
+    while (curr) {
+        if (curr->x == x) {
+            if (type_out) *type_out = curr->type;
+            t_viz_socket *vs = &curr->vs;
+            systhread_mutex_unlock(registry_mutex);
+            return vs;
+        }
+        curr = curr->next;
+    }
+    systhread_mutex_unlock(registry_mutex);
+
+    visualize_get_port(x);
+
+    systhread_mutex_lock(registry_mutex);
+    curr = g_object_entries;
+    while (curr) {
+        if (curr->x == x) {
+            if (type_out) *type_out = curr->type;
+            t_viz_socket *vs = &curr->vs;
+            systhread_mutex_unlock(registry_mutex);
+            return vs;
+        }
+        curr = curr->next;
+    }
+    systhread_mutex_unlock(registry_mutex);
+    return NULL;
+}
+
 // Background thread function prototype
 void *viz_worker_thread(void *arg);
 
@@ -83,10 +234,7 @@ int visualize_init() {
         if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
             return 1;
         }
-        viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
-        viz_socket_init(&weaver_viz, PORT_WEAVER);
-        viz_socket_init(&analyze_viz, PORT_ANALYZE);
-
+        systhread_mutex_new(&registry_mutex, 0);
         systhread_mutex_new(&queue_mutex, 0);
         systhread_cond_new(&viz_cond, 0);
         viz_exit_flag = 0;
@@ -115,23 +263,24 @@ void visualize_cleanup() {
         queue_mutex = NULL;
         viz_cond = NULL;
 
-        systhread_mutex_lock(crucible_viz.mutex);
-        if (crucible_viz.sock != INVALID_SOCKET) closesocket(crucible_viz.sock);
-        crucible_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(crucible_viz.mutex);
-        systhread_mutex_free(crucible_viz.mutex);
-
-        systhread_mutex_lock(weaver_viz.mutex);
-        if (weaver_viz.sock != INVALID_SOCKET) closesocket(weaver_viz.sock);
-        weaver_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(weaver_viz.mutex);
-        systhread_mutex_free(weaver_viz.mutex);
-
-        systhread_mutex_lock(analyze_viz.mutex);
-        if (analyze_viz.sock != INVALID_SOCKET) closesocket(analyze_viz.sock);
-        analyze_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(analyze_viz.mutex);
-        systhread_mutex_free(analyze_viz.mutex);
+        if (registry_mutex) {
+            systhread_mutex_lock(registry_mutex);
+            t_viz_object_entry *curr = g_object_entries;
+            while (curr) {
+                t_viz_object_entry *next = curr->next;
+                systhread_mutex_lock(curr->vs.mutex);
+                if (curr->vs.sock != INVALID_SOCKET) closesocket(curr->vs.sock);
+                curr->vs.sock = INVALID_SOCKET;
+                systhread_mutex_unlock(curr->vs.mutex);
+                systhread_mutex_free(curr->vs.mutex);
+                sysmem_freeptr(curr);
+                curr = next;
+            }
+            g_object_entries = NULL;
+            systhread_mutex_unlock(registry_mutex);
+            systhread_mutex_free(registry_mutex);
+            registry_mutex = NULL;
+        }
 
         WSACleanup();
         ref_count = 0;

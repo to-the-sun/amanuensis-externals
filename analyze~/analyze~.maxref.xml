@@ -94,7 +94,7 @@
 		<attribute name="visualize" get="1" set="1" type="long" size="1">
 			<digest>Enable Real-Time Visualization</digest>
 			<description>
-				Enables or disables real-time visualization. When enabled (1), the object automatically launches the companion visualizer process (transience_vis.py) in the background and streams highly detailed, real-time transient analysis frames (including 4-band envelopes, dynamic smoothings, peak scoring markers, metrics, and the 5-second accumulated historical buffer) over localhost TCP port 9001.
+				Enables or disables real-time visualization. When enabled (1), the object automatically launches a separate pop-up companion visualizer process (transience_vis.py) for that specific object instance in the background over a coordinated TCP port. It streams real-time transient analysis frames (including 4-band envelopes, dynamic smoothings, peak scoring markers, metrics, and the 5-second accumulated historical buffer) to its pop-up window, which prominently lists the object's `@group` name at the top of the accumulated historical buffer graph.
 			</description>
 		</attribute>
 	</attributelist>

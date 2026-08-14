@@ -448,4 +448,7 @@ def draw_renderer(W, H, current_time, frame_data):
     draw_text_safe(f"Contrast: {contrast:.3f}", margin_left + 15, Y_bot + 35, 12, COLOR_PEAK_MARKER)
     draw_text_safe(f"Stability: {stability:.0f}", margin_left + 15, Y_bot + 55, 12, COLOR_PEAK_MARKER)
 
-    draw_text_safe("Accumulated 5s Historical Buffer", margin_left, Y_bot - 15, 12, pr.WHITE)
+    draw_text_safe("Accumulated 5s Historical Buffer", margin_left, Y_bot - 18, 14, pr.WHITE)
+    grp = frame_data.get('group', '')
+    grp_text = f" [@group: '{grp}']" if grp else " [@group: private]"
+    draw_text_safe(grp_text, margin_left + 250, Y_bot - 18, 14, COLOR_PEAK_MARKER)

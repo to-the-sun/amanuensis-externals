@@ -10,6 +10,12 @@ int visualize_init();
 // Call this in your object's 'free' function
 void visualize_cleanup();
 
+// Call this to get or allocate a TCP port for an object
+int visualize_get_port(void *x);
+
+// Call this when an object is being freed
+void visualize_unregister_object(void *x);
+
 // Call this to send a message
 void visualize(void *x, const char *message);
 

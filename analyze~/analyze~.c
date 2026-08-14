@@ -118,8 +118,9 @@ void get_object_directory(char *dir_out, size_t max_len) {
 static void launch_visualizer(t_analyze *x) {
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
+    int port = visualize_get_port((void *)x);
     char cmd[MAX_PATH_CHARS * 2];
-    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\"", dir);
+    snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d", dir, port);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
     STARTUPINFOA si;
@@ -283,6 +284,7 @@ void analyze_free(t_analyze* x) {
     free(x->clock_buffer);
     critical_free(x->lock);
 
+    visualize_unregister_object((void *)x);
     visualize_cleanup();
 }
 
@@ -540,7 +542,8 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
                     double p_time = (double)target_analysis_frame / x->sample_rate;
 
-                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"time\":%.4f,", p_time);
+                    const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"time\":%.4f,\"group\":\"%s\",", p_time, grp);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                     double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
