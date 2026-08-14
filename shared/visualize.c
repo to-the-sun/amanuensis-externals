@@ -20,6 +20,7 @@ typedef struct {
     SOCKET sock;
     struct sockaddr_in addr;
     DWORD last_connect_attempt;
+    int connecting;
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
 
@@ -37,9 +38,9 @@ typedef struct _viz_queue_item {
     struct _viz_queue_item *next;
 } t_viz_queue_item;
 
-static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
-static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
-static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, NULL };
+static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, 0, NULL };
+static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, 0, NULL };
+static t_viz_socket analyze_viz = { INVALID_SOCKET, {0}, 0, 0, NULL };
 
 static t_dynamic_socket dynamic_sockets[MAX_DYNAMIC_SOCKETS];
 static t_systhread_mutex dynamic_sockets_mutex = NULL;
@@ -176,6 +177,7 @@ static void viz_socket_init(t_viz_socket *vs, int port) {
     vs->addr.sin_addr.S_un.S_addr = inet_addr(SERVER);
     vs->sock = INVALID_SOCKET;
     vs->last_connect_attempt = 0;
+    vs->connecting = 0;
     systhread_mutex_new(&vs->mutex, 0);
 }
 
@@ -434,32 +436,63 @@ static void viz_log(void *x, const char *fmt, ...) {
 }
 
 static void ensure_connected(t_viz_socket *vs, void *x) {
-    if (vs->sock == INVALID_SOCKET) {
-        if (x) {
-            viz_log(x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
-        }
-        DWORD now = GetTickCount();
-        if (now - vs->last_connect_attempt < 250) {
-            if (x) {
-                viz_log(x, "visualize: throttling connection attempt (too frequent)");
+    DWORD now = GetTickCount();
+
+    if (vs->sock != INVALID_SOCKET && vs->connecting) {
+        fd_set write_fds, except_fds;
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 0; // Non-blocking check
+
+        FD_ZERO(&write_fds);
+        FD_ZERO(&except_fds);
+        FD_SET(vs->sock, &write_fds);
+        FD_SET(vs->sock, &except_fds);
+
+        int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, &except_fds, &tv);
+        if (sel_ret > 0) {
+            if (FD_ISSET(vs->sock, &except_fds)) {
+                if (x) viz_log(x, "visualize: TCP handshake failed (exception set)");
+                closesocket(vs->sock);
+                vs->sock = INVALID_SOCKET;
+                vs->connecting = 0;
+            } else if (FD_ISSET(vs->sock, &write_fds)) {
+                int valopt = 0;
+                int lon = sizeof(int);
+                if (getsockopt(vs->sock, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0 || valopt != 0) {
+                    if (x) viz_log(x, "visualize: getsockopt failed during handshake, error %d", valopt);
+                    closesocket(vs->sock);
+                    vs->sock = INVALID_SOCKET;
+                    vs->connecting = 0;
+                } else {
+                    vs->connecting = 0;
+                    if (x) viz_log(x, "visualize: TCP handshake completed successfully!");
+                }
             }
+        } else if (now - vs->last_connect_attempt > 2000) {
+            if (x) viz_log(x, "visualize: TCP handshake timed out after 2s");
+            closesocket(vs->sock);
+            vs->sock = INVALID_SOCKET;
+            vs->connecting = 0;
+        }
+        return;
+    }
+
+    if (vs->sock == INVALID_SOCKET) {
+        if (now - vs->last_connect_attempt < 250) {
             return;
         }
         vs->last_connect_attempt = now;
 
         vs->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (vs->sock == INVALID_SOCKET) {
-            if (x) {
-                object_error((t_object *)x, "visualize: socket creation failed");
-            }
+            if (x) object_error((t_object *)x, "visualize: socket creation failed");
             return;
         }
 
         u_long mode = 1;
         if (ioctlsocket(vs->sock, FIONBIO, &mode) != 0) {
-            if (x) {
-                object_error((t_object *)x, "visualize: failed to set non-blocking mode");
-            }
+            if (x) object_error((t_object *)x, "visualize: failed to set non-blocking mode");
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             return;
@@ -468,77 +501,16 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
         if (connect(vs->sock, (struct sockaddr *)&vs->addr, sizeof(vs->addr)) == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
-                if (x) {
-                    viz_log(x, "visualize: TCP connect failed with error %d", err);
-                }
+                if (x) viz_log(x, "visualize: TCP connect failed with error %d", err);
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
             } else {
-                if (x) {
-                    viz_log(x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
-                }
-
-                fd_set write_fds, except_fds;
-                struct timeval tv;
-                tv.tv_sec = 0;
-                tv.tv_usec = 200000; // 200ms timeout
-
-                FD_ZERO(&write_fds);
-                FD_ZERO(&except_fds);
-                FD_SET(vs->sock, &write_fds);
-                FD_SET(vs->sock, &except_fds);
-
-                int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, &except_fds, &tv);
-                if (sel_ret > 0) {
-                    if (FD_ISSET(vs->sock, &except_fds)) {
-                        if (x) {
-                            viz_log(x, "visualize: TCP handshake failed (exception set)");
-                        }
-                        closesocket(vs->sock);
-                        vs->sock = INVALID_SOCKET;
-                    } else if (FD_ISSET(vs->sock, &write_fds)) {
-                        int valopt;
-                        int lon = sizeof(int);
-                        if (getsockopt(vs->sock, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0) {
-                            if (x) {
-                                viz_log(x, "visualize: getsockopt failed during handshake");
-                            }
-                            closesocket(vs->sock);
-                            vs->sock = INVALID_SOCKET;
-                        } else if (valopt != 0) {
-                            if (x) {
-                                viz_log(x, "visualize: TCP handshake failed with socket error %d", valopt);
-                            }
-                            closesocket(vs->sock);
-                            vs->sock = INVALID_SOCKET;
-                        } else {
-                            if (x) {
-                                viz_log(x, "visualize: TCP handshake completed successfully via select!");
-                            }
-                        }
-                    }
-                } else if (sel_ret == 0) {
-                    if (x) {
-                        viz_log(x, "visualize: TCP handshake timed out (50ms)");
-                    }
-                    closesocket(vs->sock);
-                    vs->sock = INVALID_SOCKET;
-                } else {
-                    if (x) {
-                        viz_log(x, "visualize: select failed during TCP handshake");
-                    }
-                    closesocket(vs->sock);
-                    vs->sock = INVALID_SOCKET;
-                }
+                vs->connecting = 1;
+                if (x) viz_log(x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
             }
         } else {
-            if (x) {
-                viz_log(x, "visualize: TCP socket connected immediately!");
-            }
-        }
-    } else {
-        if (x) {
-            viz_log(x, "visualize: socket is already open and ready");
+            vs->connecting = 0;
+            if (x) viz_log(x, "visualize: TCP socket connected immediately!");
         }
     }
 }
@@ -776,6 +748,15 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
     if (!vs) {
         object_warn((t_object *)x, "visualize_to_port: could not resolve socket for port %d", port);
         return;
+    }
+
+    if (vs->sock == INVALID_SOCKET && !vs->connecting) {
+        systhread_mutex_lock(queue_mutex);
+        if (queue_count > 10) {
+            systhread_mutex_unlock(queue_mutex);
+            return;
+        }
+        systhread_mutex_unlock(queue_mutex);
     }
 
     systhread_mutex_lock(queue_mutex);

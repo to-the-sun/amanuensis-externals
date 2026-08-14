@@ -120,24 +120,24 @@ def process_packet(line):
     except Exception as e:
         print(f"Error parsing packet: {e}", file=sys.stderr)
 
-def tcp_server():
+def tcp_server(port):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     bound = False
     last_err = None
     for attempt in range(20):
         try:
-            server_sock.bind(("", TCP_PORT))
+            server_sock.bind(("", port))
             bound = True
             break
         except Exception as e:
             last_err = e
             time.sleep(0.1)
     if not bound:
-        print(f"ERROR: Failed to bind to port {TCP_PORT} after 20 attempts: {last_err}", file=sys.stderr)
+        print(f"ERROR: Failed to bind to port {port} after 20 attempts: {last_err}", file=sys.stderr)
         sys.exit(1)
     server_sock.listen(5)
-    print(f"Cumulative Transience Companion Visualizer: Listening on port {TCP_PORT}", flush=True)
+    print(f"Cumulative Transience Companion Visualizer: Listening on port {port}", flush=True)
 
     while True:
         try:
@@ -241,5 +241,6 @@ def run_gui():
     sys.exit(0)
 
 if __name__ == "__main__":
-    threading.Thread(target=tcp_server, daemon=True).start()
+    threading.Thread(target=tcp_server, args=(TCP_PORT,), daemon=True).start()
+    time.sleep(0.05)
     run_gui()

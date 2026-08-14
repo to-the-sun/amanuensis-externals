@@ -165,37 +165,34 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
-static const char *get_object_scripting_name(void *x, char *buf, size_t buf_size) {
+static const char *get_object_scripting_name(void *x, int port, char *buf, size_t buf_size) {
     if (!x || !buf || buf_size == 0) return "";
     buf[0] = '\0';
 
     t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-    if (s_name && s_name != gensym("")) {
-        strncpy(buf, s_name->s_name, buf_size - 1);
-        buf[buf_size - 1] = '\0';
-        return buf;
-    }
-
     t_object *patcher = NULL;
     object_obex_lookup(x, gensym("#P"), &patcher);
-    if (patcher) {
-        t_symbol *p_name = (t_symbol *)object_attr_getsym(patcher, gensym("name"));
+    t_symbol *p_name = patcher ? (t_symbol *)object_attr_getsym(patcher, gensym("name")) : NULL;
+
+    if (s_name && s_name != gensym("")) {
         if (p_name && p_name != gensym("")) {
-            strncpy(buf, p_name->s_name, buf_size - 1);
-            buf[buf_size - 1] = '\0';
-            return buf;
+            snprintf(buf, buf_size, "%s: %s", p_name->s_name, s_name->s_name);
+        } else {
+            snprintf(buf, buf_size, "%s", s_name->s_name);
         }
+    } else if (p_name && p_name != gensym("")) {
+        snprintf(buf, buf_size, "%s", p_name->s_name);
+    } else if (port > 0) {
+        snprintf(buf, buf_size, "Port %d", port);
     }
 
-    return "";
+    return buf;
 }
 
 static void launch_visualizers(t_mc_analyze *x) {
     char dir[MAX_PATH_CHARS];
     get_object_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-    char scripting_name[256];
-    get_object_scripting_name(x, scripting_name, sizeof(scripting_name));
 
     long n_chans = x->num_audio_chans;
     if (n_chans <= 0) n_chans = 1;
@@ -215,6 +212,9 @@ static void launch_visualizers(t_mc_analyze *x) {
     for (long ch = 0; ch < n_chans; ch++) {
         if (x->viz_ports[ch] == 0) {
             x->viz_ports[ch] = visualize_allocate_port(9001);
+
+                char scripting_name[256];
+                get_object_scripting_name(x, x->viz_ports[ch], scripting_name, sizeof(scripting_name));
 
             char cmd[MAX_PATH_CHARS * 2];
             snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld --name \"%s\"", dir, x->viz_ports[ch], grp, ch, scripting_name);
@@ -738,7 +738,7 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         double p_time = (double)target_analysis_frame / x->sample_rate;
                         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
                         char scripting_name[256];
-                        get_object_scripting_name(x, scripting_name, sizeof(scripting_name));
+                        get_object_scripting_name(x, (ch < x->allocated_viz_ports) ? x->viz_ports[ch] : 0, scripting_name, sizeof(scripting_name));
 
                         n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld,\"time\":%.4f,", grp, scripting_name, ch, p_time);
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
