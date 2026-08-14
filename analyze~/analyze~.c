@@ -154,19 +154,44 @@ static const char *get_object_scripting_name(void *x, int port, char *buf, size_
     if (!x || !buf || buf_size == 0) return "";
     buf[0] = '\0';
 
-    t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+    t_symbol *s_name = NULL;
+    t_object *box = NULL;
+    object_obex_lookup(x, gensym("#B"), &box);
+    if (box) {
+        s_name = (t_symbol *)object_attr_getsym(box, gensym("varname"));
+    }
+    if (!s_name || s_name == gensym("")) {
+        s_name = (t_symbol *)object_attr_getsym(x, gensym("varname"));
+    }
+
     t_object *patcher = NULL;
     object_obex_lookup(x, gensym("#P"), &patcher);
-    t_symbol *p_name = patcher ? (t_symbol *)object_attr_getsym(patcher, gensym("name")) : NULL;
+    t_symbol *p_name = NULL;
+    t_symbol *p_varname = NULL;
+    if (patcher) {
+        p_name = (t_symbol *)object_attr_getsym(patcher, gensym("name"));
+        t_object *parent_box = NULL;
+        object_obex_lookup(patcher, gensym("#B"), &parent_box);
+        if (parent_box) {
+            p_varname = (t_symbol *)object_attr_getsym(parent_box, gensym("varname"));
+        }
+    }
+
+    char parent_prefix[128] = {0};
+    if (p_varname && p_varname != gensym("")) {
+        snprintf(parent_prefix, sizeof(parent_prefix), "%s", p_varname->s_name);
+    } else if (p_name && p_name != gensym("")) {
+        snprintf(parent_prefix, sizeof(parent_prefix), "%s", p_name->s_name);
+    }
 
     if (s_name && s_name != gensym("")) {
-        if (p_name && p_name != gensym("")) {
-            snprintf(buf, buf_size, "%s: %s", p_name->s_name, s_name->s_name);
+        if (parent_prefix[0] != '\0') {
+            snprintf(buf, buf_size, "%s: %s", parent_prefix, s_name->s_name);
         } else {
             snprintf(buf, buf_size, "%s", s_name->s_name);
         }
-    } else if (p_name && p_name != gensym("")) {
-        snprintf(buf, buf_size, "%s", p_name->s_name);
+    } else if (parent_prefix[0] != '\0') {
+        snprintf(buf, buf_size, "%s", parent_prefix);
     } else if (port > 0) {
         snprintf(buf, buf_size, "Port %d", port);
     }
