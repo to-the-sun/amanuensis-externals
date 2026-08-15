@@ -139,10 +139,14 @@ def draw_renderer(W, H, current_time, frame_data):
     """
     pr.clear_background(COLOR_BG)
 
+    log_enabled = frame_data.get('log_enabled', 0)
+    H_console = 220 if log_enabled else 0
+    H_eff = H - H_console
+
     # Panel Heights
-    H_top = int(H * 1.0 / 2.4)
-    H_mid = int(H * 0.4 / 2.4)
-    H_bot = int(H * 1.0 / 2.4)
+    H_top = int(H_eff * 1.0 / 2.4)
+    H_mid = int(H_eff * 0.4 / 2.4)
+    H_bot = int(H_eff * 1.0 / 2.4)
 
     Y_top = 0
     Y_mid = H_top
@@ -151,8 +155,8 @@ def draw_renderer(W, H, current_time, frame_data):
     # Margins and dimensions
     margin_left = int(W * 0.06)
     margin_right = int(W * 0.15)
-    margin_top = int(H * 0.04)
-    margin_bottom = int(H * 0.04)
+    margin_top = int(H_eff * 0.04)
+    margin_bottom = int(H_eff * 0.04)
 
     # Extract dynamic/shared boundaries
     min_score = frame_data.get('min_score_seen', -5.0)
@@ -513,3 +517,34 @@ def draw_renderer(W, H, current_time, frame_data):
     else:
         group_lbl = "  -  Group: [No Group]"
     draw_text_safe(f"Accumulated 5s Historical Buffer{group_lbl}", margin_left, Y_bot - 15, 12, COLOR_PEAK_MARKER)
+
+    # -------------------------------------------------------------
+    # 4. CONSOLE PANEL: TCP Packet Log (when @log mode is enabled)
+    # -------------------------------------------------------------
+    if log_enabled and H_console > 0:
+        Y_console = H_eff
+        console_h = H_console - margin_bottom
+        pr.draw_rectangle(margin_left, Y_console, graph_w, console_h, pr.Color(12, 12, 15, 255))
+        pr.draw_rectangle_lines(margin_left, Y_console, graph_w, console_h, COLOR_GRID)
+        draw_text_safe("TCP Packet Log", margin_left + 10, Y_console + 5, 12, COLOR_PEAK_MARKER)
+
+        packet_logs = frame_data.get('packet_logs', [])
+        char_width = 7.0
+        max_chars_per_line = max(20, int((graph_w - 20) / char_width))
+
+        wrapped_lines = []
+        for raw_pkt in packet_logs:
+            # Wrap long packet lines cleanly across available width
+            idx = 0
+            while idx < len(raw_pkt):
+                wrapped_lines.append(raw_pkt[idx:idx + max_chars_per_line])
+                idx += max_chars_per_line
+
+        # Show as many lines as can fit vertically in the console area
+        max_visible_text_lines = max(1, int((console_h - 30) / 15))
+        visible_wrapped = wrapped_lines[-max_visible_text_lines:]
+
+        log_y = Y_console + 24
+        for wline in visible_wrapped:
+            draw_text_safe(wline, margin_left + 10, log_y, 11, COLOR_TEXT_MUTED)
+            log_y += 15

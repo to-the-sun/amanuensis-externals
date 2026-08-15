@@ -23,12 +23,6 @@ typedef struct {
     t_systhread_mutex mutex; // Per-socket mutex for thread-safe access
 } t_viz_socket;
 
-typedef struct {
-    int port;
-    t_viz_socket vs;
-    int in_use;
-} t_dynamic_socket;
-
 typedef struct _viz_queue_item {
     t_viz_socket *vs;
     void *x;    // Reference to Max object
@@ -36,6 +30,20 @@ typedef struct _viz_queue_item {
     char *message;
     struct _viz_queue_item *next;
 } t_viz_queue_item;
+
+typedef struct {
+    int port;
+    t_viz_socket vs;
+    int in_use;
+
+    t_systhread_mutex queue_mutex;
+    t_systhread_cond queue_cond;
+    t_systhread thread;
+    t_viz_queue_item *queue_head;
+    t_viz_queue_item *queue_tail;
+    int queue_count;
+    int exit_flag;
+} t_dynamic_socket;
 
 static t_viz_socket crucible_viz = { INVALID_SOCKET, {0}, 0, NULL };
 static t_viz_socket weaver_viz = { INVALID_SOCKET, {0}, 0, NULL };
@@ -164,6 +172,8 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     return NULL;
 }
 
+static void free_dynamic_socket_queue(t_dynamic_socket *ds);
+
 static void viz_socket_init(t_viz_socket *vs, int port) {
     memset((char *) &vs->addr, 0, sizeof(vs->addr));
     vs->addr.sin_family = AF_INET;
@@ -223,6 +233,8 @@ void visualize_cleanup() {
             systhread_mutex_lock(dynamic_sockets_mutex);
             for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
                 if (dynamic_sockets[i].in_use) {
+                    free_dynamic_socket_queue(&dynamic_sockets[i]);
+
                     systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
                     if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
                         closesocket(dynamic_sockets[i].vs.sock);
@@ -276,6 +288,50 @@ void visualize_cleanup() {
     }
 }
 
+static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message);
+
+void *dynamic_socket_worker_thread(void *arg) {
+    t_dynamic_socket *ds = (t_dynamic_socket *)arg;
+    char thread_name[64];
+    snprintf(thread_name, sizeof(thread_name), "viz_port_%d", ds->port);
+    systhread_set_name(thread_name);
+
+    while (1) {
+        t_viz_queue_item *item = NULL;
+
+        systhread_mutex_lock(ds->queue_mutex);
+        while (ds->queue_head == NULL && !ds->exit_flag) {
+            systhread_cond_wait(ds->queue_cond, ds->queue_mutex);
+        }
+
+        if (ds->exit_flag && ds->queue_head == NULL) {
+            systhread_mutex_unlock(ds->queue_mutex);
+            break;
+        }
+
+        item = ds->queue_head;
+        if (item) {
+            ds->queue_head = item->next;
+            if (ds->queue_head == NULL) ds->queue_tail = NULL;
+            ds->queue_count--;
+        }
+        systhread_mutex_unlock(ds->queue_mutex);
+
+        if (item) {
+            systhread_mutex_lock(item->vs->mutex);
+            perform_send(item->vs, item->x, item->type, item->message);
+            systhread_mutex_unlock(item->vs->mutex);
+
+            sysmem_freeptr(item->type);
+            sysmem_freeptr(item->message);
+            sysmem_freeptr(item);
+        }
+    }
+
+    systhread_exit(0);
+    return NULL;
+}
+
 int visualize_allocate_port(int start_port) {
     if (start_port <= 0) start_port = 9001;
     if (!dynamic_sockets_mutex) {
@@ -313,6 +369,15 @@ int visualize_allocate_port(int start_port) {
                         dynamic_sockets[i].port = port;
                         dynamic_sockets[i].in_use = 1;
                         viz_socket_init(&dynamic_sockets[i].vs, port);
+
+                        dynamic_sockets[i].queue_head = NULL;
+                        dynamic_sockets[i].queue_tail = NULL;
+                        dynamic_sockets[i].queue_count = 0;
+                        dynamic_sockets[i].exit_flag = 0;
+                        systhread_mutex_new(&dynamic_sockets[i].queue_mutex, 0);
+                        systhread_cond_new(&dynamic_sockets[i].queue_cond, 0);
+                        systhread_create((method)dynamic_socket_worker_thread, &dynamic_sockets[i], 0, 0, 0, &dynamic_sockets[i].thread);
+
                         add_port_to_shared_map(port);
                         systhread_mutex_unlock(dynamic_sockets_mutex);
                         shared_port_map_unlock();
@@ -328,6 +393,41 @@ int visualize_allocate_port(int start_port) {
     return start_port;
 }
 
+static void free_dynamic_socket_queue(t_dynamic_socket *ds) {
+    if (!ds) return;
+    ds->exit_flag = 1;
+    if (ds->queue_cond) {
+        systhread_mutex_lock(ds->queue_mutex);
+        systhread_cond_signal(ds->queue_cond);
+        systhread_mutex_unlock(ds->queue_mutex);
+    }
+    if (ds->thread) {
+        unsigned int ret;
+        systhread_join(ds->thread, &ret);
+        ds->thread = NULL;
+    }
+
+    if (ds->queue_mutex) {
+        systhread_mutex_lock(ds->queue_mutex);
+        t_viz_queue_item *curr = ds->queue_head;
+        while (curr) {
+            t_viz_queue_item *next = curr->next;
+            if (curr->type) sysmem_freeptr(curr->type);
+            if (curr->message) sysmem_freeptr(curr->message);
+            sysmem_freeptr(curr);
+            curr = next;
+        }
+        ds->queue_head = ds->queue_tail = NULL;
+        ds->queue_count = 0;
+        systhread_mutex_unlock(ds->queue_mutex);
+
+        systhread_mutex_free(ds->queue_mutex);
+        systhread_cond_free(ds->queue_cond);
+        ds->queue_mutex = NULL;
+        ds->queue_cond = NULL;
+    }
+}
+
 void visualize_close_port(int port) {
     if (port <= 0 || !dynamic_sockets_mutex) return;
 
@@ -335,6 +435,8 @@ void visualize_close_port(int port) {
     systhread_mutex_lock(dynamic_sockets_mutex);
     for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
         if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+            free_dynamic_socket_queue(&dynamic_sockets[i]);
+
             systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
             if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
                 closesocket(dynamic_sockets[i].vs.sock);
@@ -694,6 +796,26 @@ void visualize(void *x, const char *message) {
     const char *ev = get_event_name_from_message(message);
 
     systhread_mutex_lock(queue_mutex);
+
+    // Strategy 1: Update Coalescing for 'update' event packets
+    if (strcmp(ev, "update") == 0) {
+        t_viz_queue_item *curr = queue_head;
+        while (curr) {
+            if (curr->vs == vs && strcmp(curr->type, type_static) == 0) {
+                char *new_msg = (char *)sysmem_newptr(strlen(message) + 1);
+                if (new_msg) {
+                    strcpy(new_msg, message);
+                    sysmem_freeptr(curr->message);
+                    curr->message = new_msg;
+                    curr->x = x;
+                    systhread_mutex_unlock(queue_mutex);
+                    return;
+                }
+            }
+            curr = curr->next;
+        }
+    }
+
     if (queue_count >= MAX_QUEUE_SIZE) {
         object_error((t_object *)x, "visualize queue overflow (count: %d >= %d). Dropping packet.", queue_count, MAX_QUEUE_SIZE);
         systhread_mutex_unlock(queue_mutex);
@@ -736,7 +858,7 @@ void visualize(void *x, const char *message) {
 }
 
 void visualize_to_port(void *x, int port, const char *type, const char *message) {
-    if (!x || !message || !queue_mutex || port <= 0) return;
+    if (!x || !message || port <= 0) return;
 
     long log_enabled = 0;
     long visualize_enabled = 0;
@@ -747,49 +869,61 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
         return;
     }
 
-    t_viz_socket *vs = NULL;
+    t_dynamic_socket *ds = NULL;
     if (dynamic_sockets_mutex) {
         systhread_mutex_lock(dynamic_sockets_mutex);
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
-                vs = &dynamic_sockets[i].vs;
+                ds = &dynamic_sockets[i];
                 break;
-            }
-        }
-        if (!vs) {
-            for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-                if (!dynamic_sockets[i].in_use) {
-                    dynamic_sockets[i].port = port;
-                    dynamic_sockets[i].in_use = 1;
-                    viz_socket_init(&dynamic_sockets[i].vs, port);
-                    vs = &dynamic_sockets[i].vs;
-                    break;
-                }
             }
         }
         systhread_mutex_unlock(dynamic_sockets_mutex);
     }
 
-    if (!vs) {
+    if (!ds) {
         object_warn((t_object *)x, "visualize_to_port: could not resolve socket for port %d", port);
         return;
     }
 
     viz_log(x, "visualize_to_port: queuing packet of %ld bytes to port %d (type '%s')", (long)strlen(message), port, type);
 
-    systhread_mutex_lock(queue_mutex);
-    if (queue_count >= MAX_QUEUE_SIZE) {
-        systhread_mutex_unlock(queue_mutex);
+    const char *ev = get_event_name_from_message(message);
+
+    systhread_mutex_lock(ds->queue_mutex);
+
+    // Strategy 1: Update Coalescing for 'update' event packets on analyze/mc_analyze
+    if (strcmp(ev, "update") == 0 && (strcmp(type, "analyze") == 0 || strcmp(type, "mc_analyze") == 0)) {
+        t_viz_queue_item *curr = ds->queue_head;
+        while (curr) {
+            const char *curr_ev = get_event_name_from_message(curr->message);
+            if (strcmp(curr_ev, "update") == 0) {
+                char *new_msg = (char *)sysmem_newptr(strlen(message) + 1);
+                if (new_msg) {
+                    strcpy(new_msg, message);
+                    sysmem_freeptr(curr->message);
+                    curr->message = new_msg;
+                    curr->x = x;
+                    systhread_mutex_unlock(ds->queue_mutex);
+                    return;
+                }
+            }
+            curr = curr->next;
+        }
+    }
+
+    if (ds->queue_count >= MAX_QUEUE_SIZE) {
+        systhread_mutex_unlock(ds->queue_mutex);
         return;
     }
 
     t_viz_queue_item *item = (t_viz_queue_item *)sysmem_newptr(sizeof(t_viz_queue_item));
     if (!item) {
-        systhread_mutex_unlock(queue_mutex);
+        systhread_mutex_unlock(ds->queue_mutex);
         return;
     }
 
-    item->vs = vs;
+    item->vs = &ds->vs;
     item->x = x;
     item->type = (char *)sysmem_newptr(strlen(type) + 1);
     item->message = (char *)sysmem_newptr(strlen(message) + 1);
@@ -798,7 +932,7 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
         if (item->type) sysmem_freeptr(item->type);
         if (item->message) sysmem_freeptr(item->message);
         sysmem_freeptr(item);
-        systhread_mutex_unlock(queue_mutex);
+        systhread_mutex_unlock(ds->queue_mutex);
         return;
     }
 
@@ -806,16 +940,16 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
     strcpy(item->message, message);
     item->next = NULL;
 
-    if (queue_tail) {
-        queue_tail->next = item;
+    if (ds->queue_tail) {
+        ds->queue_tail->next = item;
     } else {
-        queue_head = item;
+        ds->queue_head = item;
     }
-    queue_tail = item;
-    queue_count++;
+    ds->queue_tail = item;
+    ds->queue_count++;
 
-    systhread_cond_signal(viz_cond);
-    systhread_mutex_unlock(queue_mutex);
+    systhread_cond_signal(ds->queue_cond);
+    systhread_mutex_unlock(ds->queue_mutex);
 }
 
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {

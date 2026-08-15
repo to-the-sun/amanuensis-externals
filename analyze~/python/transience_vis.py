@@ -14,12 +14,14 @@ parser.add_argument('--port', type=int, default=9001, help="TCP port to listen o
 parser.add_argument('--group', type=str, default="", help="Shared group name")
 parser.add_argument('--channel', type=int, default=-1, help="Channel index (-1 for single channel)")
 parser.add_argument('--name', type=str, default="", help="Object scripting name")
+parser.add_argument('--log', type=int, default=0, help="Enable TCP packet logging console")
 args, _ = parser.parse_known_args()
 
 TCP_PORT = args.port
 INITIAL_GROUP = args.group
 INITIAL_CHANNEL = args.channel
 INITIAL_NAME = args.name
+INITIAL_LOG = args.log
 
 FPS = 60
 W, H = 1200, 1000
@@ -32,6 +34,8 @@ state = {
     'group': INITIAL_GROUP,
     'channel': INITIAL_CHANNEL,
     'scripting_name': INITIAL_NAME,
+    'log_enabled': INITIAL_LOG,
+    'packet_logs': [],
     'times': [],               # Rolling timestamps (last 25 seconds)
     'onset_envs': [[],[],[],[]], # 4 bands flux
     'smooth_envs': [[],[],[],[]], # 4 bands smooth
@@ -58,6 +62,12 @@ state_lock = threading.Lock()
 def process_packet(line):
     line = line.strip()
     if not line: return
+
+    with state_lock:
+        state['packet_logs'].append(line)
+        if len(state['packet_logs']) > 50:
+            state['packet_logs'] = state['packet_logs'][-50:]
+
     try:
         pkt = json.loads(line)
         pkt_type = pkt.get('type')
@@ -65,6 +75,8 @@ def process_packet(line):
             return
 
         with state_lock:
+            if 'log' in pkt and pkt['log'] is not None:
+                state['log_enabled'] = pkt['log']
             if 'group' in pkt and pkt['group']:
                 state['group'] = pkt['group']
             if 'channel' in pkt and pkt['channel'] is not None:
@@ -199,6 +211,8 @@ def run_gui():
                 'group': state['group'],
                 'channel': state['channel'],
                 'scripting_name': state['scripting_name'],
+                'log_enabled': state['log_enabled'],
+                'packet_logs': list(state['packet_logs']),
                 'times': list(state['times']),
                 'onset_envs': [list(x) for x in state['onset_envs']],
                 'smooth_envs': [list(x) for x in state['smooth_envs']],
