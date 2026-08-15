@@ -16,6 +16,7 @@
 
 #define MAX_AUDIO_SECONDS 60
 #define ANALYSIS_HOP_MS 100
+#define MAX_ANALYZE_CHANNELS 1024
 
 typedef struct _analyze_shared_buffer {
     t_object ob;
@@ -119,6 +120,8 @@ typedef struct _mc_analyze {
     int invalidated;
     int pending_analysis;
 
+    char paused_channels[MAX_ANALYZE_CHANNELS + 1];
+
     ChunkAnalysisResult* result_buffer;
 
 } t_mc_analyze;
@@ -126,6 +129,7 @@ typedef struct _mc_analyze {
 void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_free(t_mc_analyze* x);
 void mc_analyze_clear(t_mc_analyze* x);
+void mc_analyze_pause(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_group_settor(t_mc_analyze* x, void* attr, long argc, t_atom* argv);
 void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_output_metrics(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -270,6 +274,7 @@ void ext_main(void* r) {
     class_addmethod(c, (method)mc_analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)mc_analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)mc_analyze_clear, "clear", 0);
+    class_addmethod(c, (method)mc_analyze_pause, "pause", A_GIMME, 0);
     class_addmethod(c, (method)mc_analyze_inputchanged, "inputchanged", A_CANT, 0);
 
     class_dspinit(c);
@@ -327,6 +332,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
+        memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         visualize_init();
@@ -465,10 +471,41 @@ void mc_analyze_group_settor(t_mc_analyze* x, void* attr, long argc, t_atom* arg
     }
 }
 
+void mc_analyze_pause(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
+    char new_mask[MAX_ANALYZE_CHANNELS + 1];
+    memset(new_mask, 0, sizeof(new_mask));
+
+    for (long i = 0; i < argc; i++) {
+        long chan = 0;
+        if (atom_gettype(argv + i) == A_LONG) {
+            chan = atom_getlong(argv + i);
+        } else if (atom_gettype(argv + i) == A_FLOAT) {
+            chan = (long)atom_getfloat(argv + i);
+        } else if (atom_gettype(argv + i) == A_SYM) {
+            t_symbol *sym = atom_getsym(argv + i);
+            if (sym) {
+                char *endptr = NULL;
+                chan = strtol(sym->s_name, &endptr, 10);
+                if (endptr && *endptr != '\0') {
+                    chan = 0;
+                }
+            }
+        }
+        if (chan >= 1 && chan <= MAX_ANALYZE_CHANNELS) {
+            new_mask[chan] = 1;
+        }
+    }
+
+    critical_enter(x->lock);
+    memcpy(x->paused_channels, new_mask, sizeof(x->paused_channels));
+    critical_exit(x->lock);
+    mc_analyze_log(x, "updated pause state");
+}
+
 void mc_analyze_assist(t_mc_analyze* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal/multichannelsignal) Audio Input"); break;
+            case 0: sprintf(s, "(signal/multichannelsignal) Audio Input, (messages) clear, pause"); break;
             case 1: sprintf(s, "(signal) Transport Clock Input"); break;
         }
     } else {
@@ -680,6 +717,17 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
         for (long ch = 0; ch < n_chans; ch++) {
             if (x->invalidated) break;
 
+            int is_paused = 0;
+            critical_enter(x->lock);
+            if ((ch + 1) <= MAX_ANALYZE_CHANNELS) {
+                is_paused = x->paused_channels[ch + 1];
+            }
+            critical_exit(x->lock);
+
+            if (is_paused) {
+                continue;
+            }
+
             long long samples_ago = cur_samples - hop_start_samples;
             int read_ptr = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
 
@@ -837,8 +885,22 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             }
         }
 
-        if (n_chans > 0 && x->analyzers[0] && x->result_buffer) {
-            analyzer_update_metrics(x->analyzers[0], active_start_frame + 100, &x->result_buffer->metrics);
+        long active_ch = -1;
+        for (long ch = 0; ch < n_chans; ch++) {
+            int is_paused = 0;
+            critical_enter(x->lock);
+            if ((ch + 1) <= MAX_ANALYZE_CHANNELS) {
+                is_paused = x->paused_channels[ch + 1];
+            }
+            critical_exit(x->lock);
+            if (!is_paused) {
+                active_ch = ch;
+                break;
+            }
+        }
+
+        if (n_chans > 0 && active_ch >= 0 && x->analyzers[active_ch] && x->result_buffer) {
+            analyzer_update_metrics(x->analyzers[active_ch], active_start_frame + 100, &x->result_buffer->metrics);
 
             t_atom out_args[5];
             atom_setfloat(out_args, x->result_buffer->metrics.rating);
@@ -852,7 +914,11 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             int combined_bar_length_counts[5001] = {0};
             critical_enter(x->lock);
             for (long ch = 0; ch < n_chans; ch++) {
-                if (x->analyzers[ch]) {
+                int is_paused = 0;
+                if ((ch + 1) <= MAX_ANALYZE_CHANNELS) {
+                    is_paused = x->paused_channels[ch + 1];
+                }
+                if (!is_paused && x->analyzers[ch]) {
                     for (int i = 0; i <= 5000; i++) {
                         combined_bar_length_counts[i] += x->analyzers[ch]->bar_length_counts[i];
                     }

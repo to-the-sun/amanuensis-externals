@@ -16,6 +16,7 @@
 
 #define MAX_AUDIO_SECONDS 60
 #define ANALYSIS_HOP_MS 100
+#define MAX_ANALYZE_CHANNELS 1024
 
 typedef struct _analyze_shared_buffer {
     t_object ob;
@@ -105,6 +106,8 @@ typedef struct _analyze {
     int invalidated;
     int pending_analysis;
 
+    char paused_channels[MAX_ANALYZE_CHANNELS + 1];
+
     ChunkAnalysisResult* result_buffer;
 
 } t_analyze;
@@ -112,6 +115,7 @@ typedef struct _analyze {
 void* analyze_new(t_symbol* s, long argc, t_atom* argv);
 void analyze_free(t_analyze* x);
 void analyze_clear(t_analyze* x);
+void analyze_pause(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv);
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -237,6 +241,7 @@ void ext_main(void* r) {
     class_addmethod(c, (method)analyze_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)analyze_clear, "clear", 0);
+    class_addmethod(c, (method)analyze_pause, "pause", A_GIMME, 0);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -280,6 +285,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->visualize_enabled = 0;
         x->viz_port = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
+        memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         visualize_init();
@@ -391,10 +397,41 @@ void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv) {
     }
 }
 
+void analyze_pause(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
+    char new_mask[MAX_ANALYZE_CHANNELS + 1];
+    memset(new_mask, 0, sizeof(new_mask));
+
+    for (long i = 0; i < argc; i++) {
+        long chan = 0;
+        if (atom_gettype(argv + i) == A_LONG) {
+            chan = atom_getlong(argv + i);
+        } else if (atom_gettype(argv + i) == A_FLOAT) {
+            chan = (long)atom_getfloat(argv + i);
+        } else if (atom_gettype(argv + i) == A_SYM) {
+            t_symbol *sym = atom_getsym(argv + i);
+            if (sym) {
+                char *endptr = NULL;
+                chan = strtol(sym->s_name, &endptr, 10);
+                if (endptr && *endptr != '\0') {
+                    chan = 0;
+                }
+            }
+        }
+        if (chan >= 1 && chan <= MAX_ANALYZE_CHANNELS) {
+            new_mask[chan] = 1;
+        }
+    }
+
+    critical_enter(x->lock);
+    memcpy(x->paused_channels, new_mask, sizeof(x->paused_channels));
+    critical_exit(x->lock);
+    analyze_log(x, "updated pause state");
+}
+
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal) Audio Input"); break;
+            case 0: sprintf(s, "(signal) Audio Input, (messages) clear, pause"); break;
             case 1: sprintf(s, "(signal) Transport Clock Input"); break;
         }
     } else {
@@ -499,6 +536,17 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         if (x->invalidated) break;
 
         long long target_analysis_frame = x->last_analysis_frame + hop_samples;
+
+        int is_paused = 0;
+        critical_enter(x->lock);
+        is_paused = x->paused_channels[1];
+        critical_exit(x->lock);
+
+        if (is_paused) {
+            x->last_analysis_frame = target_analysis_frame;
+            continue;
+        }
+
         int hop_start_samples = (int)(target_analysis_frame - hop_samples);
 
         float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);

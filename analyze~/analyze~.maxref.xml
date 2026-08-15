@@ -64,6 +64,12 @@
 				Clears the internal historical buffers, including the cumulative transience history and the audio/clock buffers. All calculated metrics (Rating, Standard Deviation, etc.) are reset to their initialized values. If the object is part of a shared group, the shared group's buffer is also cleared.
 			</description>
 		</method>
+		<method name="pause">
+			<digest>Pause analysis for specified channels</digest>
+			<description>
+				Pauses or resumes transience analysis for specified 1-based audio channel numbers. Accepts a list of one or more integers representing channel numbers to pause. Sending `pause 1` pauses analysis for `analyze~`'s channel. Sending `pause 0` resumes analysis for all channels as normal.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
