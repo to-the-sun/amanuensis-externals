@@ -10,6 +10,8 @@ typedef struct _mc_block {
     void *proxy;
     long proxy_id;
 
+    long input_num_chans;
+
     t_critical lock;
     long *blocked_channels;
     long num_blocked;
@@ -23,6 +25,8 @@ void mc_block_list(t_mc_block *x, t_symbol *s, long argc, t_atom *argv);
 void mc_block_int(t_mc_block *x, long n);
 void mc_block_float(t_mc_block *x, double f);
 void mc_block_clear(t_mc_block *x);
+long mc_block_inputchanged(t_mc_block *x, long index, long count);
+long mc_block_multichanneloutputs(t_mc_block *x, long outlet_index);
 void mc_block_dsp64(t_mc_block *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
 void mc_block_perform64(t_mc_block *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam);
 
@@ -39,6 +43,8 @@ void ext_main(void *r) {
     class_addmethod(c, (method)mc_block_int, "int", A_LONG, 0);
     class_addmethod(c, (method)mc_block_float, "float", A_FLOAT, 0);
     class_addmethod(c, (method)mc_block_clear, "clear", 0);
+    class_addmethod(c, (method)mc_block_inputchanged, "inputchanged", A_CANT, 0);
+    class_addmethod(c, (method)mc_block_multichanneloutputs, "multichanneloutputs", A_CANT, 0);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -83,6 +89,8 @@ void *mc_block_new(t_symbol *s, long argc, t_atom *argv) {
         x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
 
         outlet_new((t_object *)x, "multichannelsignal");
+
+        x->input_num_chans = 1;
 
         critical_new(&x->lock);
         x->blocked_channels = NULL;
@@ -141,6 +149,23 @@ void mc_block_clear(t_mc_block *x) {
     critical_exit(x->lock);
 }
 
+long mc_block_inputchanged(t_mc_block *x, long index, long count) {
+    if (index == 0) {
+        if (count != x->input_num_chans) {
+            x->input_num_chans = count;
+            return true;
+        }
+    }
+    return false;
+}
+
+long mc_block_multichanneloutputs(t_mc_block *x, long outlet_index) {
+    if (outlet_index == 0) {
+        return x->input_num_chans > 0 ? x->input_num_chans : 1;
+    }
+    return 1;
+}
+
 void mc_block_assist(t_mc_block *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
@@ -159,6 +184,7 @@ void mc_block_dsp64(t_mc_block *x, t_object *dsp64, short *count, double sampler
     if (num_chans < 1) {
         num_chans = 1;
     }
+    x->input_num_chans = num_chans;
     object_method(dsp64, gensym("setnumoutputchannels"), x, 0, num_chans);
     dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)mc_block_perform64, 0, NULL);
 }
