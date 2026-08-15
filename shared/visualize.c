@@ -160,9 +160,6 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
         if (type_out) *type_out = "building";
         return &weaver_viz;
-    } else if (classname == gensym("analyze~") || classname == gensym("mc.analyze~")) {
-        if (type_out) *type_out = (classname == gensym("mc.analyze~")) ? "mc_analyze" : "analyze";
-        return &analyze_viz;
     }
     return NULL;
 }
