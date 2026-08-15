@@ -348,7 +348,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     return 1;
 }
 
-static bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame) {
+bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame) {
     int cleanup = frame - 15000; bool updated = false;
 
     if (self->lock_func) self->lock_func(self->lock_obj);

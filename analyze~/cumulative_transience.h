@@ -164,6 +164,7 @@ int analyzer_process_peak(TransientAnalyzer* self,
                           double prominence,
                           PeakResult* result_out);
 
+bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame);
 void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics* metrics_out);
 double* analyzer_get_buffer(TransientAnalyzer* self);
 

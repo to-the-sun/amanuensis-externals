@@ -732,9 +732,17 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             }
             critical_exit(x->lock);
 
+            if (is_paused) {
+                if (x->analyzers[ch]) {
+                    analyzer_cleanup_snapshots(x->analyzers[ch], active_start_frame);
+                    analyzer_push_audio(x->analyzers[ch], hop_audio, hop_samples, (int)x->sample_rate);
+                }
+                free(hop_audio);
+                continue;
+            }
+
             if (x->result_buffer && analyzer_analyze_chunk(x->analyzers[ch], hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
-                if (!is_paused) {
-                    for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+                for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
                     PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
                     if (x->clock_connected) {
@@ -878,7 +886,6 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
                         free(json_buf);
                     }
-                }
                 }
             }
         }
