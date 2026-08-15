@@ -773,6 +773,8 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
         return;
     }
 
+    viz_log(x, "visualize_to_port: queuing packet of %ld bytes to port %d (type '%s')", (long)strlen(message), port, type);
+
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
         systhread_mutex_unlock(queue_mutex);

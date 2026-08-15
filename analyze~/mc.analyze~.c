@@ -88,6 +88,7 @@ typedef struct _mc_analyze {
     // Visualizer ports per channel
     int* viz_ports;
     long allocated_viz_ports;
+    int instance_id;
 
     // Shared buffer for local channel accumulation (when no @group is specified)
     SharedTransientBuffer* local_shared_buffer;
@@ -170,7 +171,13 @@ static void launch_visualizers(t_mc_analyze *x) {
     get_object_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
     t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-    const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+    char scripting_name[128];
+    if (s_name && s_name != gensym("")) {
+        strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+        scripting_name[sizeof(scripting_name) - 1] = '\0';
+    } else {
+        snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+    }
 
     long n_chans = x->num_audio_chans;
     if (n_chans <= 0) n_chans = 1;
@@ -319,6 +326,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->tolerance = 29.0;
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
+        x->instance_id = (int)(rand() % 900000 + 100000);
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         visualize_init();
@@ -713,7 +721,13 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         double p_time = (double)target_analysis_frame / x->sample_rate;
                         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
                         t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-                        const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+                        char scripting_name[128];
+                        if (s_name && s_name != gensym("")) {
+                            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+                            scripting_name[sizeof(scripting_name) - 1] = '\0';
+                        } else {
+                            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+                        }
 
                         n = snprintf(ptr, remaining, "{\"type\":\"mc_analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld,\"time\":%.4f,", grp, scripting_name, ch, p_time);
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
@@ -815,6 +829,7 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         n = snprintf(ptr, remaining, "]}");
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
+                        mc_analyze_log(x, "queuing visualization telemetry packet (%ld bytes) for channel %ld to port %d", (long)strlen(json_buf), ch, x->viz_ports[ch]);
                         visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
                         free(json_buf);
                     }

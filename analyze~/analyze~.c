@@ -81,6 +81,7 @@ typedef struct _analyze {
     double tolerance;
     long visualize_enabled;
     int viz_port;
+    int instance_id;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -159,7 +160,13 @@ static void launch_visualizer(t_analyze *x) {
         char cmd[MAX_PATH_CHARS * 2];
         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
         t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
         snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\"", dir, x->viz_port, grp, scripting_name);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
@@ -272,6 +279,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
         x->viz_port = 0;
+        x->instance_id = (int)(rand() % 900000 + 100000);
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
         visualize_init();
@@ -577,7 +585,13 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     double p_time = (double)target_analysis_frame / x->sample_rate;
                     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
                     t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-                    const char *scripting_name = (s_name && s_name != gensym("")) ? s_name->s_name : "";
+                    char scripting_name[128];
+                    if (s_name && s_name != gensym("")) {
+                        strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+                        scripting_name[sizeof(scripting_name) - 1] = '\0';
+                    } else {
+                        snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+                    }
 
                     n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"time\":%.4f,", grp, scripting_name, p_time);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
@@ -679,6 +693,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     n = snprintf(ptr, remaining, "]}");
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
+                    analyze_log(x, "queuing visualization telemetry packet (%ld bytes) to port %d", (long)strlen(json_buf), x->viz_port);
                     visualize_to_port(x, x->viz_port, "analyze", json_buf);
                     free(json_buf);
                 }
