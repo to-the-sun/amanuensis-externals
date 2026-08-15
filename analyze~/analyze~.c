@@ -537,16 +537,6 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 
         long long target_analysis_frame = x->last_analysis_frame + hop_samples;
 
-        int is_paused = 0;
-        critical_enter(x->lock);
-        is_paused = x->paused_channels[1];
-        critical_exit(x->lock);
-
-        if (is_paused) {
-            x->last_analysis_frame = target_analysis_frame;
-            continue;
-        }
-
         int hop_start_samples = (int)(target_analysis_frame - hop_samples);
 
         float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
@@ -567,9 +557,16 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
         if (window_start_samples < 0) window_start_samples = 0;
         int buffer_start_frame = window_start_samples / ms_samples;
 
+        int is_paused = 0;
+        critical_enter(x->lock);
+        is_paused = x->paused_channels[1];
+        critical_exit(x->lock);
+
         if (x->result_buffer && analyzer_analyze_chunk(x->analyzer, hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
             hops_processed++;
-            for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+
+            if (!is_paused) {
+                for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
                 PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
                 if (x->clock_connected) {
@@ -745,6 +742,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                     visualize_to_port(x, x->viz_port, "analyze", json_buf);
                     free(json_buf);
                 }
+            }
             }
         }
 

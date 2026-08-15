@@ -717,17 +717,6 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
         for (long ch = 0; ch < n_chans; ch++) {
             if (x->invalidated) break;
 
-            int is_paused = 0;
-            critical_enter(x->lock);
-            if ((ch + 1) <= MAX_ANALYZE_CHANNELS) {
-                is_paused = x->paused_channels[ch + 1];
-            }
-            critical_exit(x->lock);
-
-            if (is_paused) {
-                continue;
-            }
-
             long long samples_ago = cur_samples - hop_start_samples;
             int read_ptr = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
 
@@ -736,8 +725,16 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                 read_ptr = (read_ptr + 1) % x->audio_buffer_size;
             }
 
+            int is_paused = 0;
+            critical_enter(x->lock);
+            if ((ch + 1) <= MAX_ANALYZE_CHANNELS) {
+                is_paused = x->paused_channels[ch + 1];
+            }
+            critical_exit(x->lock);
+
             if (x->result_buffer && analyzer_analyze_chunk(x->analyzers[ch], hop_audio, hop_samples, (int)x->sample_rate, buffer_start_frame, active_start_frame, x->result_buffer)) {
-                for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
+                if (!is_paused) {
+                    for (int i = 0; i < x->result_buffer->peak_list.num_peaks; i++) {
                     PeakResult* pr = &x->result_buffer->peak_list.peaks[i];
 
                     if (x->clock_connected) {
@@ -881,6 +878,7 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                         visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
                         free(json_buf);
                     }
+                }
                 }
             }
         }
