@@ -140,7 +140,7 @@ def draw_renderer(W, H, current_time, frame_data):
     pr.clear_background(COLOR_BG)
 
     log_enabled = frame_data.get('log_enabled', 0)
-    H_console = 140 if log_enabled else 0
+    H_console = 220 if log_enabled else 0
     H_eff = H - H_console
 
     # Panel Heights
@@ -529,10 +529,22 @@ def draw_renderer(W, H, current_time, frame_data):
         draw_text_safe("TCP Packet Log", margin_left + 10, Y_console + 5, 12, COLOR_PEAK_MARKER)
 
         packet_logs = frame_data.get('packet_logs', [])
-        visible_logs = packet_logs[-6:]
+        char_width = 7.0
+        max_chars_per_line = max(20, int((graph_w - 20) / char_width))
+
+        wrapped_lines = []
+        for raw_pkt in packet_logs:
+            # Wrap long packet lines cleanly across available width
+            idx = 0
+            while idx < len(raw_pkt):
+                wrapped_lines.append(raw_pkt[idx:idx + max_chars_per_line])
+                idx += max_chars_per_line
+
+        # Show as many lines as can fit vertically in the console area
+        max_visible_text_lines = max(1, int((console_h - 30) / 15))
+        visible_wrapped = wrapped_lines[-max_visible_text_lines:]
+
         log_y = Y_console + 24
-        for line in visible_logs:
-            max_chars = max(10, int(graph_w / 7.5))
-            disp_line = line[:max_chars] + "..." if len(line) > max_chars else line
-            draw_text_safe(disp_line, margin_left + 10, log_y, 11, COLOR_TEXT_MUTED)
-            log_y += 16
+        for wline in visible_wrapped:
+            draw_text_safe(wline, margin_left + 10, log_y, 11, COLOR_TEXT_MUTED)
+            log_y += 15
