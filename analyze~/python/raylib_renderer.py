@@ -41,42 +41,46 @@ def get_font():
     if _FONT_CACHE is not None:
         return _FONT_CACHE
 
-    font_candidates = [
-        os.path.join(os.path.dirname(__file__), "arial.ttf"),
-        os.path.join(os.path.dirname(__file__), "Arial.ttf"),
-        os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf"),
-        r"C:\Windows\Fonts\arial.ttf",
-        r"C:\Windows\Fonts\Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
+    font_candidates = []
 
     try:
         import matplotlib.font_manager as fm
-        import matplotlib
-        fpath = fm.findfont('Arial')
-        if fpath and os.path.exists(fpath):
-            font_candidates.insert(0, fpath)
-        fpath_default = fm.findfont(fm.FontProperties(family=matplotlib.rcParams.get('font.sans-serif', ['sans-serif'])))
-        if fpath_default and os.path.exists(fpath_default):
-            font_candidates.append(fpath_default)
+        for fam in ['DejaVu Sans', 'Arial', 'Liberation Sans', 'sans-serif']:
+            fpath = fm.findfont(fm.FontProperties(family=fam))
+            if fpath and os.path.exists(fpath) and fpath.lower().endswith('.ttf'):
+                if fpath not in font_candidates:
+                    font_candidates.append(fpath)
     except Exception:
         pass
 
+    sys_paths = [
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\calibri.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+
+    for p in sys_paths:
+        if os.path.exists(p) and p not in font_candidates and p.lower().endswith('.ttf'):
+            font_candidates.append(p)
+
     for path in font_candidates:
-        if path and os.path.exists(path):
-            try:
-                f = pr.load_font_ex(path, 48, None, 0)
-                if f and hasattr(f, 'baseSize') and f.baseSize > 0:
-                    pr.set_texture_filter(f.texture, pr.TEXTURE_FILTER_BILINEAR)
-                    _FONT_CACHE = f
-                    return _FONT_CACHE
-            except Exception:
-                pass
+        try:
+            f = pr.load_font_ex(path, 48, None, 0)
+            if f and hasattr(f, 'texture') and f.texture.id > 0 and hasattr(f, 'glyphCount') and f.glyphCount > 0:
+                pr.set_texture_filter(f.texture, pr.TEXTURE_FILTER_BILINEAR)
+                _FONT_CACHE = f
+                return _FONT_CACHE
+            elif f and hasattr(f, 'baseSize') and f.baseSize > 0:
+                try:
+                    pr.unload_font(f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     _FONT_CACHE = pr.get_font_default()
     return _FONT_CACHE

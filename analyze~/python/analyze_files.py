@@ -137,6 +137,7 @@ def generate_video_raylib(audio_path, data):
         pr.set_trace_log_level(pr.LOG_WARNING)
         pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
         pr.init_window(W, H, "Headless Renderer")
+        raylib_renderer.get_font()
         target = pr.load_render_texture(W, H)
 
         codec = get_best_encoder()

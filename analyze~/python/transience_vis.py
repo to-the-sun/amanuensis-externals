@@ -194,6 +194,7 @@ def run_gui():
     win_title = build_title(s_name, ch_idx, TCP_PORT)
 
     pr.init_window(W, H, win_title)
+    raylib_renderer.get_font()
     pr.set_target_fps(FPS)
 
     current_title = win_title
