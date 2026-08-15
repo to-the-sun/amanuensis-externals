@@ -160,9 +160,6 @@ static t_viz_socket *get_socket_for_object(void *x, const char **type_out) {
     } else if (classname == gensym("buildspans") || classname == gensym("rebar_buildspans_internal")) {
         if (type_out) *type_out = "building";
         return &weaver_viz;
-    } else if (classname == gensym("analyze~") || classname == gensym("mc.analyze~")) {
-        if (type_out) *type_out = (classname == gensym("mc.analyze~")) ? "mc_analyze" : "analyze";
-        return &analyze_viz;
     }
     return NULL;
 }
@@ -368,6 +365,8 @@ static const char *get_event_name_from_message(const char *message) {
         return "fill_bar";
     } else if (strstr(message, "\"event\":\"clear\"")) {
         return "clear";
+    } else if (strstr(message, "\"event\":\"update\"")) {
+        return "update";
     } else if (message[0] == '{' && strstr(message, "\"tracks\":")) {
         return "clear/tracks";
     }
@@ -775,6 +774,8 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
         object_warn((t_object *)x, "visualize_to_port: could not resolve socket for port %d", port);
         return;
     }
+
+    viz_log(x, "visualize_to_port: queuing packet of %ld bytes to port %d (type '%s')", (long)strlen(message), port, type);
 
     systhread_mutex_lock(queue_mutex);
     if (queue_count >= MAX_QUEUE_SIZE) {
