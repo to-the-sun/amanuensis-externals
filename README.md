@@ -6,7 +6,7 @@ This repository contains custom external objects for the Max/MSP programming lan
 
 The repository is organized into several directories:
 
--   `buildspans/`, `createproject/`, `crossfade~/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
+-   `buildspans/`, `createproject/`, `crossfade~/`, `mc.block~/`, `stemversion/`, `whichoffset/`: Each of these directories contains the source code for a single Max external object.
 -   `shared/`: Contains common C code modules that can be shared across multiple external objects.
 -   `max-sdk/`: Contains the Max SDK, which is required for building the external objects.
 -   `gui.py`: A Python-based GUI for visualizing data from the objects.
@@ -54,6 +54,10 @@ To build an individual external object, navigate into its specific directory and
 cd buildspans/
 make
 ```
+
+## The `mc.block~` Object
+
+The `mc.block~` object takes a multichannel signal with an arbitrary number of channels in its first inlet. Its second inlet accepts a list or integer of 1-based channel numbers to block. The object mirrors the incoming signal to its first outlet with all specified channels set to zero (blocked).
 
 ## The `crossfade~` Object
 
