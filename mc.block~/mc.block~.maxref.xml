@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet devhelp="true" type="text/xsl" href="pb-patcher.xsl"?>
+<c74object name="mc.block~" module="msp" category="Multichannel">
+	<digest>Block specified channels in a multichannel audio signal</digest>
+	<description>
+		The `mc.block~` object accepts a multichannel signal with an arbitrary number of channels in its first inlet.
+		Its second inlet receives a list or integer of 1-based channel numbers to block.
+		The object mirrors the incoming audio signal to its output on the first outlet, setting any specified blocked channels to zero (silent).
+	</description>
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name="author">Jules</metadata>
+		<metadata name="tag">Multichannel</metadata>
+		<metadata name="tag">DSP</metadata>
+		<metadata name="tag">Utility</metadata>
+	</metadatalist>
+	<!--INLETS-->
+	<inletlist>
+		<inlet id="0" type="multichannelsignal">
+			<digest>Audio Input (multichannelsignal)</digest>
+			<description>Accepts a multichannel audio signal containing an arbitrary number of channels.</description>
+		</inlet>
+		<inlet id="1" type="list/int">
+			<digest>Blocked Channel Numbers (1-based)</digest>
+			<description>Accepts a list or integer specifying 1-based channel numbers to block. Channels in this list will be set to zero at the output.</description>
+		</inlet>
+	</inletlist>
+	<!--OUTLETS-->
+	<outletlist>
+		<outlet id="0" type="multichannelsignal">
+			<digest>Mirrored Audio Output (multichannelsignal)</digest>
+			<description>Outputs the mirrored multichannel signal with the specified channels set to zero.</description>
+		</outlet>
+	</outletlist>
+	<!--ARGUMENTS-->
+	<objarglist>
+		<objarg name="blocked_channels" type="int" optional="1">
+			<digest>Initial channels to block (1-based)</digest>
+			<description>Optional initial 1-based channel numbers to block upon creation.</description>
+		</objarg>
+	</objarglist>
+	<!--MESSAGES-->
+	<methodlist>
+		<method name="list">
+			<arglist>
+				<arg name="channel_numbers" type="list" optional="0" />
+			</arglist>
+			<digest>Set channels to block</digest>
+			<description>In the second inlet, sets the list of 1-based channel numbers to block.</description>
+		</method>
+		<method name="int">
+			<arglist>
+				<arg name="channel_number" type="int" optional="0" />
+			</arglist>
+			<digest>Set single channel to block</digest>
+			<description>In the second inlet, sets a single 1-based channel number to block.</description>
+		</method>
+		<method name="clear">
+			<digest>Clear blocked channels</digest>
+			<description>Clears all blocked channels so that all channels pass through unblocked.</description>
+		</method>
+		<method name="dsp64">
+			<digest>DSP method</digest>
+			<description>Configures 64-bit signal processing chain.</description>
+		</method>
+	</methodlist>
+	<!--ATTRIBUTES-->
+	<attributelist>
+	</attributelist>
+	<!--SEEALSO-->
+	<seealsolist>
+		<seealso name="mc.analyze~" />
+		<seealso name="crossfade~" />
+		<seealso name="skipsilence~" />
+		<seealso name="bounce~" />
+	</seealsolist>
+</c74object>
