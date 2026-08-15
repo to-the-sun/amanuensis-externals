@@ -24,6 +24,7 @@ void mc_block_assist(t_mc_block *x, void *b, long m, long a, char *s);
 void mc_block_list(t_mc_block *x, t_symbol *s, long argc, t_atom *argv);
 void mc_block_int(t_mc_block *x, long n);
 void mc_block_float(t_mc_block *x, double f);
+void mc_block_anything(t_mc_block *x, t_symbol *s, long argc, t_atom *argv);
 void mc_block_clear(t_mc_block *x);
 long mc_block_inputchanged(t_mc_block *x, long index, long count);
 long mc_block_multichanneloutputs(t_mc_block *x, long outlet_index);
@@ -42,6 +43,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)mc_block_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)mc_block_int, "int", A_LONG, 0);
     class_addmethod(c, (method)mc_block_float, "float", A_FLOAT, 0);
+    class_addmethod(c, (method)mc_block_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)mc_block_clear, "clear", 0);
     class_addmethod(c, (method)mc_block_inputchanged, "inputchanged", A_CANT, 0);
     class_addmethod(c, (method)mc_block_multichanneloutputs, "multichanneloutputs", A_CANT, 0);
@@ -51,24 +53,48 @@ void ext_main(void *r) {
     mc_block_class = c;
 }
 
-static void mc_block_update_blocked_channels(t_mc_block *x, long argc, t_atom *argv) {
+static void mc_block_update_blocked_channels(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
     critical_enter(x->lock);
     x->num_blocked = 0;
-    if (argc > 0 && argv) {
-        if (x->allocated_blocked < argc) {
-            long *new_arr = (long *)realloc(x->blocked_channels, sizeof(long) * argc);
+
+    long total_count = argc;
+    if (s && s != _sym_nothing && s != gensym("list") && s != gensym("anything")) {
+        total_count++;
+    }
+
+    if (total_count > 0) {
+        if (x->allocated_blocked < total_count) {
+            long *new_arr = (long *)realloc(x->blocked_channels, sizeof(long) * total_count);
             if (new_arr) {
                 x->blocked_channels = new_arr;
-                x->allocated_blocked = argc;
+                x->allocated_blocked = total_count;
             }
         }
-        if (x->blocked_channels && x->allocated_blocked >= argc) {
+
+        if (x->blocked_channels && x->allocated_blocked >= total_count) {
+            if (s && s != _sym_nothing && s != gensym("list") && s != gensym("anything")) {
+                char *endptr = NULL;
+                long chan = strtol(s->s_name, &endptr, 10);
+                if (endptr && *endptr == '\0' && chan > 0) {
+                    x->blocked_channels[x->num_blocked++] = chan;
+                }
+            }
+
             for (long i = 0; i < argc; i++) {
                 long chan = 0;
                 if (atom_gettype(argv + i) == A_LONG) {
                     chan = atom_getlong(argv + i);
                 } else if (atom_gettype(argv + i) == A_FLOAT) {
                     chan = (long)atom_getfloat(argv + i);
+                } else if (atom_gettype(argv + i) == A_SYM) {
+                    t_symbol *sym = atom_getsym(argv + i);
+                    if (sym) {
+                        char *endptr = NULL;
+                        chan = strtol(sym->s_name, &endptr, 10);
+                        if (!endptr || *endptr != '\0') {
+                            chan = 0;
+                        }
+                    }
                 }
                 if (chan > 0) {
                     x->blocked_channels[x->num_blocked++] = chan;
@@ -98,7 +124,7 @@ void *mc_block_new(t_symbol *s, long argc, t_atom *argv) {
         x->allocated_blocked = 0;
 
         if (argc > 0) {
-            mc_block_update_blocked_channels(x, argc, argv);
+            mc_block_update_blocked_channels(x, NULL, argc, argv);
         }
     }
     return x;
@@ -121,7 +147,7 @@ void mc_block_free(t_mc_block *x) {
 void mc_block_list(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
     long inlet = proxy_getinlet((t_object *)x);
     if (inlet == 1) {
-        mc_block_update_blocked_channels(x, argc, argv);
+        mc_block_update_blocked_channels(x, s, argc, argv);
     }
 }
 
@@ -130,7 +156,7 @@ void mc_block_int(t_mc_block *x, long n) {
     if (inlet == 1) {
         t_atom a;
         atom_setlong(&a, n);
-        mc_block_update_blocked_channels(x, 1, &a);
+        mc_block_update_blocked_channels(x, NULL, 1, &a);
     }
 }
 
@@ -139,7 +165,14 @@ void mc_block_float(t_mc_block *x, double f) {
     if (inlet == 1) {
         t_atom a;
         atom_setlong(&a, (long)f);
-        mc_block_update_blocked_channels(x, 1, &a);
+        mc_block_update_blocked_channels(x, NULL, 1, &a);
+    }
+}
+
+void mc_block_anything(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 1) {
+        mc_block_update_blocked_channels(x, s, argc, argv);
     }
 }
 
