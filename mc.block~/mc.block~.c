@@ -1,21 +1,18 @@
 #include "ext.h"
 #include "ext_obex.h"
-#include "ext_critical.h"
 #include "z_dsp.h"
 #include <string.h>
 #include <stdlib.h>
 
+#define MC_BLOCK_MAX_CHANNELS 1024
+
 typedef struct _mc_block {
     t_pxobject obj;
     void *proxy;
-    long proxy_id;
+    long proxy_inletnum;
 
     long input_num_chans;
-
-    t_critical lock;
-    long *blocked_channels;
-    long num_blocked;
-    long allocated_blocked;
+    volatile char blocked_mask[MC_BLOCK_MAX_CHANNELS + 1];
 } t_mc_block;
 
 void *mc_block_new(t_symbol *s, long argc, t_atom *argv);
@@ -54,55 +51,41 @@ void ext_main(void *r) {
 }
 
 static void mc_block_update_blocked_channels(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
-    critical_enter(x->lock);
-    x->num_blocked = 0;
+    char new_mask[MC_BLOCK_MAX_CHANNELS + 1];
+    memset(new_mask, 0, sizeof(new_mask));
 
-    long total_count = argc;
     if (s && s != _sym_nothing && s != gensym("list") && s != gensym("anything")) {
-        total_count++;
+        char *endptr = NULL;
+        long chan = strtol(s->s_name, &endptr, 10);
+        if (endptr && *endptr == '\0' && chan >= 1 && chan <= MC_BLOCK_MAX_CHANNELS) {
+            new_mask[chan] = 1;
+        }
     }
 
-    if (total_count > 0) {
-        if (x->allocated_blocked < total_count) {
-            long *new_arr = (long *)realloc(x->blocked_channels, sizeof(long) * total_count);
-            if (new_arr) {
-                x->blocked_channels = new_arr;
-                x->allocated_blocked = total_count;
-            }
-        }
-
-        if (x->blocked_channels && x->allocated_blocked >= total_count) {
-            if (s && s != _sym_nothing && s != gensym("list") && s != gensym("anything")) {
-                char *endptr = NULL;
-                long chan = strtol(s->s_name, &endptr, 10);
-                if (endptr && *endptr == '\0' && chan > 0) {
-                    x->blocked_channels[x->num_blocked++] = chan;
-                }
-            }
-
-            for (long i = 0; i < argc; i++) {
-                long chan = 0;
-                if (atom_gettype(argv + i) == A_LONG) {
-                    chan = atom_getlong(argv + i);
-                } else if (atom_gettype(argv + i) == A_FLOAT) {
-                    chan = (long)atom_getfloat(argv + i);
-                } else if (atom_gettype(argv + i) == A_SYM) {
-                    t_symbol *sym = atom_getsym(argv + i);
-                    if (sym) {
-                        char *endptr = NULL;
-                        chan = strtol(sym->s_name, &endptr, 10);
-                        if (!endptr || *endptr != '\0') {
-                            chan = 0;
-                        }
+    if (argc > 0 && argv) {
+        for (long i = 0; i < argc; i++) {
+            long chan = 0;
+            if (atom_gettype(argv + i) == A_LONG) {
+                chan = atom_getlong(argv + i);
+            } else if (atom_gettype(argv + i) == A_FLOAT) {
+                chan = (long)atom_getfloat(argv + i);
+            } else if (atom_gettype(argv + i) == A_SYM) {
+                t_symbol *sym = atom_getsym(argv + i);
+                if (sym) {
+                    char *endptr = NULL;
+                    chan = strtol(sym->s_name, &endptr, 10);
+                    if (endptr && *endptr != '\0') {
+                        chan = 0;
                     }
                 }
-                if (chan > 0) {
-                    x->blocked_channels[x->num_blocked++] = chan;
-                }
+            }
+            if (chan >= 1 && chan <= MC_BLOCK_MAX_CHANNELS) {
+                new_mask[chan] = 1;
             }
         }
     }
-    critical_exit(x->lock);
+
+    memcpy((void *)x->blocked_mask, new_mask, sizeof(new_mask));
 }
 
 void *mc_block_new(t_symbol *s, long argc, t_atom *argv) {
@@ -112,16 +95,12 @@ void *mc_block_new(t_symbol *s, long argc, t_atom *argv) {
         dsp_setup((t_pxobject *)x, 1);
         x->obj.z_misc |= Z_MC_INLETS;
 
-        x->proxy = proxy_new((t_object *)x, 1, &x->proxy_id);
+        x->proxy = proxy_new((t_object *)x, 1, &x->proxy_inletnum);
 
         outlet_new((t_object *)x, "multichannelsignal");
 
         x->input_num_chans = 1;
-
-        critical_new(&x->lock);
-        x->blocked_channels = NULL;
-        x->num_blocked = 0;
-        x->allocated_blocked = 0;
+        memset((void *)x->blocked_mask, 0, sizeof(x->blocked_mask));
 
         if (argc > 0) {
             mc_block_update_blocked_channels(x, NULL, argc, argv);
@@ -136,12 +115,6 @@ void mc_block_free(t_mc_block *x) {
     if (x->proxy) {
         object_free(x->proxy);
     }
-
-    if (x->blocked_channels) {
-        free(x->blocked_channels);
-    }
-
-    critical_free(x->lock);
 }
 
 void mc_block_list(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
@@ -177,9 +150,10 @@ void mc_block_anything(t_mc_block *x, t_symbol *s, long argc, t_atom *argv) {
 }
 
 void mc_block_clear(t_mc_block *x) {
-    critical_enter(x->lock);
-    x->num_blocked = 0;
-    critical_exit(x->lock);
+    long inlet = proxy_getinlet((t_object *)x);
+    if (inlet == 1 || inlet == 0) {
+        memset((void *)x->blocked_mask, 0, sizeof(x->blocked_mask));
+    }
 }
 
 long mc_block_inputchanged(t_mc_block *x, long index, long count) {
@@ -225,18 +199,9 @@ void mc_block_dsp64(t_mc_block *x, t_object *dsp64, short *count, double sampler
 void mc_block_perform64(t_mc_block *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     long n_chans = numins < numouts ? numins : numouts;
 
-    critical_enter(x->lock);
-
     for (long c = 0; c < n_chans; c++) {
         long chan_num = c + 1;
-        int is_blocked = 0;
-
-        for (long b = 0; b < x->num_blocked; b++) {
-            if (x->blocked_channels[b] == chan_num) {
-                is_blocked = 1;
-                break;
-            }
-        }
+        int is_blocked = (chan_num <= MC_BLOCK_MAX_CHANNELS) ? x->blocked_mask[chan_num] : 0;
 
         double *in = ins[c];
         double *out = outs[c];
@@ -253,6 +218,4 @@ void mc_block_perform64(t_mc_block *x, t_object *dsp64, double **ins, long numin
     for (long c = n_chans; c < numouts; c++) {
         memset(outs[c], 0, sampleframes * sizeof(double));
     }
-
-    critical_exit(x->lock);
 }
