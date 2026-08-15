@@ -167,7 +167,7 @@ static void launch_visualizer(t_analyze *x) {
         } else {
             snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
         }
-        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\"", dir, x->viz_port, grp, scripting_name);
+        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\" --log %ld", dir, x->viz_port, grp, scripting_name, x->log_enabled);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
         STARTUPINFOA si;
@@ -593,7 +593,7 @@ void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
                         snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
                     }
 
-                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"time\":%.4f,", grp, scripting_name, p_time);
+                    n = snprintf(ptr, remaining, "{\"type\":\"analyze\",\"event\":\"update\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"log\":%ld,\"time\":%.4f,", grp, scripting_name, x->log_enabled, p_time);
                     if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                     double hp_ms = x->result_buffer->metrics.highest_peak_valid ? x->result_buffer->metrics.highest_peak_ms : -999.0;
