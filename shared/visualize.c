@@ -365,6 +365,8 @@ static const char *get_event_name_from_message(const char *message) {
         return "fill_bar";
     } else if (strstr(message, "\"event\":\"clear\"")) {
         return "clear";
+    } else if (strstr(message, "\"event\":\"update\"")) {
+        return "update";
     } else if (message[0] == '{' && strstr(message, "\"tracks\":")) {
         return "clear/tracks";
     }
