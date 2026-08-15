@@ -36,6 +36,10 @@ SNAP_LABELS = ['Sub', 'Bass', 'Mid', 'Hi']
 
 _FONT_CACHE = None
 
+def reset_font_cache():
+    global _FONT_CACHE
+    _FONT_CACHE = None
+
 def get_font():
     global _FONT_CACHE
     if _FONT_CACHE is not None:

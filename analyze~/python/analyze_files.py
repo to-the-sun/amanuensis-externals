@@ -242,6 +242,7 @@ def generate_video_raylib(audio_path, data):
         pbar.close()
         pr.unload_render_texture(target)
         pr.close_window()
+        raylib_renderer.reset_font_cache()
 
         pipe.stdin.close()
         pipe.wait()
