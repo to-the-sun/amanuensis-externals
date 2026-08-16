@@ -352,7 +352,7 @@ def draw_renderer(W, H, current_time, frame_data):
         latest_p_idx = max(p.get('p_idx', 0) for p in valid_peaks)
         window_peaks = [
             p for p in valid_peaks
-            if -45.0 <= float(p.get('p_idx', 0) - latest_p_idx) <= 1.0
+            if -29.0 <= float(p.get('p_idx', 0) - latest_p_idx) <= 1.0
         ]
         if window_peaks:
             score_avg = sum(p.get('total_score', 0.0) for p in window_peaks) / len(window_peaks)
@@ -378,14 +378,14 @@ def draw_renderer(W, H, current_time, frame_data):
     draw_text_safe(frame_data.get('title', "Cumulative Transience Analyzer"), margin_left, margin_top - 20, 14, pr.WHITE)
 
     # -------------------------------------------------------------
-    # 2. MIDDLE PANEL: 39ms Rolling Window Snapshot (Lanes)
+    # 2. MIDDLE PANEL: 29ms Rolling Window Snapshot (Lanes)
     # -------------------------------------------------------------
     graph_h_mid = H_mid - int(H_mid * 0.20)
     lane_h = graph_h_mid / 4.0
 
-    x_min_s = -45.0
+    x_min_s = -29.0
     x_max_s = 1.0
-    x_span_s = 46.0
+    x_span_s = 30.0
 
     for b in range(4):
         ly = Y_mid + int(b * lane_h)
@@ -399,8 +399,8 @@ def draw_renderer(W, H, current_time, frame_data):
 
     pr.draw_line(margin_left, Y_mid + graph_h_mid, margin_left + graph_w, Y_mid + graph_h_mid, COLOR_GRID)
 
-    # X-axis ticks, vertical grid lines, and millisecond legend labels (-45ms to 0ms)
-    for ms_val in range(-45, 1, 5):
+    # X-axis ticks, vertical grid lines, and millisecond legend labels (-29ms to 0ms)
+    for ms_val in [-29, -25, -20, -15, -10, -5, 0]:
         bx = margin_left + int(graph_w * (ms_val - x_min_s) / x_span_s)
         pr.draw_line(bx, Y_mid, bx, Y_mid + graph_h_mid, COLOR_GRID)
         draw_text_safe(f"{ms_val}ms" if ms_val != 0 else "0ms", bx - 12, Y_mid + graph_h_mid + 4, 11, COLOR_TEXT_MUTED)
@@ -411,7 +411,7 @@ def draw_renderer(W, H, current_time, frame_data):
         for p in valid_peaks:
             p_idx = p.get('p_idx', 0)
             rel_ms = float(p_idx - latest_p_idx)
-            if -45.0 <= rel_ms <= 1.0:
+            if -29.0 <= rel_ms <= 1.0:
                 band = p.get('band_idx', 0)
                 score = p.get('total_score', 0.0)
 
@@ -422,13 +422,13 @@ def draw_renderer(W, H, current_time, frame_data):
                 pr.draw_rectangle(bx - bw//2, by, bw, int(lane_h) - 4, BAND_COLORS[band])
 
                 score_c = get_score_color(score, min_score, max_score)
-                if rel_ms < -40.0:
+                if rel_ms < -25.0:
                     text_x = bx + bw // 2 + 5
                 else:
                     text_x = bx - bw // 2 - 40
                 draw_text_safe(f"{score:+.2f}", text_x, by + int(lane_h*0.1), 12, score_c)
 
-    draw_text_safe("39ms Rolling Window Snapshot", margin_left, Y_mid - 15, 12, pr.WHITE)
+    draw_text_safe("29ms Rolling Window Snapshot", margin_left, Y_mid - 15, 12, pr.WHITE)
 
     # -------------------------------------------------------------
     # 3. BOTTOM PANEL: Accumulated 5s Historical Buffer
