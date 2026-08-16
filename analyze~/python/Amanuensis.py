@@ -1,5 +1,25 @@
 import sys
 import traceback
+import time
+
+def keep_window_open():
+    sys.stdout.flush()
+    sys.stderr.flush()
+    print("\n" + "="*60, flush=True)
+    print("Script execution finished or paused.", flush=True)
+    print("Press Enter or Ctrl+C to exit...", flush=True)
+    print("="*60, flush=True)
+    sys.stdout.flush()
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt, Exception, OSError):
+        print("\nWindow will remain open. Close this window or press Ctrl+C in terminal to exit.", flush=True)
+        sys.stdout.flush()
+        try:
+            while True:
+                time.sleep(3600)
+        except (KeyboardInterrupt, BaseException):
+            pass
 
 def run_bot():
     import discord
@@ -27,12 +47,28 @@ def run_bot():
     VIDEO_OUTPUT_DIR = r'D:\[Library]\[Video]\[Works]\[Uploads]'
 
     # Load credentials from a separate file
-    try:
-        with open('credentials.json') as f:
-            credentials = json.load(f)
-    except FileNotFoundError:
-        print("Error: credentials.json not found.")
-        return
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    creds_locations = [
+        os.path.join(script_dir, 'credentials.json'),
+        'credentials.json',
+        os.path.join(os.path.dirname(script_dir), 'credentials.json'),
+        r'D:\[Library]\[Documents]\Max 8\Library\analyze~\python\credentials.json'
+    ]
+    credentials = None
+    for loc in creds_locations:
+        if os.path.exists(loc):
+            try:
+                with open(loc, 'r', encoding='utf-8') as f:
+                    credentials = json.load(f)
+                print(f"Loaded credentials from: {loc}", flush=True)
+                break
+            except Exception as e:
+                print(f"Error reading credentials file {loc}: {e}", flush=True)
+
+    if not credentials:
+        print("Error: credentials.json not found or could not be read.", flush=True)
+        print(f"Checked paths: {creds_locations}", flush=True)
+        raise FileNotFoundError("credentials.json not found or invalid.")
 
     intents = discord.Intents.default()
 
@@ -139,7 +175,9 @@ def run_bot():
                     print(f"Moved video to {dest_path}")
                     remove_from_rendering_log(file_path)
         except Exception as e:
-            print(f"Error during transient analysis processing for {file_path}: {e}")
+            print(f"Error during transient analysis processing for {file_path}: {e}", flush=True)
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
 
     async def periodic_task():
         await client.wait_until_ready()
@@ -222,7 +260,9 @@ def run_bot():
 
                 await asyncio.sleep(CHECK_INTERVAL)
             except Exception as e:
-                print(f"Error during periodic task: {e}")
+                print(f"Error during periodic task: {e}", flush=True)
+                traceback.print_exc(file=sys.stdout)
+                sys.stdout.flush()
 
     client = MyClient(intents=intents)
 
@@ -235,15 +275,14 @@ def run_bot():
 if __name__ == "__main__":
     try:
         run_bot()
-    except Exception as e:
-        print("\n" + "="*60)
-        print("CRITICAL ERROR")
-        print("="*60)
-        traceback.print_exc()
-        print("="*60)
+    except BaseException as e:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        print("\n" + "="*60, flush=True)
+        print("CRITICAL ERROR", flush=True)
+        print("="*60, flush=True)
+        traceback.print_exc(file=sys.stdout)
+        print("="*60, flush=True)
+        sys.stdout.flush()
     finally:
-        # Keep window open for user to see output/errors
-        try:
-            input("\nPress Enter to exit...")
-        except (EOFError, KeyboardInterrupt):
-            pass
+        keep_window_open()
