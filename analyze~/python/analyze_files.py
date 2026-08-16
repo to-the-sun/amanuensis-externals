@@ -29,6 +29,7 @@ except ImportError:
 
 _initialized = False
 _init_lock = threading.Lock()
+_render_lock = threading.Lock()
 cumulative_transience = None
 _best_encoder = None
 
@@ -137,6 +138,9 @@ def generate_video_raylib(audio_path, data):
         pr.set_trace_log_level(pr.LOG_WARNING)
         pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
         pr.init_window(W, H, "Headless Renderer")
+        if not pr.is_window_ready():
+            print("Raylib window failed to initialize (GLFW error). Falling back...")
+            return None
         raylib_renderer.get_font()
         target = pr.load_render_texture(W, H)
 
@@ -275,16 +279,17 @@ def generate_video(audio_path, data):
     ensure_initialized()
     if cumulative_transience is None: raise ImportError("The 'cumulative_transience' extension module could not be loaded.")
 
-    # Try Raylib first
-    try:
-        res = generate_video_raylib(audio_path, data)
-        if res is not None:
-            return res
-    except Exception as e:
-        print(f"Raylib video generation failed: {e}. Falling back to Matplotlib...")
-        traceback.print_exc()
+    with _render_lock:
+        # Try Raylib first
+        try:
+            res = generate_video_raylib(audio_path, data)
+            if res is not None:
+                return res
+        except Exception as e:
+            print(f"Raylib video generation failed: {e}. Falling back to Matplotlib...")
+            traceback.print_exc()
 
-    return generate_video_matplotlib(audio_path, data)
+        return generate_video_matplotlib(audio_path, data)
 
 def generate_video_matplotlib(audio_path, data):
     print(f"Generating Matplotlib video for {audio_path}...")
