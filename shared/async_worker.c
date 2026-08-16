@@ -41,7 +41,10 @@ void *async_worker_thread_proc(void *arg) {
         }
         
         task = (t_async_task *)linklist_getindex(worker->queue, 0);
-        if (task) linklist_chuckindex(worker->queue, 0);
+        if (task) {
+            linklist_chuckindex(worker->queue, 0);
+            worker->is_busy = 1;
+        }
         
         systhread_mutex_unlock(worker->mutex);
         
@@ -52,6 +55,11 @@ void *async_worker_thread_proc(void *arg) {
             
             if (task->argv) sysmem_freeptr(task->argv);
             sysmem_freeptr(task);
+
+            systhread_mutex_lock(worker->mutex);
+            worker->is_busy = 0;
+            systhread_cond_signal(worker->cond);
+            systhread_mutex_unlock(worker->mutex);
         }
     }
     
@@ -66,6 +74,7 @@ t_async_worker *async_worker_create(void) {
     
     worker->exit_flag = 0;
     worker->ref_count = 1;
+    worker->is_busy = 0;
     worker->queue = linklist_new();
     systhread_mutex_new(&worker->mutex, 0);
     systhread_cond_new(&worker->cond, 0);
@@ -165,6 +174,19 @@ void async_worker_clear_queue(t_async_worker *worker) {
             if (task->argv) sysmem_freeptr(task->argv);
             sysmem_freeptr(task);
         }
+    }
+    systhread_mutex_unlock(worker->mutex);
+}
+
+void async_worker_drain(t_async_worker *worker) {
+    if (!worker) return;
+    if (async_worker_is_worker_thread(worker)) return;
+
+    async_worker_clear_queue(worker);
+
+    systhread_mutex_lock(worker->mutex);
+    while (worker->is_busy) {
+        systhread_cond_wait(worker->cond, worker->mutex);
     }
     systhread_mutex_unlock(worker->mutex);
 }
