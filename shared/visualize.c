@@ -59,9 +59,11 @@ typedef struct {
     int ports[MAX_DYNAMIC_SOCKETS];
 } t_shared_port_map;
 
+#if defined(WIN_VERSION) || defined(_WIN32)
 static HANDLE g_hSharedMap = NULL;
 static t_shared_port_map *g_pSharedPortMap = NULL;
 static HANDLE g_hSharedMutex = NULL;
+#endif
 
 static void shared_port_map_init(void) {
 #if defined(WIN_VERSION) || defined(_WIN32)
@@ -617,9 +619,6 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                         }
                     }
                 } else if (sel_ret == 0) {
-                    if (x) {
-                        viz_log(x, "visualize: TCP handshake timed out (50ms)");
-                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 } else {
