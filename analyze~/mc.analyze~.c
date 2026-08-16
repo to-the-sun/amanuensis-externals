@@ -119,6 +119,7 @@ typedef struct _mc_analyze {
     t_critical lock;
     int invalidated;
     int pending_analysis;
+    long clear_sequence;
 
     char paused_channels[MAX_ANALYZE_CHANNELS + 1];
 
@@ -326,6 +327,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         x->invalidated = 0;
         x->pending_analysis = 0;
+        x->clear_sequence = 0;
         x->log_enabled = 0;
         x->weighted_bar = 1;
         x->tolerance = 29.0;
@@ -408,7 +410,12 @@ void mc_analyze_free(t_mc_analyze* x) {
 }
 
 void mc_analyze_clear(t_mc_analyze* x) {
+    if (x->worker) {
+        async_worker_drain(x->worker);
+    }
+
     critical_enter(x->lock);
+    x->clear_sequence++;
     if (x->analyzers) {
         for (long i = 0; i < x->analyzers_count; i++) {
             if (x->analyzers[i]) {
@@ -676,11 +683,14 @@ void mc_analyze_perform64(t_mc_analyze* x, t_object* dsp64, double** ins, long n
 
 void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
     if (x->invalidated || !x->analyzers) {
+        critical_enter(x->lock);
         x->pending_analysis = 0;
+        critical_exit(x->lock);
         return;
     }
 
     critical_enter(x->lock);
+    long start_seq = x->clear_sequence;
     long n_chans = x->num_audio_chans;
     for (long ch = 0; ch < n_chans; ch++) {
         if (x->analyzers[ch]) {
@@ -693,14 +703,19 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
     int ms_samples = (int)(x->sample_rate * 0.001);
 
     int hops_processed = 0;
-    while (x->current_sample_count >= x->last_analysis_frame + hop_samples) {
+    while (1) {
+        critical_enter(x->lock);
+        if (x->invalidated || x->clear_sequence != start_seq || x->current_sample_count < x->last_analysis_frame + hop_samples) {
+            critical_exit(x->lock);
+            break;
+        }
         long long cur_samples = x->current_sample_count;
         int cur_write_ptr = x->audio_buffer_write_ptr;
-
-        if (x->invalidated) break;
-
+        n_chans = x->num_audio_chans;
         long long target_analysis_frame = x->last_analysis_frame + hop_samples;
-        int hop_start_samples = (int)(target_analysis_frame - hop_samples);
+        critical_exit(x->lock);
+
+        long long hop_start_samples = target_analysis_frame - hop_samples;
 
         int active_start_samples = (int)(target_analysis_frame - hop_samples - (int)(x->sample_rate * 0.2));
         int active_start_frame = active_start_samples / ms_samples;
@@ -712,12 +727,20 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
         hops_processed++;
 
         for (long ch = 0; ch < n_chans; ch++) {
-            if (x->invalidated) break;
+            critical_enter(x->lock);
+            if (x->invalidated || x->clear_sequence != start_seq) {
+                critical_exit(x->lock);
+                break;
+            }
+            critical_exit(x->lock);
 
             float* hop_audio = (float*)malloc(sizeof(float) * hop_samples);
             if (!hop_audio) continue;
 
             long long samples_ago = cur_samples - hop_start_samples;
+            if (samples_ago < 0) samples_ago = 0;
+            if (x->audio_buffer_size > 0 && samples_ago >= x->audio_buffer_size) samples_ago = x->audio_buffer_size - 1;
+
             int read_ptr = (int)((cur_write_ptr - samples_ago + x->audio_buffer_size) % x->audio_buffer_size);
 
             for (int i = 0; i < hop_samples; i++) {
@@ -748,6 +771,8 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                     if (x->clock_connected) {
                         long long peak_sample = (long long)pr->p_idx * ms_samples;
                         long long s_ago = cur_samples - peak_sample;
+                        if (s_ago < 0) s_ago = 0;
+                        if (x->audio_buffer_size > 0 && s_ago >= x->audio_buffer_size) s_ago = x->audio_buffer_size - 1;
                         int clock_idx = (int)((cur_write_ptr - s_ago + x->audio_buffer_size) % x->audio_buffer_size);
                         double clock_val = x->clock_buffer[clock_idx];
 
@@ -892,6 +917,13 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             free(hop_audio);
         }
 
+        critical_enter(x->lock);
+        if (x->clear_sequence != start_seq) {
+            critical_exit(x->lock);
+            break;
+        }
+        critical_exit(x->lock);
+
         long active_ch = -1;
         for (long ch = 0; ch < n_chans; ch++) {
             int is_paused = 0;
@@ -952,7 +984,16 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
             atom_setfloat(out_args + 4, barlen);
             defer(x, (method)mc_analyze_output_metrics, NULL, 5, out_args);
         }
-        x->last_analysis_frame = target_analysis_frame;
+
+        critical_enter(x->lock);
+        if (x->clear_sequence == start_seq) {
+            x->last_analysis_frame = target_analysis_frame;
+        } else {
+            critical_exit(x->lock);
+            break;
+        }
+        critical_exit(x->lock);
+
         mc_analyze_log(x, "processed chunk at %lld samples", target_analysis_frame);
     }
 
@@ -960,7 +1001,9 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
         mc_analyze_log(x, "catch-up complete: processed %d hops", hops_processed);
     }
 
+    critical_enter(x->lock);
     x->pending_analysis = 0;
+    critical_exit(x->lock);
 }
 
 void mc_analyze_output_peak(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {

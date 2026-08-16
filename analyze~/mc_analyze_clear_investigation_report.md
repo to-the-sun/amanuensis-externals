@@ -128,29 +128,23 @@ Once `pending_analysis == 1`, `mc_analyze_perform64` will **never enqueue anothe
 
 ---
 
-## 4. Proposed Architectural Solutions
+## 4. Implemented Architectural Solutions
 
-To resolve these issues permanently in `mc.analyze~` (and `analyze~`), the following thread-synchronization safeguards are recommended:
+All five architectural solutions have been fully implemented across `shared/async_worker.c`, `cumulative_transience.c`, `analyze~.c`, and `mc.analyze~.c`:
 
-1. **Worker Task Cancellation / Drain on Clear**:
-   Before resetting state in `mc_analyze_clear()`, drain or cancel any in-flight worker task:
-   ```c
-   // Ensure background worker thread is idle before modifying structures
-   async_worker_drain(x->worker);
-   ```
-2. **Atomic Counter Reset Under Lock**:
-   Ensure `x->current_sample_count`, `x->last_analysis_frame`, and `x->audio_buffer_write_ptr` are updated atomically while holding `x->lock`, and that the worker thread reads/writes `last_analysis_frame` under `x->lock` to prevent time-gap mismatches.
-3. **Worker Interlock / Generation Counter**:
-   Add a monotonic `clear_sequence` counter to `t_mc_analyze`.
-   - `mc_analyze_clear()` increments `x->clear_sequence`.
-   - `mc_analyze_worker_task()` checks `clear_sequence` at the start of each hop. If the sequence counter changed mid-chunk, the worker immediately aborts processing the current hop and safely exits.
-4. **Protect Snapshot Modifications in `cumulative_transience.c`**:
-   Ensure `analyzer_clear()` and `analyzer_analyze_chunk()` synchronize snapshot list access using `self->lock_func` / `self->unlock_func` across all node traversals and node deletions.
-5. **Sanitize `samples_ago` Calculations**:
-   Clamp `samples_ago` to non-negative values (`if (samples_ago < 0) samples_ago = 0;`) to protect against negative pointer arithmetic during state resets.
+1. **Worker Task Draining (`async_worker_drain`)**:
+   In `shared/async_worker.c`, `async_worker_drain()` was added to clear pending enqueued tasks and block until any currently executing background task finishes (`is_busy == 0`). `mc_analyze_clear()` and `analyze_clear()` call `async_worker_drain(x->worker)` before resetting internal structures.
+2. **Generation Sequence Interlock (`x->clear_sequence`)**:
+   A monotonic `clear_sequence` counter was added to `t_analyze` and `t_mc_analyze`. `clear` increments `x->clear_sequence` under lock. `worker_task` captures `start_seq = x->clear_sequence` and verifies `x->clear_sequence == start_seq` before and after processing every 100ms hop across channels. If a `clear` occurred mid-task, the worker immediately aborts task processing and exits without updating `last_analysis_frame`.
+3. **Atomic Counter Synchronization Under Lock**:
+   In `mc_analyze_worker_task` and `analyze_worker_task`, reading `x->current_sample_count`, `x->audio_buffer_write_ptr`, `x->num_audio_chans`, and writing `x->last_analysis_frame` are performed atomically inside `critical_enter(x->lock)` / `critical_exit(x->lock)`.
+4. **Snapshot List Deallocation Lock Protection**:
+   In `cumulative_transience.c`, `analyzer_destroy()` was updated to deallocate snapshot linked-list nodes strictly within `self->lock_func` / `self->unlock_func` critical sections, eliminating Use-After-Free conditions.
+5. **Sanitized Buffer Indexing (`samples_ago` Clamping)**:
+   In `mc_analyze_worker_task` and `analyze_worker_task`, `samples_ago` is sanitized (`if (samples_ago < 0) samples_ago = 0; if (samples_ago >= size) samples_ago = size - 1;`) to prevent negative modulo arithmetic and out-of-bounds circular buffer reads.
 
 ---
 
 ## Conclusion
 
-The intermittent, multi-minute freezing of `mc.analyze~` upon receiving a `clear` message is caused by sample-counter desynchronization between `x->current_sample_count` (reset to 0 by `clear`) and `x->last_analysis_frame` (retained at the pre-clear sample offset by a concurrent worker task). This creates a temporal gap equal to the elapsed song duration during which no analysis tasks are triggered, causing the object to freeze until real-time samples catch up. Combined with multi-channel worker task backlog loops and snapshot linked-list race conditions, implementing worker task draining and synchronized counter resets will eliminate this failure mode entirely.
+The intermittent, multi-minute freezing of `mc.analyze~` upon receiving a `clear` message was caused by sample-counter desynchronization between `x->current_sample_count` (reset to 0 by `clear`) and `x->last_analysis_frame` (retained at the pre-clear sample offset by a concurrent worker task), as well as un-synchronized snapshot linked-list traversals. With worker task draining, generation sequence interlocks, and atomic counter updates now implemented, `mc.analyze~` and `analyze~` handle `clear` messages completely smoothly and reliably without stalling or dropping state.

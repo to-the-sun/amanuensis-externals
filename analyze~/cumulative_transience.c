@@ -158,13 +158,16 @@ void analyzer_destroy(TransientAnalyzer* self) {
             curr = curr->next;
         }
     }
-    if (self->unlock_func) self->unlock_func(self->lock_obj);
 
-    free(self->overlap_buffer); free(self->combined_scratch); free(self->fft_real); free(self->fft_imag);
     for (int b = 0; b < MAX_BANDS; b++) {
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) { SnapshotEntry* next = curr->next; free(curr); curr = next; }
+        self->snapshot_heads[b] = NULL;
+        self->snapshot_tails[b] = NULL;
     }
+    if (self->unlock_func) self->unlock_func(self->lock_obj);
+
+    free(self->overlap_buffer); free(self->combined_scratch); free(self->fft_real); free(self->fft_imag);
     free(self->mel_spectrogram); free(self->flux_envelopes); free(self->dynamic_smoothings); free(self->prominence_envelopes); free(self->fft_window); free(self->mel_filters); free(self);
 }
 
