@@ -171,9 +171,36 @@ void get_object_directory(char *dir_out, size_t max_len) {
     dir_out[max_len - 1] = '\0';
 }
 
+static int file_exists(const char *filepath) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    DWORD dwAttrib = GetFileAttributesA(filepath);
+    return (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+#else
+    FILE *f = fopen(filepath, "r");
+    if (f) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+#endif
+}
+
+static void get_visualizer_directory(char *dir_out, size_t max_len) {
+    get_object_directory(dir_out, max_len);
+
+    char test_path[MAX_PATH_CHARS * 2];
+    snprintf(test_path, sizeof(test_path), "%s\\python\\transience_vis.py", dir_out);
+
+    if (!file_exists(test_path)) {
+        const char *fallback_dir = "D:\\[Library]\\[Documents]\\Max 8\\Library\\analyze~";
+        strncpy(dir_out, fallback_dir, max_len);
+        dir_out[max_len - 1] = '\0';
+    }
+}
+
 static void launch_visualizers(t_mc_analyze *x) {
     char dir[MAX_PATH_CHARS];
-    get_object_directory(dir, sizeof(dir));
+    get_visualizer_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
     t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
     char scripting_name[128];
