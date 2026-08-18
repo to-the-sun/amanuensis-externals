@@ -19,6 +19,17 @@ SCALE = 0.8
 WINDOW_SIZE = (int(1200 * SCALE), int(1000 * SCALE))
 FPS = 60
 
+def minimize_console():
+    """Minimizes the console window on Windows when starting the script."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE = 6
+        except Exception:
+            pass
+
 # State (shared between threads; guarded by lock)
 state = {
     # Building State
@@ -602,5 +613,6 @@ def run_gui():
         clock.tick(FPS)
 
 if __name__ == "__main__":
+    minimize_console()
     threading.Thread(target=tcp_server, daemon=True).start()
     run_gui()
