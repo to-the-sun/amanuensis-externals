@@ -53,6 +53,7 @@ state = {
     'tolerance': 29.0,
     'highest_peak_ms': -999.0,
     'peaks': [],
+    'all_time_scores': [],
     'accumulated_buffer': [0.0]*5001,
     'current_time': 0.0,
     'exit_flag': False
@@ -74,6 +75,8 @@ def process_packet(line):
         if pkt_type not in ('analyze', 'mc_analyze'):
             return
 
+        event_type = pkt.get('event', 'update')
+
         with state_lock:
             if 'log' in pkt and pkt['log'] is not None:
                 state['log_enabled'] = pkt['log']
@@ -83,6 +86,14 @@ def process_packet(line):
                 state['channel'] = pkt['channel']
             if 'scripting_name' in pkt and pkt['scripting_name'] is not None:
                 state['scripting_name'] = pkt['scripting_name']
+
+            if event_type == 'clear':
+                state['all_time_scores'] = []
+                state['rating'] = 0.0
+                state['overall_rating'] = 0.0
+                state['peaks'] = []
+                state['accumulated_buffer'] = [0.0]*5001
+                return
 
             current_time = pkt.get('time', 0.0)
             state['current_time'] = current_time
@@ -128,6 +139,9 @@ def process_packet(line):
             new_peaks = pkt.get('peaks', [])
             state['peaks'].extend(new_peaks)
             state['peaks'] = [p for p in state['peaks'] if current_time - p.get('time', 0.0) <= 30.0]
+
+            for p in new_peaks:
+                state['all_time_scores'].append(p.get('total_score', 0.0))
 
     except Exception as e:
         print(f"Error parsing packet: {e}", file=sys.stderr)
@@ -232,6 +246,7 @@ def run_gui():
                 'tolerance': state['tolerance'],
                 'highest_peak_ms': state['highest_peak_ms'],
                 'peaks': list(state['peaks']),
+                'all_time_scores': list(state['all_time_scores']),
                 'accumulated_buffer': list(state['accumulated_buffer']),
                 'title': win_title
             }
