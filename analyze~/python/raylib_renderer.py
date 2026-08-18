@@ -361,7 +361,10 @@ def draw_renderer(W, H, current_time, frame_data):
     else:
         score_avg = 0.0
 
-    rating_val = frame_data.get('overall_rating', 0.0)
+    if valid_peaks:
+        rating_val = sum(p.get('total_score', 0.0) for p in valid_peaks) / len(valid_peaks)
+    else:
+        rating_val = frame_data.get('rating', 0.0)
     score_clr = get_score_color(score_avg, min_score, max_score)
 
     draw_text_safe(f"Score: {score_avg:+.2f}", margin_left + 15, margin_top + 15, 24, score_clr)
