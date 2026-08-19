@@ -5,15 +5,15 @@ generate_test_data.py
 Synthesizes palette WAV files and corresponding transcript.json file
 for unit testing the Max patch and weaver~/crucible system.
 
-Palette WAV files on disk are named palette_1.wav, palette_2.wav, palette_3.wav (mostly white noise static,
-with exact bar-length drum beat segments placed at specific offsets throughout them).
-The transcript file maps 4 tracks over a 60-second song duration exclusively to these beat segments
-(using single-bar references and multi-bar spans), with the "palette" key stripping the "palette_" prefix
-(e.g., "1.wav", "2.wav", "3.wav").
-100% of beat segments are referenced, and 0% static is included in the transcript.
-Note absolute timestamps are calculated as seg.offset_ms + b * BAR_MS + note_off, where b is the
-0-based bar index within the segment, ensuring all note timestamps reside strictly within the drum beat
-audio window in the palette file (< 70,000 ms) and (absolute - offset) // BAR_MS == b.
+- Transcript duration: 2 minutes (120,000 ms = 60 bars of 2000 ms per track) across 4 tracks.
+- Palette WAV files: palette_1.wav, palette_2.wav, palette_3.wav (160 seconds each).
+- Palette WAV files contain white noise static everywhere EXCEPT at the exact audio positions
+  where drum beat segments are referenced by the transcript.
+- "palette" key in transcript.json strips "palette_" prefix (e.g., "1.wav", "2.wav", "3.wav").
+- Note absolutes are calculated as seg.offset_ms + current_bar_ms + note_intra_bar_offset,
+  ensuring (absolute - offset) = current_bar_ms + note_intra_bar_offset,
+  which floors directly into current_bar_ms.
+- 100% of beat segments are referenced, and 0% static is included in the transcript.
 """
 
 import math
@@ -26,9 +26,10 @@ from pathlib import Path
 SAMPLE_RATE = 44100
 BAR_MS = 2000  # 2.0 seconds per bar (120 BPM, 4/4)
 BAR_SAMPLES = int(SAMPLE_RATE * (BAR_MS / 1000.0))  # 88,200 samples
-SONG_DURATION_MS = 60000  # 60 seconds
-NUM_SONG_BARS = SONG_DURATION_MS // BAR_MS  # 30 bars per track
+SONG_DURATION_MS = 120000  # 2 minutes = 120,000 ms
+NUM_SONG_BARS = SONG_DURATION_MS // BAR_MS  # 60 bars per track
 NUM_TRACKS = 4
+PALETTE_TOTAL_BARS = 80  # 160 seconds per palette WAV file
 
 # --- Drum Synthesis Functions ---
 
@@ -125,52 +126,59 @@ def synthesize_bar_beat(pattern_id, bar_index_in_segment):
 
 # --- Palette Definitions ---
 
+# Defining candidate palette offset locations (in ms) and lengths
 PALETTE_SPECS = [
     {
         "filename": "palette_1.wav",
-        "total_bars": 35,  # 70 seconds
+        "offset_ms": 10000,
         "segments": [
-            (2, 1, 0),   # 1 bar at 4000ms
-            (6, 3, 1),   # 3 bars at 12000ms
-            (11, 2, 2),  # 2 bars at 22000ms
-            (15, 1, 3),  # 1 bar at 30000ms
-            (19, 4, 0),  # 4 bars at 38000ms
-            (25, 2, 1),  # 2 bars at 50000ms
-            (30, 1, 2),  # 1 bar at 60000ms
+            (1, 0),  # 1 bar single
+            (3, 1),  # 3 bar span
+            (2, 2),  # 2 bar span
+            (1, 3),  # 1 bar single
+            (4, 0),  # 4 bar span
+            (2, 1),  # 2 bar span
+            (1, 2),  # 1 bar single
+            (5, 3),  # 5 bar span
+            (2, 0),  # 2 bar span
         ]
     },
     {
         "filename": "palette_2.wav",
-        "total_bars": 35,  # 70 seconds
+        "offset_ms": 16000,
         "segments": [
-            (1, 2, 3),   # 2 bars at 2000ms
-            (5, 1, 0),   # 1 bar at 10000ms
-            (8, 4, 1),   # 4 bars at 16000ms
-            (14, 1, 2),  # 1 bar at 28000ms
-            (17, 3, 3),  # 3 bars at 34000ms
-            (22, 2, 0),  # 2 bars at 44000ms
-            (26, 1, 1),  # 1 bar at 52000ms
-            (30, 2, 2),  # 2 bars at 60000ms
+            (2, 3),
+            (1, 0),
+            (4, 1),
+            (1, 2),
+            (3, 3),
+            (2, 0),
+            (1, 1),
+            (2, 2),
+            (4, 0),
+            (1, 3),
         ]
     },
     {
         "filename": "palette_3.wav",
-        "total_bars": 35,  # 70 seconds
+        "offset_ms": 12000,
         "segments": [
-            (2, 3, 0),   # 3 bars at 4000ms
-            (7, 1, 1),   # 1 bar at 14000ms
-            (10, 2, 2),  # 2 bars at 20000ms
-            (14, 5, 3),  # 5 bars at 28000ms
-            (21, 1, 0),  # 1 bar at 42000ms
-            (24, 2, 1),  # 2 bars at 48000ms
-            (28, 1, 2),  # 1 bar at 56000ms
-            (31, 1, 3),  # 1 bar at 62000ms
+            (3, 0),
+            (1, 1),
+            (2, 2),
+            (5, 3),
+            (1, 0),
+            (2, 1),
+            (1, 2),
+            (1, 3),
+            (3, 1),
+            (2, 2),
         ]
     }
 ]
 
 
-class SegmentInfo:
+class SegmentSpec:
     def __init__(self, palette_name, offset_ms, num_bars, pattern_id):
         self.palette_name = palette_name
         self.offset_ms = offset_ms
@@ -178,70 +186,40 @@ class SegmentInfo:
         self.pattern_id = pattern_id
 
 
-def build_palette_audio_files():
-    """Generates the WAV files according to PALETTE_SPECS."""
-    all_segments = []
-
-    for spec in PALETTE_SPECS:
-        fn = spec["filename"]
-        total_bars = spec["total_bars"]
-        total_samples = total_bars * BAR_SAMPLES
-        audio = [0.0] * total_samples
-
-        # Fill background with static (white noise)
-        for i in range(total_samples):
-            audio[i] = random.uniform(-0.15, 0.15)
-
-        # Overwrite drum beat segments
-        for (start_bar, num_bars, pattern_id) in spec["segments"]:
-            offset_ms = start_bar * BAR_MS
-            segment_obj = SegmentInfo(fn, offset_ms, num_bars, pattern_id)
-            all_segments.append(segment_obj)
-
-            for b in range(num_bars):
-                bar_audio = synthesize_bar_beat(pattern_id, b)
-                start_sample = (start_bar + b) * BAR_SAMPLES
-                for s_idx, sample_val in enumerate(bar_audio):
-                    audio[start_sample + s_idx] = sample_val
-
-        # Write WAV file (16-bit PCM Mono)
-        out_path = Path(fn)
-        with wave.open(str(out_path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(SAMPLE_RATE)
-            packed_frames = bytearray()
-            for sample in audio:
-                clamped = max(-1.0, min(1.0, sample))
-                int_val = int(clamped * 32767.0)
-                packed_frames.extend(struct.pack("<h", int_val))
-            wav_file.writeframes(packed_frames)
-        print(f"Generated {fn} ({total_bars * (BAR_MS/1000.0):.1f}s, {len(spec['segments'])} beat segments)")
-
-    return all_segments
-
-
-def create_transcript_dictionary(all_segments):
+def build_transcript_and_palette_audio():
     """
-    Constructs transcript JSON mapping 4 tracks over 60 seconds (30 bars per track)
-    using all beat segments from all_segments.
-    Guarantees 100% beat segment coverage and 0% static inclusion.
-    Sets "palette" key to filename stripped of "palette_" prefix (e.g. "1.wav").
-    Absolutes are calculated as seg.offset_ms + b * BAR_MS + note_off,
-    placing notes strictly inside the palette audio drum beat segment and ensuring
-    (absolute - offset) // BAR_MS == b.
+    Builds 4 tracks over 2 minutes (60 bars per track) in transcript.json.
+    Simultaneously populates audio in palette_1.wav, palette_2.wav, palette_3.wav
+    at exactly seg.offset_ms + current_bar_ms, filling all other areas with static.
     """
     transcript = {}
 
-    unreferenced_segments = list(all_segments)
-    all_segments_pool = list(all_segments)
+    # Total audio array for each palette WAV file (80 bars = 160 seconds)
+    total_palette_samples = PALETTE_TOTAL_BARS * BAR_SAMPLES
+    palette_audio_buffers = {
+        spec["filename"]: [random.uniform(-0.15, 0.15) for _ in range(total_palette_samples)]
+        for spec in PALETTE_SPECS
+    }
+
+    # Gather available segment templates
+    all_segment_specs = []
+    for spec in PALETTE_SPECS:
+        fn = spec["filename"]
+        base_off = spec["offset_ms"]
+        for (num_bars, pattern_id) in spec["segments"]:
+            all_segment_specs.append(SegmentSpec(fn, base_off, num_bars, pattern_id))
+
+    unreferenced_segments = list(all_segment_specs)
+    all_segment_pool = list(all_segment_specs)
 
     def get_next_segment():
         nonlocal unreferenced_segments
         if unreferenced_segments:
             return unreferenced_segments.pop(0)
         else:
-            return random.choice(all_segments_pool)
+            return random.choice(all_segment_pool)
+
+    referenced_segments = set()
 
     for tr_num in range(1, NUM_TRACKS + 1):
         tr_key = str(tr_num)
@@ -250,11 +228,12 @@ def create_transcript_dictionary(all_segments):
 
         while bar_idx < NUM_SONG_BARS:
             seg = get_next_segment()
+            referenced_segments.add((seg.palette_name, seg.offset_ms, seg.num_bars))
+
             bars_to_place = seg.num_bars
             if bar_idx + bars_to_place > NUM_SONG_BARS:
                 bars_to_place = 1
 
-            song_start_ms = bar_idx * BAR_MS
             span_bars = [ (bar_idx + b) * BAR_MS for b in range(bars_to_place) ]
 
             palette_key = seg.palette_name
@@ -265,9 +244,11 @@ def create_transcript_dictionary(all_segments):
                 current_bar_ms = (bar_idx + b) * BAR_MS
                 bar_key = str(current_bar_ms)
 
-                # Absolute note timestamps in palette audio:
-                # seg.offset_ms + b * BAR_MS + note_off
-                absolutes = [ float(seg.offset_ms + b * BAR_MS + note_off) for note_off in [0, 500, 1000, 1500] ]
+                # 1. Generate note absolutes in transcript.json
+                # absolutes = seg.offset_ms + current_bar_ms + note_intra_bar_offset
+                # So (absolute - offset) = current_bar_ms + note_intra_bar_offset
+                # floor((absolute - offset) / 2000) * 2000 == current_bar_ms
+                absolutes = [ float(seg.offset_ms + current_bar_ms + note_off) for note_off in [0, 500, 1000, 1500] ]
                 scores = [ 0.12, 0.25, 0.18, 0.30 ]
                 mean_score = sum(scores) / len(scores)
 
@@ -282,32 +263,48 @@ def create_transcript_dictionary(all_segments):
                 }
                 track_dict[bar_key] = bar_entry
 
+                # 2. Write drum beat audio into palette audio buffer
+                # At palette audio offset: seg.offset_ms + current_bar_ms
+                palette_write_start_ms = seg.offset_ms + current_bar_ms
+                start_sample = int((palette_write_start_ms / 1000.0) * SAMPLE_RATE)
+                bar_audio = synthesize_bar_beat(seg.pattern_id, b)
+
+                buf = palette_audio_buffers[seg.palette_name]
+                for s_idx, sample_val in enumerate(bar_audio):
+                    target_sample = start_sample + s_idx
+                    if target_sample < len(buf):
+                        buf[target_sample] = sample_val
+
             bar_idx += bars_to_place
 
         transcript[tr_key] = track_dict
 
-    # Verify that all segments are referenced
-    referenced_keys = set()
-    for tr_dict in transcript.values():
-        for bar_data in tr_dict.values():
-            pal = bar_data["palette"]
-            full_pal_name = f"palette_{pal}" if not pal.startswith("palette_") else pal
-            off = bar_data["offset"]
-            referenced_keys.add((full_pal_name, off))
+    # Write palette WAV files to disk
+    for fn, buf in palette_audio_buffers.items():
+        out_path = Path(fn)
+        with wave.open(str(out_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(SAMPLE_RATE)
+            packed_frames = bytearray()
+            for sample in buf:
+                clamped = max(-1.0, min(1.0, sample))
+                int_val = int(clamped * 32767.0)
+                packed_frames.extend(struct.pack("<h", int_val))
+            wav_file.writeframes(packed_frames)
+        print(f"Generated {fn} ({PALETTE_TOTAL_BARS * (BAR_MS/1000.0):.1f}s)")
 
-    for seg in all_segments:
-        if (seg.palette_name, seg.offset_ms) not in referenced_keys:
+    # Verify all segments referenced
+    for seg in all_segment_specs:
+        if (seg.palette_name, seg.offset_ms, seg.num_bars) not in referenced_segments:
             print(f"WARNING: Segment {seg.palette_name} @ {seg.offset_ms}ms was not referenced!")
 
     return transcript
 
 
 def main():
-    print("Synthesizing audio palette files...")
-    all_segments = build_palette_audio_files()
-
-    print("Generating transcript dictionary...")
-    transcript_data = create_transcript_dictionary(all_segments)
+    print("Synthesizing audio palette files and transcript dictionary...")
+    transcript_data = build_transcript_and_palette_audio()
 
     out_path = Path("transcript.json")
     with open(out_path, "w") as f:
