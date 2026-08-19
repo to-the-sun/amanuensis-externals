@@ -19,7 +19,7 @@ The testing framework consists of three main parts:
    - Enables visualization data to be transmitted over TCP Port 8999 to `debug_visualizer.py` even on Linux!
 
 3. **Test Harness (`weaver_test.c`)**:
-   - Contains a built-in recursive-descent **JSON Parser** that parses a standard transcript file (e.g. `sampletranscript.json`) into nested mock `t_dictionary` tree structures.
+   - Contains a built-in recursive-descent **JSON Parser** that parses a standard transcript file (e.g. `transcript.json`) into nested mock `t_dictionary` tree structures.
    - Implements a fallback **programmatic transcript builder** to synthesize a dictionary on the fly.
    - Configures, registers, and populates mock buffers: `"bar"`, palette wav buffers (`"palette_A.wav"`, `"palette_B.wav"`), fallback buffers (`"stems.1"`, `"stems.2"`), and destination buffers (`"poly.1"`, `"poly.2"`).
    - Instantiates `weaver~` and simulates a continuous **ramp input signal** from `0.00` ms to the absolute song length, triggering DSP processing vectors (in chunks of 512 samples) and main-thread qelem queue tasks sequentially.
