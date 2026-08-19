@@ -1,6 +1,6 @@
 # Weaver~ Standalone Unit Testing and Mock Framework
 
-This directory (`weaver~/test_include/`) contains a native standalone C unit-testing, mock, and platform adapter framework for the `weaver~` Max MSP object. It allows you to compile, run, and diagnose the core `weaver~` C object on a standard Linux environment (without needing Windows, macOS, or a running instance of Max MSP).
+This directory (`weaver~/test_include/`) contains a native standalone C unit-testing, mock, and platform adapter framework for the `weaver~` Max MSP object. **Do not** run this test suite unless explicitly asked to by the user. It allows you to compile, run, and diagnose the core `weaver~` C object on a standard Linux environment (without needing Windows, macOS, or a running instance of Max MSP).
 
 ---
 
