@@ -468,6 +468,26 @@ void mc_analyze_clear(t_mc_analyze* x) {
         x->last_peak_frame[i] = -1;
     }
     mc_analyze_log(x, "cleared internal state");
+
+    if (x->visualize_enabled && x->allocated_viz_ports > 0) {
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+        for (long ch = 0; ch < x->allocated_viz_ports; ch++) {
+            if (x->viz_ports[ch] > 0) {
+                char json_buf[512];
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"clear\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld,\"rating\":0.0}", grp, scripting_name, ch);
+                visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
+            }
+        }
+    }
+
     critical_exit(x->lock);
 }
 
