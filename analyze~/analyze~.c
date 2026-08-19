@@ -363,6 +363,19 @@ void analyze_free(t_analyze* x) {
     critical_free(x->lock);
 
     if (x->viz_port > 0) {
+        char json_buf[512];
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"close\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
+        visualize_to_port(x, x->viz_port, "analyze", json_buf);
+
         visualize_close_port(x->viz_port);
     }
 
