@@ -100,7 +100,7 @@
 		<attribute name="visualize" get="1" set="1" type="long" size="1">
 			<digest>Enable Real-Time Visualization</digest>
 			<description>
-				Enables or disables real-time visualization. When enabled (1), the object automatically launches the companion visualizer process (transience_vis.py) in the background and streams highly detailed, real-time transient analysis frames (including 4-band envelopes, dynamic smoothings, peak scoring markers, metrics, and the 5-second accumulated historical buffer) over localhost TCP port 9001.
+				Enables or disables real-time visualization. When enabled (1), the object automatically launches the companion visualizer process (transience_vis.py) in the background and streams highly detailed, real-time transient analysis frames (including 4-band envelopes, dynamic smoothings, peak scoring markers, metrics, and the 5-second accumulated historical buffer) over localhost TCP port 9001. When the object instance is freed (e.g. when deleted or when Max closes), any active visualizer processes spawned by the object are automatically closed.
 			</description>
 		</attribute>
 	</attributelist>

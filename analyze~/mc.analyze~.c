@@ -423,8 +423,22 @@ void mc_analyze_free(t_mc_analyze* x) {
     free(x->clock_buffer);
 
     if (x->viz_ports) {
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+
         for (long i = 0; i < x->allocated_viz_ports; i++) {
             if (x->viz_ports[i] > 0) {
+                char json_buf[512];
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"close\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
+                visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
+
                 visualize_close_port(x->viz_ports[i]);
             }
         }

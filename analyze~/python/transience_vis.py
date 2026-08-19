@@ -95,6 +95,10 @@ def process_packet(line):
                 state['accumulated_buffer'] = [0.0]*5001
                 return
 
+            if event_type == 'close':
+                state['exit_flag'] = True
+                return
+
             current_time = pkt.get('time', 0.0)
             state['current_time'] = current_time
 
