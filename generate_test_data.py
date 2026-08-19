@@ -5,9 +5,11 @@ generate_test_data.py
 Synthesizes palette WAV files and corresponding transcript.json / sampletranscript.json files
 for unit testing the Max patch and weaver~/crucible system.
 
-Palette WAV files are mostly white noise static, with exact bar-length drum beat segments placed
-at specific offsets throughout them. The transcript file maps 4 tracks over a 60-second song duration
-exclusively to these beat segments (using single-bar references and multi-bar spans).
+Palette WAV files on disk are named palette_1.wav, palette_2.wav, palette_3.wav (mostly white noise static,
+with exact bar-length drum beat segments placed at specific offsets throughout them).
+The transcript file maps 4 tracks over a 60-second song duration exclusively to these beat segments
+(using single-bar references and multi-bar spans), with the "palette" key stripping the "palette_" prefix
+(e.g., "1.wav", "2.wav", "3.wav").
 100% of beat segments are referenced, and 0% static is included in the transcript.
 """
 
@@ -230,6 +232,7 @@ def create_transcript_dictionary(all_segments):
     Constructs transcript JSON mapping 4 tracks over 60 seconds (30 bars per track)
     using all beat segments from all_segments.
     Guarantees 100% beat segment coverage and 0% static inclusion.
+    Sets "palette" key to filename stripped of "palette_" prefix (e.g. "1.wav").
     """
     transcript = {}
 
@@ -263,6 +266,11 @@ def create_transcript_dictionary(all_segments):
             song_start_ms = bar_idx * BAR_MS
             span_bars = [ (bar_idx + b) * BAR_MS for b in range(bars_to_place) ]
 
+            # Strip "palette_" prefix for the JSON entry (e.g., "palette_1.wav" -> "1.wav")
+            palette_key = seg.palette_name
+            if palette_key.startswith("palette_"):
+                palette_key = palette_key[len("palette_"):]
+
             for b in range(bars_to_place):
                 current_bar_ms = (bar_idx + b) * BAR_MS
                 bar_key = str(current_bar_ms)
@@ -280,7 +288,7 @@ def create_transcript_dictionary(all_segments):
                     "mean": mean_score,
                     "span": span_bars if bars_to_place > 1 else current_bar_ms,
                     "rating": round(0.8 + 0.2 * (seg.pattern_id + 1), 2),
-                    "palette": seg.palette_name
+                    "palette": palette_key
                 }
                 track_dict[bar_key] = bar_entry
 
@@ -293,8 +301,9 @@ def create_transcript_dictionary(all_segments):
     for tr_dict in transcript.values():
         for bar_data in tr_dict.values():
             pal = bar_data["palette"]
+            full_pal_name = f"palette_{pal}" if not pal.startswith("palette_") else pal
             off = bar_data["offset"]
-            referenced_keys.add((pal, off))
+            referenced_keys.add((full_pal_name, off))
 
     for seg in all_segments:
         if (seg.palette_name, seg.offset_ms) not in referenced_keys:

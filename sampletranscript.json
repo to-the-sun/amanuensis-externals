@@ -17,7 +17,7 @@
             "mean": 0.2125,
             "span": 0,
             "rating": 1.0,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "2000": {
             "absolutes": [
@@ -40,7 +40,7 @@
                 6000
             ],
             "rating": 1.2,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "4000": {
             "absolutes": [
@@ -63,7 +63,7 @@
                 6000
             ],
             "rating": 1.2,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "6000": {
             "absolutes": [
@@ -86,7 +86,7 @@
                 6000
             ],
             "rating": 1.2,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "8000": {
             "absolutes": [
@@ -108,7 +108,7 @@
                 10000
             ],
             "rating": 1.4,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "10000": {
             "absolutes": [
@@ -130,7 +130,7 @@
                 10000
             ],
             "rating": 1.4,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "12000": {
             "absolutes": [
@@ -149,7 +149,7 @@
             "mean": 0.2125,
             "span": 12000,
             "rating": 1.6,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "14000": {
             "absolutes": [
@@ -173,7 +173,7 @@
                 20000
             ],
             "rating": 1.0,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "16000": {
             "absolutes": [
@@ -197,7 +197,7 @@
                 20000
             ],
             "rating": 1.0,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "18000": {
             "absolutes": [
@@ -221,7 +221,7 @@
                 20000
             ],
             "rating": 1.0,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "20000": {
             "absolutes": [
@@ -245,7 +245,7 @@
                 20000
             ],
             "rating": 1.0,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "22000": {
             "absolutes": [
@@ -267,7 +267,7 @@
                 24000
             ],
             "rating": 1.2,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "24000": {
             "absolutes": [
@@ -289,7 +289,7 @@
                 24000
             ],
             "rating": 1.2,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "26000": {
             "absolutes": [
@@ -308,7 +308,7 @@
             "mean": 0.2125,
             "span": 26000,
             "rating": 1.4,
-            "palette": "palette_1.wav"
+            "palette": "1.wav"
         },
         "28000": {
             "absolutes": [
@@ -330,7 +330,7 @@
                 30000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "30000": {
             "absolutes": [
@@ -352,7 +352,7 @@
                 30000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "32000": {
             "absolutes": [
@@ -371,7 +371,7 @@
             "mean": 0.2125,
             "span": 32000,
             "rating": 1.0,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "34000": {
             "absolutes": [
@@ -395,7 +395,7 @@
                 40000
             ],
             "rating": 1.2,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "36000": {
             "absolutes": [
@@ -419,7 +419,7 @@
                 40000
             ],
             "rating": 1.2,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "38000": {
             "absolutes": [
@@ -443,7 +443,7 @@
                 40000
             ],
             "rating": 1.2,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "40000": {
             "absolutes": [
@@ -467,7 +467,7 @@
                 40000
             ],
             "rating": 1.2,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "42000": {
             "absolutes": [
@@ -486,7 +486,7 @@
             "mean": 0.2125,
             "span": 42000,
             "rating": 1.4,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "44000": {
             "absolutes": [
@@ -509,7 +509,7 @@
                 48000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "46000": {
             "absolutes": [
@@ -532,7 +532,7 @@
                 48000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "48000": {
             "absolutes": [
@@ -555,7 +555,7 @@
                 48000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "50000": {
             "absolutes": [
@@ -577,7 +577,7 @@
                 52000
             ],
             "rating": 1.0,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "52000": {
             "absolutes": [
@@ -599,7 +599,7 @@
                 52000
             ],
             "rating": 1.0,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "54000": {
             "absolutes": [
@@ -618,7 +618,7 @@
             "mean": 0.2125,
             "span": 54000,
             "rating": 1.2,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "56000": {
             "absolutes": [
@@ -640,7 +640,7 @@
                 58000
             ],
             "rating": 1.4,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "58000": {
             "absolutes": [
@@ -662,7 +662,7 @@
                 58000
             ],
             "rating": 1.4,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         }
     },
     "2": {
@@ -687,7 +687,7 @@
                 4000
             ],
             "rating": 1.0,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "2000": {
             "absolutes": [
@@ -710,7 +710,7 @@
                 4000
             ],
             "rating": 1.0,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "4000": {
             "absolutes": [
@@ -733,7 +733,7 @@
                 4000
             ],
             "rating": 1.0,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "6000": {
             "absolutes": [
@@ -752,7 +752,7 @@
             "mean": 0.2125,
             "span": 6000,
             "rating": 1.2,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "8000": {
             "absolutes": [
@@ -774,7 +774,7 @@
                 10000
             ],
             "rating": 1.4,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "10000": {
             "absolutes": [
@@ -796,7 +796,7 @@
                 10000
             ],
             "rating": 1.4,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "12000": {
             "absolutes": [
@@ -821,7 +821,7 @@
                 20000
             ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "14000": {
             "absolutes": [
@@ -846,7 +846,7 @@
                 20000
             ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "16000": {
             "absolutes": [
@@ -871,7 +871,7 @@
                 20000
             ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "18000": {
             "absolutes": [
@@ -896,7 +896,7 @@
                 20000
             ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "20000": {
             "absolutes": [
@@ -921,7 +921,7 @@
                 20000
             ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "22000": {
             "absolutes": [
@@ -940,7 +940,7 @@
             "mean": 0.2125,
             "span": 22000,
             "rating": 1.0,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "24000": {
             "absolutes": [
@@ -962,7 +962,7 @@
                 26000
             ],
             "rating": 1.2,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "26000": {
             "absolutes": [
@@ -984,7 +984,7 @@
                 26000
             ],
             "rating": 1.2,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "28000": {
             "absolutes": [
@@ -1003,7 +1003,7 @@
             "mean": 0.2125,
             "span": 28000,
             "rating": 1.4,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "30000": {
             "absolutes": [
@@ -1022,7 +1022,7 @@
             "mean": 0.2125,
             "span": 30000,
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "32000": {
             "absolutes": [
@@ -1037,14 +1037,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 2000.0,
             "mean": 0.2125,
             "span": [
                 32000,
                 34000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "34000": {
             "absolutes": [
@@ -1059,14 +1059,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 2000.0,
             "mean": 0.2125,
             "span": [
                 32000,
                 34000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "36000": {
             "absolutes": [
@@ -1081,14 +1081,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
                 36000,
                 38000
             ],
             "rating": 1.4,
-            "palette": "palette_2.wav"
+            "palette": "3.wav"
         },
         "38000": {
             "absolutes": [
@@ -1103,14 +1103,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
                 36000,
                 38000
             ],
             "rating": 1.4,
-            "palette": "palette_2.wav"
+            "palette": "3.wav"
         },
         "40000": {
             "absolutes": [
@@ -1125,15 +1125,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 4000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
                 40000,
-                42000,
-                44000
+                42000
             ],
-            "rating": 1.0,
-            "palette": "palette_3.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "42000": {
             "absolutes": [
@@ -1148,15 +1147,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 4000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
                 40000,
-                42000,
-                44000
+                42000
             ],
-            "rating": 1.0,
-            "palette": "palette_3.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "44000": {
             "absolutes": [
@@ -1171,15 +1169,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 4000.0,
+            "offset": 42000.0,
             "mean": 0.2125,
-            "span": [
-                40000,
-                42000,
-                44000
-            ],
+            "span": 44000,
             "rating": 1.0,
-            "palette": "palette_3.wav"
+            "palette": "3.wav"
         },
         "46000": {
             "absolutes": [
@@ -1194,14 +1188,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
                 46000,
-                48000
+                48000,
+                50000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "48000": {
             "absolutes": [
@@ -1216,14 +1211,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
                 46000,
-                48000
+                48000,
+                50000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "50000": {
             "absolutes": [
@@ -1238,14 +1234,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
-                50000,
-                52000
+                46000,
+                48000,
+                50000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "52000": {
             "absolutes": [
@@ -1260,14 +1257,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
-                50000,
-                52000
+                52000,
+                54000,
+                56000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "54000": {
             "absolutes": [
@@ -1282,11 +1280,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 28000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
-            "span": 54000,
-            "rating": 1.4,
-            "palette": "palette_2.wav"
+            "span": [
+                52000,
+                54000,
+                56000
+            ],
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "56000": {
             "absolutes": [
@@ -1301,11 +1303,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 28000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
-            "span": 56000,
+            "span": [
+                52000,
+                54000,
+                56000
+            ],
             "rating": 1.6,
-            "palette": "palette_3.wav"
+            "palette": "2.wav"
         },
         "58000": {
             "absolutes": [
@@ -1320,11 +1326,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 34000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": 58000,
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         }
     },
     "3": {
@@ -1341,11 +1347,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 4000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
-            "span": 0,
-            "rating": 1.0,
-            "palette": "palette_1.wav"
+            "span": [
+                0,
+                2000
+            ],
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "2000": {
             "absolutes": [
@@ -1360,15 +1369,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 34000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
-                2000,
-                4000,
-                6000
+                0,
+                2000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "4000": {
             "absolutes": [
@@ -1383,15 +1391,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 34000.0,
+            "offset": 52000.0,
             "mean": 0.2125,
-            "span": [
-                2000,
-                4000,
-                6000
-            ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "span": 4000,
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "6000": {
             "absolutes": [
@@ -1406,15 +1410,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 34000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
-                2000,
-                4000,
-                6000
+                6000,
+                8000,
+                10000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "8000": {
             "absolutes": [
@@ -1429,14 +1433,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
+                6000,
                 8000,
                 10000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "10000": {
             "absolutes": [
@@ -1451,14 +1456,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 20000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
+                6000,
                 8000,
                 10000
             ],
-            "rating": 1.4,
-            "palette": "palette_3.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "12000": {
             "absolutes": [
@@ -1473,11 +1479,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
-            "span": 12000,
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "span": [
+                12000,
+                14000,
+                16000
+            ],
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "14000": {
             "absolutes": [
@@ -1492,11 +1502,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 14000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
-            "span": 14000,
+            "span": [
+                12000,
+                14000,
+                16000
+            ],
             "rating": 1.2,
-            "palette": "palette_3.wav"
+            "palette": "1.wav"
         },
         "16000": {
             "absolutes": [
@@ -1511,14 +1525,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 22000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
             "span": [
-                16000,
-                18000
+                12000,
+                14000,
+                16000
             ],
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "18000": {
             "absolutes": [
@@ -1533,14 +1548,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 22000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
-                16000,
-                18000
+                18000,
+                20000,
+                22000
             ],
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "20000": {
             "absolutes": [
@@ -1555,16 +1571,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
+                18000,
                 20000,
-                22000,
-                24000,
-                26000
+                22000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "22000": {
             "absolutes": [
@@ -1579,16 +1594,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 4000.0,
             "mean": 0.2125,
             "span": [
+                18000,
                 20000,
-                22000,
-                24000,
-                26000
+                22000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "24000": {
             "absolutes": [
@@ -1603,16 +1617,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
-                20000,
-                22000,
                 24000,
-                26000
+                26000,
+                28000,
+                30000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "26000": {
             "absolutes": [
@@ -1627,16 +1641,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
-                20000,
-                22000,
                 24000,
-                26000
+                26000,
+                28000,
+                30000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "28000": {
             "absolutes": [
@@ -1651,16 +1665,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
+                24000,
+                26000,
                 28000,
-                30000,
-                32000,
-                34000
+                30000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "30000": {
             "absolutes": [
@@ -1675,16 +1689,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
+                24000,
+                26000,
                 28000,
-                30000,
-                32000,
-                34000
+                30000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "32000": {
             "absolutes": [
@@ -1699,16 +1713,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 44000.0,
             "mean": 0.2125,
             "span": [
-                28000,
-                30000,
                 32000,
                 34000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "2.wav"
         },
         "34000": {
             "absolutes": [
@@ -1723,16 +1735,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 44000.0,
             "mean": 0.2125,
             "span": [
-                28000,
-                30000,
                 32000,
                 34000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.0,
+            "palette": "2.wav"
         },
         "36000": {
             "absolutes": [
@@ -1747,11 +1757,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 62000.0,
             "mean": 0.2125,
             "span": 36000,
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "rating": 1.6,
+            "palette": "3.wav"
         },
         "38000": {
             "absolutes": [
@@ -1766,14 +1776,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
                 38000,
-                40000
+                40000,
+                42000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "40000": {
             "absolutes": [
@@ -1788,14 +1799,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
                 38000,
-                40000
+                40000,
+                42000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "42000": {
             "absolutes": [
@@ -1810,14 +1822,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
-                42000,
-                44000
+                38000,
+                40000,
+                42000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "44000": {
             "absolutes": [
@@ -1832,14 +1845,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
-                42000,
-                44000
+                44000,
+                46000,
+                48000
             ],
             "rating": 1.6,
-            "palette": "palette_2.wav"
+            "palette": "2.wav"
         },
         "46000": {
             "absolutes": [
@@ -1854,16 +1868,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
+                44000,
                 46000,
-                48000,
-                50000,
-                52000
+                48000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "48000": {
             "absolutes": [
@@ -1878,16 +1891,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 34000.0,
             "mean": 0.2125,
             "span": [
+                44000,
                 46000,
-                48000,
-                50000,
-                52000
+                48000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "50000": {
             "absolutes": [
@@ -1902,16 +1914,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
-                46000,
-                48000,
                 50000,
                 52000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.4,
+            "palette": "3.wav"
         },
         "52000": {
             "absolutes": [
@@ -1926,16 +1936,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
-                46000,
-                48000,
                 50000,
                 52000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.4,
+            "palette": "3.wav"
         },
         "54000": {
             "absolutes": [
@@ -1950,11 +1958,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 30000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
-            "span": 54000,
-            "rating": 1.6,
-            "palette": "palette_1.wav"
+            "span": [
+                54000,
+                56000,
+                58000
+            ],
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "56000": {
             "absolutes": [
@@ -1969,11 +1981,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 14000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
-            "span": 56000,
+            "span": [
+                54000,
+                56000,
+                58000
+            ],
             "rating": 1.2,
-            "palette": "palette_3.wav"
+            "palette": "1.wav"
         },
         "58000": {
             "absolutes": [
@@ -1988,11 +2004,15 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 12000.0,
             "mean": 0.2125,
-            "span": 58000,
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "span": [
+                54000,
+                56000,
+                58000
+            ],
+            "rating": 1.2,
+            "palette": "1.wav"
         }
     },
     "4": {
@@ -2009,11 +2029,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 28000.0,
+            "offset": 14000.0,
             "mean": 0.2125,
             "span": 0,
-            "rating": 1.4,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "3.wav"
         },
         "2000": {
             "absolutes": [
@@ -2028,14 +2048,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
                 2000,
-                4000
+                4000,
+                6000,
+                8000
             ],
-            "rating": 1.4,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "4000": {
             "absolutes": [
@@ -2050,14 +2072,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
                 2000,
-                4000
+                4000,
+                6000,
+                8000
             ],
-            "rating": 1.4,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "6000": {
             "absolutes": [
@@ -2072,11 +2096,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 62000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
-            "span": 6000,
-            "rating": 1.6,
-            "palette": "palette_3.wav"
+            "span": [
+                2000,
+                4000,
+                6000,
+                8000
+            ],
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "8000": {
             "absolutes": [
@@ -2091,11 +2120,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 42000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
-            "span": 8000,
-            "rating": 1.0,
-            "palette": "palette_3.wav"
+            "span": [
+                2000,
+                4000,
+                6000,
+                8000
+            ],
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "10000": {
             "absolutes": [
@@ -2110,11 +2144,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 62000.0,
+            "offset": 52000.0,
             "mean": 0.2125,
             "span": 10000,
-            "rating": 1.6,
-            "palette": "palette_3.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "12000": {
             "absolutes": [
@@ -2129,14 +2163,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 48000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
                 12000,
-                14000
+                14000,
+                16000,
+                18000
             ],
-            "rating": 1.2,
-            "palette": "palette_3.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "14000": {
             "absolutes": [
@@ -2151,14 +2187,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 48000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
             "span": [
                 12000,
-                14000
+                14000,
+                16000,
+                18000
             ],
-            "rating": 1.2,
-            "palette": "palette_3.wav"
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "16000": {
             "absolutes": [
@@ -2173,11 +2211,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 62000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
-            "span": 16000,
-            "rating": 1.6,
-            "palette": "palette_3.wav"
+            "span": [
+                12000,
+                14000,
+                16000,
+                18000
+            ],
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "18000": {
             "absolutes": [
@@ -2192,11 +2235,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 60000.0,
+            "offset": 38000.0,
             "mean": 0.2125,
-            "span": 18000,
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "span": [
+                12000,
+                14000,
+                16000,
+                18000
+            ],
+            "rating": 1.0,
+            "palette": "1.wav"
         },
         "20000": {
             "absolutes": [
@@ -2211,16 +2259,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 10000.0,
             "mean": 0.2125,
-            "span": [
-                20000,
-                22000,
-                24000,
-                26000
-            ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "span": 20000,
+            "rating": 1.0,
+            "palette": "2.wav"
         },
         "22000": {
             "absolutes": [
@@ -2235,16 +2278,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 56000.0,
             "mean": 0.2125,
-            "span": [
-                20000,
-                22000,
-                24000,
-                26000
-            ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "span": 22000,
+            "rating": 1.4,
+            "palette": "3.wav"
         },
         "24000": {
             "absolutes": [
@@ -2259,16 +2297,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 62000.0,
             "mean": 0.2125,
-            "span": [
-                20000,
-                22000,
-                24000,
-                26000
-            ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "span": 24000,
+            "rating": 1.6,
+            "palette": "3.wav"
         },
         "26000": {
             "absolutes": [
@@ -2283,16 +2316,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 16000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
-                20000,
-                22000,
-                24000,
-                26000
+                26000,
+                28000
             ],
-            "rating": 1.2,
-            "palette": "palette_2.wav"
+            "rating": 1.4,
+            "palette": "3.wav"
         },
         "28000": {
             "absolutes": [
@@ -2307,16 +2338,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 38000.0,
+            "offset": 20000.0,
             "mean": 0.2125,
             "span": [
-                28000,
-                30000,
-                32000,
-                34000
+                26000,
+                28000
             ],
-            "rating": 1.0,
-            "palette": "palette_1.wav"
+            "rating": 1.4,
+            "palette": "3.wav"
         },
         "30000": {
             "absolutes": [
@@ -2331,16 +2360,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 38000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
-                28000,
                 30000,
                 32000,
-                34000
+                34000,
+                36000
             ],
-            "rating": 1.0,
-            "palette": "palette_1.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "32000": {
             "absolutes": [
@@ -2355,16 +2384,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 38000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
-                28000,
                 30000,
                 32000,
-                34000
+                34000,
+                36000
             ],
-            "rating": 1.0,
-            "palette": "palette_1.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "34000": {
             "absolutes": [
@@ -2379,16 +2408,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 38000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
-                28000,
                 30000,
                 32000,
-                34000
+                34000,
+                36000
             ],
-            "rating": 1.0,
-            "palette": "palette_1.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "36000": {
             "absolutes": [
@@ -2403,14 +2432,16 @@
                 0.18,
                 0.3
             ],
-            "offset": 44000.0,
+            "offset": 16000.0,
             "mean": 0.2125,
             "span": [
-                36000,
-                38000
+                30000,
+                32000,
+                34000,
+                36000
             ],
-            "rating": 1.0,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "2.wav"
         },
         "38000": {
             "absolutes": [
@@ -2425,14 +2456,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 44000.0,
+            "offset": 2000.0,
             "mean": 0.2125,
             "span": [
-                36000,
-                38000
+                38000,
+                40000
             ],
-            "rating": 1.0,
-            "palette": "palette_2.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "40000": {
             "absolutes": [
@@ -2447,14 +2478,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 44000.0,
+            "offset": 2000.0,
             "mean": 0.2125,
             "span": [
-                40000,
-                42000
+                38000,
+                40000
             ],
-            "rating": 1.0,
-            "palette": "palette_2.wav"
+            "rating": 1.6,
+            "palette": "2.wav"
         },
         "42000": {
             "absolutes": [
@@ -2469,14 +2500,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 44000.0,
+            "offset": 30000.0,
             "mean": 0.2125,
-            "span": [
-                40000,
-                42000
-            ],
-            "rating": 1.0,
-            "palette": "palette_2.wav"
+            "span": 42000,
+            "rating": 1.6,
+            "palette": "1.wav"
         },
         "44000": {
             "absolutes": [
@@ -2491,14 +2519,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
                 44000,
                 46000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "46000": {
             "absolutes": [
@@ -2513,14 +2541,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
                 44000,
                 46000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "48000": {
             "absolutes": [
@@ -2535,14 +2563,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 48000.0,
             "mean": 0.2125,
             "span": [
                 48000,
                 50000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "3.wav"
         },
         "50000": {
             "absolutes": [
@@ -2557,14 +2585,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 2000.0,
+            "offset": 48000.0,
             "mean": 0.2125,
             "span": [
                 48000,
                 50000
             ],
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "rating": 1.2,
+            "palette": "3.wav"
         },
         "52000": {
             "absolutes": [
@@ -2579,14 +2607,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 22000.0,
+            "offset": 42000.0,
             "mean": 0.2125,
-            "span": [
-                52000,
-                54000
-            ],
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "span": 52000,
+            "rating": 1.0,
+            "palette": "3.wav"
         },
         "54000": {
             "absolutes": [
@@ -2601,14 +2626,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 22000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
             "span": [
-                52000,
-                54000
+                54000,
+                56000
             ],
-            "rating": 1.4,
-            "palette": "palette_1.wav"
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "56000": {
             "absolutes": [
@@ -2623,11 +2648,14 @@
                 0.18,
                 0.3
             ],
-            "offset": 34000.0,
+            "offset": 50000.0,
             "mean": 0.2125,
-            "span": 56000,
-            "rating": 1.6,
-            "palette": "palette_2.wav"
+            "span": [
+                54000,
+                56000
+            ],
+            "rating": 1.2,
+            "palette": "1.wav"
         },
         "58000": {
             "absolutes": [
@@ -2642,11 +2670,11 @@
                 0.18,
                 0.3
             ],
-            "offset": 14000.0,
+            "offset": 22000.0,
             "mean": 0.2125,
             "span": 58000,
-            "rating": 1.2,
-            "palette": "palette_3.wav"
+            "rating": 1.4,
+            "palette": "1.wav"
         }
     }
 }
