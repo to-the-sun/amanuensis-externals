@@ -477,73 +477,10 @@ static const char *get_event_name_from_message(const char *message) {
     return "unknown";
 }
 
-static void get_object_log_info(void *x, long *out_log, long *out_visualize, void **out_log_outlet) {
-    if (!x) {
-        if (out_log) *out_log = 0;
-        if (out_visualize) *out_visualize = 0;
-        if (out_log_outlet) *out_log_outlet = NULL;
-        return;
-    }
-
-    if (out_log) *out_log = (long)object_attr_getlong(x, gensym("log"));
-    if (out_visualize) *out_visualize = (long)object_attr_getlong(x, gensym("visualize"));
-
-    if (out_log_outlet) {
-        t_symbol *classname = object_classname(x);
-        if (classname == gensym("crucible") || classname == gensym("rebar_crucible_internal")) {
-            typedef struct _crucible_min_layout {
-                t_object s_obj;
-                t_dictionary *challenger_dict;
-                t_symbol *last_track_id;
-                t_symbol *incumbent_dict_name;
-                void *outlet_data;
-                void *outlet_rebar;
-                void *outlet_reach_int;
-                void *log_outlet;
-            } t_crucible_min_layout;
-            t_crucible_min_layout *cx = (t_crucible_min_layout *)x;
-            *out_log_outlet = cx->log_outlet;
-        } else {
-            *out_log_outlet = NULL;
-        }
-    }
-}
-
-static void viz_log(void *x, const char *fmt, ...) {
-    long log_enabled = 0;
-    long visualize_enabled = 0;
-    void *log_outlet = NULL;
-    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
-
-    if (log_enabled) {
-        char buf[4096];
-        char final_buf[4200];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, 4096, fmt, args);
-        va_end(args);
-
-        t_symbol *classname = object_classname(x);
-        snprintf(final_buf, 4200, "%s: %s", classname ? classname->s_name : "visualize", buf);
-
-        if (log_outlet) {
-            outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
-        } else {
-            object_post((t_object *)x, "%s", final_buf);
-        }
-    }
-}
-
 static void ensure_connected(t_viz_socket *vs, void *x) {
     if (vs->sock == INVALID_SOCKET) {
-        if (x) {
-            viz_log(x, "visualize: socket is closed, attempting connection to visualizer on 127.0.0.1:%d...", ntohs(vs->addr.sin_port));
-        }
         DWORD now = GetTickCount();
         if (now - vs->last_connect_attempt < 2000) {
-            if (x) {
-                viz_log(x, "visualize: throttling connection attempt (too frequent)");
-            }
             return;
         }
         vs->last_connect_attempt = now;
@@ -569,16 +506,9 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
         if (connect(vs->sock, (struct sockaddr *)&vs->addr, sizeof(vs->addr)) == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
-                if (x) {
-                    viz_log(x, "visualize: TCP connect failed with error %d", err);
-                }
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
             } else {
-                if (x) {
-                    viz_log(x, "visualize: TCP connection initiated (non-blocking, handshaking...)");
-                }
-
                 fd_set write_fds, except_fds;
                 struct timeval tv;
                 tv.tv_sec = 0;
@@ -592,60 +522,35 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
                 int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, &except_fds, &tv);
                 if (sel_ret > 0) {
                     if (FD_ISSET(vs->sock, &except_fds)) {
-                        if (x) {
-                            viz_log(x, "visualize: TCP handshake failed (exception set)");
-                        }
                         closesocket(vs->sock);
                         vs->sock = INVALID_SOCKET;
                     } else if (FD_ISSET(vs->sock, &write_fds)) {
                         int valopt;
                         int lon = sizeof(int);
                         if (getsockopt(vs->sock, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0) {
-                            if (x) {
-                                viz_log(x, "visualize: getsockopt failed during handshake");
-                            }
                             closesocket(vs->sock);
                             vs->sock = INVALID_SOCKET;
                         } else if (valopt != 0) {
-                            if (x) {
-                                viz_log(x, "visualize: TCP handshake failed with socket error %d", valopt);
-                            }
                             closesocket(vs->sock);
                             vs->sock = INVALID_SOCKET;
                         } else {
-                            if (x) {
-                                viz_log(x, "visualize: TCP handshake completed successfully via select!");
-                            }
+                            // Connected successfully
                         }
                     }
                 } else if (sel_ret == 0) {
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 } else {
-                    if (x) {
-                        viz_log(x, "visualize: select failed during TCP handshake");
-                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                 }
             }
-        } else {
-            if (x) {
-                viz_log(x, "visualize: TCP socket connected immediately!");
-            }
-        }
-    } else {
-        if (x) {
-            viz_log(x, "visualize: socket is already open and ready");
         }
     }
 }
 
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message) {
     const char *ev = get_event_name_from_message(message);
-    if (x) {
-        viz_log(x, "visualize: calling ensure_connected for event '%s'...", ev);
-    }
     ensure_connected(vs, x);
     if (vs->sock == INVALID_SOCKET) {
         return -1;
@@ -670,10 +575,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         return -1;
     }
 
-    if (x) {
-        viz_log(x, "visualize: attempting socket send of %d bytes for event '%s' (type '%s')...", n, ev, type);
-    }
-
     int total_sent = 0;
     int len = n;
     while (total_sent < len) {
@@ -681,10 +582,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
         if (sent == SOCKET_ERROR) {
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
-                if (x) {
-                    viz_log(x, "visualize: send returned non-blocking delay code %d (sent %d/%d bytes) for event '%s', waiting for writability...", err, total_sent, len, ev);
-                }
-
                 fd_set write_fds;
                 struct timeval tv;
                 tv.tv_sec = 1;
@@ -695,9 +592,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
 
                 int sel_ret = select((int)vs->sock + 1, NULL, &write_fds, NULL, &tv);
                 if (sel_ret > 0 && FD_ISSET(vs->sock, &write_fds)) {
-                    if (x) {
-                        viz_log(x, "visualize: socket became writable after WSAEWOULDBLOCK, retrying send...");
-                    }
                     continue;
                 } else {
                     if (x) {
@@ -728,9 +622,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
     }
 
     sysmem_freeptr(buf);
-    if (x) {
-        viz_log(x, "visualize: perform_send complete for event '%s' (sent %d of %d bytes)", ev, total_sent, len);
-    }
     return (total_sent == len) ? 0 : -1;
 }
 
@@ -776,12 +667,7 @@ void *viz_worker_thread(void *arg) {
 void visualize(void *x, const char *message) {
     if (!x || !message || !queue_mutex) return;
 
-    long log_enabled = 0;
-    long visualize_enabled = 0;
-    void *log_outlet = NULL;
-    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
-
-    if (!visualize_enabled) {
+    if (!object_attr_getlong(x, gensym("visualize"))) {
         return;
     }
 
@@ -859,12 +745,7 @@ void visualize(void *x, const char *message) {
 void visualize_to_port(void *x, int port, const char *type, const char *message) {
     if (!x || !message || port <= 0) return;
 
-    long log_enabled = 0;
-    long visualize_enabled = 0;
-    void *log_outlet = NULL;
-    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
-
-    if (!visualize_enabled) {
+    if (!object_attr_getlong(x, gensym("visualize"))) {
         return;
     }
 
@@ -884,8 +765,6 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
         object_warn((t_object *)x, "visualize_to_port: could not resolve socket for port %d", port);
         return;
     }
-
-    viz_log(x, "visualize_to_port: queuing packet of %ld bytes to port %d (type '%s')", (long)strlen(message), port, type);
 
     const char *ev = get_event_name_from_message(message);
 
@@ -954,12 +833,7 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size) {
     if (!x || !message || !response || response_size == 0) return -1;
 
-    long log_enabled = 0;
-    long visualize_enabled = 0;
-    void *log_outlet = NULL;
-    get_object_log_info(x, &log_enabled, &visualize_enabled, &log_outlet);
-
-    if (!visualize_enabled) {
+    if (!object_attr_getlong(x, gensym("visualize"))) {
         return -1;
     }
 
