@@ -21,7 +21,7 @@ The testing framework consists of three main parts:
 3. **Test Harness (`weaver_test.c`)**:
    - Contains a built-in recursive-descent **JSON Parser** that parses a standard transcript file (e.g. `sampletranscript.json`) into nested mock `t_dictionary` tree structures.
    - Implements a fallback **programmatic transcript builder** to synthesize a dictionary on the fly.
-   - Configures, registers, and populates mock buffers: `"bar"`, palette wav buffers (`"pal_A.wav"`, `"pal_B.wav"`), fallback buffers (`"stems.1"`, `"stems.2"`), and destination buffers (`"poly.1"`, `"poly.2"`).
+   - Configures, registers, and populates mock buffers: `"bar"`, palette wav buffers (`"palette_A.wav"`, `"palette_B.wav"`), fallback buffers (`"stems.1"`, `"stems.2"`), and destination buffers (`"poly.1"`, `"poly.2"`).
    - Instantiates `weaver~` and simulates a continuous **ramp input signal** from `0.00` ms to the absolute song length, triggering DSP processing vectors (in chunks of 512 samples) and main-thread qelem queue tasks sequentially.
    - Intercepts and redirects all verbose logging outlet messages, posts, warnings, and errors to `weaver_verbose_log.txt`.
 
