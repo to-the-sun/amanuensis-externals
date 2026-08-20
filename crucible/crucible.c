@@ -2795,6 +2795,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                         dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
                                     }
 
+                                    object_notify(incumbent_dict, gensym("modified"), NULL);
                                     dictobj_release(incumbent_dict);
 
                                     if (x->visualize) {
@@ -2879,6 +2880,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
                                 }
                             }
+                            object_notify(incumbent_dict, gensym("modified"), NULL);
                             dictobj_release(incumbent_dict);
                         }
 

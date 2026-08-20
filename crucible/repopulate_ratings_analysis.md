@@ -32,14 +32,14 @@ When **Instance B** later receives an ordinary `span` message for `track_1`:
 - Because `challenger_bar_dict` was populated from raw incoming bar messages and was never modified by the `replace` event, copying it into `incumbent_dict` **completely overwrites `bar_100`**, restoring the stale pre-replace rating.
 - Instance B then emits a `repopulate` packet containing the overwritten original rating.
 
-### Cause 2: Missing Max `dictobj_changed` Notifications
+### Cause 2: Missing Max Dictionary Mutation Notifications
 In the Cycling '74 Max MSP C SDK, dictionaries registered with `dictobj` reside in shared memory. Modifying a C `t_dictionary` struct in memory via functions like `dictionary_appendatom` updates the C data structure directly.
 
-However, Max's internal notification system and any Max `dict` UI objects bound to that dictionary name are **only notified of mutations if `dictobj_changed(x->incumbent_dict_name)` is called**.
+However, Max's internal notification system and any Max `dict` UI objects bound to that dictionary name are **only notified of mutations if `object_notify(incumbent_dict, gensym("modified"), NULL)` is called**.
 
-In `crucible.c`, `s == gensym("replace")` modifies `incumbent_dict` directly but does not invoke `dictobj_changed`. As a result:
+In `crucible.c`, `s == gensym("replace")` modified `incumbent_dict` directly without invoking change notifications. As a result:
 - Instance A's local `repopulate` serializer reads the C struct directly from memory, successfully displaying the updated rating in telemetry.
-- Any Max `dict` object, file saver, or external query inspecting the registered transcript dictionary from the Max patcher environment still observes the pre-replace state.
+- Any Max `dict` object, file saver, or external query inspecting the registered transcript dictionary from the Max patcher environment previously observed the pre-replace state until mutation notifications were invoked.
 
 ### Cause 3: Silent Drop on Non-Existent Bars
 If a `replace` message is sent for a bar that has not yet entered `incumbent_dict` (i.e., `specified_bar_dict` is `NULL` because no winning span has created that bar in `incumbent_dict` yet):
@@ -103,13 +103,13 @@ Both `replace` and `span` events trigger the function `crucible_visualize_repopu
 
 ---
 
-## 5. Recommended Technical Remedies
+## 5. Technical Remedies and Implementation Status
 
 1. **Update Challenger State or Persistent Overrides**:
    Modify `crucible_do_anything` so that when a `replace` message is processed, the new rating is written to `challenger_dict` as well as `incumbent_dict`, or recorded in a persistent `rating_overrides` table that is consulted whenever new spans are copied into `incumbent_dict`.
 
-2. **Invoke `dictobj_changed()`**:
-   Add a call to `dictobj_changed(x->incumbent_dict_name)` immediately after modifying `incumbent_dict` during `replace` handling to ensure Max `dict` objects and patcher listeners stay synchronized.
+2. **Invoke `object_notify(incumbent_dict, gensym("modified"), NULL)` [Implemented]**:
+   Called `object_notify(incumbent_dict, gensym("modified"), NULL)` immediately after modifying `incumbent_dict` during `replace` handling in `crucible.c` to ensure Max `dict` objects and patcher listeners stay synchronized with in-memory mutations.
 
 3. **Auto-Create Missing Bar Entries on `replace`**:
    When `specified_bar_dict` is `NULL`, automatically create the necessary track and bar sub-dictionaries in `incumbent_dict` before writing the rating, preventing silent drops of `replace` messages on new bars.
