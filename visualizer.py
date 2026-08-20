@@ -456,6 +456,7 @@ def process_packet(text, client_sock=None):
                     track = pkt.get("track")
                     bar = pkt.get("bar")
                     rating = pkt.get("rating")
+                    principal = pkt.get("principal", True)
                     if track is not None and bar is not None and rating is not None:
                         t_str = str(track)
                         bar_length = state["bar_length"]
@@ -464,13 +465,14 @@ def process_packet(text, client_sock=None):
                         if t_str not in state["bar_ratings"]:
                             state["bar_ratings"][t_str] = {}
                         state["bar_ratings"][t_str][b_str] = rating
-                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating}")
+                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating} (principal: {principal})")
 
                         state["events"].append({
                             "type": "replace",
                             "track": t_str,
                             "bars": [snapped_ts],
                             "rating": rating,
+                            "principal": principal,
                             "start_time": time.time(),
                             "duration": 3.0
                         })
@@ -831,10 +833,18 @@ def run_gui():
             if valid_bars and bar_length > 0:
                 avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
                 float_x = margin_left + avg_col * cell_w + (cell_w / 2)
-                float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
                 alpha = int(255 * (1.0 - t))
-                text_color = (200, 200, 200) if e.get("type") == "replace" else (255, 255, 100)
+                if e.get("type") == "replace":
+                    float_y = margin_top + row * cell_h
+                    if e.get("principal", True):
+                        text_color = (255, 255, 255)
+                    else:
+                        text_color = (160, 160, 160)
+                else:
+                    float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
+                    text_color = (255, 255, 100)
+
                 rating_text = big_font.render(f"{e['rating']:.2f}", True, text_color)
                 rating_text.set_alpha(alpha)
                 screen.blit(rating_text, (float_x, float_y))

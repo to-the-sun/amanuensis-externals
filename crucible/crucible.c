@@ -2784,7 +2784,8 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
                                                     if (x->visualize) {
                                                         char msg[256];
-                                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, b_sym->s_name, avg_rating);
+                                                        int is_principal = (b_sym == bar_sym) || (strcmp(b_sym->s_name, bar) == 0);
+                                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":%s}", track, b_sym->s_name, avg_rating, is_principal ? "true" : "false");
                                                         visualize((t_object *)x, msg);
                                                     }
                                                 }
@@ -2802,7 +2803,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
                                         if (x->visualize) {
                                             char msg[256];
-                                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, avg_rating);
+                                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, avg_rating);
                                             visualize((t_object *)x, msg);
                                         }
                                     }
@@ -2812,23 +2813,23 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     }
                                 } else if (x->visualize) {
                                     char msg[256];
-                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
+                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
                                     visualize((t_object *)x, msg);
                                 }
                             } else if (x->visualize) {
                                 char msg[256];
-                                snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
+                                snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
                                 visualize((t_object *)x, msg);
                             }
                             dictobj_release(incumbent_dict);
                         } else if (x->visualize) {
                             char msg[256];
-                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
+                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
                             visualize((t_object *)x, msg);
                         }
                     } else if (x->visualize) {
                         char msg[256];
-                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
+                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
                         visualize((t_object *)x, msg);
                     }
                 }
