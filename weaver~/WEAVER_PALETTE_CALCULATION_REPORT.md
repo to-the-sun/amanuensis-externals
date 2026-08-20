@@ -93,16 +93,71 @@ Where:
 - Dict Offset is the offset value from `transcript.json` (in milliseconds).
 - Trigger Time is the scan time recorded when the bar boundary was triggered.
 
-### Step 5: Real-Time Source Sample Read Position
-For any frame during song playback occurring at absolute time Current Time (in milliseconds):
+### Step 5: Real-Time Source Sample Read Position (Deep Dive)
 
-Source Time (ms) = Calculated Offset + Current Time
+#### Why Is a Calculated Offset Needed Instead of Using Dict Offset Directly?
+A common point of confusion is why `weaver~` computes a `Calculated Offset` rather than simply using `Dict Offset` as the read position in the palette buffer.
 
-Substituting Calculated Offset = Dict Offset - Trigger Time gives the fundamental read position equation:
+- `Dict Offset` is a static anchor location inside a palette WAV file (for example, 10,000 ms into `palette_1.wav`). It represents *where in the source audio the slice begins*, but it has no relationship to *when in song playback the bar occurs*.
+- `Current Time` is the global, continuously advancing timeline position of song playback (for example, 4,000 ms into the song).
+
+If `weaver~` simply tried to read from `Dict Offset + Current Time` during playback, then when song playback reached 4,000 ms, `weaver~` would read from sample 10,000 + 4,000 = 14,000 ms inside the palette file! That would mean playing audio 4 seconds too far into the palette slice.
+
+To make the palette slice start reading at 10,000 ms at the exact moment song playback hits 4,000 ms, `weaver~` must subtract the trigger timestamp from the dictionary offset. This produces `Calculated Offset`:
+
+Calculated Offset = Dict Offset - Trigger Time
+
+By pre-computing this single static value when the bar is triggered, the audio engine transforms a two-variable playback problem into a single addition per sample frame:
+
+Read Position (ms) = Calculated Offset + Current Time
+
+Substituting `Calculated Offset = Dict Offset - Trigger Time` yields the underlying equation:
 
 Read Position (ms) = Dict Offset + (Current Time - Trigger Time)
 
-In plain English: **The audio position inside the palette buffer begins at Dict Offset when Current Time equals Trigger Time, and advances linearly sample-by-sample alongside song playback!**
+Notice what this equation achieves:
+1. When `Current Time` equals `Trigger Time`, the term `(Current Time - Trigger Time)` becomes zero, so `Read Position` evaluates to exactly `Dict Offset`.
+2. As `Current Time` advances sample-by-sample, `(Current Time - Trigger Time)` measures how much time has passed since the slice started, advancing the read position linearly through the palette slice.
+
+#### Definitions of All Variables
+To make the distinction crystal clear:
+- **`Dict Offset`**: The absolute millisecond timestamp inside the source palette WAV file where the intended slice audio starts (e.g. 10,000 ms). This comes directly from `transcript.json`.
+- **`Trigger Time`**: The millisecond timestamp on the global song timeline when the bar boundary was triggered (e.g. 4,000 ms).
+- **`Current Time`**: The continuously advancing millisecond timestamp on the global song timeline for the specific sample frame currently being processed in the DSP loop (e.g. 4,000 ms, 4,001 ms, 4,500 ms).
+- **`Calculated Offset`**: The static relative offset computed once per bar hit (`Calculated Offset = Dict Offset - Trigger Time`, e.g. +6,000 ms). It is stored in the track's active slot state (`tr->offset[slot]`).
+- **`Read Position`**: The calculated millisecond position inside the source palette buffer for the sample frame currently being synthesized (`Read Position = Calculated Offset + Current Time`).
+
+#### Practical Numerical Example
+Suppose we have a song with 2,000 ms bars (120 BPM):
+
+1. **Bar Setup**:
+   - Bar 0 covers song time 0 ms to 2,000 ms.
+   - Bar 1 covers song time 2,000 ms to 4,000 ms.
+   - Bar 2 starts at song time 4,000 ms (`Trigger Time = 4,000 ms`).
+2. **Transcript Entry**:
+   - In `transcript.json`, Bar 2 is assigned to `palette_1.wav` with `Dict Offset = 10,000 ms`.
+3. **Step 4 Calculation**:
+   - When Bar 2 is triggered, `weaver~` calculates:
+     `Calculated Offset = Dict Offset - Trigger Time`
+     `Calculated Offset = 10,000 ms - 4,000 ms = +6,000 ms`
+4. **Step 5 Frame Processing in DSP Loop**:
+   - **Sample 1 (Exact Start of Bar 2)**:
+     - `Current Time = 4,000 ms`
+     - `Read Position = Calculated Offset + Current Time`
+     - `Read Position = 6,000 ms + 4,000 ms = 10,000 ms`
+     - *Result*: `weaver~` reads sample 10,000 ms from `palette_1.wav` (the exact start of the slice!).
+   - **Sample 22,050 (25% through Bar 2 at 44.1kHz)**:
+     - `Current Time = 4,500 ms`
+     - `Read Position = Calculated Offset + Current Time`
+     - `Read Position = 6,000 ms + 4,500 ms = 10,500 ms`
+     - *Result*: `weaver~` reads sample 10,500 ms from `palette_1.wav` (exactly 500 ms into the slice).
+   - **Sample 88,199 (End of Bar 2)**:
+     - `Current Time = 5,999 ms`
+     - `Read Position = Calculated Offset + Current Time`
+     - `Read Position = 6,000 ms + 5,999 ms = 11,999 ms`
+     - *Result*: `weaver~` reads sample 11,999 ms from `palette_1.wav` (1,999 ms into the slice, right before Bar 3 starts).
+
+---
 
 ### Step 6: Fractional Sample Index and Linear Interpolation
 To convert Read Position (ms) into an actual sample frame index within the palette buffer:
