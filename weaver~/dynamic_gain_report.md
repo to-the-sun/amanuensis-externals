@@ -144,8 +144,82 @@ Below is a detailed breakdown of potential causes:
 
 ### 4. Crossfade Ramp State and Fade Factors (`f1` / `f2`)
 
-* **Fade-out Target**: When transitioning between slots, the crossfade engine calculates ramp factors `f1` and `f2` via `ramp_process()`. If slot 0 is fading out while slot 1 fades in, `f1` reaches `0.0`. If slot 1 fails to trigger properly, both `f1` and `f2` can be `0.0`.
-* **Silence Slope Detector**: If the input signal amplitude was zero during the initial ramp phase, `ramp_process()` length clamping or toggle state may hold the fade multiplier at `0.0`.
+In `weaver~`, crossfading between alternating slots is governed by `ramp_process()` in `shared/crossfade.c`. The fade factors `f1` and `f2` dictate the linear volume scalar applied to slot 0 and slot 1, respectively. Even when `@dynamic_gain` supplies `target_gain = 1.0`, `f1` or `f2` evaluating to `0.0` results in zero output volume (`mix = signal * 0.0 * 1.0 = 0.0`).
+
+The mathematical equations executed per sample frame in `ramp_process()` are:
+
+```
+// 1. Convert milliseconds to target sample lengths
+high_samples = (samplerate / 1000.0) * high_ms
+low_samples  = (samplerate / 1000.0) * low_ms
+
+// 2. Track peak amplitude and adapt ramp length dynamically
+amp = slide(abs(signal), low_samples)
+target_length = amp * high_samples
+length = clip(target_length, low_samples, previous_length)
+
+// 3. Compute normalized age and fade multiplier
+age = elapsed - go
+fade_raw = age / length
+fade = abs(toggle - fade_raw)
+```
+
+Below are three specific, plausible numerical scenarios demonstrating how `f1` or `f2` drop to `0.0`:
+
+#### Scenario A: Dynamic Ramp Length Contraction via Signal Amplitude
+
+* **Engine Configuration**:
+  * Sample rate (`samplerate`): `44100 Hz` (1 ms = 44.1 samples)
+  * High limit (`high_ms`): `4000.0 ms` (`high_samples = 176,400 samples`)
+  * Low limit (`low_ms`): `22.653 ms` (`low_samples = 1,000 samples`)
+* **Initial Trigger**:
+  * Slot 0 is currently active. Slot 1 is triggered with `direction = +1.0`.
+  * `ramp1` (slot 0, fading out) receives `movement = +1.0`, setting `toggle = 1.0` and `go = 100,000 samples`. Initial length `x->length = 176,400 samples`.
+  * `ramp2` (slot 1, fading in) receives `movement = -1.0`, setting `toggle = 0.0` and `go = 100,000 samples`. Initial length `x->length = 176,400 samples`.
+* **Low Signal Amplitude Contraction**:
+  * Suppose the audio source on slot 0 drops to a near-silent background floor with peak amplitude `abs_sig = 0.001` (`-60 dBFS`).
+  * `ramp_process()` calculates `target_length = 0.001 * 176,400 = 176.4 samples`.
+  * The `clip()` function enforces the minimum threshold: `length = max(176.4, low_samples) = 1,000 samples` (`22.653 ms`).
+* **Resulting Silence**:
+  * At sample frame `f = 101,000` (just `22.653 ms` after triggering):
+    * `age = 101,000 - 100,000 = 1,000 samples`.
+    * `fade_raw = 1,000 / 1,000 = 1.0`.
+    * For slot 0 (fading out, `toggle = 1.0`), `f1 = abs(1.0 - 1.0) = 0.0`.
+  * The fade-out time for slot 0 collapses from `4,000 ms` down to `22.653 ms`. If slot 1 contains silent or unaligned audio, the track becomes completely silent after `22.653 ms`—leaving `3,977.347 ms` of unexpected silence despite receiving `gain = 1.0`.
+
+#### Scenario B: Rapid Double Re-triggering and Mid-Fade Direction Reversal
+
+* **Engine Configuration**: `samplerate = 44100 Hz`, `high_ms = 1000.0 ms` (`44,100 samples`).
+* **First Trigger (`f = 0`)**:
+  * Slot 1 triggers (`control = 1.0`, `direction = +1.0`).
+  * `ramp1` (slot 0) fades out (`toggle = 1.0`, `f1` moves `1.0 -> 0.0`).
+  * `ramp2` (slot 1) fades in (`toggle = 0.0`, `f2` moves `0.0 -> 1.0`).
+* **Second Trigger Mid-Fade (`f = 2,205 samples` / `50 ms`)**:
+  * At `f = 2,205` (`age = 2,205` of `44,100`), `f2` has only reached `0.05` (`5%` volume).
+  * A rapid new bar slice triggers slot 0 again (`control = 0.0`, `direction = -1.0`).
+  * `ramp2` (slot 1) is immediately set to fade out (`movement = +1.0`, `toggle = 1.0`, `go = 2,205`).
+  * Its new fade factor becomes `f2 = abs(1.0 - 0 / 44,100) = 1.0`? No! Since `toggle` switched to `1.0`, at `f = 2,205` (`age = 0`), `f2 = abs(1.0 - 0.0) = 1.0`. But if slot 1's source signal is now ending, its output drops.
+  * Meanwhile, `ramp1` (slot 0) is set to fade in (`movement = -1.0`, `toggle = 0.0`, `go = 2,205`). At `f = 2,205` (`age = 0`), `f1 = abs(0.0 - 0.0) = 0.0`.
+* **Resulting Silence**:
+  * During rapid mid-fade direction switches, the incoming slot starts at `0.0` while the outgoing slot is forced to fade out from its current low amplitude, creating an instantaneous dip where total sum volume drops to near zero (`0.0`).
+
+#### Scenario C: Loop Snap Hard Completion Interlock
+
+* **Engine Configuration**: Song loop boundary detection in `weaver_process_vector`.
+* **Execution**:
+  * When `main_looped` is detected (the control sync ramp wraps around to zero), `weaver~` executes a timestamp snap interlock to prevent residual audio tails from bleeding across loop boundaries:
+    ```c
+    tr->xf.ramp1.go = (double)tr->xf.elapsed - tr->xf.ramp1.length;
+    tr->xf.ramp2.go = (double)tr->xf.elapsed - tr->xf.ramp2.length;
+    ```
+* **Numerical Calculation**:
+  * Setting `go = elapsed - length` forces `age = elapsed - go = length`.
+  * `fade_raw = length / length = 1.0`.
+  * For the fading-out slot (`toggle = 1.0`), `fade = abs(1.0 - 1.0) = 0.0`.
+* **Resulting Silence**:
+  * Both crossfade ramps are forcibly snapped to their end states (`f1 = 0.0` or `f2 = 0.0`). If the new bar slice for the next loop cycle has not yet arrived or bound its palette buffer, the output factor stays locked at `0.0`.
+
+---
 
 ### 5. Inactive or Zero-Length Track (`track_length <= 0.0`)
 
