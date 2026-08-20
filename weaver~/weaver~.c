@@ -1273,7 +1273,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 int other = 1 - active;
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
-                tr->offset[other] = tr->pending_offset - tr->viz_ms;
+                tr->offset[other] = tr->pending_offset;
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
 
