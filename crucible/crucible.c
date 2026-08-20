@@ -2827,10 +2827,36 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
                             visualize((t_object *)x, msg);
                         }
-                    } else if (x->visualize) {
-                        char msg[256];
-                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
-                        visualize((t_object *)x, msg);
+                    } else {
+                        t_symbol *track_sym = gensym(track);
+                        t_symbol *bar_sym = gensym(bar);
+
+                        t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+                        if (incumbent_dict) {
+                            t_dictionary *track_dict = NULL;
+                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&track_dict);
+
+                            if (track_dict) {
+                                t_dictionary *specified_bar_dict = NULL;
+                                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&specified_bar_dict);
+
+                                if (specified_bar_dict) {
+                                    if (dictionary_hasentry(specified_bar_dict, gensym("rating"))) {
+                                        dictionary_deleteentry(specified_bar_dict, gensym("rating"));
+                                    }
+                                    t_atom r_atom;
+                                    atom_setfloat(&r_atom, specified_rating);
+                                    dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
+                                }
+                            }
+                            dictobj_release(incumbent_dict);
+                        }
+
+                        if (x->visualize) {
+                            char msg[256];
+                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
+                            visualize((t_object *)x, msg);
+                        }
                     }
                 }
                 sysmem_freeptr(track);

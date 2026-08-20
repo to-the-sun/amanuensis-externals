@@ -109,7 +109,7 @@
 		<method name="replace">
 			<digest>Update bar rating for visualization</digest>
 			<description>
-				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. When the key in the selector is 'rating' and `@meld` is enabled (1), the object looks up the span key of the specified bar in the incumbent dictionary, retrieves the rating for each bar in that span, and averages those ratings together with the specified rating. It then updates the rating key of each bar in the span in the incumbent dictionary to the new averaged rating. When `@meld` is disabled (0, default), receiving a 'replace' message directly outputs a single replacement packet to the visualizer if `@visualize` is enabled.
+				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. When the key in the selector is 'rating', the object updates the specified bar's rating in the incumbent dictionary. When `@meld` is enabled (1), the object looks up the span key of the specified bar in the incumbent dictionary, retrieves the rating for each bar in that span, averages those ratings together with the specified rating, and updates the rating key of each bar in the span in the incumbent dictionary to the new averaged rating. When `@meld` is disabled (0, default), receiving a 'replace' message updates only the rating key for the specified bar in the incumbent dictionary. In both cases, if `@visualize` is enabled, replacement packet(s) are output to the visualizer.
 			</description>
 		</method>
 		<method name="log">
@@ -148,7 +148,7 @@
 		<attribute name="meld" get="1" set="1" type="long" size="1">
 			<digest>Enable Span Rating Averaging on Replace</digest>
 			<description>
-				When enabled (1), receiving a 'replace' message for a bar's rating looks up the bar's span in the incumbent dictionary, averages the ratings of all bars in the span along with the newly specified rating, and updates the rating of every bar in that span in the incumbent dictionary. When disabled (0, default), 'replace' messages do not average span ratings or modify the incumbent dictionary.
+				When enabled (1), receiving a 'replace' message for a bar's rating looks up the bar's span in the incumbent dictionary, averages the ratings of all bars in the span along with the newly specified rating, and updates the rating of every bar in that span in the incumbent dictionary. When disabled (0, default), receiving a 'replace' message updates only the rating for the specified bar in the incumbent dictionary without averaging across the span.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
