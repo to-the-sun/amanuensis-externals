@@ -109,7 +109,7 @@
 		<method name="replace">
 			<digest>Update bar rating for visualization</digest>
 			<description>
-				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. If the key in the selector is 'rating' and the @visualize attribute is enabled, this message sends a packet to the visualizer to update the specified bar's rating in its local database. This is used for real-time visualization updates and local smartloop analysis within the visualizer.
+				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. When the key in the selector is 'rating', the object looks up the span key of the specified bar in the incumbent dictionary, retrieves the rating for each bar in that span, and averages those ratings together with the specified rating. It then updates the rating key of each bar in the span in the incumbent dictionary to the new averaged rating. If @visualize is enabled, visualizer packets are also sent for each updated bar in the span.
 			</description>
 		</method>
 		<method name="log">
