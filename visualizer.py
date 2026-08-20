@@ -557,6 +557,11 @@ def run_gui():
 
         with state_lock:
             tracks = {tid: bars[:] for tid, bars in state["tracks"].items()}
+            bar_data = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
+            bar_ratings = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
+            avg = state["average_rating"]
+            mi = state["min_rating"]
+            ma = state["max_rating"]
             song_start = state["song_start"]
             song_reach = state["song_reach"]
             bar_length = state["bar_length"]
@@ -630,14 +635,7 @@ def run_gui():
             lbl = font.render(f"T {tid}", True, (180, 180, 180))
             screen.blit(lbl, (margin_left - lbl.get_width() - 10, margin_top + row * cell_h + (cell_h - lbl.get_height())//2))
 
-        # Draw filled boxes for present bars
-        with state_lock:
-            avg = state["average_rating"]
-            mi = state["min_rating"]
-            ma = state["max_rating"]
-            bar_ratings = {tid: bars.copy() for tid, bars in state["bar_ratings"].items()}
-            bar_data_copy = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
-
+        # Pass 1: Draw base filled box rectangles for present bars
         for tid, bars in tracks.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
@@ -652,7 +650,7 @@ def run_gui():
                 rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
 
                 # Check if this bar has a bad palette that requires pulsing red with exclamation point
-                b_dict = bar_data_copy.get(tid, {}).get(str(float(b_ts)))
+                b_dict = bar_data.get(tid, {}).get(str(float(b_ts)))
                 if should_pulse_red(b_dict):
                     pulse = (math.sin(time.time() * 10) + 1.0) / 2.0  # pulse factor 0 to 1
                     r_val = int(100 + 155 * pulse)
@@ -689,42 +687,34 @@ def run_gui():
 
                 pygame.draw.rect(screen, tuple(color), rect)
 
-                # Display rating in bold white in the center of each cell at all times, flashing when changing.
-                if rating is not None:
-                    active_event = None
-                    event_elapsed = 0.0
-                    for e in events:
-                        if str(e.get("track")) == str(tid):
-                            for e_bar in e.get("bars", []):
-                                if int(e_bar) == b_ts:
-                                    elapsed = now - e["start_time"]
-                                    if elapsed < 0.8:
-                                        if active_event is None or e["start_time"] > active_event["start_time"]:
-                                            active_event = e
-                                            event_elapsed = elapsed
+        # Pass 2: Draw flashing/bright cell highlight rectangles for active events (behind hash marks and ratings)
+        for e in events:
+            elapsed = now - e["start_time"]
+            if elapsed / e["duration"] > 1.0: continue
 
-                    rating_color = (255, 255, 255)
-                    if active_event is not None:
-                        is_flash_phase = (int(event_elapsed * 10) % 2 == 0)
-                        is_meld = active_event.get("type") == "replace" and (active_event.get("meld") or not active_event.get("principal", True))
-                        if is_meld:
-                            rating_color = (160, 160, 160) if is_flash_phase else (80, 80, 80)
-                        else:
-                            rating_color = (255, 255, 100) if is_flash_phase else (180, 180, 180)
+            tid = e["track"]
+            if tid not in track_to_row: continue
+            row = track_to_row[tid]
 
-                    rating_lbl = cell_font.render(f"{rating:.2f}", True, rating_color)
-                    lbl_rect = rating_lbl.get_rect(center=rect.center)
-                    screen.blit(rating_lbl, lbl_rect)
+            if e.get("type") != "replace":
+                for bar_ts in e["bars"]:
+                    try:
+                        b_ts = int(bar_ts)
+                    except (ValueError, TypeError): continue
 
-        # Draw note hash marks
-        with state_lock:
-            bar_data = {tid: bars.copy() for tid, bars in state["bar_data"].items()}
-            tracks_copy = {tid: bars[:] for tid, bars in state["tracks"].items()}
+                    if bar_length <= 0: continue
 
+                    is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
+                    color = (255, 255, 255) if is_flashing else (150, 150, 220)
+                    col = int((b_ts - song_start) // bar_length)
+                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+                    pygame.draw.rect(screen, color, rect)
+
+        # Pass 3: Draw note hash marks in dark gray
         # Calculate most_negative_bar and most_positive_bar (+ bar_length) across all active tracks
         most_negative_bar = None
         most_positive_bar_plus_len = None
-        for track_bars in tracks_copy.values():
+        for track_bars in tracks.values():
             for bar_ts in track_bars:
                 try:
                     b_ts = float(bar_ts)
@@ -810,7 +800,7 @@ def run_gui():
                     # Map 0.0 -> bottom, 2.0 -> top of 20px row
                     h_px = (clipped_score / 2.0) * cell_h
 
-                    pygame.draw.line(screen, (255, 255, 255), (x_pos, row_y_bottom), (x_pos, row_y_bottom - h_px), 1)
+                    pygame.draw.line(screen, (100, 100, 100), (x_pos, row_y_bottom), (x_pos, row_y_bottom - h_px), 1)
 
         # Draw Smartloop Range Box
         with state_lock:
@@ -823,7 +813,52 @@ def run_gui():
             box_rect = pygame.Rect(x_s, margin_top, x_e - x_s, num_tracks * cell_h)
             pygame.draw.rect(screen, (255, 255, 255), box_rect, 2)
 
-        # Draw event animations
+        # Pass 4: Display rating in bold white in the center of each cell at all times, flashing when changing (in front of hash marks)
+        for tid, bars in tracks.items():
+            if tid not in track_to_row: continue
+            row = track_to_row[tid]
+            for bar_ts in bars:
+                try:
+                    snapped_ts = snap_to_bar(bar_ts, bar_length)
+                    b_ts = int(snapped_ts)
+                except (ValueError, TypeError): continue
+                if bar_length <= 0: continue
+
+                b_dict = bar_data.get(tid, {}).get(str(float(b_ts)))
+                if should_pulse_red(b_dict):
+                    continue
+
+                rating = bar_ratings.get(tid, {}).get(str(float(b_ts)))
+                if rating is not None:
+                    col = int((b_ts - song_start) // bar_length)
+                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
+
+                    active_event = None
+                    event_elapsed = 0.0
+                    for e in events:
+                        if str(e.get("track")) == str(tid):
+                            for e_bar in e.get("bars", []):
+                                if int(e_bar) == b_ts:
+                                    elapsed = now - e["start_time"]
+                                    if elapsed < 0.8:
+                                        if active_event is None or e["start_time"] > active_event["start_time"]:
+                                            active_event = e
+                                            event_elapsed = elapsed
+
+                    rating_color = (255, 255, 255)
+                    if active_event is not None:
+                        is_flash_phase = (int(event_elapsed * 10) % 2 == 0)
+                        is_meld = active_event.get("type") == "replace" and (active_event.get("meld") or not active_event.get("principal", True))
+                        if is_meld:
+                            rating_color = (160, 160, 160) if is_flash_phase else (80, 80, 80)
+                        else:
+                            rating_color = (255, 255, 100) if is_flash_phase else (180, 180, 180)
+
+                    rating_lbl = cell_font.render(f"{rating:.2f}", True, rating_color)
+                    lbl_rect = rating_lbl.get_rect(center=rect.center)
+                    screen.blit(rating_lbl, lbl_rect)
+
+        # Pass 5: Draw floating event animations (rising rating text & fill_bar numbers)
         for e in events:
             elapsed = now - e["start_time"]
             t = elapsed / e["duration"]
@@ -846,24 +881,12 @@ def run_gui():
                 screen.blit(lbl, (float_x - lbl.get_width() / 2, float_y - lbl.get_height() / 2))
                 continue
 
-            # Flashing/Bright Boxes
             valid_bars = []
             for bar_ts in e["bars"]:
                 try:
                     b_ts = int(bar_ts)
                     valid_bars.append(b_ts)
                 except (ValueError, TypeError): continue
-
-                if bar_length <= 0: continue
-
-                # Only draw highlight/flash for non-replace events
-                if e.get("type") != "replace":
-                    # Flash for 0.5s then stay bright
-                    is_flashing = e.get("type") == "new_span" and elapsed < 0.5 and (int(elapsed * 10) % 2 == 0)
-                    color = (255, 255, 255) if is_flashing else (150, 150, 220)
-                    col = int((b_ts - song_start) // bar_length)
-                    rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
-                    pygame.draw.rect(screen, color, rect)
 
             # Floating Rating for ordinary span updates (new_span) and replace events
             if valid_bars and bar_length > 0:
