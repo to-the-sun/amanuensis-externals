@@ -395,6 +395,10 @@ static void crucible_main_hidden(void *r) {
     CLASS_ATTR_DEFAULT(c, "monitor", 0, "0");
     CLASS_ATTR_ACCESSORS(c, "monitor", NULL, (method)crucible_attr_set_monitor);
 
+    CLASS_ATTR_LONG(c, "meld", 0, t_crucible, meld);
+    CLASS_ATTR_STYLE_LABEL(c, "meld", 0, "onoff", "Enable Span Rating Averaging on Replace");
+    CLASS_ATTR_DEFAULT(c, "meld", 0, "0");
+
     class_register(CLASS_BOX, c);
     crucible_class = c;
 }
@@ -434,6 +438,7 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
         x->worker = NULL;
         x->visualize = 0;
         x->fill = 0;
+        x->meld = 0;
         x->song_reach = 0;
         x->track_reaches_dict = dictionary_new();
         x->local_bar_length = 0;
@@ -2673,147 +2678,154 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             if (parse_selector(sel_str, &track, &bar, &key)) {
                 if (strcmp(key, "rating") == 0) {
                     double specified_rating = atom_getfloat(argv + 1);
-                    t_symbol *track_sym = gensym(track);
-                    t_symbol *bar_sym = gensym(bar);
 
-                    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-                    if (incumbent_dict) {
-                        t_dictionary *track_dict = NULL;
-                        dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&track_dict);
+                    if (x->meld) {
+                        t_symbol *track_sym = gensym(track);
+                        t_symbol *bar_sym = gensym(bar);
 
-                        if (track_dict) {
-                            t_dictionary *specified_bar_dict = NULL;
-                            dictionary_getdictionary(track_dict, bar_sym, (t_object **)&specified_bar_dict);
+                        t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+                        if (incumbent_dict) {
+                            t_dictionary *track_dict = NULL;
+                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&track_dict);
 
-                            if (specified_bar_dict) {
-                                t_atomarray *span_aa = crucible_get_span_as_atomarray(specified_bar_dict);
-                                long span_len = 0;
-                                t_atom *span_atoms = NULL;
+                            if (track_dict) {
+                                t_dictionary *specified_bar_dict = NULL;
+                                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&specified_bar_dict);
 
-                                if (span_aa) {
-                                    atomarray_getatoms(span_aa, &span_len, &span_atoms);
-                                }
+                                if (specified_bar_dict) {
+                                    t_atomarray *span_aa = crucible_get_span_as_atomarray(specified_bar_dict);
+                                    long span_len = 0;
+                                    t_atom *span_atoms = NULL;
 
-                                double rating_sum = 0.0;
-                                long rating_count = 0;
+                                    if (span_aa) {
+                                        atomarray_getatoms(span_aa, &span_len, &span_atoms);
+                                    }
 
-                                if (span_len > 0) {
-                                    for (long i = 0; i < span_len; i++) {
-                                        t_symbol *b_sym = NULL;
-                                        char b_ts_str[64];
-                                        if (atom_gettype(&span_atoms[i]) == A_SYM) {
-                                            b_sym = atom_getsym(&span_atoms[i]);
-                                        } else if (atom_gettype(&span_atoms[i]) == A_LONG) {
-                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[i]));
-                                            b_sym = gensym(b_ts_str);
-                                        } else if (atom_gettype(&span_atoms[i]) == A_FLOAT) {
-                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[i]));
-                                            b_sym = gensym(b_ts_str);
-                                        }
+                                    double rating_sum = 0.0;
+                                    long rating_count = 0;
 
-                                        // Skip specified bar itself since specified_rating replaces its rating
-                                        if (b_sym == bar_sym) {
-                                            continue;
-                                        }
+                                    if (span_len > 0) {
+                                        for (long i = 0; i < span_len; i++) {
+                                            t_symbol *b_sym = NULL;
+                                            char b_ts_str[64];
+                                            if (atom_gettype(&span_atoms[i]) == A_SYM) {
+                                                b_sym = atom_getsym(&span_atoms[i]);
+                                            } else if (atom_gettype(&span_atoms[i]) == A_LONG) {
+                                                snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[i]));
+                                                b_sym = gensym(b_ts_str);
+                                            } else if (atom_gettype(&span_atoms[i]) == A_FLOAT) {
+                                                snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[i]));
+                                                b_sym = gensym(b_ts_str);
+                                            }
 
-                                        if (b_sym) {
-                                            t_dictionary *b_dict = NULL;
-                                            dictionary_getdictionary(track_dict, b_sym, (t_object **)&b_dict);
-                                            if (b_dict) {
-                                                t_atomarray *r_aa = NULL;
-                                                t_atom r_single;
-                                                if (dictionary_getatomarray(b_dict, gensym("rating"), (t_object **)&r_aa) == MAX_ERR_NONE && r_aa) {
-                                                    long r_len = 0;
-                                                    t_atom *r_atoms = NULL;
-                                                    atomarray_getatoms(r_aa, &r_len, &r_atoms);
-                                                    if (r_len > 0) {
-                                                        rating_sum += atom_getfloat(r_atoms);
+                                            // Skip specified bar itself since specified_rating replaces its rating
+                                            if (b_sym == bar_sym) {
+                                                continue;
+                                            }
+
+                                            if (b_sym) {
+                                                t_dictionary *b_dict = NULL;
+                                                dictionary_getdictionary(track_dict, b_sym, (t_object **)&b_dict);
+                                                if (b_dict) {
+                                                    t_atomarray *r_aa = NULL;
+                                                    t_atom r_single;
+                                                    if (dictionary_getatomarray(b_dict, gensym("rating"), (t_object **)&r_aa) == MAX_ERR_NONE && r_aa) {
+                                                        long r_len = 0;
+                                                        t_atom *r_atoms = NULL;
+                                                        atomarray_getatoms(r_aa, &r_len, &r_atoms);
+                                                        if (r_len > 0) {
+                                                            rating_sum += atom_getfloat(r_atoms);
+                                                            rating_count++;
+                                                        }
+                                                    } else if (dictionary_getatom(b_dict, gensym("rating"), &r_single) == MAX_ERR_NONE) {
+                                                        rating_sum += atom_getfloat(&r_single);
                                                         rating_count++;
                                                     }
-                                                } else if (dictionary_getatom(b_dict, gensym("rating"), &r_single) == MAX_ERR_NONE) {
-                                                    rating_sum += atom_getfloat(&r_single);
-                                                    rating_count++;
                                                 }
                                             }
                                         }
                                     }
-                                }
 
-                                rating_sum += specified_rating;
-                                rating_count++;
+                                    rating_sum += specified_rating;
+                                    rating_count++;
 
-                                double avg_rating = rating_sum / (double)rating_count;
+                                    double avg_rating = rating_sum / (double)rating_count;
 
-                                // Second pass: modify rating key for each bar in span (and specified bar if not in span)
-                                int specified_bar_updated = 0;
-                                if (span_len > 0) {
-                                    for (long i = 0; i < span_len; i++) {
-                                        t_symbol *b_sym = NULL;
-                                        char b_ts_str[64];
-                                        if (atom_gettype(&span_atoms[i]) == A_SYM) {
-                                            b_sym = atom_getsym(&span_atoms[i]);
-                                        } else if (atom_gettype(&span_atoms[i]) == A_LONG) {
-                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[i]));
-                                            b_sym = gensym(b_ts_str);
-                                        } else if (atom_gettype(&span_atoms[i]) == A_FLOAT) {
-                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[i]));
-                                            b_sym = gensym(b_ts_str);
-                                        }
+                                    // Second pass: modify rating key for each bar in span (and specified bar if not in span)
+                                    int specified_bar_updated = 0;
+                                    if (span_len > 0) {
+                                        for (long i = 0; i < span_len; i++) {
+                                            t_symbol *b_sym = NULL;
+                                            char b_ts_str[64];
+                                            if (atom_gettype(&span_atoms[i]) == A_SYM) {
+                                                b_sym = atom_getsym(&span_atoms[i]);
+                                            } else if (atom_gettype(&span_atoms[i]) == A_LONG) {
+                                                snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[i]));
+                                                b_sym = gensym(b_ts_str);
+                                            } else if (atom_gettype(&span_atoms[i]) == A_FLOAT) {
+                                                snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[i]));
+                                                b_sym = gensym(b_ts_str);
+                                            }
 
-                                        if (b_sym == bar_sym) {
-                                            specified_bar_updated = 1;
-                                        }
+                                            if (b_sym == bar_sym) {
+                                                specified_bar_updated = 1;
+                                            }
 
-                                        if (b_sym) {
-                                            t_dictionary *b_dict = NULL;
-                                            dictionary_getdictionary(track_dict, b_sym, (t_object **)&b_dict);
-                                            if (b_dict) {
-                                                if (dictionary_hasentry(b_dict, gensym("rating"))) {
-                                                    dictionary_deleteentry(b_dict, gensym("rating"));
-                                                }
-                                                t_atom r_atom;
-                                                atom_setfloat(&r_atom, avg_rating);
-                                                dictionary_appendatom(b_dict, gensym("rating"), &r_atom);
+                                            if (b_sym) {
+                                                t_dictionary *b_dict = NULL;
+                                                dictionary_getdictionary(track_dict, b_sym, (t_object **)&b_dict);
+                                                if (b_dict) {
+                                                    if (dictionary_hasentry(b_dict, gensym("rating"))) {
+                                                        dictionary_deleteentry(b_dict, gensym("rating"));
+                                                    }
+                                                    t_atom r_atom;
+                                                    atom_setfloat(&r_atom, avg_rating);
+                                                    dictionary_appendatom(b_dict, gensym("rating"), &r_atom);
 
-                                                if (x->visualize) {
-                                                    char msg[256];
-                                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, b_sym->s_name, avg_rating);
-                                                    visualize((t_object *)x, msg);
+                                                    if (x->visualize) {
+                                                        char msg[256];
+                                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, b_sym->s_name, avg_rating);
+                                                        visualize((t_object *)x, msg);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
 
-                                if (!specified_bar_updated) {
-                                    if (dictionary_hasentry(specified_bar_dict, gensym("rating"))) {
-                                        dictionary_deleteentry(specified_bar_dict, gensym("rating"));
+                                    if (!specified_bar_updated) {
+                                        if (dictionary_hasentry(specified_bar_dict, gensym("rating"))) {
+                                            dictionary_deleteentry(specified_bar_dict, gensym("rating"));
+                                        }
+                                        t_atom r_atom;
+                                        atom_setfloat(&r_atom, avg_rating);
+                                        dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
+
+                                        if (x->visualize) {
+                                            char msg[256];
+                                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, avg_rating);
+                                            visualize((t_object *)x, msg);
+                                        }
                                     }
-                                    t_atom r_atom;
-                                    atom_setfloat(&r_atom, avg_rating);
-                                    dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
 
-                                    if (x->visualize) {
-                                        char msg[256];
-                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, avg_rating);
-                                        visualize((t_object *)x, msg);
+                                    if (span_aa) {
+                                        object_release((t_object *)span_aa);
                                     }
-                                }
-
-                                if (span_aa) {
-                                    object_release((t_object *)span_aa);
+                                } else if (x->visualize) {
+                                    char msg[256];
+                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
+                                    visualize((t_object *)x, msg);
                                 }
                             } else if (x->visualize) {
                                 char msg[256];
                                 snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
                                 visualize((t_object *)x, msg);
                             }
+                            dictobj_release(incumbent_dict);
                         } else if (x->visualize) {
                             char msg[256];
                             snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);
                             visualize((t_object *)x, msg);
                         }
-                        dictobj_release(incumbent_dict);
                     } else if (x->visualize) {
                         char msg[256];
                         snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}", track, bar, specified_rating);

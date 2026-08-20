@@ -109,7 +109,7 @@
 		<method name="replace">
 			<digest>Update bar rating for visualization</digest>
 			<description>
-				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. When the key in the selector is 'rating', the object looks up the span key of the specified bar in the incumbent dictionary, retrieves the rating for each bar in that span, and averages those ratings together with the specified rating. It then updates the rating key of each bar in the span in the incumbent dictionary to the new averaged rating. If @visualize is enabled, visualizer packets are also sent for each updated bar in the span.
+				Expects a selector and a value, for example: 'replace 4::15972::rating 1.072468'. When the key in the selector is 'rating' and `@meld` is enabled (1), the object looks up the span key of the specified bar in the incumbent dictionary, retrieves the rating for each bar in that span, and averages those ratings together with the specified rating. It then updates the rating key of each bar in the span in the incumbent dictionary to the new averaged rating. When `@meld` is disabled (0, default), receiving a 'replace' message directly outputs a single replacement packet to the visualizer if `@visualize` is enabled.
 			</description>
 		</method>
 		<method name="log">
@@ -140,6 +140,15 @@
 			<digest>Enable Verbose Logging</digest>
 			<description>
 				When enabled (1), status messages regarding comparisons, dictionary operations, and reach updates are sent to the fourth outlet.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
+		<attribute name="meld" get="1" set="1" type="long" size="1">
+			<digest>Enable Span Rating Averaging on Replace</digest>
+			<description>
+				When enabled (1), receiving a 'replace' message for a bar's rating looks up the bar's span in the incumbent dictionary, averages the ratings of all bars in the span along with the newly specified rating, and updates the rating of every bar in that span in the incumbent dictionary. When disabled (0, default), 'replace' messages do not average span ratings or modify the incumbent dictionary.
 			</description>
 			<attributelist>
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
