@@ -25,6 +25,7 @@ typedef struct _crucible {
     t_async_worker *worker;
     long visualize;
     long fill;
+    long meld;
     t_atom_long song_reach;
     t_dictionary *track_reaches_dict;
     double local_bar_length;
