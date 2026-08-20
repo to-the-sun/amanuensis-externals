@@ -865,18 +865,28 @@ def run_gui():
                     rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                     pygame.draw.rect(screen, color, rect)
 
-            # Floating Rating for ordinary span updates (new_span)
-            if valid_bars and bar_length > 0 and e.get("type") != "replace":
-                avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
-                float_x = margin_left + avg_col * cell_w + (cell_w / 2)
+            # Floating Rating for ordinary span updates (new_span) and replace events
+            if valid_bars and bar_length > 0:
+                e_type = e.get("type")
+                if e_type in ["new_span", "replace"]:
+                    avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
+                    float_x = margin_left + avg_col * cell_w + (cell_w / 2)
 
-                alpha = int(255 * (1.0 - t))
-                float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
-                text_color = (255, 255, 100)
+                    alpha = int(255 * (1.0 - t))
+                    float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
-                rating_text = big_font.render(f"{e['rating']:.2f}", True, text_color)
-                rating_text.set_alpha(alpha)
-                screen.blit(rating_text, (float_x, float_y))
+                    if e_type == "new_span":
+                        text_color = (255, 255, 100) # Yellow
+                    else: # replace
+                        is_principal = e.get("principal", True)
+                        if is_principal:
+                            text_color = (255, 255, 255) # White
+                        else:
+                            text_color = (100, 100, 100) # Dark gray
+
+                    rating_text = big_font.render(f"{e['rating']:.2f}", True, text_color)
+                    rating_text.set_alpha(alpha)
+                    screen.blit(rating_text, (float_x - rating_text.get_width() / 2, float_y))
 
         pygame.display.flip()
         clock.tick(FPS)
