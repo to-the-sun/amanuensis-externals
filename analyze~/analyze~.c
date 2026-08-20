@@ -209,6 +209,7 @@ static void launch_visualizer(t_analyze *x) {
         ZeroMemory(&pi, sizeof(pi));
 
         if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            visualize_register_child_process(pi.hProcess);
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
             object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);

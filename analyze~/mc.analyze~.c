@@ -241,6 +241,7 @@ static void launch_visualizers(t_mc_analyze *x) {
             ZeroMemory(&pi, sizeof(pi));
 
             if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                visualize_register_child_process(pi.hProcess);
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
                 object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);

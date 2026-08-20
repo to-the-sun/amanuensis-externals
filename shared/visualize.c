@@ -63,6 +63,28 @@ typedef struct {
 static HANDLE g_hSharedMap = NULL;
 static t_shared_port_map *g_pSharedPortMap = NULL;
 static HANDLE g_hSharedMutex = NULL;
+static HANDLE g_hVizJobObject = NULL;
+
+static void viz_job_object_init(void) {
+    if (!g_hVizJobObject) {
+        g_hVizJobObject = CreateJobObjectA(NULL, NULL);
+        if (g_hVizJobObject) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
+            memset(&jeli, 0, sizeof(jeli));
+            jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(g_hVizJobObject, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+        }
+    }
+}
+
+void visualize_register_child_process(void *hProcess) {
+    viz_job_object_init();
+    if (g_hVizJobObject && hProcess && hProcess != INVALID_HANDLE_VALUE) {
+        AssignProcessToJobObject(g_hVizJobObject, (HANDLE)hProcess);
+    }
+}
+#else
+void visualize_register_child_process(void *hProcess) {}
 #endif
 
 static void shared_port_map_init(void) {
@@ -283,6 +305,10 @@ void visualize_cleanup() {
             CloseHandle(g_hSharedMutex);
             g_hSharedMutex = NULL;
         }
+        if (g_hVizJobObject) {
+            CloseHandle(g_hVizJobObject);
+            g_hVizJobObject = NULL;
+        }
 #endif
 
         WSACleanup();
@@ -306,7 +332,7 @@ void *dynamic_socket_worker_thread(void *arg) {
             systhread_cond_wait(ds->queue_cond, ds->queue_mutex);
         }
 
-        if (ds->exit_flag && ds->queue_head == NULL) {
+        if (ds->exit_flag) {
             systhread_mutex_unlock(ds->queue_mutex);
             break;
         }
@@ -321,7 +347,9 @@ void *dynamic_socket_worker_thread(void *arg) {
 
         if (item) {
             systhread_mutex_lock(item->vs->mutex);
-            perform_send(item->vs, item->x, item->type, item->message);
+            if (!ds->exit_flag && item->vs->sock != INVALID_SOCKET) {
+                perform_send(item->vs, item->x, item->type, item->message);
+            }
             systhread_mutex_unlock(item->vs->mutex);
 
             sysmem_freeptr(item->type);
@@ -397,20 +425,12 @@ int visualize_allocate_port(int start_port) {
 
 static void free_dynamic_socket_queue(t_dynamic_socket *ds) {
     if (!ds) return;
-    ds->exit_flag = 1;
-    if (ds->queue_cond) {
-        systhread_mutex_lock(ds->queue_mutex);
-        systhread_cond_signal(ds->queue_cond);
-        systhread_mutex_unlock(ds->queue_mutex);
-    }
-    if (ds->thread) {
-        unsigned int ret;
-        systhread_join(ds->thread, &ret);
-        ds->thread = NULL;
-    }
 
+    // Purge queue items and signal exit
     if (ds->queue_mutex) {
         systhread_mutex_lock(ds->queue_mutex);
+        ds->exit_flag = 1;
+
         t_viz_queue_item *curr = ds->queue_head;
         while (curr) {
             t_viz_queue_item *next = curr->next;
@@ -421,13 +441,28 @@ static void free_dynamic_socket_queue(t_dynamic_socket *ds) {
         }
         ds->queue_head = ds->queue_tail = NULL;
         ds->queue_count = 0;
-        systhread_mutex_unlock(ds->queue_mutex);
 
+        if (ds->queue_cond) {
+            systhread_cond_signal(ds->queue_cond);
+        }
+        systhread_mutex_unlock(ds->queue_mutex);
+    }
+
+    if (ds->thread) {
+        unsigned int ret;
+        systhread_join(ds->thread, &ret);
+        ds->thread = NULL;
+    }
+
+    if (ds->queue_mutex) {
         systhread_mutex_free(ds->queue_mutex);
         systhread_cond_free(ds->queue_cond);
         ds->queue_mutex = NULL;
         ds->queue_cond = NULL;
     }
+
+    systhread_mutex_free(ds->vs.mutex);
+    ds->vs.mutex = NULL;
 }
 
 void visualize_close_port(int port) {
@@ -437,18 +472,30 @@ void visualize_close_port(int port) {
     systhread_mutex_lock(dynamic_sockets_mutex);
     for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
         if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
-            free_dynamic_socket_queue(&dynamic_sockets[i]);
+            t_dynamic_socket *ds = &dynamic_sockets[i];
 
-            systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
-            if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
-                closesocket(dynamic_sockets[i].vs.sock);
-                dynamic_sockets[i].vs.sock = INVALID_SOCKET;
+            // 1. Mark exit flag under queue_mutex and wake worker thread
+            if (ds->queue_mutex) {
+                systhread_mutex_lock(ds->queue_mutex);
+                ds->exit_flag = 1;
+                if (ds->queue_cond) {
+                    systhread_cond_signal(ds->queue_cond);
+                }
+                systhread_mutex_unlock(ds->queue_mutex);
             }
-            systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
-            systhread_mutex_free(dynamic_sockets[i].vs.mutex);
 
-            dynamic_sockets[i].in_use = 0;
-            dynamic_sockets[i].port = 0;
+            // 2. Close socket atomically without holding vs.mutex to instantly cancel any in-flight select/send in worker thread
+            SOCKET sock = ds->vs.sock;
+            ds->vs.sock = INVALID_SOCKET;
+            if (sock != INVALID_SOCKET) {
+                closesocket(sock);
+            }
+
+            // 3. Purge queue items and join worker thread cleanly
+            free_dynamic_socket_queue(ds);
+
+            ds->in_use = 0;
+            ds->port = 0;
             remove_port_from_shared_map(port);
             break;
         }

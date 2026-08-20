@@ -150,14 +150,48 @@ def process_packet(line):
     except Exception as e:
         print(f"Error parsing packet: {e}", file=sys.stderr)
 
+def monitor_parent_process():
+    """Monitors the parent process (Max) and sets exit_flag if parent terminates."""
+    parent_pid = os.getppid()
+    if parent_pid <= 1:
+        return
+
+    while True:
+        with state_lock:
+            if state['exit_flag']:
+                break
+
+        parent_alive = True
+        try:
+            os.kill(parent_pid, 0)
+        except OSError:
+            parent_alive = False
+
+        if not parent_alive:
+            print(f"Parent process {parent_pid} no longer running. Exiting visualizer...", flush=True)
+            with state_lock:
+                state['exit_flag'] = True
+            break
+
+        time.sleep(1.0)
+
 def tcp_server():
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server_sock.bind(("", TCP_PORT))
-    except Exception as e:
-        print(f"ERROR: Failed to bind to port {TCP_PORT}: {e}", file=sys.stderr)
+
+    bound = False
+    for attempt in range(20):
+        try:
+            server_sock.bind(("", TCP_PORT))
+            bound = True
+            break
+        except Exception as e:
+            time.sleep(0.1)
+
+    if not bound:
+        print(f"ERROR: Failed to bind to port {TCP_PORT} after 20 attempts", file=sys.stderr)
         sys.exit(1)
+
     server_sock.listen(5)
     server_sock.settimeout(1.0)
     print(f"Cumulative Transience Companion Visualizer: Listening on port {TCP_PORT}", flush=True)
@@ -304,5 +338,6 @@ def run_gui():
     sys.exit(0)
 
 if __name__ == "__main__":
+    threading.Thread(target=monitor_parent_process, daemon=True).start()
     threading.Thread(target=tcp_server, daemon=True).start()
     run_gui()

@@ -22,4 +22,7 @@ int visualize_allocate_port(int start_port);
 void visualize_to_port(void *x, int port, const char *type, const char *message);
 void visualize_close_port(int port);
 
+// Register spawned child process to Windows Job Object for automatic process cleanup
+void visualize_register_child_process(void *hProcess);
+
 #endif // VISUALIZE_H
