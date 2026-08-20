@@ -2795,12 +2795,67 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                         dictionary_appendatom(specified_bar_dict, gensym("rating"), &r_atom);
                                     }
 
+                                    dictobj_release(incumbent_dict);
+
+                                    if (x->visualize) {
+                                        crucible_visualize_repopulate(x);
+
+                                        if (span_len > 0) {
+                                            for (long i = 0; i < span_len; i++) {
+                                                t_symbol *b_sym = NULL;
+                                                char b_ts_str[64];
+                                                if (atom_gettype(&span_atoms[i]) == A_SYM) {
+                                                    b_sym = atom_getsym(&span_atoms[i]);
+                                                } else if (atom_gettype(&span_atoms[i]) == A_LONG) {
+                                                    snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[i]));
+                                                    b_sym = gensym(b_ts_str);
+                                                } else if (atom_gettype(&span_atoms[i]) == A_FLOAT) {
+                                                    snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[i]));
+                                                    b_sym = gensym(b_ts_str);
+                                                }
+
+                                                if (b_sym) {
+                                                    char msg[256];
+                                                    int is_principal = (b_sym == bar_sym) || (strcmp(b_sym->s_name, bar) == 0);
+                                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":%s}", track, b_sym->s_name, avg_rating, is_principal ? "true" : "false");
+                                                    visualize((t_object *)x, msg);
+                                                }
+                                            }
+                                        }
+
+                                        if (!specified_bar_updated) {
+                                            char msg[256];
+                                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, avg_rating);
+                                            visualize((t_object *)x, msg);
+                                        }
+                                    }
+
                                     if (span_aa) {
                                         object_release((t_object *)span_aa);
                                     }
+                                } else {
+                                    dictobj_release(incumbent_dict);
+                                    if (x->visualize) {
+                                        crucible_visualize_repopulate(x);
+                                        char msg[256];
+                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
+                                        visualize((t_object *)x, msg);
+                                    }
+                                }
+                            } else {
+                                dictobj_release(incumbent_dict);
+                                if (x->visualize) {
+                                    crucible_visualize_repopulate(x);
+                                    char msg[256];
+                                    snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
+                                    visualize((t_object *)x, msg);
                                 }
                             }
-                            dictobj_release(incumbent_dict);
+                        } else if (x->visualize) {
+                            crucible_visualize_repopulate(x);
+                            char msg[256];
+                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
+                            visualize((t_object *)x, msg);
                         }
                     } else {
                         t_symbol *track_sym = gensym(track);
@@ -2826,10 +2881,13 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             }
                             dictobj_release(incumbent_dict);
                         }
-                    }
 
-                    if (x->visualize) {
-                        crucible_visualize_repopulate(x);
+                        if (x->visualize) {
+                            crucible_visualize_repopulate(x);
+                            char msg[256];
+                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
+                            visualize((t_object *)x, msg);
+                        }
                     }
                 }
                 sysmem_freeptr(track);
