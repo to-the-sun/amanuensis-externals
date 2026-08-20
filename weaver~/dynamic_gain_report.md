@@ -114,9 +114,9 @@ When a new bar is triggered:
 
 ## State Resets and Boundary Behavior
 
-To prevent old negative ratings from permanently suppressing audio after playback resets or wraps around:
+To manage rating history and ensure expected behavior across playback resets:
 
-* **Song Loop / Ramp Reset**: When `main_looped` is detected (input ramp wraps back to zero), `x->rolling_head` and `x->rolling_tail` are reset to `0`, clearing all historical rating entries.
+* **Song Loop / Ramp Reset**: When `main_looped` is detected (input ramp wraps back to zero), the rolling rating window (`x->rolling_head` and `x->rolling_tail`) is preserved so that historical rating entries span seamlessly across song loop boundaries over the defined `song_length` window. Old negative ratings are evicted naturally as playback advances past the rolling window horizon rather than being forcibly cleared upon loop wrap.
 * **`clear` Message**: Resets `x->rolling_ratings`, `x->lowest_rating_seen`, and sets all track slot gains `tr->gain[0]` and `tr->gain[1]` back to `1.0`.
 * **`consolidate` Process**: Clears crossfade states and resets track lengths prior to running offline render passes.
 

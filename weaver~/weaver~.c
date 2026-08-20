@@ -1341,10 +1341,6 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
         if (main_looped) {
             x->fifo_head = x->fifo_tail;
-            critical_enter(x->lock);
-            x->rolling_head = 0;
-            x->rolling_tail = 0;
-            critical_exit(x->lock);
             for (long t = 0; t < x->track_cache_count; t++) {
                 t_weaver_track *tr = x->track_cache[t];
                 if (tr) {
