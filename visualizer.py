@@ -442,12 +442,18 @@ def process_packet(text, client_sock=None):
 
                     # Snap all bar timestamps
                     bars = [snap_to_bar(b, bar_length) for b in orig_bars]
+                    t_str = str(track)
+
+                    if t_str not in state["bar_ratings"]:
+                        state["bar_ratings"][t_str] = {}
+                    for b in bars:
+                        state["bar_ratings"][t_str][str(float(b))] = float(rating)
 
                     state["events"].append({
                         "type": "new_span",
-                        "track": track,
+                        "track": t_str,
                         "bars": bars,
-                        "rating": rating,
+                        "rating": float(rating),
                         "start_time": time.time(),
                         "duration": 3.0
                     })
@@ -457,6 +463,7 @@ def process_packet(text, client_sock=None):
                     bar = pkt.get("bar")
                     rating = pkt.get("rating")
                     principal = pkt.get("principal", True)
+                    meld = pkt.get("meld", not principal)
                     if track is not None and bar is not None and rating is not None:
                         t_str = str(track)
                         bar_length = state["bar_length"]
@@ -464,15 +471,16 @@ def process_packet(text, client_sock=None):
                         b_str = str(float(snapped_ts))
                         if t_str not in state["bar_ratings"]:
                             state["bar_ratings"][t_str] = {}
-                        state["bar_ratings"][t_str][b_str] = rating
-                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating} (principal: {principal})")
+                        state["bar_ratings"][t_str][b_str] = float(rating)
+                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
 
                         state["events"].append({
                             "type": "replace",
                             "track": t_str,
                             "bars": [snapped_ts],
-                            "rating": rating,
+                            "rating": float(rating),
                             "principal": principal,
+                            "meld": meld or (not principal),
                             "start_time": time.time(),
                             "duration": 3.0
                         })
@@ -536,6 +544,7 @@ def run_gui():
     pygame.display.set_caption("Crucible Visualizer")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("Arial", 12)
+    cell_font = pygame.font.SysFont("Arial", 11, bold=True)
     big_font = pygame.font.SysFont("Arial", 20)
     excl_font = pygame.font.SysFont("Arial", 18, bold=True)
 
@@ -679,6 +688,33 @@ def run_gui():
                         color[2] = int(100 + (80 - 100) * factor)
 
                 pygame.draw.rect(screen, tuple(color), rect)
+
+                # Display rating in bold white in the center of each cell at all times, flashing when changing.
+                if rating is not None:
+                    active_event = None
+                    event_elapsed = 0.0
+                    for e in events:
+                        if str(e.get("track")) == str(tid):
+                            for e_bar in e.get("bars", []):
+                                if int(e_bar) == b_ts:
+                                    elapsed = now - e["start_time"]
+                                    if elapsed < 0.8:
+                                        if active_event is None or e["start_time"] > active_event["start_time"]:
+                                            active_event = e
+                                            event_elapsed = elapsed
+
+                    rating_color = (255, 255, 255)
+                    if active_event is not None:
+                        is_flash_phase = (int(event_elapsed * 10) % 2 == 0)
+                        is_meld = active_event.get("type") == "replace" and (active_event.get("meld") or not active_event.get("principal", True))
+                        if is_meld:
+                            rating_color = (160, 160, 160) if is_flash_phase else (80, 80, 80)
+                        else:
+                            rating_color = (255, 255, 100) if is_flash_phase else (180, 180, 180)
+
+                    rating_lbl = cell_font.render(f"{rating:.2f}", True, rating_color)
+                    lbl_rect = rating_lbl.get_rect(center=rect.center)
+                    screen.blit(rating_lbl, lbl_rect)
 
         # Draw note hash marks
         with state_lock:
@@ -829,21 +865,14 @@ def run_gui():
                     rect = pygame.Rect(margin_left + col * cell_w + 1, margin_top + row * cell_h + 1, cell_w - 1, cell_h - 1)
                     pygame.draw.rect(screen, color, rect)
 
-            # Floating Rating
-            if valid_bars and bar_length > 0:
+            # Floating Rating for ordinary span updates (new_span)
+            if valid_bars and bar_length > 0 and e.get("type") != "replace":
                 avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
                 float_x = margin_left + avg_col * cell_w + (cell_w / 2)
 
                 alpha = int(255 * (1.0 - t))
-                if e.get("type") == "replace":
-                    float_y = margin_top + row * cell_h
-                    if e.get("principal", True):
-                        text_color = (255, 255, 255)
-                    else:
-                        text_color = (160, 160, 160)
-                else:
-                    float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
-                    text_color = (255, 255, 100)
+                float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
+                text_color = (255, 255, 100)
 
                 rating_text = big_font.render(f"{e['rating']:.2f}", True, text_color)
                 rating_text.set_alpha(alpha)
