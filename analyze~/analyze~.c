@@ -186,7 +186,35 @@ static void get_visualizer_directory(char *dir_out, size_t max_len) {
     }
 }
 
+static void stop_visualizer(t_analyze *x) {
+    if (x->viz_port > 0) {
+        char json_buf[512];
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
+        visualize_to_port(x, x->viz_port, "analyze", json_buf);
+
+        visualize_release_port(x->viz_port);
+        x->viz_port = 0;
+    }
+
+    if (x->viz_initialized) {
+        visualize_cleanup();
+        x->viz_initialized = 0;
+    }
+}
+
 static void launch_visualizer(t_analyze *x) {
+    if (!x->active_enabled) {
+        return;
+    }
     if (!x->viz_initialized) {
         visualize_init();
         x->viz_initialized = 1;
@@ -242,27 +270,7 @@ t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *
         if (x->visualize_enabled && !prev) {
             launch_visualizer(x);
         } else if (!x->visualize_enabled && prev) {
-            if (x->viz_port > 0) {
-                char json_buf[512];
-                const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-                t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-                char scripting_name[128];
-                if (s_name && s_name != gensym("")) {
-                    strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
-                    scripting_name[sizeof(scripting_name) - 1] = '\0';
-                } else {
-                    snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
-                }
-                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
-                visualize_to_port(x, x->viz_port, "analyze", json_buf);
-
-                visualize_release_port(x->viz_port);
-                x->viz_port = 0;
-            }
-            if (x->viz_initialized) {
-                visualize_cleanup();
-                x->viz_initialized = 0;
-            }
+            stop_visualizer(x);
         }
     }
     return MAX_ERR_NONE;
@@ -270,13 +278,18 @@ t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *
 
 t_max_err analyze_attr_set_active(t_analyze *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
-        long val = atom_getlong(av);
+        long val = atom_getlong(av) ? 1 : 0;
         long prev = x->active_enabled;
-        x->active_enabled = val ? 1 : 0;
+        x->active_enabled = val;
         if (x->active_enabled && !prev) {
             critical_enter(x->lock);
             x->last_analysis_frame = x->current_sample_count;
             critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizer(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizer(x);
         }
     }
     return MAX_ERR_NONE;
@@ -284,13 +297,18 @@ t_max_err analyze_attr_set_active(t_analyze *x, void *attr, long ac, t_atom *av)
 
 void analyze_active(t_analyze *x, t_symbol *s, long argc, t_atom *argv) {
     if (argc && argv) {
-        long val = atom_getlong(argv);
+        long val = atom_getlong(argv) ? 1 : 0;
         long prev = x->active_enabled;
-        x->active_enabled = val ? 1 : 0;
+        x->active_enabled = val;
         if (x->active_enabled && !prev) {
             critical_enter(x->lock);
             x->last_analysis_frame = x->current_sample_count;
             critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizer(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizer(x);
         }
     }
 }
@@ -434,28 +452,7 @@ void analyze_free(t_analyze* x) {
     free(x->clock_buffer);
     critical_free(x->lock);
 
-    if (x->viz_port > 0) {
-        char json_buf[512];
-        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        char scripting_name[128];
-        if (s_name && s_name != gensym("")) {
-            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
-            scripting_name[sizeof(scripting_name) - 1] = '\0';
-        } else {
-            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
-        }
-        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
-        visualize_to_port(x, x->viz_port, "analyze", json_buf);
-
-        visualize_release_port(x->viz_port);
-        x->viz_port = 0;
-    }
-
-    if (x->viz_initialized) {
-        visualize_cleanup();
-        x->viz_initialized = 0;
-    }
+    stop_visualizer(x);
 }
 
 void analyze_clear(t_analyze* x) {
