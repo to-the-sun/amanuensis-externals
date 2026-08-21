@@ -18,7 +18,8 @@ void visualize(void *x, const char *message);
 int visualize_exchange(void *x, const char *message, char *response, size_t response_size);
 
 // Dynamic port management for multi-instance / multi-channel visualizers
-int visualize_allocate_port(int start_port);
+int visualize_allocate_port(int start_port, int *is_reused);
+void visualize_release_port(int port);
 void visualize_to_port(void *x, int port, const char *type, const char *message);
 void visualize_close_port(int port);
 

@@ -93,17 +93,20 @@ In `analyze~.c` and `mc.analyze~.c`, create a Windows Job Object (`CreateJobObje
 
 ---
 
-### Proposal 3: Visualizer Process Pooling and Re-use
+### Proposal 3: Visualizer Process Pooling and Re-use (Implemented)
 
 #### Description
 Instead of destroying and spawning new Python processes every time scripting recreates `analyze~` objects, maintain a persistent pool of visualizer windows or re-bind existing running visualizer instances to new object IDs and ports.
 
-#### Potential Benefits
-* Completely prevents CPU and RAM spikes caused by repeated Python process initialization.
-* Eliminates TCP port `TIME_WAIT` conflicts.
+#### Implementation Details
+- **Port State Machine**: Dynamic sockets and shared memory port map now track three distinct states: `PORT_STATE_FREE` (0), `PORT_STATE_IN_USE` (1), and `PORT_STATE_POOLED` (2).
+- **Process Pooling Allocation**: `visualize_allocate_port(start_port, &is_reused)` checks if an existing pooled socket/process is available on an allocated port. If so, it re-binds the socket without calling `CreateProcessA` and sets `is_reused = 1`.
+- **Re-bind & Unbind Telemetry**: On object destruction (`analyze_free` / `mc_analyze_free`), `visualize_release_port` sends an `unbind` packet and transitions the socket to `PORT_STATE_POOLED`. When a new object claims a pooled port, `launch_visualizer` sends a `rebind` packet with updated object scripting names, group name, channel index, and logging parameters.
+- **Python Visualizer State Reset**: `transience_vis.py` handles `unbind` and `rebind` event packets by clearing rolling envelope, peak, rating, and accumulated transience buffers while updating the window title dynamically.
 
-#### Potential Downsides
-* Requires significant refactoring of process management logic in both C and Python.
+#### Benefits Achieved
+* Completely prevents CPU and RAM spikes during scripting patcher reloads by re-using active Python visualizer processes.
+* Eliminates TCP port `TIME_WAIT` conflicts and process creation storms.
 
 ---
 
