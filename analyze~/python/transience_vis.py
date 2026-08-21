@@ -116,7 +116,6 @@ def process_packet(line):
                 return
 
             if event_type == 'close':
-                state['exit_flag'] = True
                 return
 
             current_time = pkt.get('time', 0.0)
@@ -182,24 +181,14 @@ def tcp_server():
     server_sock.settimeout(1.0)
     print(f"Cumulative Transience Companion Visualizer: Listening on port {TCP_PORT}", flush=True)
 
-    start_time = time.time()
-    has_connected = False
-
     while True:
         with state_lock:
             if state['exit_flag']:
                 break
 
-        if not has_connected and (time.time() - start_time > 15.0):
-            print(f"No client connected to port {TCP_PORT} within 15s timeout, exiting...", flush=True)
-            with state_lock:
-                state['exit_flag'] = True
-            break
-
         try:
             client_sock, addr = server_sock.accept()
             print(f"Accepted connection from {addr}", flush=True)
-            has_connected = True
             threading.Thread(target=handle_client, args=(client_sock,), daemon=True).start()
         except socket.timeout:
             continue
@@ -235,13 +224,11 @@ def handle_client(sock):
             print(f"Unexpected error in handle_client: {e}", file=sys.stderr)
             break
 
-    print("Client disconnected, exiting...", flush=True)
+    print("Client disconnected", flush=True)
     try:
         sock.close()
     except Exception:
         pass
-    with state_lock:
-        state['exit_flag'] = True
 
 def build_title(scripting_name, channel, port):
     prefix_parts = []
