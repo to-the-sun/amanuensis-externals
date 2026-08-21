@@ -228,26 +228,34 @@ static void launch_visualizers(t_mc_analyze *x) {
 
     for (long ch = 0; ch < n_chans; ch++) {
         if (x->viz_ports[ch] == 0) {
-            x->viz_ports[ch] = visualize_allocate_port(9001);
+            int is_reused = 0;
+            x->viz_ports[ch] = visualize_allocate_port(9001, &is_reused);
 
-            char cmd[MAX_PATH_CHARS * 2];
-            snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld --name \"%s\" --log %ld", dir, x->viz_ports[ch], grp, ch, scripting_name, x->log_enabled);
+            if (is_reused) {
+                char json_buf[512];
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"rebind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld,\"log\":%ld}", grp, scripting_name, ch, x->log_enabled);
+                visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
+                object_post((t_object *)x, "mc.analyze~: Re-bound visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
+            } else {
+                char cmd[MAX_PATH_CHARS * 2];
+                snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --channel %ld --name \"%s\" --log %ld", dir, x->viz_ports[ch], grp, ch, scripting_name, x->log_enabled);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-            STARTUPINFOA si;
-            PROCESS_INFORMATION pi;
-            ZeroMemory(&si, sizeof(si));
-            si.cb = sizeof(si);
-            ZeroMemory(&pi, sizeof(pi));
+                STARTUPINFOA si;
+                PROCESS_INFORMATION pi;
+                ZeroMemory(&si, sizeof(si));
+                si.cb = sizeof(si);
+                ZeroMemory(&pi, sizeof(pi));
 
-            if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
-            } else {
-                object_error((t_object *)x, "mc.analyze~: Failed to launch visualizer for Ch %ld: %s", ch, cmd);
-            }
+                if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    object_post((t_object *)x, "mc.analyze~: Launched visualizer for Ch %ld on port %d.", ch, x->viz_ports[ch]);
+                } else {
+                    object_error((t_object *)x, "mc.analyze~: Failed to launch visualizer for Ch %ld: %s", ch, cmd);
+                }
 #endif
+            }
         }
     }
 }
@@ -436,10 +444,10 @@ void mc_analyze_free(t_mc_analyze* x) {
         for (long i = 0; i < x->allocated_viz_ports; i++) {
             if (x->viz_ports[i] > 0) {
                 char json_buf[512];
-                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"close\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
                 visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
 
-                visualize_close_port(x->viz_ports[i]);
+                visualize_release_port(x->viz_ports[i]);
             }
         }
         free(x->viz_ports);

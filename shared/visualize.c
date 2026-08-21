@@ -34,7 +34,7 @@ typedef struct _viz_queue_item {
 typedef struct {
     int port;
     t_viz_socket vs;
-    int in_use;
+    int state; // PORT_STATE_FREE (0), PORT_STATE_IN_USE (1), PORT_STATE_POOLED (2)
 
     t_systhread_mutex queue_mutex;
     t_systhread_cond queue_cond;
@@ -55,8 +55,13 @@ static t_systhread_mutex dynamic_sockets_mutex = NULL;
 #define SHARED_PORT_MAP_NAME "Local\\MaxAnalyzeVizSharedPorts"
 #define SHARED_MUTEX_NAME    "Local\\MaxAnalyzeVizPortMutex"
 
+#define PORT_STATE_FREE   0
+#define PORT_STATE_IN_USE 1
+#define PORT_STATE_POOLED 2
+
 typedef struct {
     int ports[MAX_DYNAMIC_SOCKETS];
+    int states[MAX_DYNAMIC_SOCKETS];
 } t_shared_port_map;
 
 #if defined(WIN_VERSION) || defined(_WIN32)
@@ -112,20 +117,34 @@ static int is_port_in_shared_map(int port) {
     if (g_pSharedPortMap) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == port) {
-                return 1;
+                return g_pSharedPortMap->states[i] ? g_pSharedPortMap->states[i] : PORT_STATE_IN_USE;
             }
         }
     }
 #endif
-    return 0;
+    return PORT_STATE_FREE;
 }
 
-static void add_port_to_shared_map(int port) {
+static void add_port_to_shared_map(int port, int state) {
 #if defined(WIN_VERSION) || defined(_WIN32)
     if (g_pSharedPortMap) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == 0) {
                 g_pSharedPortMap->ports[i] = port;
+                g_pSharedPortMap->states[i] = state;
+                break;
+            }
+        }
+    }
+#endif
+}
+
+static void update_port_state_in_shared_map(int port, int state) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (g_pSharedPortMap) {
+        for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+            if (g_pSharedPortMap->ports[i] == port) {
+                g_pSharedPortMap->states[i] = state;
                 break;
             }
         }
@@ -139,6 +158,7 @@ static void remove_port_from_shared_map(int port) {
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
             if (g_pSharedPortMap->ports[i] == port) {
                 g_pSharedPortMap->ports[i] = 0;
+                g_pSharedPortMap->states[i] = PORT_STATE_FREE;
                 break;
             }
         }
@@ -234,7 +254,7 @@ void visualize_cleanup() {
         if (dynamic_sockets_mutex) {
             systhread_mutex_lock(dynamic_sockets_mutex);
             for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-                if (dynamic_sockets[i].in_use) {
+                if (dynamic_sockets[i].state != PORT_STATE_FREE) {
                     free_dynamic_socket_queue(&dynamic_sockets[i]);
 
                     systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
@@ -244,7 +264,7 @@ void visualize_cleanup() {
                     }
                     systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
                     systhread_mutex_free(dynamic_sockets[i].vs.mutex);
-                    dynamic_sockets[i].in_use = 0;
+                    dynamic_sockets[i].state = PORT_STATE_FREE;
                 }
             }
             systhread_mutex_unlock(dynamic_sockets_mutex);
@@ -334,7 +354,8 @@ void *dynamic_socket_worker_thread(void *arg) {
     return NULL;
 }
 
-int visualize_allocate_port(int start_port) {
+int visualize_allocate_port(int start_port, int *is_reused) {
+    if (is_reused) *is_reused = 0;
     if (start_port <= 0) start_port = 9001;
     if (!dynamic_sockets_mutex) {
         return start_port;
@@ -344,15 +365,29 @@ int visualize_allocate_port(int start_port) {
     shared_port_map_lock();
     systhread_mutex_lock(dynamic_sockets_mutex);
 
+    // Pass 1: Check if there is an existing pooled socket
+    for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+        if (dynamic_sockets[i].state == PORT_STATE_POOLED) {
+            dynamic_sockets[i].state = PORT_STATE_IN_USE;
+            int port = dynamic_sockets[i].port;
+            update_port_state_in_shared_map(port, PORT_STATE_IN_USE);
+            systhread_mutex_unlock(dynamic_sockets_mutex);
+            shared_port_map_unlock();
+            if (is_reused) *is_reused = 1;
+            return port;
+        }
+    }
+
+    // Pass 2: Allocate a new port if no pooled port was available
     for (int port = start_port; port < start_port + 500; port++) {
         int already_used = 0;
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-            if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+            if (dynamic_sockets[i].state != PORT_STATE_FREE && dynamic_sockets[i].port == port) {
                 already_used = 1;
                 break;
             }
         }
-        if (already_used || is_port_in_shared_map(port)) continue;
+        if (already_used || is_port_in_shared_map(port) != PORT_STATE_FREE) continue;
 
         SOCKET test_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (test_sock != INVALID_SOCKET) {
@@ -367,9 +402,9 @@ int visualize_allocate_port(int start_port) {
 
             if (res == 0) {
                 for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-                    if (!dynamic_sockets[i].in_use) {
+                    if (dynamic_sockets[i].state == PORT_STATE_FREE) {
                         dynamic_sockets[i].port = port;
-                        dynamic_sockets[i].in_use = 1;
+                        dynamic_sockets[i].state = PORT_STATE_IN_USE;
                         viz_socket_init(&dynamic_sockets[i].vs, port);
 
                         dynamic_sockets[i].queue_head = NULL;
@@ -380,9 +415,10 @@ int visualize_allocate_port(int start_port) {
                         systhread_cond_new(&dynamic_sockets[i].queue_cond, 0);
                         systhread_create((method)dynamic_socket_worker_thread, &dynamic_sockets[i], 0, 0, 0, &dynamic_sockets[i].thread);
 
-                        add_port_to_shared_map(port);
+                        add_port_to_shared_map(port, PORT_STATE_IN_USE);
                         systhread_mutex_unlock(dynamic_sockets_mutex);
                         shared_port_map_unlock();
+                        if (is_reused) *is_reused = 0;
                         return port;
                     }
                 }
@@ -392,7 +428,41 @@ int visualize_allocate_port(int start_port) {
 
     systhread_mutex_unlock(dynamic_sockets_mutex);
     shared_port_map_unlock();
+    if (is_reused) *is_reused = 0;
     return start_port;
+}
+
+void visualize_release_port(int port) {
+    if (port <= 0 || !dynamic_sockets_mutex) return;
+
+    shared_port_map_lock();
+    systhread_mutex_lock(dynamic_sockets_mutex);
+    for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
+        if (dynamic_sockets[i].state == PORT_STATE_IN_USE && dynamic_sockets[i].port == port) {
+            dynamic_sockets[i].state = PORT_STATE_POOLED;
+            update_port_state_in_shared_map(port, PORT_STATE_POOLED);
+
+            // Drain any pending queue items for this pooled socket
+            if (dynamic_sockets[i].queue_mutex) {
+                systhread_mutex_lock(dynamic_sockets[i].queue_mutex);
+                t_viz_queue_item *curr = dynamic_sockets[i].queue_head;
+                while (curr) {
+                    t_viz_queue_item *next = curr->next;
+                    if (curr->type) sysmem_freeptr(curr->type);
+                    if (curr->message) sysmem_freeptr(curr->message);
+                    sysmem_freeptr(curr);
+                    curr = next;
+                }
+                dynamic_sockets[i].queue_head = NULL;
+                dynamic_sockets[i].queue_tail = NULL;
+                dynamic_sockets[i].queue_count = 0;
+                systhread_mutex_unlock(dynamic_sockets[i].queue_mutex);
+            }
+            break;
+        }
+    }
+    systhread_mutex_unlock(dynamic_sockets_mutex);
+    shared_port_map_unlock();
 }
 
 static void free_dynamic_socket_queue(t_dynamic_socket *ds) {
@@ -436,7 +506,7 @@ void visualize_close_port(int port) {
     shared_port_map_lock();
     systhread_mutex_lock(dynamic_sockets_mutex);
     for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-        if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+        if (dynamic_sockets[i].state != PORT_STATE_FREE && dynamic_sockets[i].port == port) {
             free_dynamic_socket_queue(&dynamic_sockets[i]);
 
             systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
@@ -447,7 +517,7 @@ void visualize_close_port(int port) {
             systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
             systhread_mutex_free(dynamic_sockets[i].vs.mutex);
 
-            dynamic_sockets[i].in_use = 0;
+            dynamic_sockets[i].state = PORT_STATE_FREE;
             dynamic_sockets[i].port = 0;
             remove_port_from_shared_map(port);
             break;
@@ -753,7 +823,7 @@ void visualize_to_port(void *x, int port, const char *type, const char *message)
     if (dynamic_sockets_mutex) {
         systhread_mutex_lock(dynamic_sockets_mutex);
         for (int i = 0; i < MAX_DYNAMIC_SOCKETS; i++) {
-            if (dynamic_sockets[i].in_use && dynamic_sockets[i].port == port) {
+            if (dynamic_sockets[i].state != PORT_STATE_FREE && dynamic_sockets[i].port == port) {
                 ds = &dynamic_sockets[i];
                 break;
             }

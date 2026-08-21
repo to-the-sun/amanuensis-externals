@@ -185,11 +185,11 @@ static void get_visualizer_directory(char *dir_out, size_t max_len) {
 
 static void launch_visualizer(t_analyze *x) {
     if (x->viz_port == 0) {
-        x->viz_port = visualize_allocate_port(9001);
+        int is_reused = 0;
+        x->viz_port = visualize_allocate_port(9001, &is_reused);
 
         char dir[MAX_PATH_CHARS];
         get_visualizer_directory(dir, sizeof(dir));
-        char cmd[MAX_PATH_CHARS * 2];
         const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
         t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
         char scripting_name[128];
@@ -199,23 +199,32 @@ static void launch_visualizer(t_analyze *x) {
         } else {
             snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
         }
-        snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\" --log %ld", dir, x->viz_port, grp, scripting_name, x->log_enabled);
+
+        if (is_reused) {
+            char json_buf[512];
+            snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"rebind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"log\":%ld}", grp, scripting_name, x->log_enabled);
+            visualize_to_port(x, x->viz_port, "analyze", json_buf);
+            object_post((t_object *)x, "analyze~: Re-bound existing companion visualizer on port %d.", x->viz_port);
+        } else {
+            char cmd[MAX_PATH_CHARS * 2];
+            snprintf(cmd, sizeof(cmd), "python \"%s\\python\\transience_vis.py\" --port %d --group \"%s\" --name \"%s\" --log %ld", dir, x->viz_port, grp, scripting_name, x->log_enabled);
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-        STARTUPINFOA si;
-        PROCESS_INFORMATION pi;
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        ZeroMemory(&pi, sizeof(pi));
+            STARTUPINFOA si;
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+            ZeroMemory(&pi, sizeof(pi));
 
-        if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);
-        } else {
-            object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
-        }
+            if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                object_post((t_object *)x, "analyze~: Launched companion visualizer on port %d.", x->viz_port);
+            } else {
+                object_error((t_object *)x, "analyze~: Failed to launch companion visualizer: %s", cmd);
+            }
 #endif
+        }
     }
 }
 
@@ -373,10 +382,10 @@ void analyze_free(t_analyze* x) {
         } else {
             snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
         }
-        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"close\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
+        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
         visualize_to_port(x, x->viz_port, "analyze", json_buf);
 
-        visualize_close_port(x->viz_port);
+        visualize_release_port(x->viz_port);
     }
 
     visualize_cleanup();

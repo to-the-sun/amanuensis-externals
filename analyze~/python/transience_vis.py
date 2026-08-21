@@ -95,6 +95,26 @@ def process_packet(line):
                 state['accumulated_buffer'] = [0.0]*5001
                 return
 
+            if event_type in ('unbind', 'rebind'):
+                state['times'] = []
+                state['onset_envs'] = [[],[],[],[]]
+                state['smooth_envs'] = [[],[],[],[]]
+                state['prominences'] = [[],[],[],[]]
+                state['rolling_smoothing_avgs'] = [0.0]*4
+                state['rolling_global_smoothing_avg'] = 0.0
+                state['rating'] = 0.0
+                state['overall_rating'] = 0.0
+                state['std_dev'] = 0.0
+                state['contrast'] = 0.0
+                state['stability'] = 0.0
+                state['max_peak_value'] = 1.0
+                state['highest_peak_ms'] = -999.0
+                state['peaks'] = []
+                state['all_time_scores'] = []
+                state['accumulated_buffer'] = [0.0]*5001
+                state['current_time'] = 0.0
+                return
+
             if event_type == 'close':
                 state['exit_flag'] = True
                 return
