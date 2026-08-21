@@ -74,6 +74,12 @@
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="active" get="1" set="1" type="long" size="1">
+			<digest>Active State</digest>
+			<description>
+				Enables or disables object processing. When active is enabled (1, default), the object has full normal functionality. When active is disabled (0), the object consumes zero CPU/network resources and performs no DSP analysis or visualizer spawning until set back to active (1).
+			</description>
+		</attribute>
 		<attribute name="group" get="1" set="1" type="symbol" size="1">
 			<digest>Shared Group Name</digest>
 			<description>
