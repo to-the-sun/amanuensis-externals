@@ -85,6 +85,7 @@ typedef struct _analyze {
     int viz_port;
     int instance_id;
     int viz_initialized;
+    int initialized;
 
     // Analyzer State
     TransientAnalyzer* analyzer;
@@ -265,7 +266,7 @@ t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *
     if (ac && av) {
         long prev = x->visualize_enabled;
         x->visualize_enabled = atom_getlong(av);
-        if (x->active) {
+        if (x->initialized && x->active) {
             if (x->visualize_enabled && !prev) {
                 launch_visualizer(x);
             } else if (!x->visualize_enabled && prev) {
@@ -280,12 +281,14 @@ t_max_err analyze_attr_set_active(t_analyze *x, void *attr, long ac, t_atom *av)
     if (ac && av) {
         long prev = x->active;
         x->active = atom_getlong(av);
-        if (x->active && !prev) {
-            if (x->visualize_enabled) {
-                launch_visualizer(x);
+        if (x->initialized) {
+            if (x->active && !prev) {
+                if (x->visualize_enabled) {
+                    launch_visualizer(x);
+                }
+            } else if (!x->active && prev) {
+                stop_visualizer(x);
             }
-        } else if (!x->active && prev) {
-            stop_visualizer(x);
         }
     }
     return MAX_ERR_NONE;
@@ -382,6 +385,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->visualize_enabled = 0;
         x->viz_port = 0;
         x->viz_initialized = 0;
+        x->initialized = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
@@ -393,6 +397,11 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         }
         if (x->analyzer) {
             x->analyzer->tolerance = x->tolerance;
+        }
+
+        x->initialized = 1;
+        if (x->active && x->visualize_enabled) {
+            launch_visualizer(x);
         }
     }
     return x;

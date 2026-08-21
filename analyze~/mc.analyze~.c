@@ -92,6 +92,7 @@ typedef struct _mc_analyze {
     long allocated_viz_ports;
     int instance_id;
     int viz_initialized;
+    int initialized;
 
     // Shared buffer for local channel accumulation (when no @group is specified)
     SharedTransientBuffer* local_shared_buffer;
@@ -303,7 +304,7 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
     if (ac && av) {
         long prev = x->visualize_enabled;
         x->visualize_enabled = atom_getlong(av);
-        if (x->active) {
+        if (x->initialized && x->active) {
             if (x->visualize_enabled && !prev) {
                 launch_visualizers(x);
             } else if (!x->visualize_enabled && prev) {
@@ -318,12 +319,14 @@ t_max_err mc_analyze_attr_set_active(t_mc_analyze *x, void *attr, long ac, t_ato
     if (ac && av) {
         long prev = x->active;
         x->active = atom_getlong(av);
-        if (x->active && !prev) {
-            if (x->visualize_enabled) {
-                launch_visualizers(x);
+        if (x->initialized) {
+            if (x->active && !prev) {
+                if (x->visualize_enabled) {
+                    launch_visualizers(x);
+                }
+            } else if (!x->active && prev) {
+                stop_visualizers(x);
             }
-        } else if (!x->active && prev) {
-            stop_visualizers(x);
         }
     }
     return MAX_ERR_NONE;
@@ -434,6 +437,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->active = 1;
         x->visualize_enabled = 0;
         x->viz_initialized = 0;
+        x->initialized = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
@@ -445,6 +449,11 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->local_shared_buffer->max_score_seen = -DBL_MAX;
         x->local_shared_buffer->max_peak = 1.0;
         critical_new(&x->local_shared_buffer_lock);
+
+        x->initialized = 1;
+        if (x->active && x->visualize_enabled) {
+            launch_visualizers(x);
+        }
     }
     return x;
 }
