@@ -1466,10 +1466,10 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset <= 0),
+    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset == 0),
     // we use the current note's calc_timestamp as the effective offset for this processing cycle
     // without persisting it to x->current_offset.
-    double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
+    double effective_offset = (x->current_offset == 0.0) ? calc_timestamp : x->current_offset;
 
     buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f", 
                     x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
@@ -1768,7 +1768,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
         buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
 
-        double effective_offset = (x->current_offset <= 0.0) ? calc_timestamp : x->current_offset;
+        double effective_offset = (x->current_offset == 0.0) ? calc_timestamp : x->current_offset;
         buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
 
         buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
