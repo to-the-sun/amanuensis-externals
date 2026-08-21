@@ -185,6 +185,7 @@ static void viz_lock_exit(void) {
 }
 
 static int ref_count = 0;
+static int g_wsa_inited = 0;
 
 static t_systhread viz_thread = NULL;
 static t_systhread_mutex queue_mutex = NULL; // Mutex for queue operations
@@ -228,12 +229,14 @@ void *viz_worker_thread(void *arg);
 
 int visualize_init() {
     viz_lock_enter();
-    if (ref_count == 0) {
+    if (!g_wsa_inited) {
         WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-            viz_lock_exit();
-            return 1;
+        if (WSAStartup(MAKEWORD(2,2), &wsa) == 0) {
+            g_wsa_inited = 1;
         }
+    }
+
+    if (ref_count == 0) {
         viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
         viz_socket_init(&weaver_viz, PORT_WEAVER);
         viz_socket_init(&analyze_viz, PORT_ANALYZE);
@@ -327,21 +330,9 @@ void visualize_cleanup() {
         }
 
 #if defined(WIN_VERSION) || defined(_WIN32)
-        if (g_pSharedPortMap) {
-            UnmapViewOfFile(g_pSharedPortMap);
-            g_pSharedPortMap = NULL;
-        }
-        if (g_hSharedMap) {
-            CloseHandle(g_hSharedMap);
-            g_hSharedMap = NULL;
-        }
-        if (g_hSharedMutex) {
-            CloseHandle(g_hSharedMutex);
-            g_hSharedMutex = NULL;
-        }
+        // Maintain shared memory and mutex structures persistent across object reloads
 #endif
 
-        WSACleanup();
         ref_count = 0;
     }
     viz_lock_exit();
@@ -505,6 +496,17 @@ void visualize_release_port(int port) {
 static void free_dynamic_socket_queue(t_dynamic_socket *ds) {
     if (!ds) return;
     ds->exit_flag = 1;
+
+    // Instantly unblock any in-flight select()/send() in the worker thread by closing socket handle first
+    if (ds->vs.mutex) {
+        systhread_mutex_lock(ds->vs.mutex);
+        if (ds->vs.sock != INVALID_SOCKET) {
+            closesocket(ds->vs.sock);
+            ds->vs.sock = INVALID_SOCKET;
+        }
+        systhread_mutex_unlock(ds->vs.mutex);
+    }
+
     if (ds->queue_cond) {
         systhread_mutex_lock(ds->queue_mutex);
         systhread_cond_signal(ds->queue_cond);
@@ -682,8 +684,8 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
             if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
                 fd_set write_fds;
                 struct timeval tv;
-                tv.tv_sec = 1;
-                tv.tv_usec = 0;
+                tv.tv_sec = 0;
+                tv.tv_usec = 10000; // 10ms timeout
 
                 FD_ZERO(&write_fds);
                 FD_SET(vs->sock, &write_fds);
