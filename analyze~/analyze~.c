@@ -76,12 +76,14 @@ typedef struct _analyze {
     void* outlet_log;
 
     // Attributes
+    long active_enabled;
     long log_enabled;
     t_symbol* group_name;
     long weighted_bar;
     double tolerance;
     long visualize_enabled;
     int viz_port;
+    int viz_initialized;
     int instance_id;
 
     // Analyzer State
@@ -117,6 +119,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv);
 void analyze_free(t_analyze* x);
 void analyze_clear(t_analyze* x);
 void analyze_pause(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
+void analyze_active(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_group_settor(t_analyze* x, void* attr, long argc, t_atom* argv);
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void analyze_output_metrics(t_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -183,7 +186,39 @@ static void get_visualizer_directory(char *dir_out, size_t max_len) {
     }
 }
 
+static void stop_visualizer(t_analyze *x) {
+    if (x->viz_port > 0) {
+        char json_buf[512];
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
+        visualize_to_port(x, x->viz_port, "analyze", json_buf);
+
+        visualize_release_port(x->viz_port);
+        x->viz_port = 0;
+    }
+
+    if (x->viz_initialized) {
+        visualize_cleanup();
+        x->viz_initialized = 0;
+    }
+}
+
 static void launch_visualizer(t_analyze *x) {
+    if (!x->active_enabled) {
+        return;
+    }
+    if (!x->viz_initialized) {
+        visualize_init();
+        x->viz_initialized = 1;
+    }
     if (x->viz_port == 0) {
         int is_reused = 0;
         x->viz_port = visualize_allocate_port(9001, &is_reused);
@@ -234,9 +269,48 @@ t_max_err analyze_attr_set_visualize(t_analyze *x, void *attr, long ac, t_atom *
         x->visualize_enabled = atom_getlong(av);
         if (x->visualize_enabled && !prev) {
             launch_visualizer(x);
+        } else if (!x->visualize_enabled && prev) {
+            stop_visualizer(x);
         }
     }
     return MAX_ERR_NONE;
+}
+
+t_max_err analyze_attr_set_active(t_analyze *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long val = atom_getlong(av) ? 1 : 0;
+        long prev = x->active_enabled;
+        x->active_enabled = val;
+        if (x->active_enabled && !prev) {
+            critical_enter(x->lock);
+            x->last_analysis_frame = x->current_sample_count;
+            critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizer(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizer(x);
+        }
+    }
+    return MAX_ERR_NONE;
+}
+
+void analyze_active(t_analyze *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc && argv) {
+        long val = atom_getlong(argv) ? 1 : 0;
+        long prev = x->active_enabled;
+        x->active_enabled = val;
+        if (x->active_enabled && !prev) {
+            critical_enter(x->lock);
+            x->last_analysis_frame = x->current_sample_count;
+            critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizer(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizer(x);
+        }
+    }
 }
 
 static t_class* analyze_class;
@@ -250,6 +324,12 @@ void ext_main(void* r) {
     analyze_shared_buffer_class = sc;
 
     t_class* c = class_new("analyze~", (method)analyze_new, (method)analyze_free, sizeof(t_analyze), 0L, A_GIMME, 0);
+
+    CLASS_ATTR_LONG(c, "active", 0, t_analyze, active_enabled);
+    CLASS_ATTR_FILTER_CLIP(c, "active", 0, 1);
+    CLASS_ATTR_STYLE_LABEL(c, "active", 0, "checkbox", "Enable Analysis");
+    CLASS_ATTR_ACCESSORS(c, "active", NULL, (method)analyze_attr_set_active);
+    CLASS_ATTR_DEFAULT(c, "active", 0, "1");
 
     CLASS_ATTR_LONG(c, "log", 0, t_analyze, log_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
@@ -279,6 +359,7 @@ void ext_main(void* r) {
     class_addmethod(c, (method)analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)analyze_clear, "clear", 0);
     class_addmethod(c, (method)analyze_pause, "pause", A_GIMME, 0);
+    class_addmethod(c, (method)analyze_active, "active", A_GIMME, 0);
 
     class_dspinit(c);
     class_register(CLASS_BOX, c);
@@ -313,6 +394,7 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->last_analysis_frame = 0;
         for(int i=0; i<MAX_BANDS; i++) x->last_peak_frame[i] = -1;
 
+        x->active_enabled = 1;
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->clear_sequence = 0;
@@ -322,11 +404,10 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
         x->viz_port = 0;
+        x->viz_initialized = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-
-        visualize_init();
 
         attr_args_process(x, argc, argv);
 
@@ -371,24 +452,7 @@ void analyze_free(t_analyze* x) {
     free(x->clock_buffer);
     critical_free(x->lock);
 
-    if (x->viz_port > 0) {
-        char json_buf[512];
-        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        char scripting_name[128];
-        if (s_name && s_name != gensym("")) {
-            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
-            scripting_name[sizeof(scripting_name) - 1] = '\0';
-        } else {
-            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
-        }
-        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\"}", grp, scripting_name);
-        visualize_to_port(x, x->viz_port, "analyze", json_buf);
-
-        visualize_release_port(x->viz_port);
-    }
-
-    visualize_cleanup();
+    stop_visualizer(x);
 }
 
 void analyze_clear(t_analyze* x) {
@@ -503,7 +567,7 @@ void analyze_pause(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 void analyze_assist(t_analyze* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal) Audio Input, (messages) clear, pause"); break;
+            case 0: sprintf(s, "(signal) Audio Input, (messages) clear, pause, active"); break;
             case 1: sprintf(s, "(signal) Transport Clock Input"); break;
         }
     } else {
@@ -565,6 +629,10 @@ void analyze_dsp64(t_analyze* x, t_object* dsp64, short* count, double samplerat
 }
 
 void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam) {
+    if (!x->active_enabled) {
+        return;
+    }
+
     double* in = ins[0];
     double* clock_in = ins[1];
 
@@ -586,7 +654,7 @@ void analyze_perform64(t_analyze* x, t_object* dsp64, double** ins, long numins,
 }
 
 void analyze_worker_task(t_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    if (x->invalidated || !x->analyzer) {
+    if (x->invalidated || !x->analyzer || !x->active_enabled) {
         critical_enter(x->lock);
         x->pending_analysis = 0;
         critical_exit(x->lock);

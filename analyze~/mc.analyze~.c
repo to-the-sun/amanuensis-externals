@@ -76,6 +76,7 @@ typedef struct _mc_analyze {
     void* outlet_log;
 
     // Attributes
+    long active_enabled;
     long log_enabled;
     t_symbol* group_name;
     long weighted_bar;
@@ -89,6 +90,7 @@ typedef struct _mc_analyze {
     // Visualizer ports per channel
     int* viz_ports;
     long allocated_viz_ports;
+    int viz_initialized;
     int instance_id;
 
     // Shared buffer for local channel accumulation (when no @group is specified)
@@ -131,6 +133,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_free(t_mc_analyze* x);
 void mc_analyze_clear(t_mc_analyze* x);
 void mc_analyze_pause(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
+void mc_analyze_active(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_group_settor(t_mc_analyze* x, void* attr, long argc, t_atom* argv);
 void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
 void mc_analyze_output_metrics(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv);
@@ -198,7 +201,45 @@ static void get_visualizer_directory(char *dir_out, size_t max_len) {
     }
 }
 
+static void stop_visualizers(t_mc_analyze *x) {
+    if (x->viz_ports) {
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+
+        for (long i = 0; i < x->allocated_viz_ports; i++) {
+            if (x->viz_ports[i] > 0) {
+                char json_buf[512];
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
+                visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
+
+                visualize_release_port(x->viz_ports[i]);
+                x->viz_ports[i] = 0;
+            }
+        }
+    }
+
+    if (x->viz_initialized) {
+        visualize_cleanup();
+        x->viz_initialized = 0;
+    }
+}
+
 static void launch_visualizers(t_mc_analyze *x) {
+    if (!x->active_enabled) {
+        return;
+    }
+    if (!x->viz_initialized) {
+        visualize_init();
+        x->viz_initialized = 1;
+    }
+
     char dir[MAX_PATH_CHARS];
     get_visualizer_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
@@ -266,9 +307,48 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
         x->visualize_enabled = atom_getlong(av);
         if (x->visualize_enabled && !prev) {
             launch_visualizers(x);
+        } else if (!x->visualize_enabled && prev) {
+            stop_visualizers(x);
         }
     }
     return MAX_ERR_NONE;
+}
+
+t_max_err mc_analyze_attr_set_active(t_mc_analyze *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long val = atom_getlong(av) ? 1 : 0;
+        long prev = x->active_enabled;
+        x->active_enabled = val;
+        if (x->active_enabled && !prev) {
+            critical_enter(x->lock);
+            x->last_analysis_frame = x->current_sample_count;
+            critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizers(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizers(x);
+        }
+    }
+    return MAX_ERR_NONE;
+}
+
+void mc_analyze_active(t_mc_analyze *x, t_symbol *s, long argc, t_atom *argv) {
+    if (argc && argv) {
+        long val = atom_getlong(argv) ? 1 : 0;
+        long prev = x->active_enabled;
+        x->active_enabled = val;
+        if (x->active_enabled && !prev) {
+            critical_enter(x->lock);
+            x->last_analysis_frame = x->current_sample_count;
+            critical_exit(x->lock);
+            if (x->visualize_enabled) {
+                launch_visualizers(x);
+            }
+        } else if (!x->active_enabled && prev) {
+            stop_visualizers(x);
+        }
+    }
 }
 
 static t_class* mc_analyze_class;
@@ -282,6 +362,12 @@ void ext_main(void* r) {
     analyze_shared_buffer_class = sc;
 
     t_class* c = class_new("mc.analyze~", (method)mc_analyze_new, (method)mc_analyze_free, sizeof(t_mc_analyze), 0L, A_GIMME, 0);
+
+    CLASS_ATTR_LONG(c, "active", 0, t_mc_analyze, active_enabled);
+    CLASS_ATTR_FILTER_CLIP(c, "active", 0, 1);
+    CLASS_ATTR_STYLE_LABEL(c, "active", 0, "checkbox", "Enable Analysis");
+    CLASS_ATTR_ACCESSORS(c, "active", NULL, (method)mc_analyze_attr_set_active);
+    CLASS_ATTR_DEFAULT(c, "active", 0, "1");
 
     CLASS_ATTR_LONG(c, "log", 0, t_mc_analyze, log_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
@@ -311,6 +397,7 @@ void ext_main(void* r) {
     class_addmethod(c, (method)mc_analyze_assist, "assist", A_CANT, 0);
     class_addmethod(c, (method)mc_analyze_clear, "clear", 0);
     class_addmethod(c, (method)mc_analyze_pause, "pause", A_GIMME, 0);
+    class_addmethod(c, (method)mc_analyze_active, "active", A_GIMME, 0);
     class_addmethod(c, (method)mc_analyze_inputchanged, "inputchanged", A_CANT, 0);
 
     class_dspinit(c);
@@ -360,6 +447,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
 
         x->local_shared_buffer = NULL;
 
+        x->active_enabled = 1;
         x->invalidated = 0;
         x->pending_analysis = 0;
         x->clear_sequence = 0;
@@ -368,11 +456,10 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->tolerance = 29.0;
         x->sample_rate = 44100.0;
         x->visualize_enabled = 0;
+        x->viz_initialized = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-
-        visualize_init();
 
         attr_args_process(x, argc, argv);
 
@@ -430,32 +517,13 @@ void mc_analyze_free(t_mc_analyze* x) {
     }
     free(x->clock_buffer);
 
+    stop_visualizers(x);
     if (x->viz_ports) {
-        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        char scripting_name[128];
-        if (s_name && s_name != gensym("")) {
-            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
-            scripting_name[sizeof(scripting_name) - 1] = '\0';
-        } else {
-            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
-        }
-
-        for (long i = 0; i < x->allocated_viz_ports; i++) {
-            if (x->viz_ports[i] > 0) {
-                char json_buf[512];
-                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
-                visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
-
-                visualize_release_port(x->viz_ports[i]);
-            }
-        }
         free(x->viz_ports);
+        x->viz_ports = NULL;
     }
 
     critical_free(x->lock);
-
-    visualize_cleanup();
 }
 
 void mc_analyze_clear(t_mc_analyze* x) {
@@ -581,7 +649,7 @@ void mc_analyze_pause(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
 void mc_analyze_assist(t_mc_analyze* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "(signal/multichannelsignal) Audio Input, (messages) clear, pause"); break;
+            case 0: sprintf(s, "(signal/multichannelsignal) Audio Input, (messages) clear, pause, active"); break;
             case 1: sprintf(s, "(signal) Transport Clock Input"); break;
         }
     } else {
@@ -727,6 +795,10 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
 }
 
 void mc_analyze_perform64(t_mc_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam) {
+    if (!x->active_enabled) {
+        return;
+    }
+
     for (int i = 0; i < sampleframes; i++) {
         for (long ch = 0; ch < x->num_audio_chans; ch++) {
             x->audio_buffers[ch][x->audio_buffer_write_ptr] = (float)ins[ch][i];
@@ -751,7 +823,7 @@ void mc_analyze_perform64(t_mc_analyze* x, t_object* dsp64, double** ins, long n
 }
 
 void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    if (x->invalidated || !x->analyzers) {
+    if (x->invalidated || !x->analyzers || !x->active_enabled) {
         critical_enter(x->lock);
         x->pending_analysis = 0;
         critical_exit(x->lock);

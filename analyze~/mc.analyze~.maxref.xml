@@ -71,9 +71,21 @@
 				Pauses or resumes transience analysis for specified 1-based audio channel numbers. Accepts a list of one or more integers representing channel numbers to pause. Sending `pause 1 2` pauses analysis for channels 1 and 2. Sending `pause 0` resumes analysis for all channels as normal.
 			</description>
 		</method>
+		<method name="active">
+			<digest>Enable or disable object processing</digest>
+			<description>
+				Enables (1) or disables (0) the object. When active is set to 0, the object performs no processing, updates no internal state, and consumes zero CPU resources. Sending `active 1` resumes normal processing.
+			</description>
+		</method>
 	</methodlist>
 	<!--ATTRIBUTES-->
 	<attributelist>
+		<attribute name="active" get="1" set="1" type="long" size="1">
+			<digest>Enable Analysis</digest>
+			<description>
+				Enables (1, default) or disables (0) transience analysis. When set to 0, the object performs no DSP processing or background analysis and consumes no resources.
+			</description>
+		</attribute>
 		<attribute name="group" get="1" set="1" type="symbol" size="1">
 			<digest>Shared Group Name</digest>
 			<description>
