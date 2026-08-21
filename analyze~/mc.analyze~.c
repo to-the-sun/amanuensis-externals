@@ -76,6 +76,7 @@ typedef struct _mc_analyze {
     void* outlet_log;
 
     // Attributes
+    long active;
     long log_enabled;
     t_symbol* group_name;
     long weighted_bar;
@@ -90,6 +91,8 @@ typedef struct _mc_analyze {
     int* viz_ports;
     long allocated_viz_ports;
     int instance_id;
+    int viz_initialized;
+    int initialized;
 
     // Shared buffer for local channel accumulation (when no @group is specified)
     SharedTransientBuffer* local_shared_buffer;
@@ -198,7 +201,44 @@ static void get_visualizer_directory(char *dir_out, size_t max_len) {
     }
 }
 
+static void stop_visualizers(t_mc_analyze *x) {
+    if (x->viz_ports) {
+        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
+        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
+        char scripting_name[128];
+        if (s_name && s_name != gensym("")) {
+            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
+            scripting_name[sizeof(scripting_name) - 1] = '\0';
+        } else {
+            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
+        }
+
+        for (long i = 0; i < x->allocated_viz_ports; i++) {
+            if (x->viz_ports[i] > 0) {
+                char json_buf[512];
+                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
+                visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
+
+                visualize_release_port(x->viz_ports[i]);
+                x->viz_ports[i] = 0;
+            }
+        }
+    }
+    if (x->viz_initialized) {
+        visualize_cleanup();
+        x->viz_initialized = 0;
+    }
+}
+
 static void launch_visualizers(t_mc_analyze *x) {
+    if (!x->active || !x->visualize_enabled) {
+        return;
+    }
+    if (!x->viz_initialized) {
+        visualize_init();
+        x->viz_initialized = 1;
+    }
+
     char dir[MAX_PATH_CHARS];
     get_visualizer_directory(dir, sizeof(dir));
     const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
@@ -264,8 +304,29 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
     if (ac && av) {
         long prev = x->visualize_enabled;
         x->visualize_enabled = atom_getlong(av);
-        if (x->visualize_enabled && !prev) {
-            launch_visualizers(x);
+        if (x->initialized && x->active) {
+            if (x->visualize_enabled && !prev) {
+                launch_visualizers(x);
+            } else if (!x->visualize_enabled && prev) {
+                stop_visualizers(x);
+            }
+        }
+    }
+    return MAX_ERR_NONE;
+}
+
+t_max_err mc_analyze_attr_set_active(t_mc_analyze *x, void *attr, long ac, t_atom *av) {
+    if (ac && av) {
+        long prev = x->active;
+        x->active = atom_getlong(av);
+        if (x->initialized) {
+            if (x->active && !prev) {
+                if (x->visualize_enabled) {
+                    launch_visualizers(x);
+                }
+            } else if (!x->active && prev) {
+                stop_visualizers(x);
+            }
         }
     }
     return MAX_ERR_NONE;
@@ -282,6 +343,12 @@ void ext_main(void* r) {
     analyze_shared_buffer_class = sc;
 
     t_class* c = class_new("mc.analyze~", (method)mc_analyze_new, (method)mc_analyze_free, sizeof(t_mc_analyze), 0L, A_GIMME, 0);
+
+    CLASS_ATTR_LONG(c, "active", 0, t_mc_analyze, active);
+    CLASS_ATTR_FILTER_CLIP(c, "active", 0, 1);
+    CLASS_ATTR_STYLE_LABEL(c, "active", 0, "checkbox", "Active State");
+    CLASS_ATTR_ACCESSORS(c, "active", NULL, (method)mc_analyze_attr_set_active);
+    CLASS_ATTR_DEFAULT(c, "active", 0, "1");
 
     CLASS_ATTR_LONG(c, "log", 0, t_mc_analyze, log_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "log", 0, 1);
@@ -367,12 +434,13 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->weighted_bar = 1;
         x->tolerance = 29.0;
         x->sample_rate = 44100.0;
+        x->active = 1;
         x->visualize_enabled = 0;
+        x->viz_initialized = 0;
+        x->initialized = 0;
         x->instance_id = (int)(rand() % 900000 + 100000);
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-
-        visualize_init();
 
         attr_args_process(x, argc, argv);
 
@@ -381,6 +449,11 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->local_shared_buffer->max_score_seen = -DBL_MAX;
         x->local_shared_buffer->max_peak = 1.0;
         critical_new(&x->local_shared_buffer_lock);
+
+        x->initialized = 1;
+        if (x->active && x->visualize_enabled) {
+            launch_visualizers(x);
+        }
     }
     return x;
 }
@@ -431,34 +504,19 @@ void mc_analyze_free(t_mc_analyze* x) {
     free(x->clock_buffer);
 
     if (x->viz_ports) {
-        const char *grp = (x->group_name && x->group_name != gensym("")) ? x->group_name->s_name : "";
-        t_symbol *s_name = object_attr_getsym(x, gensym("varname"));
-        char scripting_name[128];
-        if (s_name && s_name != gensym("")) {
-            strncpy(scripting_name, s_name->s_name, sizeof(scripting_name));
-            scripting_name[sizeof(scripting_name) - 1] = '\0';
-        } else {
-            snprintf(scripting_name, sizeof(scripting_name), "Instance #%d", x->instance_id);
-        }
-
-        for (long i = 0; i < x->allocated_viz_ports; i++) {
-            if (x->viz_ports[i] > 0) {
-                char json_buf[512];
-                snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"unbind\",\"group\":\"%s\",\"scripting_name\":\"%s\",\"channel\":%ld}", grp, scripting_name, i);
-                visualize_to_port(x, x->viz_ports[i], "mc_analyze", json_buf);
-
-                visualize_release_port(x->viz_ports[i]);
-            }
-        }
+        stop_visualizers(x);
         free(x->viz_ports);
+        x->viz_ports = NULL;
+    } else {
+        stop_visualizers(x);
     }
 
     critical_free(x->lock);
-
-    visualize_cleanup();
 }
 
 void mc_analyze_clear(t_mc_analyze* x) {
+    if (!x->active) return;
+
     if (x->worker) {
         async_worker_drain(x->worker);
     }
@@ -548,6 +606,8 @@ void mc_analyze_group_settor(t_mc_analyze* x, void* attr, long argc, t_atom* arg
 }
 
 void mc_analyze_pause(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
+    if (!x->active) return;
+
     char new_mask[MAX_ANALYZE_CHANNELS + 1];
     memset(new_mask, 0, sizeof(new_mask));
 
@@ -717,7 +777,7 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
         }
     }
 
-    if (x->visualize_enabled) {
+    if (x->active && x->visualize_enabled) {
         launch_visualizers(x);
     }
 
@@ -727,6 +787,8 @@ void mc_analyze_dsp64(t_mc_analyze* x, t_object* dsp64, short* count, double sam
 }
 
 void mc_analyze_perform64(t_mc_analyze* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam) {
+    if (!x->active) return;
+
     for (int i = 0; i < sampleframes; i++) {
         for (long ch = 0; ch < x->num_audio_chans; ch++) {
             x->audio_buffers[ch][x->audio_buffer_write_ptr] = (float)ins[ch][i];
@@ -751,7 +813,7 @@ void mc_analyze_perform64(t_mc_analyze* x, t_object* dsp64, double** ins, long n
 }
 
 void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* argv) {
-    if (x->invalidated || !x->analyzers) {
+    if (!x->active || x->invalidated || !x->analyzers) {
         critical_enter(x->lock);
         x->pending_analysis = 0;
         critical_exit(x->lock);

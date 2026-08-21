@@ -166,6 +166,24 @@ static void remove_port_from_shared_map(int port) {
 #endif
 }
 
+static CRITICAL_SECTION g_viz_ref_lock;
+static volatile LONG g_viz_lock_inited = 0;
+
+static void viz_lock_enter(void) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    if (InterlockedCompareExchange(&g_viz_lock_inited, 1, 0) == 0) {
+        InitializeCriticalSection(&g_viz_ref_lock);
+    }
+    EnterCriticalSection(&g_viz_ref_lock);
+#endif
+}
+
+static void viz_lock_exit(void) {
+#if defined(WIN_VERSION) || defined(_WIN32)
+    LeaveCriticalSection(&g_viz_ref_lock);
+#endif
+}
+
 static int ref_count = 0;
 
 static t_systhread viz_thread = NULL;
@@ -209,9 +227,11 @@ static void viz_socket_init(t_viz_socket *vs, int port) {
 void *viz_worker_thread(void *arg);
 
 int visualize_init() {
+    viz_lock_enter();
     if (ref_count == 0) {
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
+            viz_lock_exit();
             return 1;
         }
         viz_socket_init(&crucible_viz, PORT_CRUCIBLE);
@@ -229,27 +249,31 @@ int visualize_init() {
         systhread_create((method)viz_worker_thread, NULL, 0, 0, 0, &viz_thread);
     }
     ref_count++;
+    viz_lock_exit();
     return 0;
 }
 
 void visualize_cleanup() {
+    viz_lock_enter();
     ref_count--;
     if (ref_count <= 0) {
-        systhread_mutex_lock(queue_mutex);
-        viz_exit_flag = 1;
-        systhread_cond_signal(viz_cond);
-        systhread_mutex_unlock(queue_mutex);
+        if (queue_mutex) {
+            systhread_mutex_lock(queue_mutex);
+            viz_exit_flag = 1;
+            systhread_cond_signal(viz_cond);
+            systhread_mutex_unlock(queue_mutex);
 
-        if (viz_thread) {
-            unsigned int ret;
-            systhread_join(viz_thread, &ret);
-            viz_thread = NULL;
+            if (viz_thread) {
+                unsigned int ret;
+                systhread_join(viz_thread, &ret);
+                viz_thread = NULL;
+            }
+
+            systhread_mutex_free(queue_mutex);
+            systhread_cond_free(viz_cond);
+            queue_mutex = NULL;
+            viz_cond = NULL;
         }
-
-        systhread_mutex_free(queue_mutex);
-        systhread_cond_free(viz_cond);
-        queue_mutex = NULL;
-        viz_cond = NULL;
 
         if (dynamic_sockets_mutex) {
             systhread_mutex_lock(dynamic_sockets_mutex);
@@ -257,13 +281,16 @@ void visualize_cleanup() {
                 if (dynamic_sockets[i].state != PORT_STATE_FREE) {
                     free_dynamic_socket_queue(&dynamic_sockets[i]);
 
-                    systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
-                    if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
-                        closesocket(dynamic_sockets[i].vs.sock);
-                        dynamic_sockets[i].vs.sock = INVALID_SOCKET;
+                    if (dynamic_sockets[i].vs.mutex) {
+                        systhread_mutex_lock(dynamic_sockets[i].vs.mutex);
+                        if (dynamic_sockets[i].vs.sock != INVALID_SOCKET) {
+                            closesocket(dynamic_sockets[i].vs.sock);
+                            dynamic_sockets[i].vs.sock = INVALID_SOCKET;
+                        }
+                        systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
+                        systhread_mutex_free(dynamic_sockets[i].vs.mutex);
+                        dynamic_sockets[i].vs.mutex = NULL;
                     }
-                    systhread_mutex_unlock(dynamic_sockets[i].vs.mutex);
-                    systhread_mutex_free(dynamic_sockets[i].vs.mutex);
                     dynamic_sockets[i].state = PORT_STATE_FREE;
                 }
             }
@@ -272,23 +299,32 @@ void visualize_cleanup() {
             dynamic_sockets_mutex = NULL;
         }
 
-        systhread_mutex_lock(crucible_viz.mutex);
-        if (crucible_viz.sock != INVALID_SOCKET) closesocket(crucible_viz.sock);
-        crucible_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(crucible_viz.mutex);
-        systhread_mutex_free(crucible_viz.mutex);
+        if (crucible_viz.mutex) {
+            systhread_mutex_lock(crucible_viz.mutex);
+            if (crucible_viz.sock != INVALID_SOCKET) closesocket(crucible_viz.sock);
+            crucible_viz.sock = INVALID_SOCKET;
+            systhread_mutex_unlock(crucible_viz.mutex);
+            systhread_mutex_free(crucible_viz.mutex);
+            crucible_viz.mutex = NULL;
+        }
 
-        systhread_mutex_lock(weaver_viz.mutex);
-        if (weaver_viz.sock != INVALID_SOCKET) closesocket(weaver_viz.sock);
-        weaver_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(weaver_viz.mutex);
-        systhread_mutex_free(weaver_viz.mutex);
+        if (weaver_viz.mutex) {
+            systhread_mutex_lock(weaver_viz.mutex);
+            if (weaver_viz.sock != INVALID_SOCKET) closesocket(weaver_viz.sock);
+            weaver_viz.sock = INVALID_SOCKET;
+            systhread_mutex_unlock(weaver_viz.mutex);
+            systhread_mutex_free(weaver_viz.mutex);
+            weaver_viz.mutex = NULL;
+        }
 
-        systhread_mutex_lock(analyze_viz.mutex);
-        if (analyze_viz.sock != INVALID_SOCKET) closesocket(analyze_viz.sock);
-        analyze_viz.sock = INVALID_SOCKET;
-        systhread_mutex_unlock(analyze_viz.mutex);
-        systhread_mutex_free(analyze_viz.mutex);
+        if (analyze_viz.mutex) {
+            systhread_mutex_lock(analyze_viz.mutex);
+            if (analyze_viz.sock != INVALID_SOCKET) closesocket(analyze_viz.sock);
+            analyze_viz.sock = INVALID_SOCKET;
+            systhread_mutex_unlock(analyze_viz.mutex);
+            systhread_mutex_free(analyze_viz.mutex);
+            analyze_viz.mutex = NULL;
+        }
 
 #if defined(WIN_VERSION) || defined(_WIN32)
         if (g_pSharedPortMap) {
@@ -308,6 +344,7 @@ void visualize_cleanup() {
         WSACleanup();
         ref_count = 0;
     }
+    viz_lock_exit();
 }
 
 static int perform_send(t_viz_socket *vs, void *x, const char *type, const char *message);
@@ -557,17 +594,11 @@ static void ensure_connected(t_viz_socket *vs, void *x) {
 
         vs->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (vs->sock == INVALID_SOCKET) {
-            if (x) {
-                object_error((t_object *)x, "visualize: socket creation failed");
-            }
             return;
         }
 
         u_long mode = 1;
         if (ioctlsocket(vs->sock, FIONBIO, &mode) != 0) {
-            if (x) {
-                object_error((t_object *)x, "visualize: failed to set non-blocking mode");
-            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             return;
@@ -639,9 +670,6 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
 
     if (n <= 0 || n >= (int)buf_size) {
         sysmem_freeptr(buf);
-        if (x) {
-            object_error((t_object *)x, "visualize: packet formatting error or truncation for event '%s' (length: %d)", ev, n);
-        }
         return -1;
     }
 
@@ -664,26 +692,17 @@ static int perform_send(t_viz_socket *vs, void *x, const char *type, const char 
                 if (sel_ret > 0 && FD_ISSET(vs->sock, &write_fds)) {
                     continue;
                 } else {
-                    if (x) {
-                        object_error((t_object *)x, "visualize: select timed out or failed while waiting for writability (sent %d/%d bytes) for event '%s'", total_sent, len, ev);
-                    }
                     closesocket(vs->sock);
                     vs->sock = INVALID_SOCKET;
                     break;
                 }
             } else {
-                if (x) {
-                    object_error((t_object *)x, "visualize: send failed with socket error %d for event '%s'", err, ev);
-                }
                 closesocket(vs->sock);
                 vs->sock = INVALID_SOCKET;
                 break;
             }
         }
         if (sent == 0) {
-            if (x) {
-                object_warn((t_object *)x, "visualize: connection closed by remote visualizer server during event '%s'", ev);
-            }
             closesocket(vs->sock);
             vs->sock = INVALID_SOCKET;
             break;
