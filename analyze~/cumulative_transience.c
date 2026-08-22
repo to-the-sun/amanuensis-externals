@@ -64,29 +64,29 @@ static double calculate_energy_area_midpoint(const double* values, int n) {
     memcpy(sorted, values, sizeof(double) * n);
     qsort(sorted, n, sizeof(double), compare_double);
 
-    double total_area = 0.0;
-    for (int i = 0; i < n; i++) total_area += sorted[i];
-
-    if (total_area <= 0.0) {
-        free(sorted);
-        return 0.0;
+    double v_min = sorted[0];
+    double total_net_area = 0.0;
+    for (int i = 0; i < n; i++) {
+        total_net_area += (sorted[i] - v_min);
     }
 
-    double target_area = total_area / 2.0;
-
-    if (target_area <= (double)n * sorted[0]) {
-        double m_star = target_area / (double)n;
+    if (total_net_area <= 0.0) {
+        double m_star = v_min;
         free(sorted);
         return m_star;
     }
 
-    double prefix_sum = 0.0;
+    double target_net_area = total_net_area / 2.0;
+
+    double prefix_sum_y = 0.0;
     for (int k = 0; k < n - 1; k++) {
-        prefix_sum += sorted[k];
-        double next_area_below = prefix_sum + (double)(n - 1 - k) * sorted[k + 1];
-        if (target_area <= next_area_below) {
+        prefix_sum_y += (sorted[k] - v_min);
+        double next_y = sorted[k + 1] - v_min;
+        double next_area_below = prefix_sum_y + (double)(n - 1 - k) * next_y;
+        if (target_net_area <= next_area_below) {
             double remaining_num = (double)(n - 1 - k);
-            double m_star = (target_area - prefix_sum) / remaining_num;
+            double h_star = (target_net_area - prefix_sum_y) / remaining_num;
+            double m_star = v_min + h_star;
             free(sorted);
             return m_star;
         }
