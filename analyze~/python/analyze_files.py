@@ -128,6 +128,7 @@ def generate_video_raylib(audio_path, data):
         max_peak = data['max_peak_value']
         min_score_seen = data['min_score_seen']
         max_score_seen = data['max_score_seen']
+        demarcation_lines = data.get('demarcation_lines')
         ratings = data['ratings']
         std_devs = data['std_devs']
         means = data['means']
@@ -225,6 +226,7 @@ def generate_video_raylib(audio_path, data):
                 'max_score_seen': max_score_seen,
                 'tolerance': data.get('tolerance', 29.0),
                 'highest_peak_ms': data.get('highest_peaks_ms')[frame] if data.get('highest_peaks_ms') is not None else -999.0,
+                'demarcation_line': demarcation_lines[frame] if demarcation_lines is not None else 0.0,
                 'peaks': all_peaks,
                 'accumulated_buffer': accumulated_buffer,
                 'title': f"4-Band Transient Analysis - {os.path.basename(audio_path)}"
@@ -309,6 +311,7 @@ def generate_video_matplotlib(audio_path, data):
         for b_peaks in data['peaks']: all_peaks.extend(b_peaks)
         all_peaks.sort(key=lambda x: x['p_idx'])
         max_peak = data['max_peak_value']; min_score_seen = data['min_score_seen']; max_score_seen = data['max_score_seen']
+        demarcation_lines = data.get('demarcation_lines')
         ratings = data['ratings']; std_devs = data['std_devs']; means = data['means']; contrasts = data['contrasts']; stability_scores = data['stability_scores']
         fig, (ax_transient, ax_snapshot, ax_buf) = plt.subplots(3, 1, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 0.4, 1]})
         colors = ['#1b4f72', '#3498db', '#2ecc71', '#a9dfbf']; alphas = [1.0, 0.8, 0.6, 0.4]; labels = ['Sub-Bass', 'Bass/Low-Mid', 'High-Mid', 'Treble']
@@ -464,7 +467,7 @@ def generate_video_matplotlib(audio_path, data):
             # Exclude the last 99ms to avoid self-referential bias from the peak at zero.
             current_max = np.max(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
             current_min = np.min(accumulated_buffer[:-99]) if len(accumulated_buffer) > 99 else 0;
-            current_midpoint = (current_min + current_max) / 2.0;
+            current_midpoint = demarcation_lines[frame] if demarcation_lines is not None else (current_min + current_max) / 2.0;
             ax_buf.set_ylim(0, max(0.1, current_max * 1.1)); mean_line.set_ydata([current_midpoint, current_midpoint]); metrics_text.set_text(f"Std Dev: {std_devs[frame]:.3f}\nContrast: {contrasts[frame]:.3f}\nStability: {stability_scores[frame]:.0f}"); rating_text.set_text(f"Rating: {ratings[frame]:.2f}"); score_display_text.set_text(f"Score: {current_snapshot_avg:+.2f}"); score_display_text.set_color(get_score_color(current_snapshot_avg, min_score_seen, max_score_seen))
             # In generate_video, data['metrics'] isn't available frame-by-frame easily unless we pass it.
             # However, we have access to means, std_devs, etc. We need highest_peak_ms.

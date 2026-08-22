@@ -954,7 +954,9 @@ void mc_analyze_worker_task(t_mc_analyze* x, t_symbol* s, long argc, t_atom* arg
                                      hp_ms);
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
-                        n = snprintf(ptr, remaining, "\"global_smoothing_avg\":%.4f,", x->result_buffer->metrics.global_smoothing_avg);
+                        n = snprintf(ptr, remaining, "\"demarcation_line\":%.4f,\"global_smoothing_avg\":%.4f,",
+                                     x->result_buffer->metrics.demarcation_line,
+                                     x->result_buffer->metrics.global_smoothing_avg);
                         if (n > 0 && n < remaining) { ptr += n; remaining -= n; }
 
                         n = snprintf(ptr, remaining, "\"smoothing_avgs\":[%.4f,%.4f,%.4f,%.4f],",

@@ -436,6 +436,7 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     double mean = (m_len > 0) ? (sum / (double)m_len) : 0.0;
     double var = (m_len > 0) ? (sum_sq / (double)m_len - mean * mean) : 0.0; if (var < 0) var = 0;
     metrics_out->std_dev = sqrt(var); metrics_out->mean = mean; metrics_out->contrast = (mean > 0) ? (max_v / mean) : 0;
+    metrics_out->demarcation_line = (m_len > 0) ? calculate_energy_area_midpoint(acc_buf, m_len) : 0.0;
 
     if (self->shared_buffer) {
         metrics_out->rating = (self->shared_buffer->score_count > 0) ? (self->shared_buffer->total_score_sum / self->shared_buffer->score_count) : 0;
@@ -816,6 +817,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     result_out->contrasts = (double*)malloc(sizeof(double) * num_f);
     result_out->stability_scores = (double*)malloc(sizeof(double) * num_f);
     result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
+    result_out->demarcation_lines = (double*)malloc(sizeof(double) * num_f);
     result_out->rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
     result_out->rolling_global_smoothing_avg = (float*)calloc(num_f, sizeof(float));
     for (int b = 0; b < MAX_BANDS; b++) {
@@ -869,7 +871,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->demarcation_lines[f] = res->metrics.demarcation_line; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
@@ -916,4 +918,5 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     free(result->contrasts);
     free(result->stability_scores);
     free(result->highest_peaks_ms);
+    free(result->demarcation_lines);
 }

@@ -47,6 +47,7 @@ typedef struct {
     int highest_peak_valid;
     double min_score_seen;
     double max_score_seen;
+    double demarcation_line;
     double band_midpoints[MAX_BANDS];
     double band_lookbacks[MAX_BANDS];
     double band_avg_deltas[MAX_BANDS];
@@ -212,6 +213,7 @@ typedef struct {
 
     double min_score_seen;
     double max_score_seen;
+    double* demarcation_lines;
     float* rolling_global_flux_avg;
     float* rolling_global_smoothing_avg;
     double tolerance;
