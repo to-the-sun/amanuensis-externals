@@ -2,7 +2,6 @@ import os
 import shutil
 import time
 import re
-import json
 import send2trash
 
 # Default paths
@@ -72,22 +71,6 @@ def scan_and_sync():
         if sync_file(file_path):
             sync_queue.remove(file_path)
 
-def is_palette_in_transcript(data, target_value):
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if k == "palette":
-                if v == target_value:
-                    return True
-                if isinstance(v, (list, tuple, set)) and target_value in v:
-                    return True
-            if is_palette_in_transcript(v, target_value):
-                return True
-    elif isinstance(data, (list, tuple)):
-        for item in data:
-            if is_palette_in_transcript(item, target_value):
-                return True
-    return False
-
 def local_cleanup():
     # Regex patterns for matching filenames
     patterns = [
@@ -99,25 +82,11 @@ def local_cleanup():
     for root, dirs, files in os.walk(PROJECTS_FOLDER):
         if os.path.basename(root) == "Backup":
             parent_folder = os.path.dirname(root)
-            transcript_path = os.path.join(parent_folder, "transcript.json")
-            transcript_data = None
-            if os.path.exists(transcript_path):
-                try:
-                    with open(transcript_path, "r", encoding="utf-8") as f:
-                        transcript_data = json.load(f)
-                except Exception as e:
-                    print(f"Failed to read {transcript_path}: {e}")
-
             for file in files:
                 if any(p.match(file) for p in patterns):
                     parent_file_path = os.path.join(parent_folder, file)
                     parent_file_path = os.path.normpath(parent_file_path)  # Normalize path separators
                     if os.path.exists(parent_file_path):
-                        if file.startswith("palette_"):
-                            stripped_name = file[len("palette_"):]
-                            if transcript_data is not None and is_palette_in_transcript(transcript_data, stripped_name):
-                                print(f"Skipping recycling for {parent_file_path} (found in transcript.json)")
-                                continue
                         try:
                             send2trash.send2trash(parent_file_path)
                             print(f"Moved to recycle bin: {parent_file_path}")
