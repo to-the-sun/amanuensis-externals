@@ -169,8 +169,6 @@ def draw_renderer(W, H, current_time, frame_data):
     # Extract dynamic/shared boundaries
     min_score = frame_data.get('min_score_seen', -5.0)
     max_score = frame_data.get('max_score_seen', 5.0)
-    max_peak = frame_data.get('max_peak_value', 1.0)
-    if max_peak <= 0: max_peak = 1.0
 
     # -------------------------------------------------------------
     # 1. TOP PANEL: 4-Band Transient Envelopes
@@ -182,6 +180,31 @@ def draw_renderer(W, H, current_time, frame_data):
     x_min_t = current_time - 20.0
     x_max_t = current_time + 5.0
     x_span_t = 25.0
+
+    # Waveforms/Envelopes data
+    times_arr = frame_data.get('times', [])
+    onset_envs = frame_data.get('onset_envs', [])
+    smooth_envs = frame_data.get('smooth_envs', [])
+    prom_envs = frame_data.get('prominences', [])
+
+    # Calculate dynamic max peak visible in the current 25s window
+    local_max = 0.0
+    if len(times_arr) > 1 and onset_envs:
+        idx_start = bisect.bisect_left(times_arr, x_min_t)
+        idx_end = bisect.bisect_right(times_arr, x_max_t)
+        if idx_end > idx_start:
+            for b in range(min(4, len(onset_envs))):
+                b_slice = onset_envs[b][idx_start:idx_end]
+                if len(b_slice) > 0:
+                    m_val = float(np.max(b_slice)) if hasattr(b_slice, 'tolist') else max(b_slice)
+                    if m_val > local_max:
+                        local_max = m_val
+
+    if local_max > 0:
+        max_peak = local_max * 1.1
+    else:
+        max_peak = frame_data.get('max_peak_value', 1.0)
+        if max_peak <= 0: max_peak = 1.0
 
     # Draw top border/grid
     pr.draw_rectangle_lines(margin_left, margin_top, graph_w, graph_h_top, COLOR_GRID)
@@ -214,11 +237,6 @@ def draw_renderer(W, H, current_time, frame_data):
     draw_text_safe("Onset Strength", 10, margin_top - 18, 11, COLOR_TEXT_MUTED)
 
     # Waveforms/Envelopes rendering
-    times_arr = frame_data.get('times', [])
-    onset_envs = frame_data.get('onset_envs', [])
-    smooth_envs = frame_data.get('smooth_envs', [])
-    prom_envs = frame_data.get('prominences', [])
-
     if len(times_arr) > 1 and onset_envs:
         for b in range(4):
             env_pts = []
