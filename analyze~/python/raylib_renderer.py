@@ -161,7 +161,7 @@ def draw_renderer(W, H, current_time, frame_data):
     Y_bot = H_top + H_mid
 
     # Margins and dimensions
-    margin_left = int(W * 0.06)
+    margin_left = int(W * 0.08)
     margin_right = int(W * 0.15)
     margin_top = int(H_eff * 0.04)
     margin_bottom = int(H_eff * 0.04)
@@ -200,6 +200,18 @@ def draw_renderer(W, H, current_time, frame_data):
             lbl = f"{prefix}{m}:{s:02d}"
             draw_text_safe(lbl, gx - 15, margin_top + graph_h_top + 5, 12, COLOR_TEXT_MUTED)
         start_tick += 5.0
+
+    # Draw Y-axis ticks, horizontal grid lines, and tick labels for Top Panel
+    for ratio in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        gy = margin_top + graph_h_top - int(graph_h_top * ratio)
+        if 0.0 < ratio < 1.0:
+            pr.draw_line(margin_left, gy, margin_left + graph_w, gy, COLOR_GRID)
+        pr.draw_line(margin_left - 5, gy, margin_left, gy, COLOR_TEXT_MUTED)
+        val = max_peak * ratio
+        lbl = f"{val:.2f}"
+        draw_text_safe(lbl, margin_left - 42, gy - 6, 11, COLOR_TEXT_MUTED)
+
+    draw_text_safe("Onset Strength", 10, margin_top - 18, 11, COLOR_TEXT_MUTED)
 
     # Waveforms/Envelopes rendering
     times_arr = frame_data.get('times', [])
@@ -457,7 +469,23 @@ def draw_renderer(W, H, current_time, frame_data):
         cur_max = max(visible_sub) if len(visible_sub) > 0 else 1.0
         cur_min = min(visible_sub) if len(visible_sub) > 0 else 0.0
         if cur_max <= 0: cur_max = 1.0
+    else:
+        cur_max = 1.0
+        cur_min = 0.0
 
+    # Draw Y-axis ticks, horizontal grid lines, and tick labels for Bottom Panel
+    for ratio in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        gy = Y_bot + graph_h_bot - int(graph_h_bot * ratio)
+        if 0.0 < ratio < 1.0:
+            pr.draw_line(margin_left, gy, margin_left + graph_w, gy, COLOR_GRID)
+        pr.draw_line(margin_left - 5, gy, margin_left, gy, COLOR_TEXT_MUTED)
+        val = cur_max * ratio
+        lbl = f"{val:.2f}"
+        draw_text_safe(lbl, margin_left - 42, gy - 6, 11, COLOR_TEXT_MUTED)
+
+    draw_text_safe("Accumulated Energy", 5, Y_bot - 18, 10, COLOR_TEXT_MUTED)
+
+    if accum_buffer is not None and len(accum_buffer) > 0:
         wave_pts = []
         step = max(1, len(accum_buffer) // 1000)
         for i in range(0, len(accum_buffer), step):
@@ -528,7 +556,7 @@ def draw_renderer(W, H, current_time, frame_data):
         group_lbl = f"  -  Group: @{group_val}"
     else:
         group_lbl = "  -  Group: [No Group]"
-    draw_text_safe(f"Accumulated 5s Historical Buffer{group_lbl}", margin_left, Y_bot - 15, 12, COLOR_PEAK_MARKER)
+    draw_text_safe(f"Accumulated 5s Historical Buffer{group_lbl}", margin_left + 35, Y_bot - 18, 12, COLOR_PEAK_MARKER)
 
     # -------------------------------------------------------------
     # 4. CONSOLE PANEL: TCP Packet Log (when @log mode is enabled)
