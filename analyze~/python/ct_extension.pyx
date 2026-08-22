@@ -47,6 +47,7 @@ cdef extern from "cumulative_transience.h":
         bint highest_peak_valid
         double min_score_seen
         double max_score_seen
+        double demarcation_line
         double band_midpoints[4]
         double band_lookbacks[4]
         double band_avg_deltas[4]
@@ -132,6 +133,7 @@ cdef extern from "cumulative_transience.h":
         double* contrasts
         double* stability_scores
         double* highest_peaks_ms
+        double* demarcation_lines
         double min_score_seen
         double max_score_seen
         float* rolling_global_flux_avg
@@ -259,6 +261,7 @@ cdef class TransientAnalyzer:
                 'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
                 'min_score_seen': m.min_score_seen,
                 'max_score_seen': m.max_score_seen,
+                'demarcation_line': m.demarcation_line,
                 'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]],
                 'band_lookbacks': [m.band_lookbacks[0], m.band_lookbacks[1], m.band_lookbacks[2], m.band_lookbacks[3]],
                 'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
@@ -291,6 +294,7 @@ cdef class TransientAnalyzer:
             'highest_peak_ms': m.highest_peak_ms if m.highest_peak_valid else None,
             'min_score_seen': m.min_score_seen,
             'max_score_seen': m.max_score_seen,
+            'demarcation_line': m.demarcation_line,
             'band_midpoints': [m.band_midpoints[0], m.band_midpoints[1], m.band_midpoints[2], m.band_midpoints[3]],
             'band_lookbacks': [m.band_lookbacks[0], m.band_lookbacks[1], m.band_lookbacks[2], m.band_lookbacks[3]],
             'band_avg_deltas': [m.band_avg_deltas[0], m.band_avg_deltas[1], m.band_avg_deltas[2], m.band_avg_deltas[3]],
@@ -437,6 +441,9 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
     cdef cnp.ndarray[double, ndim=1] highest_peaks_ms = np.zeros(num_frames, dtype=np.float64)
     memcpy(highest_peaks_ms.data, res.highest_peaks_ms, num_frames * sizeof(double))
 
+    cdef cnp.ndarray[double, ndim=1] demarcation_lines = np.zeros(num_frames, dtype=np.float64)
+    memcpy(demarcation_lines.data, res.demarcation_lines, num_frames * sizeof(double))
+
     cdef cnp.ndarray[float, ndim=1] rolling_global_flux_avgs = np.zeros(num_frames, dtype=np.float32)
     memcpy(rolling_global_flux_avgs.data, res.rolling_global_flux_avg, num_frames * sizeof(float))
 
@@ -477,5 +484,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
         "means": means,
         "contrasts": contrasts,
         "stability_scores": stability_scores,
-        "highest_peaks_ms": highest_peaks_ms
+        "highest_peaks_ms": highest_peaks_ms,
+        "demarcation_lines": demarcation_lines
     }

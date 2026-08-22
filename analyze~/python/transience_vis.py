@@ -52,6 +52,7 @@ state = {
     'max_score_seen': 5.0,
     'tolerance': 29.0,
     'highest_peak_ms': -999.0,
+    'demarcation_line': 0.0,
     'peaks': [],
     'all_time_scores': [],
     'accumulated_buffer': [0.0]*5001,
@@ -158,6 +159,7 @@ def process_packet(line):
             state['max_score_seen'] = pkt.get('max_score_seen', 5.0)
             state['tolerance'] = pkt.get('tolerance', 29.0)
             state['highest_peak_ms'] = pkt.get('highest_peak_ms', -999.0)
+            state['demarcation_line'] = pkt.get('demarcation_line', 0.0)
             state['accumulated_buffer'] = pkt.get('accumulated_buffer', [0.0]*5001)
 
             new_peaks = pkt.get('peaks', [])
@@ -305,6 +307,7 @@ def run_gui():
                 'max_score_seen': state['max_score_seen'],
                 'tolerance': state['tolerance'],
                 'highest_peak_ms': state['highest_peak_ms'],
+                'demarcation_line': state['demarcation_line'],
                 'peaks': list(state['peaks']),
                 'all_time_scores': list(state['all_time_scores']),
                 'accumulated_buffer': list(state['accumulated_buffer']),

@@ -517,7 +517,7 @@ def draw_renderer(W, H, current_time, frame_data):
         for i in range(len(wave_pts) - 1):
             pr.draw_line_ex(wave_pts[i], wave_pts[i+1], 2.0, COLOR_HIST_WAVE)
 
-        midpoint = (cur_min + cur_max) / 2.0
+        midpoint = frame_data.get('demarcation_line', (cur_min + cur_max) / 2.0)
         wy_mid = Y_bot + graph_h_bot - int(graph_h_bot * midpoint / cur_max)
         if Y_bot <= wy_mid <= Y_bot + graph_h_bot:
             draw_dashed_line(margin_left, wy_mid, margin_left + graph_w, wy_mid, COLOR_MIDPOINT, 1.2, 5, 5)
