@@ -49,6 +49,54 @@ static void fft(double* real, double* imag, int n) {
 typedef struct { int p_idx; int band_idx; } PeakRef;
 static int compare_peaks(const void* a, const void* b) { return ((PeakRef*)a)->p_idx - ((PeakRef*)b)->p_idx; }
 
+static int compare_double(const void* a, const void* b) {
+    double da = *(const double*)a;
+    double db = *(const double*)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+static double calculate_energy_area_midpoint(const double* values, int n) {
+    if (n <= 0) return 0.0;
+    double* sorted = (double*)malloc(sizeof(double) * n);
+    if (!sorted) return 0.0;
+    memcpy(sorted, values, sizeof(double) * n);
+    qsort(sorted, n, sizeof(double), compare_double);
+
+    double total_area = 0.0;
+    for (int i = 0; i < n; i++) total_area += sorted[i];
+
+    if (total_area <= 0.0) {
+        free(sorted);
+        return 0.0;
+    }
+
+    double target_area = total_area / 2.0;
+
+    if (target_area <= (double)n * sorted[0]) {
+        double m_star = target_area / (double)n;
+        free(sorted);
+        return m_star;
+    }
+
+    double prefix_sum = 0.0;
+    for (int k = 0; k < n - 1; k++) {
+        prefix_sum += sorted[k];
+        double next_area_below = prefix_sum + (double)(n - 1 - k) * sorted[k + 1];
+        if (target_area <= next_area_below) {
+            double remaining_num = (double)(n - 1 - k);
+            double m_star = (target_area - prefix_sum) / remaining_num;
+            free(sorted);
+            return m_star;
+        }
+    }
+
+    double m_star = sorted[n - 1];
+    free(sorted);
+    return m_star;
+}
+
 static float calculate_half_max(float* values, int n) {
     if (n <= 0) return 0;
     float max_v = values[0];
@@ -277,7 +325,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
             if (v < min_v) min_v = v;
         }
     }
-    double midpoint = (m_len > 0) ? ((min_v + max_v) / 2.0) : 0.0;
+    double midpoint = (m_len > 0) ? calculate_energy_area_midpoint(acc_buf, m_len) : 0.0;
     int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
     if (tol_idx < 0) tol_idx = 0;
 
