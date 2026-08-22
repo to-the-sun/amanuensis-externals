@@ -49,54 +49,6 @@ static void fft(double* real, double* imag, int n) {
 typedef struct { int p_idx; int band_idx; } PeakRef;
 static int compare_peaks(const void* a, const void* b) { return ((PeakRef*)a)->p_idx - ((PeakRef*)b)->p_idx; }
 
-static int compare_double(const void* a, const void* b) {
-    double da = *(const double*)a;
-    double db = *(const double*)b;
-    if (da < db) return -1;
-    if (da > db) return 1;
-    return 0;
-}
-
-static double calculate_energy_area_midpoint(const double* values, int n) {
-    if (n <= 0) return 0.0;
-    double* sorted = (double*)malloc(sizeof(double) * n);
-    if (!sorted) return 0.0;
-    memcpy(sorted, values, sizeof(double) * n);
-    qsort(sorted, n, sizeof(double), compare_double);
-
-    double v_min = sorted[0];
-    double total_net_area = 0.0;
-    for (int i = 0; i < n; i++) {
-        total_net_area += (sorted[i] - v_min);
-    }
-
-    if (total_net_area <= 0.0) {
-        double m_star = v_min;
-        free(sorted);
-        return m_star;
-    }
-
-    double target_net_area = total_net_area / 2.0;
-
-    double prefix_sum_y = 0.0;
-    for (int k = 0; k < n - 1; k++) {
-        prefix_sum_y += (sorted[k] - v_min);
-        double next_y = sorted[k + 1] - v_min;
-        double next_area_below = prefix_sum_y + (double)(n - 1 - k) * next_y;
-        if (target_net_area <= next_area_below) {
-            double remaining_num = (double)(n - 1 - k);
-            double h_star = (target_net_area - prefix_sum_y) / remaining_num;
-            double m_star = v_min + h_star;
-            free(sorted);
-            return m_star;
-        }
-    }
-
-    double m_star = sorted[n - 1];
-    free(sorted);
-    return m_star;
-}
-
 static float calculate_half_max(float* values, int n) {
     if (n <= 0) return 0;
     float max_v = values[0];
@@ -325,7 +277,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
             if (v < min_v) min_v = v;
         }
     }
-    double midpoint = (m_len > 0) ? calculate_energy_area_midpoint(acc_buf, m_len) : 0.0;
+    double midpoint = (m_len > 0) ? (sum / (double)m_len) : 0.0;
     int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
     if (tol_idx < 0) tol_idx = 0;
 
@@ -436,7 +388,7 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
     double mean = (m_len > 0) ? (sum / (double)m_len) : 0.0;
     double var = (m_len > 0) ? (sum_sq / (double)m_len - mean * mean) : 0.0; if (var < 0) var = 0;
     metrics_out->std_dev = sqrt(var); metrics_out->mean = mean; metrics_out->contrast = (mean > 0) ? (max_v / mean) : 0;
-    metrics_out->demarcation_line = (m_len > 0) ? calculate_energy_area_midpoint(acc_buf, m_len) : 0.0;
+    metrics_out->demarcation_line = mean;
 
     if (self->shared_buffer) {
         metrics_out->rating = (self->shared_buffer->score_count > 0) ? (self->shared_buffer->total_score_sum / self->shared_buffer->score_count) : 0;
