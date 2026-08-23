@@ -318,15 +318,22 @@ t_max_err mc_analyze_attr_set_visualize(t_mc_analyze *x, void *attr, long ac, t_
 t_max_err mc_analyze_attr_set_active(t_mc_analyze *x, void *attr, long ac, t_atom *av) {
     if (ac && av) {
         long prev = x->active;
-        x->active = atom_getlong(av);
+        long new_val = atom_getlong(av);
         if (x->initialized) {
-            if (x->active && !prev) {
+            if (!new_val && prev) {
+                mc_analyze_clear(x);
+                x->active = new_val;
+                stop_visualizers(x);
+            } else if (new_val && !prev) {
+                x->active = new_val;
                 if (x->visualize_enabled) {
                     launch_visualizers(x);
                 }
-            } else if (!x->active && prev) {
-                stop_visualizers(x);
+            } else {
+                x->active = new_val;
             }
+        } else {
+            x->active = new_val;
         }
     }
     return MAX_ERR_NONE;
