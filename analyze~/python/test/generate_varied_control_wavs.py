@@ -10,29 +10,27 @@ def generate_varied_control_test_set():
     # Base rhythmic beat times: 60 notes across 30 seconds (0.5s interval / 120 BPM steady beat)
     base_beats = [i * 0.5 for i in range(60)]
 
-    # Human timing perception limit (JND for micro-timing shifts): ~20-25 ms at 120 BPM (500ms IBI).
-    # Introduce pseudo-random human timing variance per beat up to +/- 25 ms (+/- 0.025s).
-    # Each beat gets a unique offset, ranging from nearly 0ms (tight) up to ~25ms (bordering on offbeat).
+    # Increase timing variance range so that maximum variance pushes past human noticeability JND threshold (~20-25ms)
+    # up to +/- 65ms (+/- 0.065s). Notes with larger shifts will be distinctly and noticeably offbeat.
     np.random.seed(12345)  # Reproducible random seed
-    # Random offsets between -0.025 and +0.025 seconds for each beat
-    timing_offsets = np.random.uniform(-0.025, 0.025, len(base_beats))
+    timing_offsets = np.random.uniform(-0.065, 0.065, len(base_beats))
 
     # Ensure beat 0 starts at >= 0.0s
     beats = [max(0.0, base_beats[i] + timing_offsets[i]) for i in range(len(base_beats))]
 
     def generate_sustained_bass():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.45
+        note_dur = 0.65
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
         freq = 75.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.2 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Ultra-smooth 250ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 500ms S-curve attack (half-second swell, zero transience), 150ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.25)
-        rel_samples = int(sr * 0.10)
+        att_samples = int(sr * 0.50)
+        rel_samples = int(sr * 0.15)
 
         att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
         env[:att_samples] = att_curve
@@ -53,17 +51,17 @@ def generate_varied_control_test_set():
 
     def generate_sustained_treble():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.45
+        note_dur = 0.65
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
         freq = 1760.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.15 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Ultra-smooth 250ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 500ms S-curve attack (half-second swell, zero transience), 150ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.25)
-        rel_samples = int(sr * 0.10)
+        att_samples = int(sr * 0.50)
+        rel_samples = int(sr * 0.15)
 
         att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
         env[:att_samples] = att_curve
