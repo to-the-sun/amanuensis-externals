@@ -444,12 +444,15 @@ void analyze_free(t_analyze* x) {
 void analyze_clear(t_analyze* x) {
     if (!x->active) return;
 
+    critical_enter(x->lock);
+    x->clear_sequence++;
+    critical_exit(x->lock);
+
     if (x->worker) {
         async_worker_drain(x->worker);
     }
 
     critical_enter(x->lock);
-    x->clear_sequence++;
     if (x->analyzer) {
         analyzer_clear(x->analyzer);
     }

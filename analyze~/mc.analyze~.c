@@ -517,12 +517,15 @@ void mc_analyze_free(t_mc_analyze* x) {
 void mc_analyze_clear(t_mc_analyze* x) {
     if (!x->active) return;
 
+    critical_enter(x->lock);
+    x->clear_sequence++;
+    critical_exit(x->lock);
+
     if (x->worker) {
         async_worker_drain(x->worker);
     }
 
     critical_enter(x->lock);
-    x->clear_sequence++;
     if (x->analyzers) {
         for (long i = 0; i < x->analyzers_count; i++) {
             if (x->analyzers[i]) {
