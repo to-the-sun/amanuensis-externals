@@ -14,7 +14,7 @@ def generate_control_test_set():
 
     def generate_sustained_bass():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.45
+        note_dur = 0.65
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
@@ -22,10 +22,10 @@ def generate_control_test_set():
         freq = 75.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.2 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 500ms S-curve attack (half-second swell, zero transience), 150ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.15)
-        rel_samples = int(sr * 0.10)
+        att_samples = int(sr * 0.50)
+        rel_samples = int(sr * 0.15)
 
         # Raised cosine (S-curve) attack for zero derivative at onset
         att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
@@ -41,13 +41,14 @@ def generate_control_test_set():
             start_idx = int(onset * sr)
             end_idx = min(start_idx + note_len, total_samples)
             actual_len = end_idx - start_idx
-            audio[start_idx:end_idx] += note_waveform[:actual_len]
+            if actual_len > 0:
+                audio[start_idx:end_idx] += note_waveform[:actual_len]
 
         return audio
 
     def generate_sustained_treble():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.45
+        note_dur = 0.65
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
@@ -55,10 +56,10 @@ def generate_control_test_set():
         freq = 1760.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.15 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 500ms S-curve attack (half-second swell, zero transience), 150ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.15)
-        rel_samples = int(sr * 0.10)
+        att_samples = int(sr * 0.50)
+        rel_samples = int(sr * 0.15)
 
         # Raised cosine (S-curve) attack for zero derivative at onset
         att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
@@ -74,7 +75,8 @@ def generate_control_test_set():
             start_idx = int(onset * sr)
             end_idx = min(start_idx + note_len, total_samples)
             actual_len = end_idx - start_idx
-            audio[start_idx:end_idx] += note_waveform[:actual_len]
+            if actual_len > 0:
+                audio[start_idx:end_idx] += note_waveform[:actual_len]
 
         return audio
 
@@ -97,7 +99,8 @@ def generate_control_test_set():
             start_idx = int(onset * sr)
             end_idx = min(start_idx + note_len, total_samples)
             actual_len = end_idx - start_idx
-            audio[start_idx:end_idx] += note_waveform[:actual_len]
+            if actual_len > 0:
+                audio[start_idx:end_idx] += note_waveform[:actual_len]
 
         return audio
 
@@ -121,7 +124,8 @@ def generate_control_test_set():
             start_idx = int(onset * sr)
             end_idx = min(start_idx + note_len, total_samples)
             actual_len = end_idx - start_idx
-            audio[start_idx:end_idx] += note_waveform[:actual_len]
+            if actual_len > 0:
+                audio[start_idx:end_idx] += note_waveform[:actual_len]
 
         return audio
 
