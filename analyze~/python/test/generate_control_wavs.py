@@ -22,9 +22,9 @@ def generate_control_test_set():
         freq = 75.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.2 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 250ms S-curve attack (minimal transience), sustain, 100ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.15)
+        att_samples = int(sr * 0.25)
         rel_samples = int(sr * 0.10)
 
         # Raised cosine (S-curve) attack for zero derivative at onset
@@ -55,9 +55,9 @@ def generate_control_test_set():
         freq = 1760.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.15 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
+        # Envelope: Ultra-smooth 250ms S-curve attack (minimal transience), sustain, 100ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.15)
+        att_samples = int(sr * 0.25)
         rel_samples = int(sr * 0.10)
 
         # Raised cosine (S-curve) attack for zero derivative at onset
