@@ -1,121 +1,127 @@
-# Technical Report: Speculated Causes and Proposed Solutions for Patch Freezes During `clear` Message Execution in `mc.analyze~`
+# Technical Report: Speculated Causes and Proposed Solutions for Patch Freezes During `clear` Execution in `mc.analyze~`
 
 ## Executive Summary
 
-When an `mc.analyze~` object receives a `clear` message, it is tasked with resetting internal STFT analysis engines, zeroing multichannel circular audio and clock buffers, resetting sample counters, clearing worker task queues, and sending state-reset JSON telemetry to active visualizer processes.
+This report investigates why sending a `clear` message during active audio playback causes Max patch freezes specifically in the multichannel `mc.analyze~` object, whereas the single-channel `analyze~` object does not exhibit this behavior.
 
-Under certain runtime conditions (such as high audio channel counts, active background worker tasks, or socket transmission latency), triggering a `clear` message can cause Max to freeze or hang. This report analyzes four primary technical hypotheses for these freezes and outlines proposed architectural solutions, complete with their potential benefits and downsides.
+**Key Operating Constraint**: This analysis assumes `@visualize 0` (the default state). With visualization disabled, zero CPU, memory, socket, or process overhead is spent on real-time visualization or TCP telemetry. Visualizers are explicitly ruled out as a contributing factor.
+
+The issue stems entirely from structural differences between single-channel processing in `analyze~` and multichannel signal processing in `mc.analyze~`.
 
 ---
 
-## 1. Worker Thread Drain Deadlock (`async_worker_drain`)
+## Multichannel vs Single-Channel Architectural Differences
+
+| Feature / Operation | Single-Channel `analyze~` | Multichannel `mc.analyze~` |
+| :--- | :--- | :--- |
+| **Worker Task Workload** | Processes 1 audio channel per hop | Loops across N audio channels sequentially per hop |
+| **STFT & History Processing** | 1 STFT calculation & 1 history buffer per hop | N STFT calculations & N history buffers per hop |
+| **Main-Thread Lock Hold Time** | Clears 1 analyzer & 1 buffer under `x->lock` | Clears N analyzers & N buffers under `x->lock` |
+| **Memory Buffer Footprint** | ~2.64 MB audio buffer (15s @ 44.1kHz) | N x 2.64 MB audio buffers (~21.1 MB for 8 channels) |
+| **Drain Wait Duration** | Microsecond wait in `async_worker_drain` | Millisecond-to-second wait in `async_worker_drain` |
+
+---
+
+## 1. Worker Thread Drain Delay in `async_worker_drain`
 
 ### Speculated Mechanism
-When `mc_analyze_clear()` receives a `clear` message on Max's main thread, it invokes:
+When `mc_analyze_clear()` receives a `clear` message on Max's main thread, it calls:
 ```c
 if (x->worker) {
     async_worker_drain(x->worker);
 }
 ```
-`async_worker_drain()` clears pending tasks from the worker queue and blocks the calling main thread via `systhread_cond_wait()` until the active background worker thread finishes executing its current task (`worker->is_busy == 0`).
+`async_worker_drain()` clears pending tasks from the worker queue and blocks the calling main thread via `systhread_cond_wait()` until the background worker thread finishes executing its current task (`worker->is_busy == 0`).
 
-If the worker thread is currently running `mc_analyze_worker_task()` and attempts to acquire a lock held by the main thread (or waits on a blocking socket call), a classic **priority inversion or circular deadlock** occurs:
-- The main thread is blocked waiting for `worker->is_busy` to become `0`.
-- The worker thread is blocked waiting for the main thread to release a lock or unblock a shared dependency.
-- Max's user interface hangs permanently.
+- **Why this affects `mc.analyze~` and NOT `analyze~`**:
+  In `analyze~`, a single worker task processes only 1 channel of audio per hop, completing almost instantly.
+  In `mc.analyze~`, a single worker task runs a `for (long ch = 0; ch < n_chans; ch++)` loop. For each channel, it performs full STFT chunk analysis, FFT calculations, peak scoring, and snapshot history updates. For 8, 16, or 32 channels, a single worker task takes **N times longer** to finish.
+
+  When `clear` arrives, Max's main thread blocks in `async_worker_drain()` waiting for the heavy N-channel worker loop to finish. Under high DSP loads or large channel counts, this blocking wait causes Max's UI to freeze or hang.
 
 ### Proposed Solutions
 1. **Asynchronous Non-Blocking Drain (Sequence Interlock)**:
-   Instead of blocking the main thread in `async_worker_drain()`, increment a atomic `clear_sequence` counter on the object and clear the task queue without waiting for the running task to finish. When the background task resumes execution, it compares its local snapshot of `clear_sequence` against `x->clear_sequence`; if they do not match, the worker task aborts immediately.
-2. **Timed Wait with Fallback Timeout**:
-   Replace the indefinite `systhread_cond_wait()` with a timed wait loop (e.g., 50ms maximum threshold). If the worker does not signal completion within the timeout, force task abort via flags and log a warning rather than locking the main thread.
+   Instead of blocking the main thread in `async_worker_drain()`, increment a atomic `clear_sequence` counter on the object and clear the task queue without waiting for the running task to finish. Inside `mc_analyze_worker_task()`, check `x->clear_sequence` at the start of every channel loop iteration; if `clear_sequence` changes, abort the worker loop immediately.
+2. **Per-Channel Worker Task Splitting**:
+   Enqueue separate worker tasks per channel rather than a single monolithic task that iterates over all channels in a single blocking loop.
 
 ### Benefits & Downsides
-- **Benefits**: Completely eliminates main-thread UI hangs caused by worker thread synchronization.
-- **Downsides**: Requires careful sequence validation inside all background worker loops to guarantee that stale background computations do not overwrite freshly cleared audio or analysis states.
+- **Benefits**: Completely eliminates main-thread UI hangs during worker thread synchronization regardless of channel count.
+- **Downsides**: Requires adding sequence check guards at every channel loop iteration in the background worker routines.
 
 ---
 
-## 2. Synchronous Network Socket I/O Inside Critical Sections
+## 2. Multichannel Critical Section Lock Hold Time (`x->lock`)
 
 ### Speculated Mechanism
-During execution of `mc_analyze_clear()`, while holding the main object critical section lock (`critical_enter(x->lock)`), the object iterates through all allocated channel visualizer ports and transmits state-reset packets:
+Inside `mc_analyze_clear()`, after draining the worker task, the main thread enters the object's critical section lock (`critical_enter(x->lock)`) to perform cleanup across all channels:
 ```c
-for (long ch = 0; ch < x->allocated_viz_ports; ch++) {
-    if (x->viz_ports[ch] > 0) {
-        snprintf(json_buf, sizeof(json_buf), "{\"type\":\"mc_analyze\",\"event\":\"clear\",...}");
-        visualize_to_port(x, x->viz_ports[ch], "mc_analyze", json_buf);
+critical_enter(x->lock);
+x->clear_sequence++;
+if (x->analyzers) {
+    for (long i = 0; i < x->analyzers_count; i++) {
+        if (x->analyzers[i]) {
+            analyzer_clear(x->analyzers[i]);
+        }
+    }
+}
+if (x->audio_buffers) {
+    for (long ch = 0; ch < x->allocated_audio_chans; ch++) {
+        if (x->audio_buffers[ch]) {
+            memset(x->audio_buffers[ch], 0, sizeof(float) * x->audio_buffer_size);
+        }
     }
 }
 ```
-If an `mc.analyze~` object manages a large number of channels (e.g., 8, 16, or 32 channels), calling `visualize_to_port()` sequentially inside `x->lock` introduces several failure points:
-- Blocking socket calls (`send()` or socket creation/select checks) under TCP network backpressure.
-- Worker queue lock contention inside `visualize.c` across multiple socket threads.
-- Holding `x->lock` on the main thread for prolonged periods blocks the DSP perform thread, freezing both audio processing and the Max user interface.
+- **Why this affects `mc.analyze~` and NOT `analyze~`**:
+  In `analyze~`, clearing involves 1 call to `analyzer_clear()` and 1 `memset()` on a 2.64 MB buffer.
+  In `mc.analyze~`, clearing loops across `x->analyzers_count` (calling `analyzer_clear()` which deallocates/clears snapshot linked lists) and `x->allocated_audio_chans` (calling `memset()` across all channel audio buffers, totaling 21 MB to 84 MB of memory zeroing).
+
+  Holding `x->lock` on the main thread for this duration prevents the 64-bit DSP audio perform routine (`mc_analyze_perform64`) from acquiring `x->lock`. When the DSP audio thread stalls waiting for `x->lock`, audio driver buffer underflows occur, causing Max's audio engine and UI to lock up.
 
 ### Proposed Solutions
-1. **Move Network I/O Outside `x->lock`**:
-   Gather the list of active visualizer ports while holding `x->lock`, release `x->lock`, and then transmit the telemetry packets over network sockets without holding the object lock.
-2. **Coalesced / Asynchronous Socket Dispatch**:
-   Enqueue visualizer `clear` events directly to `visualize.c` background socket worker queues using non-blocking queues, ensuring zero network I/O execution on Max's main thread.
+1. **Atomic Pointer Swapping / Deferred Clearing**:
+   Instead of clearing every channel's analyzer and zeroing memory synchronously inside `x->lock`, allocate clean empty buffers or swap pointers atomically under `x->lock`, and defer memory zeroing/deallocation to the background worker thread or outside the critical section.
+2. **Per-Channel Critical Sections**:
+   Replace the global `x->lock` with individual per-channel locks (`x->chan_locks[ch]`), allowing channel clearing to occur incrementally without blocking all channels or the DSP thread simultaneously.
 
 ### Benefits & Downsides
-- **Benefits**: Drastically reduces critical section lock hold times and prevents socket network stalls from cascading into Max UI freezes.
-- **Downsides**: Requires ensuring that visualizer port indices remain valid if the object is simultaneously modified or freed while network packets are being dispatched outside the lock.
+- **Benefits**: Keeps critical section lock hold times down to microseconds, preventing DSP thread starvation and audio driver freezes.
+- **Downsides**: Increases code complexity surrounding memory pointer management and per-channel lock allocations.
 
 ---
 
-## 3. Main Thread and DSP Thread Lock Contention (`x->lock`)
+## 3. Sample Counter and Buffer Index Race Conditions During Active Audio
 
 ### Speculated Mechanism
-`mc_analyze_clear()` holds `critical_enter(x->lock)` while clearing internal data structures across all channels:
-- Invoking `analyzer_clear()` on every channel's `TransientAnalyzer` instance.
-- Zeroing out all multichannel float audio buffers (`x->audio_buffers[ch]`).
-- Zeroing out clock buffers and resetting sample/frame counters.
-
-When DSP is actively running (`mc_analyze_perform64`), the 64-bit audio perform routine executes every vector size (e.g., 64 or 128 samples). If the perform routine attempts to enter `x->lock` while the main thread holds `x->lock` (or is delayed inside `mc_analyze_clear()`), the audio driver thread stalls. On Windows/Max audio engines, stalling the DSP thread leads to driver timeouts, application hangs, or audio buffer underflow freezes.
-
-### Proposed Solutions
-1. **Atomic State Swap / Double-Buffering**:
-   Instead of zeroing large memory blocks in-place while holding `x->lock`, allocate or swap clean buffer pointers atomically, or set an atomic `needs_clear` flag that the DSP or worker thread applies safely at vector boundaries.
-2. **Per-Channel Lock Granularity**:
-   Replace the single global object lock (`x->lock`) with per-channel lock structures, allowing clearing operations to proceed with finer granularity without locking out all channels simultaneously.
-
-### Benefits & Downsides
-- **Benefits**: Keeps the DSP audio thread running smoothly without buffer underflow or driver lockups during `clear` message execution.
-- **Downsides**: Increases memory overhead and code complexity around pointer management and atomic lock-free atomic swaps.
-
----
-
-## 4. Sample Counter and Buffer Indexing Desynchronization Race Conditions
-
-### Speculated Mechanism
-`mc_analyze_clear()` resets frame and sample counters:
+`mc_analyze_clear()` resets global sample counters:
 ```c
 x->audio_buffer_write_ptr = 0;
 x->current_sample_count = 0;
 x->last_analysis_frame = 0;
 x->pending_analysis = 0;
 ```
-If a background worker task is concurrently running on another thread, or if the DSP thread continues accumulating samples immediately before or after `mc_analyze_clear()` executes, a sample counter desynchronization can occur:
-- `x->current_sample_count` is zeroed while `hop_start_samples` or `target_analysis_frame` in an in-flight worker task retains large pre-clear values.
-- Arithmetic expression `samples_ago = cur_samples - hop_start_samples` computes huge negative numbers or extremely large positive values.
-- If modulo or clamping logic fails to bound buffer indices correctly, the worker task can enter an infinite processing loop or trigger out-of-bounds memory accesses.
+- **Why this affects `mc.analyze~` and NOT `analyze~`**:
+  `mc.analyze~` processes audio frames across multiple channels concurrently. If audio continues playing on the DSP thread while `clear` resets `x->current_sample_count` to `0`, channel analysis loops in an active or queued worker task calculate buffer offsets (`samples_ago = cur_samples - hop_start_samples`).
+
+  With N channels active, the likelihood of a worker task processing channel `K` using pre-clear frame indices while channel `K-1` has been zeroed is N times higher. Out-of-bounds array index calculations or clamped read pointer spins in the worker task can cause high CPU utilization and application freezes.
 
 ### Proposed Solutions
-1. **Monotonic Generation Sequence Checking**:
-   Tag every sample accumulation and worker task invocation with a monotonic `clear_sequence` integer. Any worker iteration whose sequence tag does not match the active `clear_sequence` immediately exits without performing buffer read calculations.
-2. **Strict Index Bounds Sanitization**:
-   Enforce defensive bounds checking on all `samples_ago` calculations inside worker tasks to guarantee that buffer read pointers always remain within `[0, audio_buffer_size - 1]`.
+1. **Monotonic Generation Sequence Interlock**:
+   Snapshot `start_seq = x->clear_sequence` before entering the multichannel processing loop in `mc_analyze_worker_task()`. If `x->clear_sequence != start_seq` at any point during channel iteration, discard intermediate results and exit immediately.
+2. **Strict Bounds Sanitization**:
+   Clamp all calculated `samples_ago` values strictly to `[0, audio_buffer_size - 1]` before indexing into `x->audio_buffers[ch]`.
 
 ### Benefits & Downsides
-- **Benefits**: Prevents out-of-bounds memory reads, tight spin-loops, and sample counter corruption when `clear` is sent during continuous audio playback.
-- **Downsides**: Requires adding sequence checks in all DSP and background worker inner loops.
+- **Benefits**: Guarantees thread-safe handling of sample counter resets during continuous multichannel audio playback.
+- **Downsides**: Requires checking sequence tags before processing each channel in background worker tasks.
 
 ---
 
-## Conclusion & Summary Recommendation
+## Summary Conclusion
 
-The most likely cause of Max patch freezes during `clear` message processing in `mc.analyze~` is a combination of **main-thread worker drain deadlocks (`async_worker_drain`)** and **synchronous network socket I/O performed while holding `x->lock`**.
+The reason Max patch freezes occur with `mc.analyze~` and not `analyze~` (when `@visualize 0` is set) is due to **multichannel scaling**:
+1. **`async_worker_drain()`** blocks Max's main thread while the worker finishes a long, blocking loop across all N channels.
+2. **`critical_enter(x->lock)`** holds the global object lock while clearing N analyzer instances and zeroing megabytes of multichannel audio memory, starving the audio DSP thread.
 
-Implementing non-blocking sequence-based task cancellation along with dispatching visualizer network telemetry outside of critical section locks provides the highest resilience against application hangs while preserving real-time audio performance.
+Eliminating the blocking wait in `async_worker_drain()` using an atomic sequence interlock and minimizing lock hold times inside `mc_analyze_clear()` will completely resolve these freezes.
