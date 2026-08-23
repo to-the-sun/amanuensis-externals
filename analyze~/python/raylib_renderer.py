@@ -525,7 +525,7 @@ def draw_renderer(W, H, current_time, frame_data):
     if valid_peaks:
         latest_active_peak = max(valid_peaks, key=lambda p: p.get('time', 0.0))
         qualifiers = latest_active_peak.get('qualifiers', [])
-        tolerance = frame_data.get('tolerance', 29.0)
+        tolerance = frame_data.get('tolerance', 19.0)
 
         for q in qualifiers:
             q_ms = q.get('ms', 0.0)

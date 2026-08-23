@@ -224,7 +224,7 @@ def generate_video_raylib(audio_path, data):
                 'max_peak_value': max_peak,
                 'min_score_seen': min_score_seen,
                 'max_score_seen': max_score_seen,
-                'tolerance': data.get('tolerance', 29.0),
+                'tolerance': data.get('tolerance', 19.0),
                 'highest_peak_ms': data.get('highest_peaks_ms')[frame] if data.get('highest_peaks_ms') is not None else -999.0,
                 'demarcation_line': demarcation_lines[frame] if demarcation_lines is not None else 0.0,
                 'peaks': all_peaks,
@@ -501,7 +501,7 @@ def generate_video_matplotlib(audio_path, data):
                     line.set_visible(True)
 
                     # Shaded vertical bar of width 2*tolerance centered at orig_ms
-                    tolerance = data.get('tolerance', 29.0)
+                    tolerance = data.get('tolerance', 19.0)
                     span.set_x(orig_ms - tolerance)
                     span.set_width(2.0 * tolerance)
                     span.set_facecolor(qc)

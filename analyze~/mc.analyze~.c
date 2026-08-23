@@ -366,7 +366,7 @@ void ext_main(void* r) {
     CLASS_ATTR_DOUBLE(c, "tolerance", 0, t_mc_analyze, tolerance);
     CLASS_ATTR_FILTER_CLIP(c, "tolerance", 0.0, 5000.0);
     CLASS_ATTR_LABEL(c, "tolerance", 0, "Tolerance (ms)");
-    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "29.0");
+    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "19.0");
 
     CLASS_ATTR_LONG(c, "visualize", 0, t_mc_analyze, visualize_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "visualize", 0, 1);
@@ -432,7 +432,7 @@ void* mc_analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->clear_sequence = 0;
         x->log_enabled = 0;
         x->weighted_bar = 1;
-        x->tolerance = 29.0;
+        x->tolerance = 19.0;
         x->sample_rate = 44100.0;
         x->active = 1;
         x->visualize_enabled = 0;
