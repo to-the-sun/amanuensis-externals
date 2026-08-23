@@ -14,7 +14,7 @@ def generate_control_test_set():
 
     def generate_sustained_bass():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.35
+        note_dur = 0.45
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
@@ -22,12 +22,18 @@ def generate_control_test_set():
         freq = 75.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.2 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Smooth envelope: 20ms attack, sustain, 50ms release
+        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.02)
-        rel_samples = int(sr * 0.05)
-        env[:att_samples] = np.linspace(0, 1, att_samples)
-        env[-rel_samples:] = np.linspace(1, 0, rel_samples)
+        att_samples = int(sr * 0.15)
+        rel_samples = int(sr * 0.10)
+
+        # Raised cosine (S-curve) attack for zero derivative at onset
+        att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
+        env[:att_samples] = att_curve
+
+        # Smooth cosine release
+        rel_curve = 0.5 * (1.0 + np.cos(np.pi * np.linspace(0, 1, rel_samples)))
+        env[-rel_samples:] = rel_curve
 
         note_waveform = sig * env
 
@@ -41,7 +47,7 @@ def generate_control_test_set():
 
     def generate_sustained_treble():
         audio = np.zeros(total_samples, dtype=np.float32)
-        note_dur = 0.35
+        note_dur = 0.45
         note_len = int(sr * note_dur)
         t_note = np.arange(note_len) / sr
 
@@ -49,12 +55,18 @@ def generate_control_test_set():
         freq = 1760.0
         sig = 0.8 * np.sin(2 * np.pi * freq * t_note) + 0.15 * np.sin(2 * np.pi * 2 * freq * t_note)
 
-        # Smooth envelope: 20ms attack, sustain, 50ms release
+        # Envelope: Very smooth 150ms S-curve attack (minimal transience), sustain, 100ms release
         env = np.ones(note_len, dtype=np.float32)
-        att_samples = int(sr * 0.02)
-        rel_samples = int(sr * 0.05)
-        env[:att_samples] = np.linspace(0, 1, att_samples)
-        env[-rel_samples:] = np.linspace(1, 0, rel_samples)
+        att_samples = int(sr * 0.15)
+        rel_samples = int(sr * 0.10)
+
+        # Raised cosine (S-curve) attack for zero derivative at onset
+        att_curve = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, att_samples)))
+        env[:att_samples] = att_curve
+
+        # Smooth cosine release
+        rel_curve = 0.5 * (1.0 + np.cos(np.pi * np.linspace(0, 1, rel_samples)))
+        env[-rel_samples:] = rel_curve
 
         note_waveform = sig * env
 
