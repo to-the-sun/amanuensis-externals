@@ -87,6 +87,15 @@ def ensure_initialized():
                 cumulative_transience = None
         _initialized = True
 
+def get_default_tolerance():
+    ensure_initialized()
+    if cumulative_transience is not None:
+        try:
+            return float(cumulative_transience.TransientAnalyzer().tolerance)
+        except Exception:
+            pass
+    return 19.0
+
 def get_score_color(score, min_score, max_score):
     if score == 0: return "#808080"
     if score < 0:
@@ -224,7 +233,7 @@ def generate_video_raylib(audio_path, data):
                 'max_peak_value': max_peak,
                 'min_score_seen': min_score_seen,
                 'max_score_seen': max_score_seen,
-                'tolerance': data.get('tolerance', 19.0),
+                'tolerance': data.get('tolerance', get_default_tolerance()),
                 'highest_peak_ms': data.get('highest_peaks_ms')[frame] if data.get('highest_peaks_ms') is not None else -999.0,
                 'demarcation_line': demarcation_lines[frame] if demarcation_lines is not None else 0.0,
                 'peaks': all_peaks,
@@ -501,7 +510,7 @@ def generate_video_matplotlib(audio_path, data):
                     line.set_visible(True)
 
                     # Shaded vertical bar of width 2*tolerance centered at orig_ms
-                    tolerance = data.get('tolerance', 19.0)
+                    tolerance = data.get('tolerance', get_default_tolerance())
                     span.set_x(orig_ms - tolerance)
                     span.set_width(2.0 * tolerance)
                     span.set_facecolor(qc)
