@@ -178,6 +178,7 @@ def draw_renderer(W, H, current_time, frame_data):
     # Extract dynamic/shared boundaries
     min_score = frame_data.get('min_score_seen', -5.0)
     max_score = frame_data.get('max_score_seen', 5.0)
+    tolerance = frame_data.get('tolerance', get_default_tolerance())
 
     # -------------------------------------------------------------
     # 1. TOP PANEL: 4-Band Transient Envelopes
@@ -391,7 +392,7 @@ def draw_renderer(W, H, current_time, frame_data):
         latest_p_idx = max(p.get('p_idx', 0) for p in valid_peaks)
         window_peaks = [
             p for p in valid_peaks
-            if -29.0 <= float(p.get('p_idx', 0) - latest_p_idx) <= 1.0
+            if -tolerance <= float(p.get('p_idx', 0) - latest_p_idx) <= 1.0
         ]
         if window_peaks:
             score_avg = sum(p.get('total_score', 0.0) for p in window_peaks) / len(window_peaks)
@@ -421,14 +422,14 @@ def draw_renderer(W, H, current_time, frame_data):
     draw_text_safe(frame_data.get('title', "Cumulative Transience Analyzer"), margin_left, margin_top - 20, 14, pr.WHITE)
 
     # -------------------------------------------------------------
-    # 2. MIDDLE PANEL: 29ms Rolling Window Snapshot (Lanes)
+    # 2. MIDDLE PANEL: Dynamic Rolling Window Snapshot (Lanes)
     # -------------------------------------------------------------
     graph_h_mid = H_mid - int(H_mid * 0.20)
     lane_h = graph_h_mid / 4.0
 
-    x_min_s = -29.0
+    x_min_s = -tolerance
     x_max_s = 1.0
-    x_span_s = 30.0
+    x_span_s = x_max_s - x_min_s
 
     for b in range(4):
         ly = Y_mid + int(b * lane_h)
@@ -442,11 +443,27 @@ def draw_renderer(W, H, current_time, frame_data):
 
     pr.draw_line(margin_left, Y_mid + graph_h_mid, margin_left + graph_w, Y_mid + graph_h_mid, COLOR_GRID)
 
-    # X-axis ticks, vertical grid lines, and millisecond legend labels (-29ms to 0ms)
-    for ms_val in [-29, -25, -20, -15, -10, -5, 0]:
+    # X-axis ticks, vertical grid lines, and millisecond legend labels (-tolerance to 0ms)
+    tick_step = 5.0 if tolerance <= 30 else 10.0
+    ticks = [-tolerance]
+    curr_tick = -math.floor(tolerance / tick_step) * tick_step
+    while curr_tick <= 0:
+        if curr_tick > -tolerance and curr_tick <= 0:
+            if not any(abs(curr_tick - t) < 1.0 for t in ticks):
+                ticks.append(curr_tick)
+        curr_tick += tick_step
+    ticks.sort()
+
+    for ms_val in ticks:
         bx = margin_left + int(graph_w * (ms_val - x_min_s) / x_span_s)
         pr.draw_line(bx, Y_mid, bx, Y_mid + graph_h_mid, COLOR_GRID)
-        draw_text_safe(f"{ms_val}ms" if ms_val != 0 else "0ms", bx - 12, Y_mid + graph_h_mid + 4, 11, COLOR_TEXT_MUTED)
+        if ms_val == 0:
+            lbl = "0ms"
+        elif abs(ms_val - round(ms_val)) < 1e-4:
+            lbl = f"{int(round(ms_val))}ms"
+        else:
+            lbl = f"{ms_val:.1f}ms"
+        draw_text_safe(lbl, bx - 12, Y_mid + graph_h_mid + 4, 11, COLOR_TEXT_MUTED)
 
     valid_peaks = [p for p in peaks if p.get('time', 0.0) <= current_time]
     if valid_peaks:
@@ -454,7 +471,7 @@ def draw_renderer(W, H, current_time, frame_data):
         for p in valid_peaks:
             p_idx = p.get('p_idx', 0)
             rel_ms = float(p_idx - latest_p_idx)
-            if -29.0 <= rel_ms <= 1.0:
+            if -tolerance <= rel_ms <= 1.0:
                 band = p.get('band_idx', 0)
                 score = p.get('total_score', 0.0)
 
@@ -465,13 +482,14 @@ def draw_renderer(W, H, current_time, frame_data):
                 pr.draw_rectangle(bx - bw//2, by, bw, int(lane_h) - 4, BAND_COLORS[band])
 
                 score_c = get_score_color(score, min_score, max_score)
-                if rel_ms < -25.0:
+                if rel_ms < -tolerance + 4.0:
                     text_x = bx + bw // 2 + 5
                 else:
                     text_x = bx - bw // 2 - 40
                 draw_text_safe(f"{score:+.2f}", text_x, by + int(lane_h*0.1), 12, score_c)
 
-    draw_text_safe("29ms Rolling Window Snapshot", margin_left, Y_mid - 15, 12, pr.WHITE)
+    tol_title = f"{int(round(tolerance))}" if abs(tolerance - round(tolerance)) < 1e-4 else f"{tolerance:.1f}"
+    draw_text_safe(f"{tol_title}ms Rolling Window Snapshot", margin_left, Y_mid - 15, 12, pr.WHITE)
 
     # -------------------------------------------------------------
     # 3. BOTTOM PANEL: Accumulated 5s Historical Buffer
