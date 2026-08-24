@@ -362,8 +362,10 @@ def generate_video_matplotlib(audio_path, data):
         ax_transient.xaxis.set_major_formatter(ticker.FuncFormatter(format_time)); ax_transient.set_ylim(0, max_peak * 1.1 if max_peak > 0 else 1)
         buffer_times = np.linspace(-5000, 0, 5001); buffer_line, = ax_buf.plot(buffer_times, np.zeros(5001), color='#f1c40f', lw=2); mean_line, = ax_buf.plot([-5000, 0], [0, 0], color='#808080', lw=1, ls='--', alpha=0.5, label='Midpoint (Min/Max)')
         ax_buf.set_title("Accumulated 5s Historical Buffer"); ax_buf.set_xlabel("Time Relative to Peak (ms)"); ax_buf.set_ylabel("Accumulated Energy"); ax_buf.grid(True, alpha=0.3); ax_buf.set_xlim(-5000, 0); ax_buf.set_ylim(0, 1)
+        tolerance = data.get('tolerance', get_default_tolerance())
+        tol_title = f"{int(round(tolerance))}" if abs(tolerance - round(tolerance)) < 1e-4 else f"{tolerance:.1f}"
         highest_peak_line = ax_buf.axvline(0, color='#f1c40f', lw=2, ls='--', visible=False, zorder=15)
-        ax_snapshot.set_xlim(-29, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title("29ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
+        ax_snapshot.set_xlim(-tolerance, 1); ax_snapshot.set_ylim(-0.5, 3.5); ax_snapshot.set_yticks([0, 1, 2, 3]); ax_snapshot.set_yticklabels(['Sub', 'Bass', 'Mid', 'Hi'], fontsize=10, fontweight='bold'); ax_snapshot.set_title(f"{tol_title}ms Rolling Window Snapshot", fontsize=14, fontweight='bold'); ax_snapshot.set_xlabel("Time Relative to Latest Peak (ms)", fontsize=12); ax_snapshot.grid(False)
         for i in range(3): ax_snapshot.axhline(i + 0.5, color='gray', lw=1, alpha=0.3)
         import matplotlib.patches as patches
         POPUP_LIFETIME = 60; MAX_POOL = 128; snap_verts_x = np.concatenate([[buffer_times[0]], buffer_times, [buffer_times[-1]]])
@@ -422,7 +424,7 @@ def generate_video_matplotlib(audio_path, data):
                     if not any(a[0] == i for a in active_scores): active_scores.append([i, POPUP_LIFETIME, p['peak_val'], p['total_score'], p['time']]); break
                 snapshot_line.set_ydata(p['snapshot'])
                 live_peaks_x.append(p['time']); live_peaks_y.append(p['peak_val']); live_peaks_scatter.set_offsets(np.c_[live_peaks_x, live_peaks_y])
-            last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - 29]
+            last_frame_processed = frame; rolling_window_scores = [s for s in rolling_window_scores if s['frame'] > frame - tolerance]
 
             if rolling_window_scores:
                 current_snapshot_avg = sum(s['score'] for s in rolling_window_scores) / len(rolling_window_scores); latest_p_frame = max(s['frame'] for s in rolling_window_scores); segments = []; seg_colors = []; snap_data = []
