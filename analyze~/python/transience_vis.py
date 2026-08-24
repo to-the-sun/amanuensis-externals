@@ -29,6 +29,15 @@ W, H = 1200, 1000
 if os.environ.get('HEADLESS'):
     pr.set_config_flags(pr.FLAG_WINDOW_HIDDEN)
 
+def get_default_tolerance():
+    try:
+        import ct_utils
+        ct_utils.ensure_extension_built()
+        import cumulative_transience
+        return float(cumulative_transience.TransientAnalyzer().tolerance)
+    except Exception:
+        return 19.0
+
 # Global Visualizer State
 state = {
     'group': INITIAL_GROUP,
@@ -50,7 +59,7 @@ state = {
     'max_peak_value': 1.0,
     'min_score_seen': -5.0,
     'max_score_seen': 5.0,
-    'tolerance': 29.0,
+    'tolerance': get_default_tolerance(),
     'highest_peak_ms': -999.0,
     'demarcation_line': 0.0,
     'peaks': [],
@@ -157,7 +166,7 @@ def process_packet(line):
             state['max_peak_value'] = pkt.get('max_peak_value', 1.0)
             state['min_score_seen'] = pkt.get('min_score_seen', -5.0)
             state['max_score_seen'] = pkt.get('max_score_seen', 5.0)
-            state['tolerance'] = pkt.get('tolerance', 29.0)
+            state['tolerance'] = pkt.get('tolerance', get_default_tolerance())
             state['highest_peak_ms'] = pkt.get('highest_peak_ms', -999.0)
             state['demarcation_line'] = pkt.get('demarcation_line', 0.0)
             state['accumulated_buffer'] = pkt.get('accumulated_buffer', [0.0]*5001)

@@ -36,6 +36,15 @@ SNAP_LABELS = ['Sub', 'Bass', 'Mid', 'Hi']
 
 _FONT_CACHE = None
 
+def get_default_tolerance():
+    try:
+        import ct_utils
+        ct_utils.ensure_extension_built()
+        import cumulative_transience
+        return float(cumulative_transience.TransientAnalyzer().tolerance)
+    except Exception:
+        return 19.0
+
 def reset_font_cache():
     global _FONT_CACHE
     _FONT_CACHE = None
@@ -525,7 +534,7 @@ def draw_renderer(W, H, current_time, frame_data):
     if valid_peaks:
         latest_active_peak = max(valid_peaks, key=lambda p: p.get('time', 0.0))
         qualifiers = latest_active_peak.get('qualifiers', [])
-        tolerance = frame_data.get('tolerance', 29.0)
+        tolerance = frame_data.get('tolerance', get_default_tolerance())
 
         for q in qualifiers:
             q_ms = q.get('ms', 0.0)
