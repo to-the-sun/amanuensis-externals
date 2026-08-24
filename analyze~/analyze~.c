@@ -328,7 +328,6 @@ void ext_main(void* r) {
     CLASS_ATTR_DOUBLE(c, "tolerance", 0, t_analyze, tolerance);
     CLASS_ATTR_FILTER_CLIP(c, "tolerance", 0.0, 5000.0);
     CLASS_ATTR_LABEL(c, "tolerance", 0, "Tolerance (ms)");
-    CLASS_ATTR_DEFAULT(c, "tolerance", 0, "29.0");
 
     CLASS_ATTR_LONG(c, "visualize", 0, t_analyze, visualize_enabled);
     CLASS_ATTR_FILTER_CLIP(c, "visualize", 0, 1);
@@ -379,7 +378,6 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         x->clear_sequence = 0;
         x->log_enabled = 0;
         x->weighted_bar = 1;
-        x->tolerance = 29.0;
         x->sample_rate = 44100.0;
         x->active = 1;
         x->visualize_enabled = 0;
@@ -390,11 +388,15 @@ void* analyze_new(t_symbol* s, long argc, t_atom* argv) {
         memset(x->paused_channels, 0, sizeof(x->paused_channels));
         x->result_buffer = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
 
-        attr_args_process(x, argc, argv);
-
         if (!x->analyzer) {
             x->analyzer = analyzer_create(1.0, NULL, x->lock, (ct_lock_func)critical_enter, (ct_lock_func)critical_exit);
         }
+        if (x->analyzer) {
+            x->tolerance = x->analyzer->tolerance;
+        }
+
+        attr_args_process(x, argc, argv);
+
         if (x->analyzer) {
             x->analyzer->tolerance = x->tolerance;
         }
