@@ -113,13 +113,38 @@ def run_bot():
     def convert_wav_to_mp3(wav_path, mp3_path):
         audio = AudioSegment.from_wav(wav_path)
         duration_seconds = len(audio) / 1000
-        max_bitrate_kbps = (MAX_FILE_SIZE * 8) / duration_seconds / 1000  # Calculate max bitrate in kbps
-        bitrate = min(max_bitrate_kbps - 19, 320)  # Cap the bitrate at 320 kbps
+        if duration_seconds > 0:
+            max_bitrate_kbps = (MAX_FILE_SIZE * 8) / duration_seconds / 1000  # Calculate max bitrate in kbps
+            bitrate = min(max_bitrate_kbps - 19, 320)  # Cap the bitrate at 320 kbps
+        else:
+            bitrate = 320
+        bitrate = max(8, int(bitrate))
         estimated_size = (bitrate * 1000 / 8) * duration_seconds  # Estimate file size in bytes
+
         audio = audio.set_channels(1)
-        audio.export(mp3_path, format="mp3", bitrate=f"{int(bitrate)}k")
-        print(f'Converted {wav_path} to {mp3_path} with bitrate {int(bitrate)}k')
+
+        def _export_mp3(b_rate):
+            export_audio = audio
+            if b_rate < 32:
+                export_audio = export_audio.set_frame_rate(22050 if b_rate >= 16 else 11025)
+            export_audio.export(mp3_path, format="mp3", bitrate=f"{b_rate}k")
+
+        _export_mp3(bitrate)
+        print(f'Converted {wav_path} to {mp3_path} with bitrate {bitrate}k')
         print(f'Estimated file size: {estimated_size / (1024 * 1024):.2f} MB')
+
+        while os.path.getsize(mp3_path) > MAX_FILE_SIZE and bitrate > 8:
+            actual_size = os.path.getsize(mp3_path)
+            # Calculate lower bitrate to duck under size limit
+            ratio = MAX_FILE_SIZE / actual_size
+            new_bitrate = int(bitrate * ratio * 0.95)
+            new_bitrate = min(new_bitrate, bitrate - 1)
+            bitrate = max(8, new_bitrate)
+            print(f'Converted MP3 size ({actual_size / (1024 * 1024):.2f} MB) exceeds limit ({MAX_FILE_SIZE / (1024 * 1024):.2f} MB). Re-converting with lower bitrate {bitrate}k...')
+            _export_mp3(bitrate)
+
+        final_size = os.path.getsize(mp3_path)
+        print(f'Final MP3 size: {final_size / (1024 * 1024):.2f} MB with bitrate {bitrate}k')
 
     def process_transient_analysis(file_path):
         """
