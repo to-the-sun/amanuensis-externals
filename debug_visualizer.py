@@ -301,6 +301,29 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                             surface.blit(s, (start_x, bar_y - bar_height / 2))
 
                             ratings_dict = track_data.get("ratings", {})
+
+                            def _get_bar_rating(b_ts):
+                                if str(b_ts) in ratings_dict:
+                                    return float(ratings_dict[str(b_ts)])
+                                if b_ts in ratings_dict:
+                                    return float(ratings_dict[b_ts])
+                                try:
+                                    if str(float(b_ts)) in ratings_dict:
+                                        return float(ratings_dict[str(float(b_ts))])
+                                    if str(int(b_ts)) in ratings_dict:
+                                        return float(ratings_dict[str(int(b_ts))])
+                                except (ValueError, TypeError):
+                                    pass
+                                return 0.0
+
+                            bar_ratings_list = [_get_bar_rating(b) for b in span_data]
+                            if bar_ratings_list:
+                                first_r = bar_ratings_list[0]
+                                all_same = all(math.isclose(r, first_r, rel_tol=1e-5, abs_tol=1e-5) for r in bar_ratings_list)
+                            else:
+                                all_same = True
+                                first_r = 0.0
+
                             for bar_relative_ts in span_data:
                                 # Relative bar timestamps shown naturally without loop_start offset adjustment
                                 bar_abs_start_ts = bar_relative_ts + offset_val
@@ -316,15 +339,28 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 label = fonts["building_small"].render(label_text, True, (204, 204, 204))
                                 surface.blit(label, (bar_start_x + int(2 * SCALE), bar_y - bar_height / 2 - int(15 * SCALE)))
 
-                                # Draw bar rating centered in the cell in bigger bold
-                                bar_rating = ratings_dict.get(str(bar_relative_ts), 0.0)
-                                rating_text = f"{bar_rating:.3f}"
-                                rating_surf = fonts.get("building_bold", fonts["building_large"]).render(rating_text, True, (255, 255, 255))
+                                # Fallback: if ratings differ within span, render per bar with flashing red text
+                                if not all_same:
+                                    bar_rating = _get_bar_rating(bar_relative_ts)
+                                    rating_text = f"{bar_rating:.3f}"
+                                    flash_on = (int(time.time() * 8) % 2 == 0)
+                                    red_color = (255, 50, 50) if flash_on else (130, 20, 20)
+                                    rating_surf = fonts.get("building_bold", fonts["building_large"]).render(rating_text, True, red_color)
 
-                                cell_center_x = bar_start_x + bar_width_pixels / 2
-                                cell_center_y = bar_y
-                                rx = cell_center_x - rating_surf.get_width() / 2
-                                ry = cell_center_y - rating_surf.get_height() / 2
+                                    cell_center_x = bar_start_x + bar_width_pixels / 2
+                                    cell_center_y = bar_y
+                                    rx = cell_center_x - rating_surf.get_width() / 2
+                                    ry = cell_center_y - rating_surf.get_height() / 2
+                                    surface.blit(rating_surf, (rx, ry))
+
+                            # Primary: if all ratings in span match, render ONE large rating centered in the span itself
+                            if all_same and span_data:
+                                rating_text = f"{first_r:.3f}"
+                                rating_surf = fonts.get("building_bold", fonts["building_large"]).render(rating_text, True, (255, 255, 255))
+                                span_center_x = (start_x + end_x) / 2.0
+                                span_center_y = bar_y
+                                rx = span_center_x - rating_surf.get_width() / 2
+                                ry = span_center_y - rating_surf.get_height() / 2
                                 surface.blit(rating_surf, (rx, ry))
 
                         except (ValueError, IndexError): pass
