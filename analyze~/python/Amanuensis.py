@@ -119,6 +119,7 @@ def run_bot():
         else:
             bitrate = 320
         bitrate = max(8, int(bitrate))
+        estimated_size = (bitrate * 1000 / 8) * duration_seconds  # Estimate file size in bytes
 
         audio = audio.set_channels(1)
 
@@ -130,6 +131,7 @@ def run_bot():
 
         _export_mp3(bitrate)
         print(f'Converted {wav_path} to {mp3_path} with bitrate {bitrate}k')
+        print(f'Estimated file size: {estimated_size / (1024 * 1024):.2f} MB')
 
         while os.path.getsize(mp3_path) > MAX_FILE_SIZE and bitrate > 8:
             actual_size = os.path.getsize(mp3_path)
