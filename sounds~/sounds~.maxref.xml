@@ -22,6 +22,17 @@
 				A list of two integers is treated as a MIDI note. The first integer is the note number (0-127), and the second is the velocity (0-127). A velocity greater than 0 triggers a note-on event; a velocity of 0 triggers a note-off event.
 			</description>
 		</method>
+		<method name="midievent">
+			<arglist>
+				<arg name="status" optional="0" type="int" />
+				<arg name="data1" optional="1" type="int" />
+				<arg name="data2" optional="1" type="int" />
+			</arglist>
+			<digest>Process raw MIDI event messages</digest>
+			<description>
+				Accepts raw MIDI event lists as output by objects like <inline>midiformat</inline>. Supports Note On (144-159), Note Off (128-143), and Program Change (192-207 for changing presets).
+			</description>
+		</method>
 		<method name="preset">
 			<arglist>
 				<arg name="index" optional="0" type="int" />

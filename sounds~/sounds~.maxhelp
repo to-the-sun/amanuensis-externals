@@ -120,6 +120,18 @@
 				}
 
 			}
+, 			{
+				"box" : 				{
+					"id" : "obj-11",
+					"maxclass" : "newobj",
+					"numinlets" : 7,
+					"numoutlets" : 2,
+					"outlettype" : [ "int", "" ],
+					"patching_rect" : [ 50.0, 180.0, 100.0, 22.0 ],
+					"text" : "midiformat"
+				}
+
+			}
  ],
 		"lines" : [ 			{
 				"patchline" : 				{

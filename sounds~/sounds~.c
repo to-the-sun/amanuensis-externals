@@ -54,6 +54,7 @@ void sounds_free(t_sounds* x);
 void sounds_dsp64(t_sounds* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags);
 void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam);
 void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv);
+void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv);
 void sounds_preset(t_sounds* x, long n);
 void sounds_random(t_sounds* x);
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s);
@@ -65,6 +66,7 @@ void ext_main(void* r) {
 
     class_addmethod(c, (method)sounds_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)sounds_list, "list", A_GIMME, 0);
+    class_addmethod(c, (method)sounds_midievent, "midievent", A_GIMME, 0);
     class_addmethod(c, (method)sounds_preset, "preset", A_LONG, 0);
     class_addmethod(c, (method)sounds_random, "random", 0);
     class_addmethod(c, (method)sounds_assist, "assist", A_CANT, 0);
@@ -188,6 +190,52 @@ void sounds_random(t_sounds* x) {
     int next = rand() % x->num_modules;
     while (next == x->current_module) next = rand() % x->num_modules;
     sounds_preset(x, next + 1);
+}
+
+void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
+    if (argc < 1) return;
+
+    long status = atom_getlong(&argv[0]);
+    long cmd = status & 0xF0;
+
+    switch (cmd) {
+        case 0x80: { // Note Off (128..143)
+            if (argc >= 2) {
+                long note = atom_getlong(&argv[1]);
+                t_atom list_argv[2];
+                atom_setlong(&list_argv[0], note);
+                atom_setlong(&list_argv[1], 0);
+                sounds_list(x, NULL, 2, list_argv);
+            }
+            break;
+        }
+        case 0x90: { // Note On (144..159)
+            if (argc >= 3) {
+                long note = atom_getlong(&argv[1]);
+                long vel = atom_getlong(&argv[2]);
+                t_atom list_argv[2];
+                atom_setlong(&list_argv[0], note);
+                atom_setlong(&list_argv[1], vel);
+                sounds_list(x, NULL, 2, list_argv);
+            } else if (argc >= 2) {
+                long note = atom_getlong(&argv[1]);
+                t_atom list_argv[2];
+                atom_setlong(&list_argv[0], note);
+                atom_setlong(&list_argv[1], 64);
+                sounds_list(x, NULL, 2, list_argv);
+            }
+            break;
+        }
+        case 0xC0: { // Program Change (192..207)
+            if (argc >= 2) {
+                long pgm = atom_getlong(&argv[1]);
+                sounds_preset(x, pgm + 1);
+            }
+            break;
+        }
+        default:
+            break;
+    }
 }
 
 void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
@@ -331,7 +379,7 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
 
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "MIDI (list), messages");
+        sprintf(s, "MIDI (list), midievent, messages");
     } else {
         if (a == 0) sprintf(s, "(signal) Left Output");
         else sprintf(s, "(signal) Right Output");
