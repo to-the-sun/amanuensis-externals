@@ -15,7 +15,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -120000
@@ -36,7 +36,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -118000
@@ -57,7 +57,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -116000
@@ -78,7 +78,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -114000
@@ -99,7 +99,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -112000
@@ -120,7 +120,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -110000
@@ -141,7 +141,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -108000
@@ -162,7 +162,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -106000
@@ -183,7 +183,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -104000
@@ -204,7 +204,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -102000
@@ -225,7 +225,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -100000
@@ -246,7 +246,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -98000
@@ -267,7 +267,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -96000
@@ -288,7 +288,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -94000
@@ -309,7 +309,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -92000
@@ -330,7 +330,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -90000
@@ -351,7 +351,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -88000
@@ -372,7 +372,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -86000
@@ -393,7 +393,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -84000
@@ -414,7 +414,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -82000
@@ -435,7 +435,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -80000
@@ -456,7 +456,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -78000
@@ -477,7 +477,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -76000
@@ -498,7 +498,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -74000
@@ -519,7 +519,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -72000
@@ -540,7 +540,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -70000
@@ -561,7 +561,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -68000
@@ -582,7 +582,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -66000
@@ -603,7 +603,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -64000
@@ -624,7 +624,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -62000
@@ -645,7 +645,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -60000
@@ -666,7 +666,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -58000
@@ -687,7 +687,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -56000
@@ -708,7 +708,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -54000
@@ -729,7 +729,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -52000
@@ -750,7 +750,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -50000
@@ -771,7 +771,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -48000
@@ -792,7 +792,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -46000
@@ -813,7 +813,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -44000
@@ -834,7 +834,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -42000
@@ -855,7 +855,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -40000
@@ -876,7 +876,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -38000
@@ -897,7 +897,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -36000
@@ -918,7 +918,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -34000
@@ -939,7 +939,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -32000
@@ -960,7 +960,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -30000
@@ -981,7 +981,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -28000
@@ -1002,7 +1002,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -26000
@@ -1023,7 +1023,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -24000
@@ -1044,7 +1044,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -22000
@@ -1065,7 +1065,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -20000
@@ -1086,7 +1086,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -18000
@@ -1107,7 +1107,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -16000
@@ -1128,7 +1128,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -14000
@@ -1149,7 +1149,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -12000
@@ -1170,7 +1170,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -10000
@@ -1191,7 +1191,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -8000
@@ -1212,7 +1212,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -6000
@@ -1233,7 +1233,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -4000
@@ -1254,7 +1254,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         -2000
@@ -1275,7 +1275,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         0
@@ -1298,7 +1298,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         0
@@ -1321,7 +1321,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         0
@@ -1344,7 +1344,7 @@
       ],
       "mean": 0.8875,
       "offset": 0.0,
-      "palette": "control_beat.wav",
+      "palette": "controlbeat.wav",
       "rating": 1.0,
       "span": [
         0

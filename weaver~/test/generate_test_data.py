@@ -2,11 +2,11 @@
 """
 generate_test_data.py
 
-Synthesizes control test transcript.json and palette WAV file (palette_control_beat.wav).
+Synthesizes control test transcript.json and palette WAV file (palette_controlbeat.wav).
 - 4 tracks ("1", "2", "3", "4")
 - Each track has a bar at timestamp 0 ("0")
 - Track 1 has 2 minutes of bars in the negative direction (-120000 ms to 0 ms, 60 negative bars + bar 0)
-- Synthesizes palette_control_beat.wav containing a 120 BPM steady drum beat (kick, snare, hi-hat pattern)
+- Synthesizes palette_controlbeat.wav containing a 120 BPM steady drum beat (kick, snare, hi-hat pattern)
 """
 
 import os
@@ -86,7 +86,7 @@ def generate_palette_wav(filepath, duration_sec=8.0, sr=44100, bpm=120):
 
 def generate_transcript_json(filepath):
     bar_length = 2000.0  # 2000 ms per bar (4 beats @ 120 BPM)
-    palette_name = "control_beat.wav"  # Reference palette without "palette_" prefix
+    palette_name = "controlbeat.wav"  # Reference palette without "palette_" prefix, no underscore in filename after palette_
 
     transcript = {}
 
@@ -131,7 +131,7 @@ def generate_transcript_json(filepath):
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    wav_path = os.path.join(script_dir, "palette_control_beat.wav")
+    wav_path = os.path.join(script_dir, "palette_controlbeat.wav")
     json_path = os.path.join(script_dir, "transcript.json")
 
     print(f"Generating palette WAV at {wav_path}...")
@@ -139,9 +139,5 @@ if __name__ == "__main__":
 
     print(f"Generating transcript JSON at {json_path}...")
     generate_transcript_json(json_path)
-
-    # Also generate transcript.json and palette in parent/weaver~ root for convenience if executed from there
-    root_dir = os.path.dirname(script_dir)
-    generate_transcript_json(os.path.join(script_dir, "transcript.json"))
 
     print("Generation complete!")
