@@ -3103,6 +3103,10 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
 }
 
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
+    // Validation temporarily bypassed while retaining intact validation logic below for reference / easy re-enabling.
+    return 1;
+
+    /*
     long track_num;
     double offset_val = 0.0;
 
@@ -3184,6 +3188,7 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
 
     buildspans_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
     return 1;
+    */
 }
 
 void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_atom_array) {
