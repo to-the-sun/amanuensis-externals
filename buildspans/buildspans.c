@@ -1775,16 +1775,16 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     if (offset == 0.0) {
         object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
-        buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track %ld.", x->current_track);
+        buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track (%ld).", x->current_track);
 
         double effective_offset = (x->current_offset == 0.0) ? calc_timestamp : x->current_offset;
         buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
 
         buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
         buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
-        buildspans_log(x, "*** Last note parameters: calc %.2f, store %.2f, score %.2f", x->last_note_calc, x->last_note_store, x->last_note_score);
-        buildspans_log(x, "*** Current note parameters: calc %.2f, store %.2f, score %.2f", calc_timestamp, store_timestamp, score);
-        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 calc_timestamp.");
+        buildspans_log(x, "*** Last note parameters: looped_absolute (calc) (%.2f), store (%.2f), score (%.2f)", x->last_note_calc, x->last_note_store, x->last_note_score);
+        buildspans_log(x, "*** Current note parameters: looped_absolute (calc) (%.2f), store (%.2f), score (%.2f)", calc_timestamp, store_timestamp, score);
+        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 looped_absolute (calc_timestamp).");
 
         // List active spans
         long num_keys;
@@ -1832,7 +1832,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         buildspans_visualize_memory(x);
         return; // Abort processing for this note
     }
-    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length %ld", bar_length);
+    buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length (%ld)", bar_length);
     // Get current track symbol (using rounded offset for grouping)
     char track_str[64];
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
@@ -1840,9 +1840,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // Calculate bar timestamp (calc_timestamp is already looped_absolute)
     double relative_timestamp = calc_timestamp - offset;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset): %.2f", relative_timestamp);
+    buildspans_log(x, "Relative timestamp (looped_absolute (%.2f) - offset (%.2f)): %.2f", calc_timestamp, offset, relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
-    buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
+    buildspans_log(x, "Calculated bar timestamp (rounded down to nearest bar_length (%ld)): %ld", bar_length, bar_timestamp_val);
 
     // --- Find the most recent bar for the current track to see if this is a new bar ---
     long last_bar_timestamp = -1;
@@ -2045,7 +2045,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
             dictionary_appendfloat(x->building, rating_key, final_rating);
             buildspans_log(x, "%s %.2f", rating_key->s_name, final_rating);
         }
-        buildspans_log(x, "Final rating for span: %.2f (%.2f * %ld)", final_rating, final_lowest_mean, bar_timestamps_count);
+        buildspans_log(x, "Final rating for span: %.2f (final_lowest_mean (%.2f) * bar_timestamps_count (%ld))", final_rating, final_lowest_mean, bar_timestamps_count);
     }
 
     sysmem_freeptr(bar_timestamps);
