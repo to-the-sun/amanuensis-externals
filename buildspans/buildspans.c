@@ -1831,7 +1831,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
 
     // Calculate bar timestamp
     double relative_timestamp = calc_timestamp - offset + x->loop_start;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset + loop_start): %.2f", relative_timestamp);
+    buildspans_log(x, "Relative timestamp (calc_absolute (%.2f) - offset (%.2f) + loop_start (%.2f)): %.2f", calc_timestamp, offset, x->loop_start, relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
