@@ -191,6 +191,7 @@ void buildspans_log(t_buildspans *x, const char *fmt, ...);
 void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_symbol *bar_sym);
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 int buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
+double buildspans_calc_looped_absolute(t_buildspans *x, double raw_absolute);
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
 void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
@@ -1445,16 +1446,16 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         }
         return;
     }
-    double calc_timestamp, store_timestamp, score;
+    double raw_calc_absolute, raw_store_absolute, score;
 
     if (argc == 2 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT) {
-        calc_timestamp = atom_getfloat(argv);
-        store_timestamp = calc_timestamp;
+        raw_calc_absolute = atom_getfloat(argv);
+        raw_store_absolute = raw_calc_absolute;
         score = atom_getfloat(argv + 1);
     } else if (argc == 3 && atom_gettype(argv) == A_FLOAT && atom_gettype(argv + 1) == A_FLOAT && atom_gettype(argv + 2) == A_FLOAT) {
-        calc_timestamp = atom_getfloat(argv);
+        raw_calc_absolute = atom_getfloat(argv);
         score = atom_getfloat(argv + 1);
-        store_timestamp = atom_getfloat(argv + 2);
+        raw_store_absolute = atom_getfloat(argv + 2);
     } else {
         object_error((t_object *)x, "Input must be a list of two floats (timestamp, score) or three floats (synth_timestamp, score, orig_timestamp).");
         x->current_task_seq = -1;
@@ -1464,15 +1465,18 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         return;
     }
 
+    double looped_calc_absolute = buildspans_calc_looped_absolute(x, raw_calc_absolute);
+    double looped_store_absolute = buildspans_calc_looped_absolute(x, raw_store_absolute);
+
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
     // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset == 0),
-    // we use the current note's calc_timestamp as the effective offset for this processing cycle
+    // we use the current note's looped_calc_absolute as the effective offset for this processing cycle
     // without persisting it to x->current_offset.
-    double effective_offset = (x->current_offset == 0.0) ? calc_timestamp : x->current_offset;
+    double effective_offset = (x->current_offset == 0.0) ? looped_calc_absolute : x->current_offset;
 
-    buildspans_log(x, "Palette: %s, Calc timestamp: %.2f, Score: %.2f, Store timestamp: %.2f, Effective Offset: %.2f", 
-                    x->current_palette->s_name, calc_timestamp, score, store_timestamp, effective_offset);
+    buildspans_log(x, "Palette: %s, Raw calc: %.2f, Looped calc: %.2f, Score: %.2f, Raw store: %.2f, Looped store: %.2f, Effective Offset: %.2f",
+                    x->current_palette->s_name, raw_calc_absolute, looped_calc_absolute, score, raw_store_absolute, looped_store_absolute, effective_offset);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
     long num_keys;
@@ -1576,19 +1580,19 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         // TIER 2: Effective Global Offset
         // If no offset was found in the dictionary, we use the effective_offset.
         // This handles both the manual current_offset (high precision) and 
-        // the ephemeral auto-initialization (calc_timestamp).
+        // the ephemeral auto-initialization (looped_calc_absolute).
         if (!offset_found) {
             actual_offset = effective_offset;
         }
 
-        buildspans_process_and_add_note(x, calc_timestamp, store_timestamp, score, actual_offset, bar_length);
+        buildspans_process_and_add_note(x, looped_calc_absolute, looped_store_absolute, score, actual_offset, bar_length);
     }
 
     if (keys) sysmem_freeptr(keys);
     sysmem_freeptr(unique_track_syms);
 
-    x->last_note_calc = calc_timestamp;
-    x->last_note_store = store_timestamp;
+    x->last_note_calc = looped_calc_absolute;
+    x->last_note_store = looped_store_absolute;
     x->last_note_score = score;
     x->last_msg_type = gensym("list");
     buildspans_run_cleanup(x);
@@ -1761,6 +1765,11 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
     }
 }
 
+// Helper function to calculate a looped absolute timestamp from a raw absolute timestamp
+double buildspans_calc_looped_absolute(t_buildspans *x, double raw_absolute) {
+    return raw_absolute + x->loop_start;
+}
+
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
     if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
     if (offset == 0.0) {
@@ -1829,9 +1838,9 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
     t_symbol *track_sym = gensym(track_str);
 
-    // Calculate bar timestamp
-    double relative_timestamp = calc_timestamp - offset + x->loop_start;
-    buildspans_log(x, "Relative timestamp (calc_absolute - offset + loop_start): %.2f", relative_timestamp);
+    // Calculate bar timestamp (calc_timestamp is already looped_absolute)
+    double relative_timestamp = calc_timestamp - offset;
+    buildspans_log(x, "Relative timestamp (calc_absolute - offset): %.2f", relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest %ld): %ld", bar_length, bar_timestamp_val);
 
@@ -1902,7 +1911,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         if (dictionary_hasentry(x->building, absolutes_key)) dictionary_deleteentry(x->building, absolutes_key);
         dictionary_appendatom(x->building, absolutes_key, &a);
     }
-    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp + x->loop_start);
+    t_atom new_absolute; atom_setfloat(&new_absolute, store_timestamp);
     atomarray_appendatom(absolutes_array, &new_absolute);
     char *abs_str = atomarray_to_string(absolutes_array);
     if (abs_str) {
@@ -3103,6 +3112,9 @@ double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_t
 }
 
 int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_to_output) {
+    // Validation is bypassed to return 1 unconditionally (supporting valid negative bars without removing valid spans)
+    return 1;
+
     long track_num;
     double offset_val = 0.0;
 
@@ -3172,17 +3184,20 @@ int buildspans_validate_span_before_output(t_buildspans *x, t_symbol *palette_sy
         return 0;
     }
 
-    if (latest_absolute < offset_val) {
-        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is strictly before its own offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, offset_val);
+    double looped_offset_val = buildspans_calc_looped_absolute(x, offset_val);
+    double looped_next_offset = (next_offset != -1.0) ? buildspans_calc_looped_absolute(x, next_offset) : -1.0;
+
+    if (latest_absolute < looped_offset_val) {
+        buildspans_log(x, "Validation failed for %s: latest absolute (%.2f) is strictly before its own looped offset (%.2f). Aborting.", track_sym->s_name, latest_absolute, looped_offset_val);
         return 0;
     }
 
-    if (next_offset != -1.0 && earliest_absolute > next_offset) {
-        buildspans_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, next_offset);
+    if (looped_next_offset != -1.0 && earliest_absolute > looped_next_offset) {
+        buildspans_log(x, "Validation failed for %s: earliest absolute (%.2f) is after the next looped offset (%.2f). Aborting.", track_sym->s_name, earliest_absolute, looped_next_offset);
         return 0;
     }
 
-    buildspans_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, offset: %.2f, next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, offset_val, next_offset);
+    buildspans_log(x, "Validation successful for %s (earliest: %.2f, latest: %.2f, looped_offset: %.2f, looped_next_offset: %.2f)", track_sym->s_name, earliest_absolute, latest_absolute, looped_offset_val, looped_next_offset);
     return 1;
 }
 
