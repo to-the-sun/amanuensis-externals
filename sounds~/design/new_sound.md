@@ -28,7 +28,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Implement your synthesis logic in the `render_midi` function within `sound_design.c`.
 - The following "hook points" **must** be built into the sound design itself. Their values will be provided by standard MIDI, and they must do *something* in the code.
     1. **`note_on` and `note_off`:** A non-zero integer will arrive at `note_on` and a `0` will arrive at `note_off`. The typical use for these would be to signal the beginning of the attack and the beginning of the release, respectively, in a standard ADSR envelope. However, they could do anything else as well, for example, signal a modulation in pitch or some other aspect of timbre. Anything is fair game as long as they do something. It doesn't have to be related to amplitude at all.
-    2. **`pitch`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`), indicating the pitch the tonal portion of the sound must take on, in 12-tone equal temperament with MIDI note 69 (A4) at 440 Hz. To derive the hertz from the MIDI pitch, use:
+    2. **`pitch`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the pitch the tonal portion of the sound must take on, in 12-tone equal temperament with MIDI note 69 (A4) at 440 Hz. To derive the hertz from the MIDI pitch, use:
 
         ```
         #include <math.h>
