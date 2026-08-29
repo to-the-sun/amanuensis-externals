@@ -13,6 +13,21 @@
 
 #define MAX_VOICES 32
 #define MAX_MODULES 64
+#define EVENT_QUEUE_SIZE 512
+
+typedef enum {
+    EVENT_NOTE_ON,
+    EVENT_NOTE_OFF,
+    EVENT_PRESET,
+    EVENT_FLUSH
+} t_event_type;
+
+typedef struct {
+    t_event_type type;
+    int note;
+    int velocity;
+    int preset;
+} t_sound_event;
 
 typedef struct {
     char type[16];
@@ -58,6 +73,10 @@ typedef struct _sounds {
     t_critical lock;
     double sample_rate;
 
+    t_sound_event event_queue[EVENT_QUEUE_SIZE];
+    volatile int queue_head;
+    volatile int queue_tail;
+
     t_symbol* dict_name;
     double preset_durations[MAX_MODULES];
     double last_dict_val[MAX_MODULES];
@@ -100,6 +119,16 @@ void ext_main(void* r) {
     srand((unsigned int)time(NULL));
 }
 
+static void sounds_enqueue_event(t_sounds* x, t_sound_event ev) {
+    critical_enter(x->lock);
+    int next_head = (x->queue_head + 1) % EVENT_QUEUE_SIZE;
+    if (next_head != x->queue_tail) {
+        x->event_queue[x->queue_head] = ev;
+        x->queue_head = next_head;
+    }
+    critical_exit(x->lock);
+}
+
 void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
     t_sounds* x = (t_sounds*)object_alloc(sounds_class);
 
@@ -120,6 +149,8 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
         x->num_modules = 0;
         x->current_module = 0;
         x->sample_rate = 44100.0;
+        x->queue_head = 0;
+        x->queue_tail = 0;
 
         for (int i = 0; i < MAX_VOICES; i++) {
             x->voices[i].active = 0;
@@ -310,24 +341,22 @@ void sounds_preset(t_sounds* x, long n) {
     if (x->num_modules == 0) return;
     long zero_based = (n - 1) % x->num_modules;
     if (zero_based < 0) zero_based += x->num_modules;
-    x->current_module = (int)zero_based;
-    object_post((t_object*)x, "Switched to preset %d: %s", x->current_module + 1, x->modules[x->current_module].name);
+
+    t_sound_event ev;
+    ev.type = EVENT_PRESET;
+    ev.preset = (int)zero_based;
+    sounds_enqueue_event(x, ev);
+
+    object_post((t_object*)x, "Switched to preset %d: %s", (int)zero_based + 1, x->modules[zero_based].name);
     if (x->outlet_preset) {
-        outlet_int(x->outlet_preset, x->current_module + 1);
+        outlet_int(x->outlet_preset, (int)zero_based + 1);
     }
 }
 
 void sounds_flush(t_sounds* x) {
-    critical_enter(x->lock);
-    for (int i = 0; i < MAX_VOICES; i++) {
-        if (x->voices[i].active && !x->voices[i].releasing) {
-            x->voices[i].releasing = 1;
-            if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
-                x->voices[i].note_off_voice(x->voices[i].voice_instance);
-            }
-        }
-    }
-    critical_exit(x->lock);
+    t_sound_event ev;
+    ev.type = EVENT_FLUSH;
+    sounds_enqueue_event(x, ev);
 }
 
 void sounds_random(t_sounds* x) {
@@ -426,64 +455,18 @@ void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
     int velocity = atom_getlong(argv + 1);
 
     if (x->num_modules == 0) return;
-    t_sound_module* mod = &x->modules[x->current_module];
 
+    t_sound_event ev;
     if (velocity > 0) {
-        // Note On
-        if (!mod->create_voice) return;
-        void* new_inst = mod->create_voice(note, velocity, (int)x->sample_rate);
-        if (!new_inst) return;
-
-        critical_enter(x->lock);
-        int voice_idx = -1;
-        // Re-use voice playing same note
-        for (int i = 0; i < MAX_VOICES; i++) {
-            if (x->voices[i].active && x->voices[i].note == note) {
-                voice_idx = i;
-                break;
-            }
-        }
-        // Find free voice
-        if (voice_idx == -1) {
-            for (int i = 0; i < MAX_VOICES; i++) {
-                if (!x->voices[i].active) {
-                    voice_idx = i;
-                    break;
-                }
-            }
-        }
-
-        if (voice_idx != -1) {
-            if (x->voices[voice_idx].active && x->voices[voice_idx].voice_instance && x->voices[voice_idx].free_voice) {
-                x->voices[voice_idx].free_voice(x->voices[voice_idx].voice_instance);
-            }
-            x->voices[voice_idx].voice_instance = new_inst;
-            x->voices[voice_idx].create_voice = mod->create_voice;
-            x->voices[voice_idx].note_off_voice = mod->note_off_voice;
-            x->voices[voice_idx].process_voice = mod->process_voice;
-            x->voices[voice_idx].free_voice = mod->free_voice;
-            x->voices[voice_idx].note = note;
-            x->voices[voice_idx].velocity = velocity;
-            x->voices[voice_idx].releasing = 0;
-            x->voices[voice_idx].active = 1;
-        } else {
-            mod->free_voice(new_inst);
-        }
-        critical_exit(x->lock);
+        ev.type = EVENT_NOTE_ON;
+        ev.note = note;
+        ev.velocity = velocity;
     } else {
-        // Note Off
-        critical_enter(x->lock);
-        for (int i = 0; i < MAX_VOICES; i++) {
-            if (x->voices[i].active && x->voices[i].note == note && !x->voices[i].releasing) {
-                x->voices[i].releasing = 1;
-                if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
-                    x->voices[i].note_off_voice(x->voices[i].voice_instance);
-                }
-                break;
-            }
-        }
-        critical_exit(x->lock);
+        ev.type = EVENT_NOTE_OFF;
+        ev.note = note;
+        ev.velocity = 0;
     }
+    sounds_enqueue_event(x, ev);
 }
 
 void sounds_dsp64(t_sounds* x, t_object* dsp64, short* count, double samplerate, long maxvectorsize, long flags) {
@@ -500,10 +483,99 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
         outR[i] = 0.0;
     }
 
-    if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
-        double temp_buf[2048];
-        int frames_to_process = (sampleframes > 2048) ? 2048 : (int)sampleframes;
-        int active_voices = 0;
+    // Process queued events in the audio thread
+    while (x->queue_tail != x->queue_head) {
+        t_sound_event ev = x->event_queue[x->queue_tail];
+        x->queue_tail = (x->queue_tail + 1) % EVENT_QUEUE_SIZE;
+
+        if (ev.type == EVENT_PRESET) {
+            if (ev.preset >= 0 && ev.preset < x->num_modules) {
+                x->current_module = ev.preset;
+            }
+        } else if (ev.type == EVENT_FLUSH) {
+            for (int i = 0; i < MAX_VOICES; i++) {
+                if (x->voices[i].active && !x->voices[i].releasing) {
+                    x->voices[i].releasing = 1;
+                    if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
+                        x->voices[i].note_off_voice(x->voices[i].voice_instance);
+                    }
+                }
+            }
+        } else if (ev.type == EVENT_NOTE_OFF) {
+            for (int i = 0; i < MAX_VOICES; i++) {
+                if (x->voices[i].active && x->voices[i].note == ev.note && !x->voices[i].releasing) {
+                    x->voices[i].releasing = 1;
+                    if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
+                        x->voices[i].note_off_voice(x->voices[i].voice_instance);
+                    }
+                    break;
+                }
+            }
+        } else if (ev.type == EVENT_NOTE_ON) {
+            if (x->num_modules > 0 && x->current_module >= 0 && x->current_module < x->num_modules) {
+                t_sound_module* mod = &x->modules[x->current_module];
+                if (mod->create_voice) {
+                    void* new_inst = mod->create_voice(ev.note, ev.velocity, (int)x->sample_rate);
+                    if (new_inst) {
+                        // Issue #3 Solution: Put existing active voice on same pitch into release mode
+                        for (int i = 0; i < MAX_VOICES; i++) {
+                            if (x->voices[i].active && x->voices[i].note == ev.note && !x->voices[i].releasing) {
+                                x->voices[i].releasing = 1;
+                                if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
+                                    x->voices[i].note_off_voice(x->voices[i].voice_instance);
+                                }
+                            }
+                        }
+
+                        // Find a free voice slot
+                        int voice_idx = -1;
+                        for (int i = 0; i < MAX_VOICES; i++) {
+                            if (!x->voices[i].active) {
+                                voice_idx = i;
+                                break;
+                            }
+                        }
+
+                        // If all slots active, find a slot currently in release
+                        if (voice_idx == -1) {
+                            for (int i = 0; i < MAX_VOICES; i++) {
+                                if (x->voices[i].releasing) {
+                                    voice_idx = i;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Fallback: steal slot 0
+                        if (voice_idx == -1) {
+                            voice_idx = 0;
+                        }
+
+                        if (x->voices[voice_idx].active && x->voices[voice_idx].voice_instance && x->voices[voice_idx].free_voice) {
+                            x->voices[voice_idx].free_voice(x->voices[voice_idx].voice_instance);
+                            x->voices[voice_idx].voice_instance = NULL;
+                        }
+
+                        x->voices[voice_idx].voice_instance = new_inst;
+                        x->voices[voice_idx].create_voice = mod->create_voice;
+                        x->voices[voice_idx].note_off_voice = mod->note_off_voice;
+                        x->voices[voice_idx].process_voice = mod->process_voice;
+                        x->voices[voice_idx].free_voice = mod->free_voice;
+                        x->voices[voice_idx].note = ev.note;
+                        x->voices[voice_idx].velocity = ev.velocity;
+                        x->voices[voice_idx].releasing = 0;
+                        x->voices[voice_idx].active = 1;
+                    }
+                }
+            }
+        }
+    }
+
+    double temp_buf[2048];
+    int active_voices = 0;
+
+    for (int offset = 0; offset < (int)sampleframes; offset += 2048) {
+        int frames_to_process = ((int)sampleframes - offset > 2048) ? 2048 : ((int)sampleframes - offset);
 
         for (int v = 0; v < MAX_VOICES; v++) {
             if (x->voices[v].active && x->voices[v].voice_instance && x->voices[v].process_voice) {
@@ -511,8 +583,8 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
                 int still_active = x->voices[v].process_voice(x->voices[v].voice_instance, temp_buf, frames_to_process);
 
                 for (int i = 0; i < frames_to_process; i++) {
-                    outL[i] += temp_buf[i];
-                    outR[i] += temp_buf[i];
+                    outL[offset + i] += temp_buf[i];
+                    outR[offset + i] += temp_buf[i];
                 }
 
                 if (!still_active) {
@@ -522,20 +594,18 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
                     x->voices[v].voice_instance = NULL;
                     x->voices[v].active = 0;
                     x->voices[v].releasing = 0;
-                } else {
+                } else if (offset == 0) {
                     active_voices++;
                 }
             }
         }
+    }
 
-        if (active_voices > 0 && x->dict_name != _sym_nothing && x->num_modules > 0) {
-            if (x->current_module >= 0 && x->current_module < x->num_modules) {
-                double delta_sec = (double)sampleframes / x->sample_rate;
-                x->preset_durations[x->current_module] += delta_sec;
-            }
+    if (active_voices > 0 && x->dict_name != _sym_nothing && x->num_modules > 0) {
+        if (x->current_module >= 0 && x->current_module < x->num_modules) {
+            double delta_sec = (double)sampleframes / x->sample_rate;
+            x->preset_durations[x->current_module] += delta_sec;
         }
-
-        critical_exit(x->lock);
     }
 }
 
