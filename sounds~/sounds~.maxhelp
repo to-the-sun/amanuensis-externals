@@ -55,8 +55,20 @@
 					"numinlets" : 1,
 					"numoutlets" : 2,
 					"outlettype" : [ "signal", "signal" ],
-					"patching_rect" : [ 50.0, 250.0, 100.0, 22.0 ],
-					"text" : "sounds~"
+					"patching_rect" : [ 50.0, 250.0, 160.0, 22.0 ],
+					"text" : "sounds~ preset_durations"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-11",
+					"maxclass" : "newobj",
+					"numinlets" : 2,
+					"numoutlets" : 4,
+					"outlettype" : [ "dictionary", "", "", "" ],
+					"patching_rect" : [ 250.0, 250.0, 150.0, 22.0 ],
+					"text" : "dict preset_durations"
 				}
 
 			}
