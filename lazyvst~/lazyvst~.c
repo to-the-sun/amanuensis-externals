@@ -5,6 +5,7 @@
 #include "ext_obex.h"
 #include "ext_systhread.h"
 #include "ext_critical.h"
+#include "ext_buffer.h"
 #include "z_dsp.h"
 
 #define kEffectMagic 0x56737450
@@ -160,24 +161,33 @@ typedef struct _lazyvst {
     long debug_host;
     long loading;
     t_critical lock;
+
+    VstTimeInfo time_info;
+    t_symbol *b_src_name;
+    t_symbol *b_dest_name;
+    double b_start_ms;
+    double b_end_ms;
+    long b_busy;
+    t_qelem *q_bounce;
+    void *outlet_bounce;
 } t_lazyvst;
 
 intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt) {
-    static VstTimeInfo timeInfo = { 0 };
     t_lazyvst *x = (effect) ? (t_lazyvst*)effect->user : NULL;
 
-    timeInfo.samplePos = 0.0;
-    timeInfo.sampleRate = (x && x->cur_sr > 0) ? x->cur_sr : 44100.0;
-    timeInfo.nanoSeconds = 0.0;
-    timeInfo.ppqPos = 0.0;
-    timeInfo.tempo = 120.0;
-    timeInfo.barStartPos = 0.0;
-    timeInfo.cycleStartPos = 0.0;
-    timeInfo.cycleEndPos = 0.0;
-    timeInfo.timeSigNumerator = 4;
-    timeInfo.timeSigDenominator = 4;
-    timeInfo.samplesToNextClock = 0;
-    timeInfo.flags = 1 | 2 | 1024 | 2048; // TransportChanged | TransportPlaying | TimeSigValid | TempoValid
+    if (x) {
+        x->time_info.sampleRate = (x->cur_sr > 0) ? x->cur_sr : 44100.0;
+        x->time_info.nanoSeconds = 0.0;
+        x->time_info.ppqPos = 0.0;
+        x->time_info.tempo = 120.0;
+        x->time_info.barStartPos = 0.0;
+        x->time_info.cycleStartPos = 0.0;
+        x->time_info.cycleEndPos = 0.0;
+        x->time_info.timeSigNumerator = 4;
+        x->time_info.timeSigDenominator = 4;
+        x->time_info.samplesToNextClock = 0;
+        x->time_info.flags = 1 | 2 | 1024 | 2048; // TransportChanged | TransportPlaying | TimeSigValid | TempoValid
+    }
 
     // Comprehensive host call tracing
     if (x && x->debug_host) {
@@ -192,7 +202,7 @@ intptr_t hostCallback(struct AEffect* effect, int32_t opcode, int32_t index, int
         case audioMasterIdle:
             return 0;
         case audioMasterGetTime:
-            return (intptr_t)&timeInfo;
+            return (intptr_t)(x ? &x->time_info : NULL);
         case audioMasterGetSampleRate:
             return (intptr_t)((x && x->cur_sr > 0) ? x->cur_sr : 44100.0);
         case audioMasterGetBlockSize:
@@ -267,6 +277,9 @@ void lazyvst_vstinfo(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_params(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_list(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
 void lazyvst_vstdebug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void lazyvst_bounce(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv);
+void *lazyvst_bounce_worker(t_lazyvst *x);
+void lazyvst_bounce_done(t_lazyvst *x);
 unsigned char *lazyvst_base64_decode(const char *in, size_t *out_len);
 
 static t_class *lazyvst_class;
@@ -345,6 +358,7 @@ void ext_main(void *r) {
     class_addmethod(c, (method)lazyvst_params, "params", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_list, "list", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_vstdebug, "vstdebug", A_GIMME, 0);
+    class_addmethod(c, (method)lazyvst_bounce, "bounce", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_bang, "bang", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_anything, "anything", A_GIMME, 0);
     class_addmethod(c, (method)lazyvst_dsp64, "dsp64", A_CANT, 0);
@@ -471,6 +485,227 @@ void lazyvst_vstdebug(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
     long state = (argc > 0) ? atom_getlong(argv) : 0;
     x->debug_host = state;
     post("lazyvst~: Host call debugging %s.", state ? "ENABLED" : "DISABLED");
+}
+
+void lazyvst_bounce(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
+    if (x->loading) {
+        defer_low(x, (method)lazyvst_bounce, s, argc, argv);
+        return;
+    }
+
+    if (!x->effect) {
+        error("lazyvst~: cannot bounce, no plugin loaded");
+        return;
+    }
+
+    if (x->b_busy) {
+        error("lazyvst~: bounce already in progress");
+        return;
+    }
+
+    if (argc < 2) {
+        error("lazyvst~: bounce requires source and destination buffer names");
+        return;
+    }
+
+    t_symbol *src = atom_getsym(argv);
+    t_symbol *dest = atom_getsym(argv + 1);
+    double start_ms = (argc > 2) ? atom_getfloat(argv + 2) : 0.0;
+    double end_ms = (argc > 3) ? atom_getfloat(argv + 3) : -1.0;
+
+    // Verify buffers exist
+    t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, src);
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, dest);
+
+    if (!buffer_ref_getobject(src_ref)) {
+        error("lazyvst~: source buffer '%s' not found", src->s_name);
+        object_free(src_ref);
+        object_free(dest_ref);
+        return;
+    }
+
+    if (!buffer_ref_getobject(dest_ref)) {
+        error("lazyvst~: destination buffer '%s' not found", dest->s_name);
+        object_free(src_ref);
+        object_free(dest_ref);
+        return;
+    }
+
+    object_free(src_ref);
+    object_free(dest_ref);
+
+    x->b_src_name = src;
+    x->b_dest_name = dest;
+    x->b_start_ms = start_ms;
+    x->b_end_ms = end_ms;
+    x->b_busy = 1;
+
+    post("lazyvst~: beginning offline bounce from '%s' to '%s'...", src->s_name, dest->s_name);
+    systhread_create((method)lazyvst_bounce_worker, x, 0, 0, 0, &x->thread);
+}
+
+void *lazyvst_bounce_worker(t_lazyvst *x) {
+    t_buffer_ref *src_ref = buffer_ref_new((t_object *)x, x->b_src_name);
+    t_buffer_ref *dest_ref = buffer_ref_new((t_object *)x, x->b_dest_name);
+    t_buffer_obj *src_obj = buffer_ref_getobject(src_ref);
+    t_buffer_obj *dest_obj = buffer_ref_getobject(dest_ref);
+    float *src_samples = NULL;
+    float *dest_samples = NULL;
+    float **vst_f_ins = NULL;
+    float **vst_f_outs = NULL;
+
+    if (!src_obj || !dest_obj) {
+        error("lazyvst~: bounce failed, buffer(s) no longer valid");
+        goto cleanup;
+    }
+
+    double sr = buffer_getsamplerate(src_obj);
+    if (sr <= 0) sr = 44100.0;
+    long long total_frames = buffer_getframecount(src_obj);
+    long src_chans = (long)buffer_getchannelcount(src_obj);
+    long dest_chans = (long)buffer_getchannelcount(dest_obj);
+    long long dest_frames = buffer_getframecount(dest_obj);
+
+    long long start_frame = (long long)round(x->b_start_ms * sr / 1000.0);
+    long long end_frame = (x->b_end_ms < 0) ? total_frames : (long long)round(x->b_end_ms * sr / 1000.0);
+
+    if (start_frame < 0) start_frame = 0;
+    if (end_frame > total_frames) end_frame = total_frames;
+    if (start_frame >= end_frame) {
+        error("lazyvst~: bounce failed, invalid frame range");
+        goto cleanup;
+    }
+
+    long long frames_to_process = end_frame - start_frame;
+    if (frames_to_process > dest_frames) {
+        error("lazyvst~: bounce failed, destination buffer too small (needs %lld frames, has %lld)", frames_to_process, dest_frames);
+        goto cleanup;
+    }
+
+    src_samples = buffer_locksamples(src_obj);
+    dest_samples = buffer_locksamples(dest_obj);
+
+    if (!src_samples || !dest_samples) {
+        error("lazyvst~: bounce failed, could not lock buffer samples");
+        goto cleanup;
+    }
+
+    critical_enter(x->lock);
+    long block_size = 1024;
+    x->effect->dispatcher(x->effect, effSetSampleRate, 0, 0, NULL, (float)sr);
+    x->effect->dispatcher(x->effect, effSetBlockSize, 0, block_size, NULL, 0.0f);
+    x->effect->dispatcher(x->effect, effMainsChanged, 0, 1, NULL, 0.0f);
+
+    vst_f_ins = (x->vst_inputs > 0) ? (float**)sysmem_newptr(sizeof(float*) * x->vst_inputs) : NULL;
+    vst_f_outs = (x->vst_outputs > 0) ? (float**)sysmem_newptr(sizeof(float*) * x->vst_outputs) : NULL;
+
+    if (x->vst_inputs > 0 && !vst_f_ins) { error("lazyvst~: bounce failed, memory allocation error"); goto cleanup; }
+    if (x->vst_outputs > 0 && !vst_f_outs) { error("lazyvst~: bounce failed, memory allocation error"); goto cleanup; }
+
+    if (vst_f_ins) {
+        for (int i = 0; i < x->vst_inputs; i++) {
+            vst_f_ins[i] = (float*)sysmem_newptrclear(sizeof(float) * block_size);
+            if (!vst_f_ins[i]) { error("lazyvst~: bounce failed, memory allocation error"); goto cleanup; }
+        }
+    }
+    if (vst_f_outs) {
+        for (int i = 0; i < x->vst_outputs; i++) {
+            vst_f_outs[i] = (float*)sysmem_newptrclear(sizeof(float) * block_size);
+            if (!vst_f_outs[i]) { error("lazyvst~: bounce failed, memory allocation error"); goto cleanup; }
+        }
+    }
+
+    x->time_info.sampleRate = sr;
+    x->time_info.tempo = 120.0;
+    x->time_info.timeSigNumerator = 4;
+    x->time_info.timeSigDenominator = 4;
+    x->time_info.flags = 1 | 2 | 1024 | 2048; // TransportChanged | TransportPlaying | TimeSigValid | TempoValid
+
+    for (long long f = 0; f < frames_to_process; f += block_size) {
+        long cur_block = (long)((f + block_size > frames_to_process) ? (frames_to_process - f) : block_size);
+
+        // Fill inputs
+        if (vst_f_ins) {
+            for (int c = 0; c < x->vst_inputs; c++) {
+                if (c < src_chans) {
+                    for (int i = 0; i < cur_block; i++) {
+                        vst_f_ins[c][i] = src_samples[(start_frame + f + i) * src_chans + c];
+                    }
+                } else {
+                    memset(vst_f_ins[c], 0, sizeof(float) * cur_block);
+                }
+            }
+        }
+
+        // Process
+        x->time_info.samplePos = (double)(start_frame + f);
+        x->time_info.ppqPos = x->time_info.samplePos / sr * (x->time_info.tempo / 60.0);
+        x->time_info.nanoSeconds = x->time_info.samplePos / sr * 1000000000.0;
+
+        if (x->effect->flags & effFlagsCanReplacing) {
+            ((VstProcessProc*)x->effect->processReplacing)(x->effect, vst_f_ins, vst_f_outs, (int32_t)cur_block);
+        }
+
+        // Fill outputs - destination always starts at 0
+        if (vst_f_outs) {
+            for (int c = 0; c < dest_chans; c++) {
+                if (c < x->vst_outputs) {
+                    for (int i = 0; i < cur_block; i++) {
+                        dest_samples[(f + i) * dest_chans + c] = vst_f_outs[c][i];
+                    }
+                }
+            }
+        }
+    }
+
+    x->effect->dispatcher(x->effect, effMainsChanged, 0, 0, NULL, 0.0f);
+
+    if (vst_f_ins) {
+        for (int i = 0; i < x->vst_inputs; i++) if (vst_f_ins[i]) sysmem_freeptr(vst_f_ins[i]);
+        sysmem_freeptr(vst_f_ins);
+        vst_f_ins = NULL;
+    }
+    if (vst_f_outs) {
+        for (int i = 0; i < x->vst_outputs; i++) if (vst_f_outs[i]) sysmem_freeptr(vst_f_outs[i]);
+        sysmem_freeptr(vst_f_outs);
+        vst_f_outs = NULL;
+    }
+
+    critical_exit(x->lock);
+
+cleanup:
+    if (vst_f_ins) {
+        for (int i = 0; i < x->vst_inputs; i++) if (vst_f_ins[i]) sysmem_freeptr(vst_f_ins[i]);
+        sysmem_freeptr(vst_f_ins);
+    }
+    if (vst_f_outs) {
+        for (int i = 0; i < x->vst_outputs; i++) if (vst_f_outs[i]) sysmem_freeptr(vst_f_outs[i]);
+        sysmem_freeptr(vst_f_outs);
+    }
+
+    if (src_obj && src_samples) buffer_unlocksamples(src_obj);
+    if (dest_obj) {
+        if (dest_samples) {
+            buffer_setdirty(dest_obj);
+            buffer_unlocksamples(dest_obj);
+        }
+    }
+
+    if (src_ref) object_free(src_ref);
+    if (dest_ref) object_free(dest_ref);
+
+    qelem_set(x->q_bounce);
+    return NULL;
+}
+
+void lazyvst_bounce_done(t_lazyvst *x) {
+    if (x->thread) {
+        systhread_join(x->thread, NULL);
+        x->thread = NULL;
+    }
+    x->b_busy = 0;
+    outlet_bang(x->outlet_bounce);
+    post("lazyvst~: offline bounce complete.");
 }
 
 void lazyvst_snapshot(t_lazyvst *x, t_symbol *s, long argc, t_atom *argv) {
@@ -836,12 +1071,16 @@ void lazyvst_perform64(t_lazyvst *x, t_object *dsp64, double **ins, long numins,
 void lazyvst_assist(t_lazyvst *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         if (a == 0) {
-            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld (min. 4 inlets)", a + 1, a + 1);
+            sprintf(s, "Inlet %ld (signal/messages): VST Input %ld (min. 4 inlets), bounce [src] [dest] [start] [end]", a + 1, a + 1);
         } else {
             sprintf(s, "Inlet %ld (signal): VST Input %ld", a + 1, a + 1);
         }
     } else {
-        sprintf(s, "Outlet %ld (signal): VST Output %ld (min. 4 outlets)", a + 1, a + 1);
+        if (a < x->num_outputs) {
+            sprintf(s, "Outlet %ld (signal): VST Output %ld (min. 4 outlets)", a + 1, a + 1);
+        } else {
+            sprintf(s, "Outlet %ld (bang): offline bounce complete", a + 1);
+        }
     }
 }
 
@@ -1130,6 +1369,9 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         x->debug_host = 0;
         x->loading = 0;
         x->q_instantiate = qelem_new(x, (method)lazyvst_do_instantiate);
+        x->q_bounce = qelem_new(x, (method)lazyvst_bounce_done);
+        x->b_busy = 0;
+        memset(&x->time_info, 0, sizeof(VstTimeInfo));
 
         if (argc > 0 && atom_gettype(argv) == A_SYM) {
             t_symbol *path_sym = atom_getsym(argv);
@@ -1181,6 +1423,7 @@ void *lazyvst_new(t_symbol *s, long argc, t_atom *argv) {
         for (long i = 0; i < x->num_outputs; i++) {
             outlet_new((t_object *)x, "signal");
         }
+        x->outlet_bounce = outlet_new((t_object *)x, NULL);
     }
     return x;
 }
@@ -1191,6 +1434,11 @@ void lazyvst_free(t_lazyvst *x) {
     if (x->q_instantiate) {
         qelem_free(x->q_instantiate);
         x->q_instantiate = NULL;
+    }
+
+    if (x->q_bounce) {
+        qelem_free(x->q_bounce);
+        x->q_bounce = NULL;
     }
 
     if (x->thread) {

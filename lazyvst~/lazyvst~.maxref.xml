@@ -23,6 +23,10 @@
 			<digest>Audio Output</digest>
 			<description>The outlets correspond to the VST's audio outputs.</description>
 		</outlet>
+		<outlet id="1" type="bang">
+			<digest>Offline Bounce Complete</digest>
+			<description>A bang is output when an offline bounce process initiated by the <m>bounce</m> message has finished.</description>
+		</outlet>
 	</outletlist>
 	<!--ARGUMENTS-->
 	<argumentlist>
@@ -84,6 +88,18 @@
 			<digest>Toggle host call debugging</digest>
 			<description>
 				Enables (1) or disables (0) verbose logging of calls made by the plugin to the host.
+			</description>
+		</method>
+		<method name="bounce">
+			<digest>Perform an offline bounce</digest>
+			<description>
+				Initiates an offline processing of audio from one buffer to another through the loaded VST plugin.
+				The message takes the following arguments:
+				1. <m>source_buffer</m> (symbol): The name of the buffer containing the source audio.
+				2. <m>dest_buffer</m> (symbol): The name of the buffer where the results will be written.
+				3. <m>start_ms</m> (float, optional): The start position in the source buffer in milliseconds (default 0.0).
+				4. <m>end_ms</m> (float, optional): The end position in the source buffer in milliseconds (default -1.0, meaning the end of the buffer).
+				The process runs in a background thread at maximum speed. A bang is sent from the last outlet when finished.
 			</description>
 		</method>
 		<method name="bang">
