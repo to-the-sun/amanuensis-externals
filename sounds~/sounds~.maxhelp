@@ -53,8 +53,8 @@
 					"id" : "obj-9",
 					"maxclass" : "newobj",
 					"numinlets" : 1,
-					"numoutlets" : 2,
-					"outlettype" : [ "signal", "signal" ],
+					"numoutlets" : 3,
+					"outlettype" : [ "signal", "signal", "int" ],
 					"patching_rect" : [ 50.0, 250.0, 160.0, 22.0 ],
 					"text" : "sounds~ preset_durations"
 				}

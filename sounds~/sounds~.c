@@ -63,6 +63,7 @@ typedef struct _sounds {
     double last_dict_val[MAX_MODULES];
     int dict_initialized[MAX_MODULES];
     t_clock* dict_clock;
+    void* outlet_preset;
 } t_sounds;
 
 void* sounds_new(t_symbol* s, long argc, t_atom* argv);
@@ -109,6 +110,7 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
         }
 
         dsp_setup((t_pxobject*)x, 1);
+        x->outlet_preset = outlet_new(x, NULL); // Preset Int (Rightmost)
         outlet_new(x, "signal"); // Right
         outlet_new(x, "signal"); // Left
 
@@ -308,6 +310,9 @@ void sounds_preset(t_sounds* x, long n) {
     if (zero_based < 0) zero_based += x->num_modules;
     x->current_module = (int)zero_based;
     object_post((t_object*)x, "Switched to preset %d: %s", x->current_module + 1, x->modules[x->current_module].name);
+    if (x->outlet_preset) {
+        outlet_int(x->outlet_preset, x->current_module + 1);
+    }
 }
 
 void sounds_random(t_sounds* x) {
@@ -524,6 +529,7 @@ void sounds_assist(t_sounds* x, void* b, long m, long a, char* s) {
         sprintf(s, "MIDI (list), midievent, messages. Optional argument: duration dict name");
     } else {
         if (a == 0) sprintf(s, "(signal) Left Output");
-        else sprintf(s, "(signal) Right Output");
+        else if (a == 1) sprintf(s, "(signal) Right Output");
+        else if (a == 2) sprintf(s, "(int) Current Preset Index (1-based)");
     }
 }

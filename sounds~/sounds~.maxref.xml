@@ -19,6 +19,20 @@
 			</description>
 		</objarg>
 	</objarglist>
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Left channel audio output</digest>
+			<description>Left channel audio signal output.</description>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>Right channel audio output</digest>
+			<description>Right channel audio signal output.</description>
+		</outlet>
+		<outlet id="2" type="int">
+			<digest>Current preset number</digest>
+			<description>Outputs the 1-based integer number of the active preset whenever it is changed.</description>
+		</outlet>
+	</outletlist>
 	<methodlist>
 		<method name="list">
 			<arglist>
