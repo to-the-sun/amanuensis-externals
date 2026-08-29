@@ -9,132 +9,153 @@
 #endif
 
 typedef struct {
-    double start_time;
+    int note;
     int velocity;
-    int active;
-} ActiveNote;
+    int sample_rate;
+    double freq;
+    double vel_scale;
+    int is_note_on;
 
-static void adsr_envelope(double* buffer, int duration_samples, int attack_samples, int decay_samples, double sustain_level, int release_samples, int is_sustained) {
-    int a_len = attack_samples;
-    int d_len = decay_samples;
-    int r_len = is_sustained ? 0 : release_samples;
+    // Amp Env
+    double amp_attack, amp_decay, amp_sustain, amp_release;
+    double amp_env_level;
+    int amp_env_stage;
+    double amp_release_start;
 
-    int total_adr = a_len + d_len + r_len;
-    int s_len;
+    // Mod Env
+    double mod_attack, mod_decay, mod_sustain, mod_release;
+    double mod_env_level;
+    int mod_env_stage;
+    double mod_release_start;
 
-    if (duration_samples < total_adr && total_adr > 0) {
-        double scale = (double)duration_samples / total_adr;
-        a_len = (int)(a_len * scale);
-        d_len = (int)(d_len * scale);
-        r_len = (int)(r_len * scale);
-        s_len = 0;
-    } else {
-        s_len = duration_samples - a_len - d_len - r_len;
-    }
+    double phase;
+} Sound4Voice;
 
-    int current = 0;
-    // Attack
-    for (int i = 0; i < a_len && current < duration_samples; i++, current++) {
-        buffer[current] = (double)i / a_len;
-    }
-    // Decay
-    for (int i = 0; i < d_len && current < duration_samples; i++, current++) {
-        buffer[current] = 1.0 - (1.0 - sustain_level) * ((double)i / d_len);
-    }
-    // Sustain
-    for (int i = 0; i < s_len && current < duration_samples; i++, current++) {
-        buffer[current] = sustain_level;
-    }
-    // Release
-    if (!is_sustained) {
-        for (int i = 0; i < r_len && current < duration_samples; i++, current++) {
-            buffer[current] = sustain_level * (1.0 - (double)i / r_len);
-        }
-    }
-
-    // Fill remaining if any
-    while (current < duration_samples) {
-        buffer[current++] = is_sustained ? sustain_level : 0.0;
-    }
+static double midi_to_hz_tuned(int midi_note, double a4_hz) {
+    return a4_hz * pow(2.0, ((double)midi_note - 69.0) / 12.0);
 }
 
-static void render_note(double* output, int num_samples, int note_num, double start_time, double end_time, int velocity, int sample_rate, int is_sustained) {
-    // FM Bell parameters
+void* create_voice(int note, int velocity, int sample_rate) {
+    Sound4Voice* v = (Sound4Voice*)calloc(1, sizeof(Sound4Voice));
+    if (!v) return NULL;
+    v->note = note;
+    v->velocity = velocity;
+    v->sample_rate = sample_rate;
+    v->freq = midi_to_hz_tuned(note, 440.0);
+    v->vel_scale = (double)velocity / 127.0;
+    v->is_note_on = 1;
+
+    v->amp_attack = 0.002; v->amp_decay = 0.8; v->amp_sustain = 0.05; v->amp_release = 0.3;
+    v->mod_attack = 0.001; v->mod_decay = 0.15; v->mod_sustain = 0.1; v->mod_release = 0.1;
+
+    v->amp_env_level = 0.0; v->amp_env_stage = 0;
+    v->mod_env_level = 0.0; v->mod_env_stage = 0;
+    v->phase = 0.0;
+    return v;
+}
+
+void note_off_voice(void* voice_ptr) {
+    if (!voice_ptr) return;
+    Sound4Voice* v = (Sound4Voice*)voice_ptr;
+    v->is_note_on = 0;
+    if (v->amp_env_stage < 3) { v->amp_env_stage = 3; v->amp_release_start = v->amp_env_level; }
+    if (v->mod_env_stage < 3) { v->mod_env_stage = 3; v->mod_release_start = v->mod_env_level; }
+}
+
+int process_voice(void* voice_ptr, double* buffer, int num_samples) {
+    if (!voice_ptr) return 0;
+    Sound4Voice* v = (Sound4Voice*)voice_ptr;
+    if (v->amp_env_stage == 4) return 0;
+
+    double dt = 1.0 / v->sample_rate;
     double mod_ratio = 2.718;
     double mod_index_max = 8.0;
     double mod_index_min = 0.5;
+    double gain = 0.851774;
 
-    double amp_attack = 0.002;
-    double amp_decay = 0.8;
-    double amp_sustain = 0.05;
-    double amp_release = 0.3;
+    for (int i = 0; i < num_samples; i++) {
+        // Amp Env update
+        if (v->amp_env_stage == 0) {
+            v->amp_env_level += dt / v->amp_attack;
+            if (v->amp_env_level >= 1.0) { v->amp_env_level = 1.0; v->amp_env_stage = 1; }
+        } else if (v->amp_env_stage == 1) {
+            v->amp_env_level -= dt * (1.0 - v->amp_sustain) / v->amp_decay;
+            if (v->amp_env_level <= v->amp_sustain) { v->amp_env_level = v->amp_sustain; v->amp_env_stage = 2; }
+        } else if (v->amp_env_stage == 2) {
+            v->amp_env_level = v->amp_sustain;
+            if (!v->is_note_on) { v->amp_env_stage = 3; v->amp_release_start = v->amp_env_level; }
+        } else if (v->amp_env_stage == 3) {
+            v->amp_env_level -= dt * (v->amp_release_start > 0 ? v->amp_release_start : 0.05) / v->amp_release;
+            if (v->amp_env_level <= 0.0) { v->amp_env_level = 0.0; v->amp_env_stage = 4; }
+        }
 
-    double mod_attack = 0.001;
-    double mod_decay = 0.15;
-    double mod_sustain = 0.1;
-    double mod_release = 0.1;
+        // Mod Env update
+        if (v->mod_env_stage == 0) {
+            v->mod_env_level += dt / v->mod_attack;
+            if (v->mod_env_level >= 1.0) { v->mod_env_level = 1.0; v->mod_env_stage = 1; }
+        } else if (v->mod_env_stage == 1) {
+            v->mod_env_level -= dt * (1.0 - v->mod_sustain) / v->mod_decay;
+            if (v->mod_env_level <= v->mod_sustain) { v->mod_env_level = v->mod_sustain; v->mod_env_stage = 2; }
+        } else if (v->mod_env_stage == 2) {
+            v->mod_env_level = v->mod_sustain;
+            if (!v->is_note_on) { v->mod_env_stage = 3; v->mod_release_start = v->mod_env_level; }
+        } else if (v->mod_env_stage == 3) {
+            v->mod_env_level -= dt * (v->mod_release_start > 0 ? v->mod_release_start : 0.1) / v->mod_release;
+            if (v->mod_env_level <= 0.0) { v->mod_env_level = 0.0; v->mod_env_stage = 4; }
+        }
 
-    double freq = 440.0 * pow(2.0, (note_num - 69) / 12.0);
-    double note_duration = is_sustained ? (end_time - start_time) : (end_time - start_time + amp_release);
-    int note_samples = (int)(note_duration * sample_rate);
+        if (v->amp_env_stage == 4) break;
 
-    int start_idx = (int)(start_time * sample_rate);
-    int end_idx = start_idx + note_samples;
-    if (end_idx > num_samples) end_idx = num_samples;
-    int actual_samples = end_idx - start_idx;
-
-    if (actual_samples <= 0) return;
-
-    double* mod_env = (double*)malloc(actual_samples * sizeof(double));
-    double* amp_env = (double*)malloc(actual_samples * sizeof(double));
-
-    adsr_envelope(mod_env, actual_samples, (int)(mod_attack * sample_rate), (int)(mod_decay * sample_rate), mod_sustain, (int)(mod_release * sample_rate), is_sustained);
-    adsr_envelope(amp_env, actual_samples, (int)(amp_attack * sample_rate), (int)(amp_decay * sample_rate), amp_sustain, (int)(amp_release * sample_rate), is_sustained);
-
-    double mod_freq = freq * mod_ratio;
-
-    for (int i = 0; i < actual_samples; i++) {
-        double t = (double)i / sample_rate + start_time;
-        double current_mod_index = mod_index_min + (mod_index_max - mod_index_min) * mod_env[i];
+        double t = v->phase;
+        double mod_freq = v->freq * mod_ratio;
+        double current_mod_index = mod_index_min + (mod_index_max - mod_index_min) * v->mod_env_level;
         double modulator = current_mod_index * sin(2.0 * M_PI * mod_freq * t);
-        double wave = sin(2.0 * M_PI * freq * t + modulator);
+        double wave = sin(2.0 * M_PI * v->freq * t + modulator);
 
-        output[start_idx + i] += wave * amp_env[i] * (velocity / 127.0) * 0.851774;
+        buffer[i] += wave * v->amp_env_level * v->vel_scale * gain;
+        v->phase += dt;
     }
 
-    free(mod_env);
-    free(amp_env);
+    return (v->amp_env_stage < 4);
+}
+
+void free_voice(void* voice_ptr) {
+    if (voice_ptr) free(voice_ptr);
 }
 
 double* render_midi(MidiMessage* midi_messages, int num_messages, double duration, int sample_rate, int* num_samples_out) {
     int num_samples = (int)(duration * sample_rate);
     *num_samples_out = num_samples;
     double* output = (double*)calloc(num_samples, sizeof(double));
+    void* active_voices[128] = {NULL};
 
-    ActiveNote active_notes[128];
-    for (int i = 0; i < 128; i++) active_notes[i].active = 0;
+    int block_size = 64;
+    for (int start = 0; start < num_samples; start += block_size) {
+        int count = block_size;
+        if (start + count > num_samples) count = num_samples - start;
+        double cur_time = (double)start / sample_rate;
+        double end_time = (double)(start + count) / sample_rate;
 
-    for (int i = 0; i < num_messages; i++) {
-        MidiMessage msg = midi_messages[i];
-        if (msg.time >= duration) continue;
+        for (int m = 0; m < num_messages; m++) {
+            if (midi_messages[m].time >= cur_time && midi_messages[m].time < end_time) {
+                int note = midi_messages[m].note;
+                if (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity > 0) {
+                    if (active_voices[note]) free_voice(active_voices[note]);
+                    active_voices[note] = create_voice(note, midi_messages[m].velocity, sample_rate);
+                } else if (strcmp(midi_messages[m].type, "note_off") == 0 || (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity == 0)) {
+                    if (active_voices[note]) note_off_voice(active_voices[note]);
+                }
+            }
+        }
 
-        if (strcmp(msg.type, "note_on") == 0 && msg.velocity > 0) {
-            active_notes[msg.note].start_time = msg.time;
-            active_notes[msg.note].velocity = msg.velocity;
-            active_notes[msg.note].active = 1;
-        } else if (strcmp(msg.type, "note_off") == 0 || (strcmp(msg.type, "note_on") == 0 && msg.velocity == 0)) {
-            if (active_notes[msg.note].active) {
-                render_note(output, num_samples, msg.note, active_notes[msg.note].start_time, msg.time, active_notes[msg.note].velocity, sample_rate, 0);
-                active_notes[msg.note].active = 0;
+        for (int n = 0; n < 128; n++) {
+            if (active_voices[n]) {
+                int still_active = process_voice(active_voices[n], output + start, count);
+                if (!still_active) { free_voice(active_voices[n]); active_voices[n] = NULL; }
             }
         }
     }
 
-    for (int i = 0; i < 128; i++) {
-        if (active_notes[i].active) {
-            render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
-        }
-    }
-
+    for (int n = 0; n < 128; n++) if (active_voices[n]) free_voice(active_voices[n]);
     return output;
 }

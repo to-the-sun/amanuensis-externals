@@ -11,8 +11,6 @@
 
 #define MAX_VOICES 32
 #define MAX_MODULES 64
-#define DEFAULT_SUSTAIN_DURATION 10.0
-#define RELEASE_EXTRA_TIME 2.0
 
 typedef struct {
     char type[16];
@@ -21,18 +19,28 @@ typedef struct {
     double time;
 } MidiMessage;
 
+typedef void* (*create_voice_ptr)(int note, int velocity, int sample_rate);
+typedef void (*note_off_voice_ptr)(void* voice_ptr);
+typedef int (*process_voice_ptr)(void* voice_ptr, double* buffer, int num_samples);
+typedef void (*free_voice_ptr)(void* voice_ptr);
 typedef double* (*render_midi_ptr)(MidiMessage* midi_messages, int num_messages, double duration, int sample_rate, int* num_samples_out);
 
 typedef struct {
     HINSTANCE hLib;
+    create_voice_ptr create_voice;
+    note_off_voice_ptr note_off_voice;
+    process_voice_ptr process_voice;
+    free_voice_ptr free_voice;
     render_midi_ptr render_midi;
     char name[256];
 } t_sound_module;
 
 typedef struct {
-    double* buffer;
-    int length;
-    int pos;
+    void* voice_instance;
+    create_voice_ptr create_voice;
+    note_off_voice_ptr note_off_voice;
+    process_voice_ptr process_voice;
+    free_voice_ptr free_voice;
     int note;
     int velocity;
     int active;
@@ -84,9 +92,8 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
 
     if (x) {
         dsp_setup((t_pxobject*)x, 1);
-        // Outlets created right-to-left
-        outlet_new(x, "signal"); // Right (Index 1)
-        outlet_new(x, "signal"); // Left (Index 0)
+        outlet_new(x, "signal"); // Right
+        outlet_new(x, "signal"); // Left
 
         critical_new(&x->lock);
         x->num_modules = 0;
@@ -95,16 +102,14 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
 
         for (int i = 0; i < MAX_VOICES; i++) {
             x->voices[i].active = 0;
-            x->voices[i].buffer = NULL;
+            x->voices[i].voice_instance = NULL;
         }
 
-        // Scan for modules
         char module_dir_abs[MAX_PATH_CHARS];
         char module_dir_rel[] = "modules";
         short pathid = 0;
         t_fourcc type = 0;
 
-        // Find the object's path to locate modules/ relative to it
         char object_filename[MAX_FILENAME_CHARS];
         strncpy(object_filename, "sounds~.mxe64", MAX_FILENAME_CHARS);
 
@@ -112,7 +117,6 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
             char object_path[MAX_PATH_CHARS];
             path_toabsolutesystempath(pathid, object_filename, object_path);
 
-            // Get directory of the object
             char* last_slash = strrchr(object_path, '\\');
             if (!last_slash) last_slash = strrchr(object_path, '/');
             if (last_slash) {
@@ -139,10 +143,19 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
 
                 HINSTANCE h = LoadLibrary(dllPath);
                 if (h) {
-                    render_midi_ptr ptr = (render_midi_ptr)GetProcAddress(h, "render_midi");
-                    if (ptr) {
+                    create_voice_ptr create_fn = (create_voice_ptr)GetProcAddress(h, "create_voice");
+                    note_off_voice_ptr off_fn = (note_off_voice_ptr)GetProcAddress(h, "note_off_voice");
+                    process_voice_ptr proc_fn = (process_voice_ptr)GetProcAddress(h, "process_voice");
+                    free_voice_ptr free_fn = (free_voice_ptr)GetProcAddress(h, "free_voice");
+                    render_midi_ptr render_fn = (render_midi_ptr)GetProcAddress(h, "render_midi");
+
+                    if (create_fn && off_fn && proc_fn && free_fn) {
                         x->modules[x->num_modules].hLib = h;
-                        x->modules[x->num_modules].render_midi = ptr;
+                        x->modules[x->num_modules].create_voice = create_fn;
+                        x->modules[x->num_modules].note_off_voice = off_fn;
+                        x->modules[x->num_modules].process_voice = proc_fn;
+                        x->modules[x->num_modules].free_voice = free_fn;
+                        x->modules[x->num_modules].render_midi = render_fn;
                         strncpy(x->modules[x->num_modules].name, findData.cFileName, 256);
                         x->num_modules++;
                         object_post((t_object*)x, "Loaded module %d: %s", x->num_modules, findData.cFileName);
@@ -165,9 +178,10 @@ void sounds_free(t_sounds* x) {
     dsp_free((t_pxobject*)x);
     critical_enter(x->lock);
     for (int i = 0; i < MAX_VOICES; i++) {
-        if (x->voices[i].buffer) {
-            free(x->voices[i].buffer);
-            x->voices[i].buffer = NULL;
+        if (x->voices[i].active && x->voices[i].voice_instance && x->voices[i].free_voice) {
+            x->voices[i].free_voice(x->voices[i].voice_instance);
+            x->voices[i].voice_instance = NULL;
+            x->voices[i].active = 0;
         }
     }
     for (int i = 0; i < x->num_modules; i++) {
@@ -199,7 +213,7 @@ void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
     long cmd = status & 0xF0;
 
     switch (cmd) {
-        case 0x80: { // Note Off (128..143)
+        case 0x80: { // Note Off
             if (argc >= 2) {
                 long note = atom_getlong(&argv[1]);
                 t_atom list_argv[2];
@@ -209,7 +223,7 @@ void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
             }
             break;
         }
-        case 0x90: { // Note On (144..159)
+        case 0x90: { // Note On
             if (argc >= 3) {
                 long note = atom_getlong(&argv[1]);
                 long vel = atom_getlong(&argv[2]);
@@ -226,7 +240,7 @@ void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
             }
             break;
         }
-        case 0xC0: { // Program Change (192..207)
+        case 0xC0: { // Program Change
             if (argc >= 2) {
                 long pgm = atom_getlong(&argv[1]);
                 sounds_preset(x, pgm + 1);
@@ -244,102 +258,63 @@ void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
     int velocity = atom_getlong(argv + 1);
 
     if (x->num_modules == 0) return;
-    render_midi_ptr render = x->modules[x->current_module].render_midi;
+    t_sound_module* mod = &x->modules[x->current_module];
 
     if (velocity > 0) {
         // Note On
-        MidiMessage msg;
-        strcpy(msg.type, "note_on");
-        msg.note = note;
-        msg.velocity = velocity;
-        msg.time = 0.0;
+        if (!mod->create_voice) return;
+        void* new_inst = mod->create_voice(note, velocity, (int)x->sample_rate);
+        if (!new_inst) return;
 
-        int num_samples = 0;
-        // Perform expensive rendering OUTSIDE of the lock
-        double* rendered = render(&msg, 1, DEFAULT_SUSTAIN_DURATION, (int)x->sample_rate, &num_samples);
-
-        if (rendered) {
-            int voice_idx = -1;
-            critical_enter(x->lock);
-            // Find existing voice for this note to re-trigger or find free
+        critical_enter(x->lock);
+        int voice_idx = -1;
+        // Re-use voice playing same note
+        for (int i = 0; i < MAX_VOICES; i++) {
+            if (x->voices[i].active && x->voices[i].note == note) {
+                voice_idx = i;
+                break;
+            }
+        }
+        // Find free voice
+        if (voice_idx == -1) {
             for (int i = 0; i < MAX_VOICES; i++) {
-                if (x->voices[i].active && x->voices[i].note == note) {
+                if (!x->voices[i].active) {
                     voice_idx = i;
                     break;
                 }
             }
-            if (voice_idx == -1) {
-                for (int i = 0; i < MAX_VOICES; i++) {
-                    if (!x->voices[i].active) {
-                        voice_idx = i;
-                        break;
-                    }
-                }
-            }
-
-            if (voice_idx != -1) {
-                if (x->voices[voice_idx].buffer) free(x->voices[voice_idx].buffer);
-                x->voices[voice_idx].buffer = rendered;
-                x->voices[voice_idx].length = num_samples;
-                x->voices[voice_idx].pos = 0;
-                x->voices[voice_idx].note = note;
-                x->voices[voice_idx].velocity = velocity;
-                x->voices[voice_idx].releasing = 0;
-                x->voices[voice_idx].active = 1;
-            } else {
-                free(rendered);
-            }
-            critical_exit(x->lock);
         }
+
+        if (voice_idx != -1) {
+            if (x->voices[voice_idx].active && x->voices[voice_idx].voice_instance && x->voices[voice_idx].free_voice) {
+                x->voices[voice_idx].free_voice(x->voices[voice_idx].voice_instance);
+            }
+            x->voices[voice_idx].voice_instance = new_inst;
+            x->voices[voice_idx].create_voice = mod->create_voice;
+            x->voices[voice_idx].note_off_voice = mod->note_off_voice;
+            x->voices[voice_idx].process_voice = mod->process_voice;
+            x->voices[voice_idx].free_voice = mod->free_voice;
+            x->voices[voice_idx].note = note;
+            x->voices[voice_idx].velocity = velocity;
+            x->voices[voice_idx].releasing = 0;
+            x->voices[voice_idx].active = 1;
+        } else {
+            mod->free_voice(new_inst);
+        }
+        critical_exit(x->lock);
     } else {
         // Note Off
-        int voice_to_render = -1;
-        int original_velocity = 0;
-        int current_pos = 0;
-
         critical_enter(x->lock);
         for (int i = 0; i < MAX_VOICES; i++) {
             if (x->voices[i].active && x->voices[i].note == note && !x->voices[i].releasing) {
-                voice_to_render = i;
-                original_velocity = x->voices[i].velocity;
-                current_pos = x->voices[i].pos;
+                x->voices[i].releasing = 1;
+                if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
+                    x->voices[i].note_off_voice(x->voices[i].voice_instance);
+                }
                 break;
             }
         }
         critical_exit(x->lock);
-
-        if (voice_to_render != -1) {
-            double off_time = (double)current_pos / x->sample_rate;
-            MidiMessage msgs[2];
-            strcpy(msgs[0].type, "note_on");
-            msgs[0].note = note;
-            msgs[0].velocity = original_velocity;
-            msgs[0].time = 0.0;
-
-            strcpy(msgs[1].type, "note_off");
-            msgs[1].note = note;
-            msgs[1].velocity = 0;
-            msgs[1].time = off_time;
-
-            int num_samples = 0;
-            // Perform expensive rendering OUTSIDE of the lock
-            double* rendered = render(msgs, 2, off_time + RELEASE_EXTRA_TIME, (int)x->sample_rate, &num_samples);
-
-            if (rendered) {
-                critical_enter(x->lock);
-                // Check if the voice is still the same note and not already re-triggered
-                if (x->voices[voice_to_render].active && x->voices[voice_to_render].note == note && !x->voices[voice_to_render].releasing) {
-                    double* old_buffer = x->voices[voice_to_render].buffer;
-                    x->voices[voice_to_render].buffer = rendered;
-                    x->voices[voice_to_render].length = num_samples;
-                    x->voices[voice_to_render].releasing = 1;
-                    if (old_buffer) free(old_buffer);
-                } else {
-                    free(rendered);
-                }
-                critical_exit(x->lock);
-            }
-        }
     }
 }
 
@@ -358,18 +333,26 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
     }
 
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
+        double temp_buf[2048];
+        int frames_to_process = (sampleframes > 2048) ? 2048 : (int)sampleframes;
+
         for (int v = 0; v < MAX_VOICES; v++) {
-            if (x->voices[v].active) {
-                for (int i = 0; i < sampleframes; i++) {
-                    if (x->voices[v].pos < x->voices[v].length) {
-                        double val = x->voices[v].buffer[x->voices[v].pos];
-                        outL[i] += val;
-                        outR[i] += val;
-                        x->voices[v].pos++;
-                    } else {
-                        x->voices[v].active = 0;
-                        break;
+            if (x->voices[v].active && x->voices[v].voice_instance && x->voices[v].process_voice) {
+                memset(temp_buf, 0, frames_to_process * sizeof(double));
+                int still_active = x->voices[v].process_voice(x->voices[v].voice_instance, temp_buf, frames_to_process);
+
+                for (int i = 0; i < frames_to_process; i++) {
+                    outL[i] += temp_buf[i];
+                    outR[i] += temp_buf[i];
+                }
+
+                if (!still_active) {
+                    if (x->voices[v].free_voice) {
+                        x->voices[v].free_voice(x->voices[v].voice_instance);
                     }
+                    x->voices[v].voice_instance = NULL;
+                    x->voices[v].active = 0;
+                    x->voices[v].releasing = 0;
                 }
             }
         }
