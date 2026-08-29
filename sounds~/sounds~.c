@@ -2,12 +2,14 @@
 #include "ext_obex.h"
 #include "ext_critical.h"
 #include "ext_path.h"
+#include "ext_dictobj.h"
 #include "z_dsp.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #define MAX_VOICES 32
 #define MAX_MODULES 64
@@ -55,6 +57,12 @@ typedef struct _sounds {
     t_voice voices[MAX_VOICES];
     t_critical lock;
     double sample_rate;
+
+    t_symbol* dict_name;
+    double preset_durations[MAX_MODULES];
+    double last_dict_val[MAX_MODULES];
+    int dict_initialized[MAX_MODULES];
+    t_clock* dict_clock;
 } t_sounds;
 
 void* sounds_new(t_symbol* s, long argc, t_atom* argv);
@@ -66,6 +74,8 @@ void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv);
 void sounds_preset(t_sounds* x, long n);
 void sounds_random(t_sounds* x);
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s);
+void sounds_sync_dict(t_sounds* x);
+void sounds_dict_clock_tick(t_sounds* x);
 
 static t_class* sounds_class;
 
@@ -91,6 +101,13 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
     t_sounds* x = (t_sounds*)object_alloc(sounds_class);
 
     if (x) {
+        x->dict_name = _sym_nothing;
+        if (argc > 0 && atom_gettype(argv) == A_SYM && strncmp(atom_getsym(argv)->s_name, "@", 1) != 0) {
+            x->dict_name = atom_getsym(argv);
+            argc--;
+            argv++;
+        }
+
         dsp_setup((t_pxobject*)x, 1);
         outlet_new(x, "signal"); // Right
         outlet_new(x, "signal"); // Left
@@ -104,6 +121,16 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
             x->voices[i].active = 0;
             x->voices[i].voice_instance = NULL;
         }
+
+        for (int i = 0; i < MAX_MODULES; i++) {
+            x->preset_durations[i] = 1.0;
+            x->last_dict_val[i] = 1.0;
+            x->dict_initialized[i] = 0;
+        }
+
+        x->dict_clock = clock_new(x, (method)sounds_dict_clock_tick);
+
+        attr_args_process(x, argc, argv);
 
         char module_dir_abs[MAX_PATH_CHARS];
         char module_dir_rel[] = "modules";
@@ -170,12 +197,24 @@ void* sounds_new(t_symbol* s, long argc, t_atom* argv) {
         if (x->num_modules == 0) {
             object_error((t_object*)x, "No sound modules found in %s directory!", module_dir_abs);
         }
+
+        if (x->dict_name != _sym_nothing) {
+            sounds_sync_dict(x);
+            clock_delay(x->dict_clock, 100);
+        }
     }
     return x;
 }
 
 void sounds_free(t_sounds* x) {
     dsp_free((t_pxobject*)x);
+    if (x->dict_clock) {
+        object_free(x->dict_clock);
+        x->dict_clock = NULL;
+    }
+    if (x->dict_name != _sym_nothing) {
+        sounds_sync_dict(x);
+    }
     critical_enter(x->lock);
     for (int i = 0; i < MAX_VOICES; i++) {
         if (x->voices[i].active && x->voices[i].voice_instance && x->voices[i].free_voice) {
@@ -191,6 +230,78 @@ void sounds_free(t_sounds* x) {
     critical_free(x->lock);
 }
 
+void sounds_dict_clock_tick(t_sounds* x) {
+    if (x->dict_name != _sym_nothing) {
+        sounds_sync_dict(x);
+        clock_delay(x->dict_clock, 100);
+    }
+}
+
+void sounds_sync_dict(t_sounds* x) {
+    if (!x || x->dict_name == _sym_nothing || x->num_modules == 0) return;
+
+    t_dictionary* d = dictobj_findregistered_retain(x->dict_name);
+    if (!d) return;
+
+    critical_enter(x->lock);
+    int dict_changed = 0;
+
+    for (int i = 0; i < x->num_modules; i++) {
+        char key_str[32];
+        snprintf(key_str, sizeof(key_str), "%d", i + 1);
+        t_symbol* key_sym = gensym(key_str);
+
+        if (!x->dict_initialized[i]) {
+            if (dictionary_hasentry(d, key_sym)) {
+                double val = 1.0;
+                t_atom a;
+                if (dictionary_getatom(d, key_sym, &a) == MAX_ERR_NONE) {
+                    if (atom_gettype(&a) == A_FLOAT) val = atom_getfloat(&a);
+                    else if (atom_gettype(&a) == A_LONG) val = (double)atom_getlong(&a);
+                }
+                x->preset_durations[i] = val;
+                x->last_dict_val[i] = val;
+            } else {
+                x->preset_durations[i] = 1.0;
+                x->last_dict_val[i] = 1.0;
+                t_atom a;
+                atom_setfloat(&a, 1.0);
+                dictionary_appendatom(d, key_sym, &a);
+                dict_changed = 1;
+            }
+            x->dict_initialized[i] = 1;
+        } else {
+            if (dictionary_hasentry(d, key_sym)) {
+                t_atom a;
+                if (dictionary_getatom(d, key_sym, &a) == MAX_ERR_NONE) {
+                    double current_dict_val = 0.0;
+                    if (atom_gettype(&a) == A_FLOAT) current_dict_val = atom_getfloat(&a);
+                    else if (atom_gettype(&a) == A_LONG) current_dict_val = (double)atom_getlong(&a);
+
+                    if (fabs(current_dict_val - x->last_dict_val[i]) > 1e-6) {
+                        double diff = current_dict_val - x->last_dict_val[i];
+                        x->preset_durations[i] += diff;
+                    }
+                }
+            }
+
+            if (fabs(x->preset_durations[i] - x->last_dict_val[i]) > 1e-6 || !dictionary_hasentry(d, key_sym)) {
+                t_atom a;
+                atom_setfloat(&a, (float)x->preset_durations[i]);
+                dictionary_appendatom(d, key_sym, &a);
+                x->last_dict_val[i] = x->preset_durations[i];
+                dict_changed = 1;
+            }
+        }
+    }
+    critical_exit(x->lock);
+
+    if (dict_changed) {
+        object_notify((t_object *)d, gensym("modified"), NULL);
+    }
+    dictobj_release(d);
+}
+
 void sounds_preset(t_sounds* x, long n) {
     if (x->num_modules == 0) return;
     long zero_based = (n - 1) % x->num_modules;
@@ -201,9 +312,46 @@ void sounds_preset(t_sounds* x, long n) {
 
 void sounds_random(t_sounds* x) {
     if (x->num_modules <= 1) return;
-    int next = rand() % x->num_modules;
-    while (next == x->current_module) next = rand() % x->num_modules;
-    sounds_preset(x, next + 1);
+
+    if (x->dict_name == _sym_nothing) {
+        int next = rand() % x->num_modules;
+        while (next == x->current_module) next = rand() % x->num_modules;
+        sounds_preset(x, next + 1);
+    } else {
+        sounds_sync_dict(x);
+
+        critical_enter(x->lock);
+        double total_weight = 0.0;
+        for (int i = 0; i < x->num_modules; i++) {
+            double w = x->preset_durations[i];
+            if (w < 0.0) w = 0.0;
+            total_weight += w;
+        }
+
+        if (total_weight <= 0.0) {
+            critical_exit(x->lock);
+            int next = rand() % x->num_modules;
+            while (next == x->current_module) next = rand() % x->num_modules;
+            sounds_preset(x, next + 1);
+            return;
+        }
+
+        double r = ((double)rand() / ((double)RAND_MAX + 1.0)) * total_weight;
+        int chosen = x->num_modules - 1;
+        double accum = 0.0;
+        for (int i = 0; i < x->num_modules; i++) {
+            double w = x->preset_durations[i];
+            if (w < 0.0) w = 0.0;
+            accum += w;
+            if (r < accum) {
+                chosen = i;
+                break;
+            }
+        }
+        critical_exit(x->lock);
+
+        sounds_preset(x, chosen + 1);
+    }
 }
 
 void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv) {
@@ -335,6 +483,7 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
     if (critical_tryenter(x->lock) == MAX_ERR_NONE) {
         double temp_buf[2048];
         int frames_to_process = (sampleframes > 2048) ? 2048 : (int)sampleframes;
+        int active_voices = 0;
 
         for (int v = 0; v < MAX_VOICES; v++) {
             if (x->voices[v].active && x->voices[v].voice_instance && x->voices[v].process_voice) {
@@ -353,16 +502,26 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
                     x->voices[v].voice_instance = NULL;
                     x->voices[v].active = 0;
                     x->voices[v].releasing = 0;
+                } else {
+                    active_voices++;
                 }
             }
         }
+
+        if (active_voices > 0 && x->dict_name != _sym_nothing && x->num_modules > 0) {
+            if (x->current_module >= 0 && x->current_module < x->num_modules) {
+                double delta_sec = (double)sampleframes / x->sample_rate;
+                x->preset_durations[x->current_module] += delta_sec;
+            }
+        }
+
         critical_exit(x->lock);
     }
 }
 
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "MIDI (list), midievent, messages");
+        sprintf(s, "MIDI (list), midievent, messages. Optional argument: duration dict name");
     } else {
         if (a == 0) sprintf(s, "(signal) Left Output");
         else sprintf(s, "(signal) Right Output");

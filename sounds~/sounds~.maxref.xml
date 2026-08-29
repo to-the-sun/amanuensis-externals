@@ -3,7 +3,7 @@
 <c74object name="sounds~" module="msp">
 	<digest>Dynamic polyphonic sound module host</digest>
 	<description>
-		<inline>sounds~</inline> is a polyphonic MIDI-to-audio instrument that dynamically loads sound synthesis modules from the <inline>modules/</inline> directory. It renders audio on-the-fly using a Just-In-Time rendering strategy to handle complex synthesis designs while maintaining polyphony and correct release phases.
+		<inline>sounds~</inline> is a polyphonic MIDI-to-audio instrument that dynamically loads sound synthesis modules from the <inline>modules/</inline> directory. It renders audio on-the-fly using a Just-In-Time rendering strategy to handle complex synthesis designs while maintaining polyphony and correct release phases. If an optional dictionary name argument is provided, <inline>sounds~</inline> tracks active use duration in seconds for each preset in the named <inline>dict</inline> object using 1-based keys (e.g., "1", "2") defaulting to 1.0, and applies duration-weighted lottery sampling when receiving a <inline>random</inline> message.
 	</description>
 	<metadatalist>
 		<metadata name="author">Jules</metadata>
@@ -11,6 +11,14 @@
 		<metadata name="tag">Synthesis</metadata>
 		<metadata name="tag">MIDI</metadata>
 	</metadatalist>
+	<objarglist>
+		<objarg name="dict-name" optional="1" type="symbol">
+			<digest>Name of external dictionary for preset duration tracking</digest>
+			<description>
+				Optional symbol specifying the name of an external <inline>dict</inline> object to reference. When present, the active playtime duration in seconds of each preset (while at least one voice is active) is recorded under 1-based keys (e.g. "1": 1.0, "2": 1.0).
+			</description>
+		</objarg>
+	</objarglist>
 	<methodlist>
 		<method name="list">
 			<arglist>
@@ -45,13 +53,13 @@
 		<method name="random">
 			<digest>Switch to a random sound module</digest>
 			<description>
-				Randomly selects one of the available sound modules as the active preset.
+				Randomly selects one of the available sound modules as the active preset. If an optional dictionary argument is specified, selection is weighted based on stored durations in the dictionary (favoring presets with more active playtime).
 			</description>
 		</method>
 	</methodlist>
 	<seealsolist>
 		<seealso name="smartloop~" />
 		<seealso name="weaver~" />
-		<seealso name="arrangement~" />
+		<seealso name="crucible" />
 	</seealsolist>
 </c74object>
