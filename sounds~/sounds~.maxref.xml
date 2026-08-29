@@ -70,6 +70,12 @@
 				Randomly selects one of the available sound modules as the active preset. If an optional dictionary argument is specified, selection is weighted based on stored durations in the dictionary (favoring presets with more active playtime).
 			</description>
 		</method>
+		<method name="flush">
+			<digest>Flush all active MIDI notes</digest>
+			<description>
+				Flushes all currently playing MIDI notes, cueing their note offs so that voices enter their release phase.
+			</description>
+		</method>
 	</methodlist>
 	<seealsolist>
 		<seealso name="smartloop~" />

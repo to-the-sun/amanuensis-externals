@@ -74,6 +74,7 @@ void sounds_list(t_sounds* x, t_symbol* s, short argc, t_atom* argv);
 void sounds_midievent(t_sounds* x, t_symbol* s, short argc, t_atom* argv);
 void sounds_preset(t_sounds* x, long n);
 void sounds_random(t_sounds* x);
+void sounds_flush(t_sounds* x);
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s);
 void sounds_sync_dict(t_sounds* x);
 void sounds_dict_clock_tick(t_sounds* x);
@@ -88,6 +89,7 @@ void ext_main(void* r) {
     class_addmethod(c, (method)sounds_midievent, "midievent", A_GIMME, 0);
     class_addmethod(c, (method)sounds_preset, "preset", A_LONG, 0);
     class_addmethod(c, (method)sounds_random, "random", 0);
+    class_addmethod(c, (method)sounds_flush, "flush", 0);
     class_addmethod(c, (method)sounds_assist, "assist", A_CANT, 0);
 
     class_dspinit(c);
@@ -315,6 +317,19 @@ void sounds_preset(t_sounds* x, long n) {
     }
 }
 
+void sounds_flush(t_sounds* x) {
+    critical_enter(x->lock);
+    for (int i = 0; i < MAX_VOICES; i++) {
+        if (x->voices[i].active && !x->voices[i].releasing) {
+            x->voices[i].releasing = 1;
+            if (x->voices[i].note_off_voice && x->voices[i].voice_instance) {
+                x->voices[i].note_off_voice(x->voices[i].voice_instance);
+            }
+        }
+    }
+    critical_exit(x->lock);
+}
+
 void sounds_random(t_sounds* x) {
     if (x->num_modules <= 1) return;
 
@@ -526,7 +541,7 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
 
 void sounds_assist(t_sounds* x, void* b, long m, long a, char* s) {
     if (m == ASSIST_INLET) {
-        sprintf(s, "MIDI (list), midievent, messages. Optional argument: duration dict name");
+        sprintf(s, "MIDI (list), midievent, messages (flush, preset, random). Optional argument: duration dict name");
     } else {
         if (a == 0) sprintf(s, "(signal) Left Output");
         else if (a == 1) sprintf(s, "(signal) Right Output");
