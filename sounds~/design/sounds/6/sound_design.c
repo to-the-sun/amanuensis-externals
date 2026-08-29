@@ -9,12 +9,6 @@
 #endif
 
 typedef struct {
-    double start_time;
-    int velocity;
-    int active;
-} ActiveNote;
-
-typedef struct {
     double x1, x2, y1, y2;
     double b0, b1, b2, a1, a2;
 } Biquad;
@@ -45,120 +39,138 @@ static double process_biquad(Biquad* f, double x) {
     return y;
 }
 
-static void adsr_envelope(double* buffer, int duration_samples, int attack_samples, int decay_samples, double sustain_level, int release_samples, int is_sustained) {
-    int a_len = attack_samples;
-    int d_len = decay_samples;
-    int r_len = is_sustained ? 0 : release_samples;
+typedef struct {
+    int note;
+    int velocity;
+    int sample_rate;
+    double freq;
+    double vel_scale;
+    int is_note_on;
 
-    int total_adr = a_len + d_len + r_len;
-    int s_len;
-
-    if (duration_samples < total_adr && total_adr > 0) {
-        double scale = (double)duration_samples / total_adr;
-        a_len = (int)(a_len * scale);
-        d_len = (int)(d_len * scale);
-        r_len = (int)(r_len * scale);
-        s_len = 0;
-    } else {
-        s_len = duration_samples - a_len - d_len - r_len;
-    }
-
-    int current = 0;
-    for (int i = 0; i < a_len && current < duration_samples; i++, current++) buffer[current] = (double)i / a_len;
-    for (int i = 0; i < d_len && current < duration_samples; i++, current++) buffer[current] = 1.0 - (1.0 - sustain_level) * ((double)i / d_len);
-    for (int i = 0; i < s_len && current < duration_samples; i++, current++) buffer[current] = sustain_level;
-    if (!is_sustained) {
-        for (int i = 0; i < r_len && current < duration_samples; i++, current++) buffer[current] = sustain_level * (1.0 - (double)i / r_len);
-    }
-    while (current < duration_samples) buffer[current++] = is_sustained ? sustain_level : 0.0;
-}
-
-static void render_note(double* output, int num_samples, int note_num, double start_time, double end_time, int velocity, int sample_rate, int is_sustained) {
-    double freq = 440.0 * pow(2.0, (note_num - 69) / 12.0);
-
-    // Formant parameters for "A" vowel
-    double formant_freqs[] = {730.0, 1090.0, 2440.0};
-    double formant_bws[] = {80.0, 90.0, 120.0};
-    double formant_amps[] = {1.0, 0.5, 0.2};
+    double attack_time, decay_time, sustain_level, release_time;
+    double env_level;
+    int env_stage;
+    double release_start_level;
 
     Biquad filters[3];
+    double phase;
+} Sound6Voice;
+
+static double midi_to_hz_tuned(int midi_note, double a4_hz) {
+    return a4_hz * pow(2.0, ((double)midi_note - 69.0) / 12.0);
+}
+
+void* create_voice(int note, int velocity, int sample_rate) {
+    Sound6Voice* v = (Sound6Voice*)calloc(1, sizeof(Sound6Voice));
+    if (!v) return NULL;
+    v->note = note;
+    v->velocity = velocity;
+    v->sample_rate = sample_rate;
+    v->freq = midi_to_hz_tuned(note, 440.0);
+    v->vel_scale = (double)velocity / 127.0;
+    v->is_note_on = 1;
+
+    v->attack_time = 0.05; v->decay_time = 0.1; v->sustain_level = 0.7; v->release_time = 0.2;
+    v->env_level = 0.0; v->env_stage = 0;
+    v->phase = 0.0;
+
+    double formant_freqs[] = {730.0, 1090.0, 2440.0};
+    double formant_bws[] = {80.0, 90.0, 120.0};
     for (int i = 0; i < 3; i++) {
-        setup_bpf(&filters[i], formant_freqs[i], formant_bws[i], sample_rate);
+        setup_bpf(&v->filters[i], formant_freqs[i], formant_bws[i], sample_rate);
     }
+    return v;
+}
 
-    double amp_attack = 0.05;
-    double amp_decay = 0.1;
-    double amp_sustain = 0.7;
-    double amp_release = 0.2;
+void note_off_voice(void* voice_ptr) {
+    if (!voice_ptr) return;
+    Sound6Voice* v = (Sound6Voice*)voice_ptr;
+    v->is_note_on = 0;
+    if (v->env_stage < 3) { v->env_stage = 3; v->release_start_level = v->env_level; }
+}
 
-    double note_duration = is_sustained ? (end_time - start_time) : (end_time - start_time + amp_release);
-    int note_samples = (int)(note_duration * sample_rate);
+int process_voice(void* voice_ptr, double* buffer, int num_samples) {
+    if (!voice_ptr) return 0;
+    Sound6Voice* v = (Sound6Voice*)voice_ptr;
+    if (v->env_stage == 4) return 0;
 
-    int start_idx = (int)(start_time * sample_rate);
-    if (start_idx >= num_samples) return;
-
-    int end_idx = start_idx + note_samples;
-    if (end_idx > num_samples) end_idx = num_samples;
-    int actual_samples = end_idx - start_idx;
-
-    if (actual_samples <= 0) return;
-
-    double* amp_env = (double*)malloc(actual_samples * sizeof(double));
-    adsr_envelope(amp_env, actual_samples, (int)(amp_attack * sample_rate), (int)(amp_decay * sample_rate), amp_sustain, (int)(amp_release * sample_rate), is_sustained);
-
-    // Vibrato parameters
+    double dt = 1.0 / v->sample_rate;
+    double formant_amps[] = {1.0, 0.5, 0.2};
     double vib_freq = 5.0;
     double vib_depth = 0.005;
+    double gain = 2.10974;
 
-    for (int i = 0; i < actual_samples; i++) {
-        double t = (double)i / sample_rate + start_time;
-
-        // Oscillator with vibrato
-        double current_vib = 1.0 + vib_depth * sin(2.0 * M_PI * vib_freq * t);
-        double phase = t * freq * current_vib;
-        double saw = 2.0 * (phase - floor(phase + 0.5));
-
-        // Parallel formant filters
-        double out = 0;
-        for (int j = 0; j < 3; j++) {
-            out += process_biquad(&filters[j], saw) * formant_amps[j];
+    for (int i = 0; i < num_samples; i++) {
+        if (v->env_stage == 0) {
+            v->env_level += dt / v->attack_time;
+            if (v->env_level >= 1.0) { v->env_level = 1.0; v->env_stage = 1; }
+        } else if (v->env_stage == 1) {
+            v->env_level -= dt * (1.0 - v->sustain_level) / v->decay_time;
+            if (v->env_level <= v->sustain_level) { v->env_level = v->sustain_level; v->env_stage = 2; }
+        } else if (v->env_stage == 2) {
+            v->env_level = v->sustain_level;
+            if (!v->is_note_on) { v->env_stage = 3; v->release_start_level = v->env_level; }
+        } else if (v->env_stage == 3) {
+            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.7) / v->release_time;
+            if (v->env_level <= 0.0) { v->env_level = 0.0; v->env_stage = 4; }
         }
 
-        output[start_idx + i] += out * amp_env[i] * (velocity / 127.0) * 2.10974;
+        if (v->env_stage == 4) break;
+
+        double t = v->phase;
+        double current_vib = 1.0 + vib_depth * sin(2.0 * M_PI * vib_freq * t);
+        double phase_val = t * v->freq * current_vib;
+        double saw = 2.0 * (phase_val - floor(phase_val + 0.5));
+
+        double out = 0.0;
+        for (int j = 0; j < 3; j++) {
+            out += process_biquad(&v->filters[j], saw) * formant_amps[j];
+        }
+
+        buffer[i] += out * v->env_level * v->vel_scale * gain;
+        v->phase += dt;
     }
 
-    free(amp_env);
+    return (v->env_stage < 4);
+}
+
+void free_voice(void* voice_ptr) {
+    if (voice_ptr) free(voice_ptr);
 }
 
 double* render_midi(MidiMessage* midi_messages, int num_messages, double duration, int sample_rate, int* num_samples_out) {
     int num_samples = (int)(duration * sample_rate);
     *num_samples_out = num_samples;
     double* output = (double*)calloc(num_samples, sizeof(double));
+    void* active_voices[128] = {NULL};
 
-    ActiveNote active_notes[128];
-    for (int i = 0; i < 128; i++) active_notes[i].active = 0;
+    int block_size = 64;
+    for (int start = 0; start < num_samples; start += block_size) {
+        int count = block_size;
+        if (start + count > num_samples) count = num_samples - start;
+        double cur_time = (double)start / sample_rate;
+        double end_time = (double)(start + count) / sample_rate;
 
-    for (int i = 0; i < num_messages; i++) {
-        MidiMessage msg = midi_messages[i];
-        if (msg.time >= duration) continue;
+        for (int m = 0; m < num_messages; m++) {
+            if (midi_messages[m].time >= cur_time && midi_messages[m].time < end_time) {
+                int note = midi_messages[m].note;
+                if (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity > 0) {
+                    if (active_voices[note]) free_voice(active_voices[note]);
+                    active_voices[note] = create_voice(note, midi_messages[m].velocity, sample_rate);
+                } else if (strcmp(midi_messages[m].type, "note_off") == 0 || (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity == 0)) {
+                    if (active_voices[note]) note_off_voice(active_voices[note]);
+                }
+            }
+        }
 
-        if (strcmp(msg.type, "note_on") == 0 && msg.velocity > 0) {
-            active_notes[msg.note].start_time = msg.time;
-            active_notes[msg.note].velocity = msg.velocity;
-            active_notes[msg.note].active = 1;
-        } else if (strcmp(msg.type, "note_off") == 0 || (strcmp(msg.type, "note_on") == 0 && msg.velocity == 0)) {
-            if (active_notes[msg.note].active) {
-                render_note(output, num_samples, msg.note, active_notes[msg.note].start_time, msg.time, active_notes[msg.note].velocity, sample_rate, 0);
-                active_notes[msg.note].active = 0;
+        for (int n = 0; n < 128; n++) {
+            if (active_voices[n]) {
+                int still_active = process_voice(active_voices[n], output + start, count);
+                if (!still_active) { free_voice(active_voices[n]); active_voices[n] = NULL; }
             }
         }
     }
 
-    for (int i = 0; i < 128; i++) {
-        if (active_notes[i].active) {
-            render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
-        }
-    }
-
+    for (int n = 0; n < 128; n++) if (active_voices[n]) free_voice(active_voices[n]);
     return output;
 }

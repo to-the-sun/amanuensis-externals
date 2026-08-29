@@ -9,12 +9,6 @@
 #endif
 
 typedef struct {
-    double start_time;
-    int velocity;
-    int active;
-} ActiveNote;
-
-typedef struct {
     double b0, b1, b2, a1, a2;
     double x1, x2, y1, y2;
 } BiquadFilter;
@@ -39,146 +33,170 @@ static void setup_highpass(BiquadFilter* f, double freq, double Q, double sample
 
 static double process_biquad(BiquadFilter* f, double in) {
     double out = f->b0 * in + f->b1 * f->x1 + f->b2 * f->x2 - f->a1 * f->y1 - f->a2 * f->y2;
-    f->x2 = f->x1;
-    f->x1 = in;
-    f->y2 = f->y1;
-    f->y1 = out;
+    f->x2 = f->x1; f->x1 = in;
+    f->y2 = f->y1; f->y1 = out;
     return out;
 }
 
-static void adsr_envelope(double* buffer, int duration_samples, int attack_samples, int decay_samples, double sustain_level, int release_samples, int is_sustained) {
-    int a_len = attack_samples;
-    int d_len = decay_samples;
-    int r_len = is_sustained ? 0 : release_samples;
-    int total_adr = a_len + d_len + r_len;
-    int s_len;
-    if (duration_samples < total_adr && total_adr > 0) {
-        double scale = (double)duration_samples / total_adr;
-        a_len = (int)(a_len * scale);
-        d_len = (int)(d_len * scale);
-        r_len = (int)(r_len * scale);
-        s_len = 0;
-    } else {
-        s_len = duration_samples - a_len - d_len - r_len;
-    }
-    int current = 0;
-    for (int i = 0; i < a_len && current < duration_samples; i++, current++) buffer[current] = (double)i / a_len;
-    for (int i = 0; i < d_len && current < duration_samples; i++, current++) buffer[current] = 1.0 - (1.0 - sustain_level) * ((double)i / d_len);
-    for (int i = 0; i < s_len && current < duration_samples; i++, current++) buffer[current] = sustain_level;
-    if (!is_sustained) for (int i = 0; i < r_len && current < duration_samples; i++, current++) buffer[current] = sustain_level * (1.0 - (double)i / r_len);
-    while (current < duration_samples) buffer[current++] = is_sustained ? sustain_level : 0.0;
+typedef struct {
+    int note;
+    int velocity;
+    int sample_rate;
+    double freq;
+    double vel_scale;
+    int is_note_on;
+
+    double attack_time, decay_time, sustain_level, release_time;
+    double env_level;
+    int env_stage;
+    double release_start_level;
+
+    BiquadFilter mallet_hp;
+    double mode_phases[5];
+    double mod_phase;
+    double ring_mod_phase;
+    double kick_phase;
+    double t_local;
+} Sound12Voice;
+
+static double midi_to_hz_tuned(int midi_note, double a4_hz) {
+    return a4_hz * pow(2.0, ((double)midi_note - 69.0) / 12.0);
 }
 
-static void render_note(double* output, int num_samples, int note_num, double start_time, double end_time, int velocity, int sample_rate, int is_sustained) {
-    double base_freq = 440.0 * pow(2.0, (note_num - 69) / 12.0);
+void* create_voice(int note, int velocity, int sample_rate) {
+    Sound12Voice* v = (Sound12Voice*)calloc(1, sizeof(Sound12Voice));
+    if (!v) return NULL;
+    v->note = note;
+    v->velocity = velocity;
+    v->sample_rate = sample_rate;
+    v->freq = midi_to_hz_tuned(note, 440.0);
+    v->vel_scale = (double)velocity / 127.0;
+    v->is_note_on = 1;
 
-    double attack_time = 0.002;
-    double decay_time = 0.600;
-    double sustain_level = 0.30;
-    double release_time = 0.250;
+    v->attack_time = 0.002; v->decay_time = 0.600; v->sustain_level = 0.30; v->release_time = 0.250;
+    v->env_level = 0.0; v->env_stage = 0;
 
-    double note_duration = is_sustained ? (end_time - start_time) : (end_time - start_time + release_time);
-    int note_samples = (int)(note_duration * sample_rate);
-    int start_idx = (int)(start_time * sample_rate);
-    int end_idx = start_idx + note_samples;
-    if (end_idx > num_samples) end_idx = num_samples;
-    int actual_samples = end_idx - start_idx;
-    if (actual_samples <= 0) return;
+    setup_highpass(&v->mallet_hp, 2500.0, 0.707, (double)sample_rate);
+    for (int m = 0; m < 5; m++) v->mode_phases[m] = 0.0;
+    v->mod_phase = 0.0; v->ring_mod_phase = 0.0; v->kick_phase = 0.0; v->t_local = 0.0;
+    srand(note * 100);
+    return v;
+}
 
-    double* env = (double*)malloc(actual_samples * sizeof(double));
-    adsr_envelope(env, actual_samples, (int)(attack_time * sample_rate), (int)(decay_time * sample_rate), sustain_level, (int)(release_time * sample_rate), is_sustained);
+void note_off_voice(void* voice_ptr) {
+    if (!voice_ptr) return;
+    Sound12Voice* v = (Sound12Voice*)voice_ptr;
+    v->is_note_on = 0;
+    if (v->env_stage < 3) { v->env_stage = 3; v->release_start_level = v->env_level; }
+}
 
-    // Highpass filter for mallet noise strike transient
-    BiquadFilter mallet_hp;
-    setup_highpass(&mallet_hp, 2500.0, 0.707, (double)sample_rate);
+int process_voice(void* voice_ptr, double* buffer, int num_samples) {
+    if (!voice_ptr) return 0;
+    Sound12Voice* v = (Sound12Voice*)voice_ptr;
+    if (v->env_stage == 4) return 0;
 
-    // Stiff metal bar inharmonic mode frequency ratios
+    double dt = 1.0 / v->sample_rate;
     double mode_ratios[5] = {1.0, 2.756, 5.404, 8.933, 13.344};
     double mode_weights[5] = {1.0, 0.60, 0.35, 0.20, 0.10};
-    double mode_damp[5] = {1.0, 2.2, 4.5, 8.0, 14.0}; // higher partials decay exponentially faster
-    double mode_phases[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double mode_damp[5] = {1.0, 2.2, 4.5, 8.0, 14.0};
+    double mod_ratio = 3.571;
+    double gain = 1.172394792222333;
 
-    double mod_phase = 0.0;
-    double mod_ratio = 3.571; // Inharmonic FM ratio
+    for (int i = 0; i < num_samples; i++) {
+        if (v->env_stage == 0) {
+            v->env_level += dt / v->attack_time;
+            if (v->env_level >= 1.0) { v->env_level = 1.0; v->env_stage = 1; }
+        } else if (v->env_stage == 1) {
+            v->env_level -= dt * (1.0 - v->sustain_level) / v->decay_time;
+            if (v->env_level <= v->sustain_level) { v->env_level = v->sustain_level; v->env_stage = 2; }
+        } else if (v->env_stage == 2) {
+            v->env_level = v->sustain_level;
+            if (!v->is_note_on) { v->env_stage = 3; v->release_start_level = v->env_level; }
+        } else if (v->env_stage == 3) {
+            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.30) / v->release_time;
+            if (v->env_level <= 0.0) { v->env_level = 0.0; v->env_stage = 4; }
+        }
 
-    double ring_mod_phase = 0.0;
-    double kick_phase = 0.0;
+        if (v->env_stage == 4) break;
 
-    srand(note_num * 100);
+        double kick_env = exp(-v->t_local / 0.025);
+        double kick_freq = 40.0 + 160.0 * exp(-v->t_local / 0.008);
+        v->kick_phase += 2.0 * M_PI * kick_freq / v->sample_rate;
+        if (v->kick_phase > 2.0 * M_PI) v->kick_phase -= 2.0 * M_PI;
+        double sub_thump = sin(v->kick_phase) * kick_env * 0.45;
 
-    // Gain calibration variable
-    double current_gain = 1.172394792222333;
-
-    for (int i = 0; i < actual_samples; i++) {
-        double t_local = (double)i / sample_rate;
-
-        // 1. Mallet Sub-Bass Pitch Sweep (Kick thump transient)
-        double kick_env = exp(-t_local / 0.025);
-        double kick_freq = 40.0 + 160.0 * exp(-t_local / 0.008);
-        kick_phase += 2.0 * M_PI * kick_freq / sample_rate;
-        if (kick_phase > 2.0 * M_PI) kick_phase -= 2.0 * M_PI;
-        double sub_thump = sin(kick_phase) * kick_env * 0.45;
-
-        // 2. Mallet Click Noise Transient
-        double noise_env = exp(-t_local / 0.005);
+        double noise_env = exp(-v->t_local / 0.005);
         double white_noise = ((double)rand() / RAND_MAX * 2.0 - 1.0);
-        double mallet_click = process_biquad(&mallet_hp, white_noise) * noise_env * 0.35;
+        double mallet_click = process_biquad(&v->mallet_hp, white_noise) * noise_env * 0.35;
 
-        // 3. FM Modulator (Decaying modulation index for transient metallic brightness burst)
-        double mod_index = 3.5 * exp(-t_local / 0.06) + 0.15;
-        mod_phase += 2.0 * M_PI * (base_freq * mod_ratio) / sample_rate;
-        if (mod_phase > 2.0 * M_PI) mod_phase -= 2.0 * M_PI;
-        double mod_val = sin(mod_phase) * mod_index;
+        double mod_index = 3.5 * exp(-v->t_local / 0.06) + 0.15;
+        v->mod_phase += 2.0 * M_PI * (v->freq * mod_ratio) / v->sample_rate;
+        if (v->mod_phase > 2.0 * M_PI) v->mod_phase -= 2.0 * M_PI;
+        double mod_val = sin(v->mod_phase) * mod_index;
 
-        // 4. Metal Bar Inharmonic Partial Summation with FM Phase Modulation
         double bar_sum = 0.0;
         for (int m = 0; m < 5; m++) {
-            double partial_freq = base_freq * mode_ratios[m];
-            mode_phases[m] += 2.0 * M_PI * partial_freq / sample_rate;
-            if (mode_phases[m] > 2.0 * M_PI) mode_phases[m] -= 2.0 * M_PI;
+            double partial_freq = v->freq * mode_ratios[m];
+            v->mode_phases[m] += 2.0 * M_PI * partial_freq / v->sample_rate;
+            if (v->mode_phases[m] > 2.0 * M_PI) v->mode_phases[m] -= 2.0 * M_PI;
 
-            double partial_env = exp(-t_local * mode_damp[m] * 2.5);
-            double partial_sig = sin(mode_phases[m] + mod_val * (m == 0 ? 1.0 : 0.4));
+            double partial_env = exp(-v->t_local * mode_damp[m] * 2.5);
+            double partial_sig = sin(v->mode_phases[m] + mod_val * (m == 0 ? 1.0 : 0.4));
             bar_sum += partial_sig * mode_weights[m] * partial_env;
         }
 
-        // 5. Dynamic Ring Modulation Partial Sweep (sweeps upwards over time)
-        double ring_mod_freq = base_freq * (1.5 + 4.0 * (1.0 - exp(-t_local / 0.3)));
-        ring_mod_phase += 2.0 * M_PI * ring_mod_freq / sample_rate;
-        if (ring_mod_phase > 2.0 * M_PI) ring_mod_phase -= 2.0 * M_PI;
-        double ring_mod_sig = bar_sum * sin(ring_mod_phase) * 0.25 * exp(-t_local / 0.15);
+        double ring_mod_freq = v->freq * (1.5 + 4.0 * (1.0 - exp(-v->t_local / 0.3)));
+        v->ring_mod_phase += 2.0 * M_PI * ring_mod_freq / v->sample_rate;
+        if (v->ring_mod_phase > 2.0 * M_PI) v->ring_mod_phase -= 2.0 * M_PI;
+        double ring_mod_sig = bar_sum * sin(v->ring_mod_phase) * 0.25 * exp(-v->t_local / 0.15);
 
-        // Combine components
         double combined = sub_thump + mallet_click + bar_sum + ring_mod_sig;
-
-        // Warm metallic acoustic body saturation
         double saturated = tanh(combined * 1.3) / 1.3;
 
-        output[start_idx + i] += saturated * env[i] * (velocity / 127.0) * current_gain;
+        buffer[i] += saturated * v->env_level * v->vel_scale * gain;
+        v->t_local += dt;
     }
 
-    free(env);
+    return (v->env_stage < 4);
+}
+
+void free_voice(void* voice_ptr) {
+    if (voice_ptr) free(voice_ptr);
 }
 
 double* render_midi(MidiMessage* midi_messages, int num_messages, double duration, int sample_rate, int* num_samples_out) {
     int num_samples = (int)(duration * sample_rate);
     *num_samples_out = num_samples;
     double* output = (double*)calloc(num_samples, sizeof(double));
-    ActiveNote active_notes[128] = {0};
-    for (int i = 0; i < num_messages; i++) {
-        MidiMessage msg = midi_messages[i];
-        if (msg.time >= duration) continue;
-        if (strcmp(msg.type, "note_on") == 0 && msg.velocity > 0) {
-            active_notes[msg.note].start_time = msg.time;
-            active_notes[msg.note].velocity = msg.velocity;
-            active_notes[msg.note].active = 1;
-        } else if (strcmp(msg.type, "note_off") == 0 || (strcmp(msg.type, "note_on") == 0 && msg.velocity == 0)) {
-            if (active_notes[msg.note].active) {
-                render_note(output, num_samples, msg.note, active_notes[msg.note].start_time, msg.time, active_notes[msg.note].velocity, sample_rate, 0);
-                active_notes[msg.note].active = 0;
+    void* active_voices[128] = {NULL};
+
+    int block_size = 64;
+    for (int start = 0; start < num_samples; start += block_size) {
+        int count = block_size;
+        if (start + count > num_samples) count = num_samples - start;
+        double cur_time = (double)start / sample_rate;
+        double end_time = (double)(start + count) / sample_rate;
+
+        for (int m = 0; m < num_messages; m++) {
+            if (midi_messages[m].time >= cur_time && midi_messages[m].time < end_time) {
+                int note = midi_messages[m].note;
+                if (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity > 0) {
+                    if (active_voices[note]) free_voice(active_voices[note]);
+                    active_voices[note] = create_voice(note, midi_messages[m].velocity, sample_rate);
+                } else if (strcmp(midi_messages[m].type, "note_off") == 0 || (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity == 0)) {
+                    if (active_voices[note]) note_off_voice(active_voices[note]);
+                }
+            }
+        }
+
+        for (int n = 0; n < 128; n++) {
+            if (active_voices[n]) {
+                int still_active = process_voice(active_voices[n], output + start, count);
+                if (!still_active) { free_voice(active_voices[n]); active_voices[n] = NULL; }
             }
         }
     }
-    for (int i = 0; i < 128; i++) if (active_notes[i].active) render_note(output, num_samples, i, active_notes[i].start_time, duration, active_notes[i].velocity, sample_rate, 1);
+
+    for (int n = 0; n < 128; n++) if (active_voices[n]) free_voice(active_voices[n]);
     return output;
 }
