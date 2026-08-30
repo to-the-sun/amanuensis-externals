@@ -17,8 +17,8 @@ Furthermore, active region segmentation (Strategy A) is implemented to avoid fal
 
 ### 2. Strategy A: Active Region Segmentation
 When comparing temporal MFCC sequences between two sound modules:
-- An active region for each sound module is determined by detecting frames where signal energy exceeds an RMS silence threshold (for example, -60 dB relative to peak or 0.001 absolute linear RMS).
-- **Active vs. Active Frames**: Standard frame-by-frame Euclidean distance is computed between MFCC vectors.
+- An active region for each sound module is determined by detecting frames where signal energy exceeds an RMS silence threshold (0.0001 linear RMS, equivalent to -80 dB relative to full scale).
+- **Active vs. Active Frames**: Standard frame-by-frame Euclidean distance is computed between 13-band MFCC vectors.
 - **Active vs. Silent (Zero) Frames**: When one sound module's active region extends longer than another's, the active frame MFCCs of the longer sound are compared against zero vectors for the shorter sound.
 - **Silent vs. Silent Frames**: When both sound modules extend beyond their respective active regions into silence, zero vectors are NOT compared against zero vectors. No comparison is performed for these frame indices, preventing silent trailing tails from artificially inflating similarity or skewing distance metrics.
 
@@ -26,9 +26,9 @@ When comparing temporal MFCC sequences between two sound modules:
 
 ## Multi-Probe Diagnostic Test Suite Specification
 
-The multi-probe test suite uses four distinct probe categories. When testing a specific parameter category, all unvaried parameters are fixed at designated standard median baseline values:
+The multi-probe test suite uses four distinct probe categories. When testing a specific parameter category, all unvaried parameters are fixed at designated standard baseline values:
 - Standard Pitch: MIDI Note 60 (Middle C)
-- Standard Velocity: 80
+- Standard Velocity: 80 (Mezzo-forte)
 - Standard Note Duration: 1000 milliseconds (1.0 second)
 
 ### Probe 1: Note Duration (Length Probe)
@@ -42,7 +42,7 @@ Evaluates sustained decay and release characteristics across four standard note-
 Evaluates velocity response, timbral brightness scaling, and non-linear gain transfer across four standard MIDI velocity levels:
 1. Velocity 16 (Pianissimo)
 2. Velocity 48 (Piano/Mezzo-piano)
-3. Velocity 80 (Mezzo-forte/Forte)
+3. Velocity 80 (Mezzo-forte / Median baseline)
 4. Velocity 127 (Fortissimo)
 
 ### Probe 3: Pitch Frequency (Pitch Probe)
@@ -59,10 +59,54 @@ Evaluates retriggering, overlap behavior, and voice allocation using two standar
 
 ---
 
+## Detailed Distance Metric Formulation and Utilization
+
+### 1. Distance Metric Calculation (Strategy A)
+
+For any two sound modules A and B, distance is evaluated independently across each probe p in the 14-probe diagnostic suite:
+
+1. **Active Region Boundaries**:
+   Let active_A be the number of active 50ms frames in sound A (frames with RMS > 0.0001), and active_B be the active frames in sound B.
+   The total evaluated frame count for probe p is max_active = max(active_A, active_B).
+
+2. **Per-Frame Mean Squared Error (MSE)**:
+   For frame index i from 0 to (max_active - 1):
+   - If i < active_A, vector_A(i) contains the 13 MFCC coefficients for sound A; otherwise vector_A(i) = [0, 0, ..., 0].
+   - If i < active_B, vector_B(i) contains the 13 MFCC coefficients for sound B; otherwise vector_B(i) = [0, 0, ..., 0].
+   - If i >= active_A AND i >= active_B, the frame is skipped entirely (no zero-vs-zero comparison).
+
+   The squared difference for frame i across all 13 MFCC coefficients k = 0..12 is:
+   frame_sq_diff(i) = sum_{k=0}^{12} ( vector_A(i)[k] - vector_B(i)[k] )^2
+
+3. **Probe RMS Distance**:
+   The root-mean-square distance for probe p across all evaluated active frames is:
+   probe_distance(p) = sqrt( (1 / max_active) * sum_{i=0}^{max_active-1} frame_sq_diff(i) )
+
+4. **Overall Module Distance**:
+   The final timbral distance D(A, B) between module A and module B is the unweighted mean of probe_distance(p) across all valid probes:
+   D(A, B) = (1 / N_probes) * sum_{p=1}^{N_probes} probe_distance(p)
+
+---
+
+### 2. Utilization of the Distance Metric
+
+The resulting timbral distance D(A, B) is stored in each preset's `analysis.json` file under the `"distances"` dictionary key (mapping preset ID strings to floating-point distance values). This metric is utilized in three primary ways:
+
+1. **Preset Diversity Matrix & Clustering**:
+   The reciprocal distance matrix D(i, j) quantifies pair-wise timbral uniqueness across all installed sound modules. Presets with large mean distances to all other presets represent unique sonic palette entries.
+
+2. **Duration-Weighted Preset Selection in `sounds~`**:
+   When an optional `dict` argument is provided to `sounds~`, the active preset duration dictionary tracks preset weights. The distance matrix allows `sounds~` to evaluate preset diversity metrics when executing `random` preset selection or lottery sampling.
+
+3. **Sound Module Migration and Regression Testing**:
+   When sound modules are modified or updated (via `migrate_analysis`), changes in the pairwise distance matrix identify whether a code modification altered a sound's fundamental timbre relative to the rest of the sound library.
+
+---
+
 ## Technical Implementation Steps
 
 1. **`analysis_utils.h` & `analysis_utils.c`**:
-   - Define multi-probe MIDI sequence data structures for Length, Velocity, Pitch, and Phrasing tests.
+   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 48, 80, 127), Pitch, and Phrasing tests.
    - Update `analyze_audio()` to store 50ms temporal MFCC arrays and calculate active region frame limits.
    - Update `calculate_distance()` to implement Strategy A active region segmentation distance logic.
 

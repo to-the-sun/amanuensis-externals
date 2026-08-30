@@ -31,7 +31,7 @@ MidiMessage PROBE_LENGTH_3000MS[] = {
 };
 int PROBE_LENGTH_3000MS_LEN = 2;
 
-// Velocity Probes (Baseline: Pitch 60, Duration 1000ms)
+// Velocity Probes (Baseline: Pitch 60, Duration 1000ms; Velocities: 16, 48, 80, 127)
 MidiMessage PROBE_VELOCITY_16[] = {
     {"note_on", 60, 16, 0.0},
     {"note_off", 60, 0, 1.000}
@@ -180,7 +180,7 @@ double calculate_distance(struct json_object* results1, struct json_object* resu
 
         for (int i = 0; i < max_active; i++) {
             // Strategy A: Only evaluate when at least one sound is within its active region.
-            // If both sounds have extended beyond their active regions (i > active1 && i > active2), do nothing.
+            // If both sounds have extended beyond their active regions (i >= active1 && i >= active2), do nothing.
             struct json_object *f1 = (i < len1) ? json_object_array_get_idx(mfcc_obj1, i) : NULL;
             struct json_object *f2 = (i < len2) ? json_object_array_get_idx(mfcc_obj2, i) : NULL;
 
