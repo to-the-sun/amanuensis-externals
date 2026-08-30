@@ -62,7 +62,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Run `./migrate_analysis` to re-analyze all sound presets across the 14 diagnostic probes. This updates every preset's `analysis.json` with complete composite `distances`, `uniqueness_score`, and saved `staccato.wav` and `legato.wav` audio files.
 
 ### 7. Create a New `sounds~` Plugin 
-- When finished with the above steps, move up to the parent `sounds~` folder and:
+- When finished with the above steps, move up to the parent `sounds~/` folder and:
     1. Create a new `.dll` in the `modules/` folder for the new sound.
     2. Recompile `sounds~.mxe64` to incorporate the new sound into the object.
 
