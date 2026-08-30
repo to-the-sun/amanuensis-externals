@@ -72,50 +72,34 @@ where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equ
 
 ---
 
-### Diversity Reward Function Formulations and Comparison
+### Smooth Continuous Uniqueness Rating Metric (0.0 to 1.0)
 
-To evaluate candidate sound modules for inclusion in the preset library, several reward function strategies were evaluated to quantify novelty, avoid redundant presets, and promote library diversity.
+To quantify novelty without requiring complex multi-candidate interactions or hard binary thresholds, a continuous uniqueness metric `Uniqueness_Score(N)` is defined for candidate module `N`. The metric maps the distance to the nearest existing library module smoothly onto a normalized scale from `0.0` (identical duplicate) to `1.0` (completely unique and isolated).
 
-#### 1. K-Nearest Neighbor (KNN) Density Penalty with Minimum Separation Constraint
-- **Formulation**:
-  - `Density_Distance(N) = (1 / K) * sum_{i=1..K} D(N, Neighbor_i)`
-  - `Is_Unique = min_i( D(N, Module_i) ) > D_min`
-  - `Reward(N) = Is_Unique ? Density_Distance(N) : 0`
-- **Pros**: Directly measures local cluster sparsity around candidate module `N`. The hard cutoff `D_min` guarantees no near-duplicate modules are added to the library. Computationally efficient for local neighborhood queries.
-- **Cons**: The hard threshold creates a step-function discontinuity where a candidate module at `D_min - 0.001` receives zero score while `D_min + 0.001` receives full reward. Does not reward modules that expand the global boundaries or convex hull of the library space.
+#### Formulation
 
-#### 2. Continuous Soft-Min Exponential Decay Reward
-- **Formulation**:
-  - `Uniqueness_Factor(N) = 1.0 - exp(- (min_i D(N, Module_i) / D_scale)^2)`
-  - `Reward(N) = Uniqueness_Factor(N) * Density_Distance(N)`
-- **Pros**: Provides a smooth, continuous penalty gradient from 0.0 (identical duplicate) to 1.0 (well isolated). Eliminates sharp boundary artifacts and behaves well in continuous optimization or evolutionary search algorithms.
-- **Cons**: Requires tuning `D_scale`. In multi-objective evolutionary search, soft penalties can occasionally allow subtle duplicates to pass if secondary objectives (e.g. stability or CPU efficiency) score highly.
-
-#### 3. Global Library Centroid and Variance Expansion
-- **Formulation**:
-  - `Library_Centroid C = (1 / M) * sum_{j=1..M} Module_j`
-  - `Spread_Expansion(N) = D(N, C) + [ Variance(Library + {N}) - Variance(Library) ]`
-- **Pros**: Explicitly rewards candidate modules that push the boundary of the sound library outward into unexplored timbral regions, maximizing overall library coverage.
-- **Cons**: Vulnerable to extreme outliers or unmusical synthesis artifacts, which could receive disproportionately high scores merely by being far away from all existing presets.
-
----
-
-### Selected Hybrid Diversity Reward Function
-To balance strict duplicate prevention, local cluster sparsity, and global timbral expansion, a hybrid diversity reward function is adopted:
+Let `D_min_dist(N)` be the minimum composite distance from candidate module `N` to any existing module in the library:
 
 ```
-Is_Unique = min_i( D(N, Module_i) ) >= D_min
-
-Density_Distance(N) = (1 / K) * sum_{i=1..K} D(N, Neighbor_i)   [K = 3]
-
-Centroid_Distance(N) = D(N, Library_Centroid)
-
-Reward(N) = Is_Unique ? [ w_knn * Density_Distance(N) + w_centroid * Centroid_Distance(N) ] : 0.0
+D_min_dist(N) = min_{i} D(N, Module_i)
 ```
 
-- **Hard Uniqueness Guardrail**: Rejects any candidate module within `D_min` distance of an existing preset.
-- **KNN Sparsity Incentive**: Prefers candidate modules situated in sparse regions rather than dense clusters.
-- **Global Expansion Incentive**: Rewards candidate modules that expand the global timbral boundaries of the library.
+The normalized Uniqueness Score is calculated using a smooth S-curve / Gaussian saturation function parameterised by a scaling distance `D_scale`:
+
+```
+Uniqueness_Score(N) = 1.0 - exp( - ( D_min_dist(N) / D_scale )^2 )
+```
+
+#### Metric Behavior
+- **Identical Duplicate (`D_min_dist = 0.0`)**: `Uniqueness_Score = 1.0 - exp(0.0) = 0.0`
+- **Near Duplicate (`D_min_dist << D_scale`)**: Quadradic decay yields scores very close to `0.0`.
+- **Moderate Separation (`D_min_dist = D_scale`)**: `Uniqueness_Score = 1.0 - exp(-1.0) approx 0.632`
+- **Highly Unique / Isolated (`D_min_dist >= 2 * D_scale`)**: `Uniqueness_Score = 1.0 - exp(-4.0) approx 0.982` (saturating gracefully towards `1.0`).
+
+#### Benefits
+- **No Sharp Discontinuities**: Provides a smooth gradient suitable for ranking presets or driving search algorithms.
+- **Bounded Output Range**: Output is guaranteed to lie within `[0.0, 1.0]`, simplifying interpretation and thresholding.
+- **Standalone Evaluation**: Evaluates each candidate module directly against the existing library state without needing pairwise candidate-to-candidate comparison matrix logic.
 
 ---
 
