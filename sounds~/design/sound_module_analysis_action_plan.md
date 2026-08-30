@@ -118,3 +118,5 @@ The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `a
 3. **Build & Verification**:
    - Recompile `audio_engine` and `migrate_analysis` binaries.
    - Run verification tests to confirm calculation accuracy and absence of silent zero-frame comparison artifacts.
+   - Run the scripts to update each preset with the new analytics and build artifacts.
+   - Update sounds~/design/new_sound.md to reflect the changes that were made here. You don't need to rewrite that report or go into more detail than necessary. Just correct any lingering inconsistencies so that a new designer looking at it will know exactly what to do. 
