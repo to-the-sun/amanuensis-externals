@@ -65,12 +65,10 @@ Evaluates retriggering, overlap behavior, and voice allocation using two standar
 
 ### Pairwise Distance Matrix Computation Across Multi-Probe Outputs
 To determine the distance `D(A, B)` between two sound modules `A` and `B`, pairwise frame-by-frame MFCC distances are evaluated across each diagnostic probe `p` in the test suite:
-- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using Strategy A active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
+- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
 - **Composite Distance `D(A, B)`**: Computed as the weighted sum of individual probe distances:
-```
-D(A, B) = sum_{p} w_p * D_p(A, B)
-```
-where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
+  `D(A, B) = sum of (w_p * D_p(A, B)) over all probes p`
+where probe weights `w_p` are normalized such that `sum of w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
 
 ---
 
@@ -82,9 +80,7 @@ To quantify novelty cleanly and directly without artificial parameter tuning or 
 
 Candidate module `N` is compared against every existing module `Module_i` in the sound library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum across all computed pairwise distances represents the candidate's absolute uniqueness score `Uniqueness_Score(N)`:
 
-```
-Uniqueness_Score(N) = D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
-```
+`Uniqueness_Score(N) = D_min_dist(N) = min(D(N, Module_i)) for i = 1 to M`
 
 where `M` is the total number of existing modules in the library.
 
@@ -119,4 +115,4 @@ The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `a
    - Recompile `audio_engine` and `migrate_analysis` binaries.
    - Run verification tests to confirm calculation accuracy and absence of silent zero-frame comparison artifacts.
    - Run the scripts to update each preset with the new analytics and build artifacts.
-   - Update sounds~/design/new_sound.md to reflect the changes that were made here. You don't need to rewrite that report or go into more detail than necessary. Just correct any lingering inconsistencies so that a new designer looking at it will know exactly what to do. 
+   - Update `sounds~/design/new_sound.md` to reflect the changes made.
