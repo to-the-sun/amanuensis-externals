@@ -98,6 +98,9 @@ where `M` is the total number of existing modules in the library.
 - **Unbounded Timbral Scale**: Preserves raw Euclidean distance relationships across 13-band MFCC feature dimensions directly.
 - **Computationally Direct**: Requires only computing pairwise multi-probe distances to existing library presets and taking the minimum value.
 
+#### Storage Location
+The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `analysis.json` for each preset.
+
 ---
 
 ## Technical Implementation Steps
@@ -110,7 +113,7 @@ where `M` is the total number of existing modules in the library.
 2. **`audio_engine.c` & `migrate_analysis.c`**:
    - Update rendering loops to execute each probe sequence.
    - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs for each preset corresponding to the two phrasing probes.
-   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output detailed `analysis.json` files for each sound design module.
+   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output detailed `analysis.json` files for each sound design module, storing the `uniqueness_score` at the very beginning of `analysis.json`.
 
 3. **Build & Verification**:
    - Recompile `audio_engine` and `migrate_analysis` binaries.
