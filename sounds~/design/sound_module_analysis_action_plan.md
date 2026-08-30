@@ -41,8 +41,8 @@ Evaluates sustained decay and release characteristics across four standard note-
 ### Probe 2: Dynamic Velocity (Velocity Probe)
 Evaluates velocity response, timbral brightness scaling, and non-linear gain transfer across four standard MIDI velocity levels:
 1. Velocity 16 (Pianissimo)
-2. Velocity 48 (Piano/Mezzo-piano)
-3. Velocity 80 (Mezzo-forte / Median baseline)
+2. Velocity 52 (Piano/Mezzo-piano)
+3. Velocity 96 (Mezzo-forte)
 4. Velocity 127 (Fortissimo)
 
 ### Probe 3: Pitch Frequency (Pitch Probe)
@@ -54,26 +54,62 @@ Evaluates register balance, spectral energy distribution, and oscillator tuning 
 
 ### Probe 4: Articulation Phrasing (Phrasing Probe)
 Evaluates retriggering, overlap behavior, and voice allocation using two standardized phrase sequences with identical pitch and velocity variations across all sound modules:
-1. **Staccato Phrase**: Rapid sequence of short notes (50ms - 100ms duration with short gaps) across a mix of pitches (e.g., MIDI 60, 64, 67, 72) and velocities.
-2. **Legato Phrase**: Overlapping sustained notes (500ms - 1500ms duration) creating voice transitions and legato crossfades across the same standardized mix of pitches and velocities.
+1. **Staccato Phrase**: Rapid sequence of short notes (50ms - 100ms duration with short gaps) across a mix of pitches (e.g., MIDI 60, 64, 67, 72) and velocities. Rendered and saved directly to `staccato.wav`.
+2. **Legato Phrase**: Overlapping sustained notes (500ms - 1500ms duration) creating voice transitions and legato crossfades across the same standardized mix of pitches and velocities. Rendered and saved directly to `legato.wav`.
+
+*Note on Audio Output Artifacts*: Rather than rendering a generic `design_output.wav` per sound preset, the audio rendering engine explicitly saves `staccato.wav` and `legato.wav` within each preset's folder to preserve audio representations of these two phrasing probes.
 
 ---
 
-## Distance Metric Calculation 
+## Distance Metric Calculation
 
+### Pairwise Distance Matrix Computation Across Multi-Probe Outputs
+To determine the distance `D(A, B)` between two sound modules `A` and `B`, pairwise frame-by-frame MFCC distances are evaluated across each diagnostic probe `p` in the test suite:
+- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using Strategy A active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
+- **Composite Distance `D(A, B)`**: Computed as the weighted sum of individual probe distances:
+```
+D(A, B) = sum_{p} w_p * D_p(A, B)
+```
+where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
 
+---
+
+### Absolute Nearest-Neighbor Uniqueness Metric
+
+To quantify novelty cleanly and directly without artificial parameter tuning or normalization bounds, the uniqueness of candidate module `N` is defined directly by its absolute distance to its nearest neighbor in the existing sound library.
+
+#### Formulation
+
+Candidate module `N` is compared against every existing module `Module_i` in the sound library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum across all computed pairwise distances represents the candidate's absolute uniqueness score `Uniqueness_Score(N)`:
+
+```
+Uniqueness_Score(N) = D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
+```
+
+where `M` is the total number of existing modules in the library.
+
+#### Metric Interpretation
+- `Uniqueness_Score(N) = 0.0`: Candidate module `N` is an identical acoustic duplicate of an existing library preset.
+- Small `Uniqueness_Score(N)`: Candidate module `N` is timbrally very similar to an existing preset.
+- Large `Uniqueness_Score(N)`: Candidate module `N` is highly distinct and isolated from all current library presets.
+
+#### Benefits
+- **Parameter-Free**: Eliminates the need to choose scaling hyperparameters (e.g., `D_scale`).
+- **Unbounded Timbral Scale**: Preserves raw Euclidean distance relationships across 13-band MFCC feature dimensions directly.
+- **Computationally Direct**: Requires only computing pairwise multi-probe distances to existing library presets and taking the minimum value.
 
 ---
 
 ## Technical Implementation Steps
 
 1. **`analysis_utils.h` & `analysis_utils.c`**:
-   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 48, 80, 127), Pitch, and Phrasing tests.
+   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 52, 96, 127), Pitch, and Phrasing tests.
    - Update `analyze_audio()` to store 50ms temporal MFCC arrays and calculate active region frame limits.
    - Update `calculate_distance()` to implement Strategy A active region segmentation distance logic.
 
 2. **`audio_engine.c` & `migrate_analysis.c`**:
    - Update rendering loops to execute each probe sequence.
+   - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs for each preset corresponding to the two phrasing probes.
    - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output detailed `analysis.json` files for each sound design module.
 
 3. **Build & Verification**:
