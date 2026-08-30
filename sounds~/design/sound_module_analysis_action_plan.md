@@ -54,8 +54,10 @@ Evaluates register balance, spectral energy distribution, and oscillator tuning 
 
 ### Probe 4: Articulation Phrasing (Phrasing Probe)
 Evaluates retriggering, overlap behavior, and voice allocation using two standardized phrase sequences with identical pitch and velocity variations across all sound modules:
-1. **Staccato Phrase**: Rapid sequence of short notes (50ms - 100ms duration with short gaps) across a mix of pitches (e.g., MIDI 60, 64, 67, 72) and velocities.
-2. **Legato Phrase**: Overlapping sustained notes (500ms - 1500ms duration) creating voice transitions and legato crossfades across the same standardized mix of pitches and velocities.
+1. **Staccato Phrase**: Rapid sequence of short notes (50ms - 100ms duration with short gaps) across a mix of pitches (e.g., MIDI 60, 64, 67, 72) and velocities. Rendered and saved directly to `staccato.wav`.
+2. **Legato Phrase**: Overlapping sustained notes (500ms - 1500ms duration) creating voice transitions and legato crossfades across the same standardized mix of pitches and velocities. Rendered and saved directly to `legato.wav`.
+
+*Note on Audio Output Artifacts*: Rather than rendering a generic `design_output.wav` per sound preset, the audio rendering engine explicitly saves `staccato.wav` and `legato.wav` within each preset's folder to preserve audio representations of these two phrasing probes.
 
 ---
 
@@ -107,6 +109,7 @@ where `M` is the total number of existing modules in the library.
 
 2. **`audio_engine.c` & `migrate_analysis.c`**:
    - Update rendering loops to execute each probe sequence.
+   - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs for each preset corresponding to the two phrasing probes.
    - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output detailed `analysis.json` files for each sound design module.
 
 3. **Build & Verification**:
