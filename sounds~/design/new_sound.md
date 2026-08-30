@@ -74,5 +74,5 @@ The primary objective is to design a sound that is **as perceptually different a
 - **Audio Output Files:** Phrasing probes output `staccato.wav` and `legato.wav`.
 - **JSON Structure:** `analysis.json` puts `uniqueness_score` at the very beginning of the object, followed by `distances` and `probes` (containing 50ms frame `rms` and 13-band `mfccs` data for each probe).
 
-## Subjective Judgment and Continued Iteration 
+## Subjective Judgment & Continued Iteration 
 Analyze, compare, and iterate as many times as necessary on the new sound to achieve distinction. While the `uniqueness_score` provides a quantitative guide, prioritize **human perception**. If two sounds have a high statistical distance but sound similar to a person, iterate further on the design to achieve true variety.
