@@ -78,10 +78,10 @@ To quantify novelty without requiring complex multi-candidate interactions or ha
 
 #### Formulation
 
-Let `D_min_dist(N)` be the minimum composite distance from candidate module `N` to any existing module in the library:
+Let `D_min_dist(N)` be the minimum composite distance from candidate module `N` to any existing module in the sound library. To find this distance, candidate module `N` is compared against every existing module `Module_i` in the library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum of all these computed pairwise distances represents the distance to the candidate's single nearest neighbor in timbral space:
 
 ```
-D_min_dist(N) = min_{i} D(N, Module_i)
+D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
 ```
 
 The normalized Uniqueness Score is calculated using a smooth S-curve / Gaussian saturation function parameterised by a scaling distance `D_scale`:
