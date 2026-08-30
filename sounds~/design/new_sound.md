@@ -20,7 +20,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Sounds can be made distinct from each other by varying them over time. This can mean different ADSR envelopes, or modulating the timbre itself from one thing to another, all during a single note.
 - Effects are not out of the question, as long as they can be implemented efficiently in C.
 - Much dissonance is generally discouraged, but sounds can absolutely incorporate an atonal element, e.g. distortion, static. It is valid that this atonal element could be most or even all of the sound, as you might have when making drum samples, for example.
-- We do not need to think of this in terms of only building "synths." If you want to try emulating acoustic instruments or even found sounds from nature, that would be interesting and acceptable. 
+- You do not need to think of this in terms of only building "synths." If you want to try emulating acoustic instruments or even found sounds from nature, that would be interesting and acceptable. 
 
 ### 3. Implement the Design
 - **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside existing `sounds/` subfolders.
