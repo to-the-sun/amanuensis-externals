@@ -59,9 +59,63 @@ Evaluates retriggering, overlap behavior, and voice allocation using two standar
 
 ---
 
-## Distance Metric Calculation 
+## Distance Metric Calculation
 
+### Pairwise Distance Matrix Computation Across Multi-Probe Outputs
+To determine the distance `D(A, B)` between two sound modules `A` and `B`, pairwise frame-by-frame MFCC distances are evaluated across each diagnostic probe `p` in the test suite:
+- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using Strategy A active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
+- **Composite Distance `D(A, B)`**: Computed as the weighted sum of individual probe distances:
+```
+D(A, B) = sum_{p} w_p * D_p(A, B)
+```
+where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
 
+---
+
+### Diversity Reward Function Formulations and Comparison
+
+To evaluate candidate sound modules for inclusion in the preset library, several reward function strategies were evaluated to quantify novelty, avoid redundant presets, and promote library diversity.
+
+#### 1. K-Nearest Neighbor (KNN) Density Penalty with Minimum Separation Constraint
+- **Formulation**:
+  - `Density_Distance(N) = (1 / K) * sum_{i=1..K} D(N, Neighbor_i)`
+  - `Is_Unique = min_i( D(N, Module_i) ) > D_min`
+  - `Reward(N) = Is_Unique ? Density_Distance(N) : 0`
+- **Pros**: Directly measures local cluster sparsity around candidate module `N`. The hard cutoff `D_min` guarantees no near-duplicate modules are added to the library. Computationally efficient for local neighborhood queries.
+- **Cons**: The hard threshold creates a step-function discontinuity where a candidate module at `D_min - 0.001` receives zero score while `D_min + 0.001` receives full reward. Does not reward modules that expand the global boundaries or convex hull of the library space.
+
+#### 2. Continuous Soft-Min Exponential Decay Reward
+- **Formulation**:
+  - `Uniqueness_Factor(N) = 1.0 - exp(- (min_i D(N, Module_i) / D_scale)^2)`
+  - `Reward(N) = Uniqueness_Factor(N) * Density_Distance(N)`
+- **Pros**: Provides a smooth, continuous penalty gradient from 0.0 (identical duplicate) to 1.0 (well isolated). Eliminates sharp boundary artifacts and behaves well in continuous optimization or evolutionary search algorithms.
+- **Cons**: Requires tuning `D_scale`. In multi-objective evolutionary search, soft penalties can occasionally allow subtle duplicates to pass if secondary objectives (e.g. stability or CPU efficiency) score highly.
+
+#### 3. Global Library Centroid and Variance Expansion
+- **Formulation**:
+  - `Library_Centroid C = (1 / M) * sum_{j=1..M} Module_j`
+  - `Spread_Expansion(N) = D(N, C) + [ Variance(Library + {N}) - Variance(Library) ]`
+- **Pros**: Explicitly rewards candidate modules that push the boundary of the sound library outward into unexplored timbral regions, maximizing overall library coverage.
+- **Cons**: Vulnerable to extreme outliers or unmusical synthesis artifacts, which could receive disproportionately high scores merely by being far away from all existing presets.
+
+---
+
+### Selected Hybrid Diversity Reward Function
+To balance strict duplicate prevention, local cluster sparsity, and global timbral expansion, a hybrid diversity reward function is adopted:
+
+```
+Is_Unique = min_i( D(N, Module_i) ) >= D_min
+
+Density_Distance(N) = (1 / K) * sum_{i=1..K} D(N, Neighbor_i)   [K = 3]
+
+Centroid_Distance(N) = D(N, Library_Centroid)
+
+Reward(N) = Is_Unique ? [ w_knn * Density_Distance(N) + w_centroid * Centroid_Distance(N) ] : 0.0
+```
+
+- **Hard Uniqueness Guardrail**: Rejects any candidate module within `D_min` distance of an existing preset.
+- **KNN Sparsity Incentive**: Prefers candidate modules situated in sparse regions rather than dense clusters.
+- **Global Expansion Incentive**: Rewards candidate modules that expand the global timbral boundaries of the library.
 
 ---
 
