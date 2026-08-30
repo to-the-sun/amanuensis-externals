@@ -26,9 +26,9 @@ The primary objective is to design a sound that is **as perceptually different a
 - **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside existing `sounds/` subfolders.
 - Update the `SOUND_DESIGN_VERSION` macro in `sound_design.h` to the next increment (find the highest numbered folder in `sounds/` and add 1).
 - Implement your synthesis logic in the `render_midi` function within `sound_design.c`.
-- The sound design itself **must** accept the following arguments and utilize them somewhere in the code. Their values will be provided by standard MIDI:
-    1. **`note_on` and `note_off`:** A non-zero integer will arrive at `note_on` and a `0` will arrive at `note_off`. The sound must go from silence to audible at `note_on` and return to silence after `note_off`.
-    2. **`pitch`:** An integer `0` through `127` indicating MIDI pitch (12-tone equal temperament with A4 = 440 Hz):
+- The sound design itself **must** accept the following arguments and utilize them somewhere in the code. Their values will be provided by standard MIDI. The basic requirements for these values are as follows, but a great way to make the sound unique is to get creative with including additional functions in the sound design for them. For example, `note_off` typically signals the beginning of the release in an ADSR envelope, however, it could do anything else as well or instead, such as cue some new modulation to begin. Or some other aspect of timbre could be based on the `velocity`, etc. Anything is fair game and you should not be limited by the following points, which are only the most basic requirements.
+    1. **`note_on` and `note_off`:** A non-zero integer will arrive at `note_on` and a `0` will arrive at `note_off`. The only very general requirement for these is that the sound must go from silence to audible at the point of `note_on` and must return to silence eventually at some point beyond `note_off`.
+    2. **`pitch`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the pitch the tonal portion of the sound must take on, in 12-tone equal temperament with MIDI note 69 (A4) at 440 Hz. To derive the hertz from the MIDI pitch, use:
 
         ```
         #include <math.h>
@@ -37,7 +37,8 @@ The primary objective is to design a sound that is **as perceptually different a
         }
         ```
 
-    3. **`velocity`:** An integer `0` through `127` indicating peak amplitude, scaling linearly from silence (`0`) to full volume (`127`).
+        Again, there may be an atonal portion to the sound as well, which this would not apply to. However, being atonal or non-tonal is different than simply being out-of-tune, so nothing microtonal.
+    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`).
 
 ### 4. Volume Calibration & Normalization
 - All sounds must be normalized to a peak amplitude of **exactly 1.0 at velocity 127**.
