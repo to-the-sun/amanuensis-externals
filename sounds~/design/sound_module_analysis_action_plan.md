@@ -103,7 +103,7 @@ where `M` is the total number of existing modules in the library.
 ## Technical Implementation Steps
 
 1. **`analysis_utils.h` & `analysis_utils.c`**:
-   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 52, 96, 127), Pitch, and Phrasing tests.
+   - Define multi-probe MIDI sequence data structures for Length, Velocity, Pitch, and Phrasing tests.
    - Update `analyze_audio()` to store 50ms temporal MFCC arrays and calculate active region frame limits.
    - Update `calculate_distance()` to implement Strategy A active region segmentation distance logic.
 
