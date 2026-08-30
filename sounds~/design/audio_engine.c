@@ -8,9 +8,7 @@
 #include "analysis_utils.h"
 
 int main(int argc, char** argv) {
-    double duration = 5.0;
     int sr = 44100;
-    const char* output_wav = "design_output.wav";
 
     char sounds_dir[] = "sounds";
     char version_str[16];
@@ -22,25 +20,34 @@ int main(int argc, char** argv) {
     mkdir(sounds_dir, 0755);
     mkdir(subfolder, 0755);
 
-    printf("Rendering %.1f seconds of audio using sound_design sandbox...\n", duration);
-    int num_samples;
-    double* audio = render_midi(DEFAULT_MIDI_SEQUENCE, DEFAULT_MIDI_SEQUENCE_LEN, duration, sr, &num_samples);
+    printf("Rendering multi-probe diagnostic suite for sound_design version %d...\n", SOUND_DESIGN_VERSION);
 
-    char output_path[512];
-    sprintf(output_path, "%s/%s", subfolder, output_wav);
-    save_wav(output_path, audio, num_samples, sr);
-    printf("Audio saved to %s\n", output_path);
+    struct json_object* probe_results = json_object_new_object();
+
+    for (int p = 0; p < NUM_ALL_PROBES; p++) {
+        ProbeSuiteEntry probe = ALL_PROBES[p];
+        printf("  Running probe '%s' (%.3fs)...\n", probe.name, probe.duration);
+
+        int num_samples;
+        double* audio = render_midi(probe.sequence, probe.length, probe.duration, sr, &num_samples);
+
+        if (strcmp(probe.name, "length_1000ms") == 0) {
+            char wav_path[512];
+            sprintf(wav_path, "%s/design_output.wav", subfolder);
+            save_wav(wav_path, audio, num_samples, sr);
+        }
+
+        struct json_object* analysis = analyze_audio(audio, num_samples, sr);
+        json_object_object_add(probe_results, probe.name, analysis);
+        free(audio);
+    }
+
+    struct json_object* results = json_object_new_object();
+    json_object_object_add(results, "probe_results", probe_results);
 
     char cmd[1024];
     sprintf(cmd, "cp sound_design.c sound_design.h %s/", subfolder);
     system(cmd);
-
-    struct json_object* results = analyze_audio(audio, num_samples, sr);
-
-    struct json_object* peak_amp_obj;
-    if (json_object_object_get_ex(results, "peak_amplitude", &peak_amp_obj)) {
-        printf("Peak amplitude: %f\n", json_object_get_double(peak_amp_obj));
-    }
 
     struct json_object* distances = json_object_new_object();
     DIR *dir;
@@ -73,6 +80,5 @@ int main(int argc, char** argv) {
     printf("Analysis saved to %s\n", json_path);
 
     json_object_put(results);
-    free(audio);
     return 0;
 }

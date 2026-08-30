@@ -33,10 +33,18 @@ int main() {
                 double* (*render_midi_ptr)(MidiMessage*, int, double, int, int*);
                 render_midi_ptr = dlsym(handle, "render_midi");
                 if (render_midi_ptr) {
-                    int num_samples;
-                    double* audio = render_midi_ptr(DEFAULT_MIDI_SEQUENCE, DEFAULT_MIDI_SEQUENCE_LEN, 5.0, 44100, &num_samples);
-                    json_object_object_add(all_results, ent->d_name, analyze_audio(audio, num_samples, 44100));
-                    free(audio);
+                    struct json_object* probe_results = json_object_new_object();
+                    for (int p = 0; p < NUM_ALL_PROBES; p++) {
+                        ProbeSuiteEntry probe = ALL_PROBES[p];
+                        int num_samples;
+                        double* audio = render_midi_ptr(probe.sequence, probe.length, probe.duration, 44100, &num_samples);
+                        struct json_object* analysis = analyze_audio(audio, num_samples, 44100);
+                        json_object_object_add(probe_results, probe.name, analysis);
+                        free(audio);
+                    }
+                    struct json_object* sound_res = json_object_new_object();
+                    json_object_object_add(sound_res, "probe_results", probe_results);
+                    json_object_object_add(all_results, ent->d_name, sound_res);
                 }
                 dlclose(handle); unlink(lib_path);
             }
