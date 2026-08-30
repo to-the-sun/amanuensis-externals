@@ -10,8 +10,8 @@ The primary objective is to design a sound that is **as perceptually different a
 ### 1. Survey the Existing Library
 - Browse the `sounds/` directory.
 - Review the `analysis.json` files in each subfolder.
-- Pay attention to the `average_spectral_centroid` (brightness), `average_spectral_bandwidth`, and `mfcc_means` (timbral fingerprint).
-- Look at the `temporal_data` arrays to understand how existing sounds evolve over time.
+- Note the `uniqueness_score` at the top of each `analysis.json` file.
+- Inspect the 14 multi-probe diagnostic outputs under `probes`, which contain frame-by-frame 50ms `mfccs` vectors and `rms` energy values for active region segmentation. Legacy global scalar metrics (e.g., `average_rms`, `peak_rms`, `peak_amplitude`, `mfcc_means`, `spectral_centroid`) are no longer used or stored.
 
 ### 2. Formulate a Distinct Timbre
 - First of all, you are allowed and encouraged to be creative.
@@ -26,9 +26,9 @@ The primary objective is to design a sound that is **as perceptually different a
 - **Crucial:** Only modify the top-level `sound_design.c` file. **Never** modify the `sound_design.c` files stored inside existing `sounds/` subfolders.
 - Update the `SOUND_DESIGN_VERSION` macro in `sound_design.h` to the next increment (find the highest numbered folder in `sounds/` and add 1).
 - Implement your synthesis logic in the `render_midi` function within `sound_design.c`.
-- The sound design itself **must** accept the following arguments and utilize them somewhere in the code. Their values will be provided by standard MIDI. The basic requirements for these values are as follows, but a great way to make the sound unique is to get creative with including additional functions in the sound design for them. For example, `note_off` typically signals the beginning of the release in an ADSR envelope, however, it could do anything else as well or instead, such as cue some new modulation to begin. Or some other aspect of timbre could be based on the `velocity`, etc. Anything is fair game and you should not be limited by the following points, which are only the most basic requirements.
-    1. **`note_on` and `note_off`:** A non-zero integer will arrive at `note_on` and a `0` will arrive at `note_off`. The only very general requirement for these is that the sound must go from silence to audible at the point of `note_on` and must return to silence eventually at some point beyond `note_off`.
-    2. **`pitch`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the pitch the tonal portion of the sound must take on, in 12-tone equal temperament with MIDI note 69 (A4) at 440 Hz. To derive the hertz from the MIDI pitch, use:
+- The sound design itself **must** accept the following arguments and utilize them somewhere in the code. Their values will be provided by standard MIDI:
+    1. **`note_on` and `note_off`:** A non-zero integer will arrive at `note_on` and a `0` will arrive at `note_off`. The sound must go from silence to audible at `note_on` and return to silence after `note_off`.
+    2. **`pitch`:** An integer `0` through `127` indicating MIDI pitch (12-tone equal temperament with A4 = 440 Hz):
 
         ```
         #include <math.h>
@@ -37,46 +37,43 @@ The primary objective is to design a sound that is **as perceptually different a
         }
         ```
 
-        Again, there may be an atonal portion to the sound as well, which this would not apply to. However, being atonal or non-tonal is different than simply being out-of-tune, so nothing microtonal.
-    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`).
+    3. **`velocity`:** An integer `0` through `127` indicating peak amplitude, scaling linearly from silence (`0`) to full volume (`127`).
 
 ### 4. Volume Calibration & Normalization
 - All sounds must be normalized to a peak amplitude of **exactly 1.0 at velocity 127**.
-- This normalization must be achieved by adjusting internal synthesis gain constants (e.g., scaling the final output in `render_note`) rather than using limiters or compressors.
-- The standardized MIDI sequence uses a velocity of **127** for all notes.
+- This normalization must be achieved by adjusting internal synthesis gain constants (e.g., scaling final output) rather than limiters or compressors.
 - **Calibration Loop:**
     1. Compile with `make`.
     2. Run `./audio_engine`.
-    3. Observe the `Peak amplitude` reported in the console.
-    4. If the peak is not 1.0, calculate a correction factor: `new_gain = old_gain * (1.0 / current_peak)`.
-    5. Update `sound_design.c` and repeat until the peak amplitude is exactly 1.0.
+    3. Observe the `Peak amplitude` reported in the console for the `vel_127` probe.
+    4. If the peak is not 1.0, calculate correction factor: `new_gain = old_gain * (1.0 / current_peak)`.
+    5. Update `sound_design.c` and repeat until peak amplitude is exactly 1.0.
 
 ### 5. Standardized Analysis
 - After calibration, running `./audio_engine` will:
-    1. Render the standardized MIDI sequence (at velocity 127).
-    2. Perform analysis every 50ms (RMS, Spectral Centroid, Bandwidth, Kurtosis, ZCR, MFCCs).
-    3. Calculate the "Distance" from other sounds in the library.
-    4. Save the `.wav`, the `sound_design.c` copy, and `analysis.json` into the new versioned subfolder.
+    1. Render all 14 diagnostic probes across length, velocity, pitch, and articulation phrasing dimensions.
+    2. Generate dedicated `staccato.wav` and `legato.wav` audio output files for the phrasing probes.
+    3. Perform active region frame-by-frame 50ms MFCC analysis.
+    4. Calculate composite multi-probe pairwise distances and the absolute nearest-neighbor `uniqueness_score`.
+    5. Save `staccato.wav`, `legato.wav`, `sound_design.c` copy, `sound_design.h` copy, and `analysis.json` (with `uniqueness_score` at the very beginning) into the new versioned subfolder.
 
 ### 6. Reciprocal Library Maintenance
-- After generating a new sound, the older sounds' `analysis.json` files will not yet know their distance to this new sound.
-- Run `./migrate_analysis` to re-analyze the entire library. This ensures every sound's `analysis.json` contains a complete `distances` dictionary reflecting its relationship to all other versions, including the one you just created.
+- After generating a new sound, older sounds' `analysis.json` files must be updated with pairwise distances to the new sound.
+- Run `./migrate_analysis` to re-analyze all sound presets across the 14 diagnostic probes. This updates every preset's `analysis.json` with complete composite `distances`, `uniqueness_score`, and saved `staccato.wav` and `legato.wav` audio files.
 
 ### 7. Create a New `sounds~` Plugin 
-- When finished with the above steps, the only things that need to be done outside of the `design/` folder are:
-    1. Create a new `.dll` in the `modules/` folder for the new sound that can be run as expected from the `sounds~` object.
-    2. Then recompile the `sounds~.mxe64` file itself to incorporate the sound into the object. 
+- When finished with the above steps:
+    1. Create a new `.dll` in the `modules/` folder for the new sound.
+    2. Recompile `sounds~.mxe64` to incorporate the new sound into the object.
 
 ## Technical Constraints & Format
 - **Language:** C (C99 or later).
 - **Dependencies:** `libsndfile`, `aubio`, `json-c`, `fftw3`.
   - On Debian/Ubuntu: `sudo apt-get install libsndfile1-dev libaubio-dev libjson-c-dev libfftw3-dev`
-- **Temporal Analysis:** 50ms hop/window.
-- **Data Format:** `temporal_data` must be a dictionary of arrays (e.g., `{"times": [...], "rms": [...]}`).
-- **MIDI Consistency:** Always use the same MIDI sequence for all sounds to ensure a fair "timbre" comparison.
-- **Distance Metric:** The system uses Euclidean distance on MFCC means as the primary "difference" score.
-- **MIDI Handling:** Modules must be polyphonic and correctly handle sustained notes (e.g., by rendering any notes remaining in `active_notes` at the end of the `duration` without a release phase). This ensures compatibility with both listed sequences and potential live MIDI streams.
-- **MIDI Pitch:** The tonal element of each sound must be able to take on the MIDI pitch being used (with a standard A4 = 440Hz tuning). Again, there may be an atonal portion to the sound as well, which this would not apply to. However, being atonal or non-tonal is different than simply being out-of-tune, so nothing microtonal.
+- **Temporal Analysis:** 50ms hop/window with active region frame-by-frame MFCC distance calculation.
+- **Audio Output Files:** Phrasing probes output `staccato.wav` and `legato.wav`.
+- **JSON Structure:** `analysis.json` puts `uniqueness_score` at the very beginning of the object, followed by `distances` and `probes` (containing 50ms frame `rms` and 13-band `mfccs` data for each probe).
+- **MIDI Pitch:** Tonal elements take on MIDI pitch using standard A4 = 440 Hz tuning.
 
 ## Subjective Judgment and Continued Iteration 
-Analyze, compare, and iterate as many times as necessary on the new sound to achieve distinction. While the distance metric provides a quantitative guide, prioritize **human perception**. If two sounds have a high statistical distance but sound similar to a person, iterate further on the design to achieve true variety.
+Analyze, compare, and iterate as many times as necessary on the new sound to achieve distinction. While the `uniqueness_score` provides a quantitative guide, prioritize **human perception**. If two sounds have a high statistical distance but sound similar to a person, iterate further on the design to achieve true variety.

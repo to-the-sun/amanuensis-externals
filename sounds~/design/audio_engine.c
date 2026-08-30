@@ -3,14 +3,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <float.h>
+#include <math.h>
 #include <json-c/json.h>
 #include "sound_design.h"
 #include "analysis_utils.h"
 
 int main(int argc, char** argv) {
-    double duration = 5.0;
     int sr = 44100;
-    const char* output_wav = "design_output.wav";
 
     char sounds_dir[] = "sounds";
     char version_str[16];
@@ -22,27 +23,48 @@ int main(int argc, char** argv) {
     mkdir(sounds_dir, 0755);
     mkdir(subfolder, 0755);
 
-    printf("Rendering %.1f seconds of audio using sound_design sandbox...\n", duration);
-    int num_samples;
-    double* audio = render_midi(DEFAULT_MIDI_SEQUENCE, DEFAULT_MIDI_SEQUENCE_LEN, duration, sr, &num_samples);
+    char old_wav[512];
+    sprintf(old_wav, "%s/design_output.wav", subfolder);
+    unlink(old_wav);
 
-    char output_path[512];
-    sprintf(output_path, "%s/%s", subfolder, output_wav);
-    save_wav(output_path, audio, num_samples, sr);
-    printf("Audio saved to %s\n", output_path);
+    printf("Rendering diagnostic probes for version %d...\n", SOUND_DESIGN_VERSION);
+
+    struct json_object* probes_obj = json_object_new_object();
+    double vel127_peak_amp = 0.0;
+
+    for (int p = 0; p < NUM_PROBES; p++) {
+        ProbeConfig* cfg = &PROBE_CONFIGS[p];
+        int num_samples = 0;
+        double* audio = render_midi(cfg->sequence, cfg->sequence_len, cfg->duration, sr, &num_samples);
+
+        if (cfg->save_wav_filename != NULL) {
+            char output_path[512];
+            sprintf(output_path, "%s/%s", subfolder, cfg->save_wav_filename);
+            save_wav(output_path, audio, num_samples, sr);
+            printf("Saved audio probe: %s\n", output_path);
+        }
+
+        if (strcmp(cfg->name, "vel_127") == 0) {
+            for (int k = 0; k < num_samples; k++) {
+                double abs_val = fabs(audio[k]);
+                if (abs_val > vel127_peak_amp) vel127_peak_amp = abs_val;
+            }
+        }
+
+        struct json_object* probe_res = analyze_audio(audio, num_samples, sr);
+        json_object_object_add(probes_obj, cfg->name, probe_res);
+        free(audio);
+    }
+
+    printf("Peak amplitude: %f\n", vel127_peak_amp);
 
     char cmd[1024];
     sprintf(cmd, "cp sound_design.c sound_design.h %s/", subfolder);
     system(cmd);
 
-    struct json_object* results = analyze_audio(audio, num_samples, sr);
-
-    struct json_object* peak_amp_obj;
-    if (json_object_object_get_ex(results, "peak_amplitude", &peak_amp_obj)) {
-        printf("Peak amplitude: %f\n", json_object_get_double(peak_amp_obj));
-    }
-
     struct json_object* distances = json_object_new_object();
+    double min_dist = DBL_MAX;
+
     DIR *dir;
     struct dirent *ent;
     if ((dir = opendir(sounds_dir)) != NULL) {
@@ -52,8 +74,11 @@ int main(int argc, char** argv) {
                 sprintf(other_json_path, "%s/%s/analysis.json", sounds_dir, ent->d_name);
                 struct json_object* other_results = json_object_from_file(other_json_path);
                 if (other_results) {
-                    double dist = calculate_distance(results, other_results);
+                    double dist = calculate_distance(probes_obj, other_results);
                     json_object_object_add(distances, ent->d_name, json_object_new_double(dist));
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                    }
                     json_object_put(other_results);
                 }
             }
@@ -61,18 +86,18 @@ int main(int argc, char** argv) {
         closedir(dir);
     }
 
-    if (json_object_object_length(distances) > 0) {
-        json_object_object_add(results, "distances", distances);
-    } else {
-        json_object_put(distances);
-    }
+    double uniqueness_score = (min_dist == DBL_MAX) ? 0.0 : min_dist;
+
+    struct json_object* results = json_object_new_object();
+    json_object_object_add(results, "uniqueness_score", json_object_new_double(uniqueness_score));
+    json_object_object_add(results, "distances", distances);
+    json_object_object_add(results, "probes", probes_obj);
 
     char json_path[512];
     sprintf(json_path, "%s/analysis.json", subfolder);
     json_object_to_file_ext(json_path, results, JSON_C_TO_STRING_PRETTY);
-    printf("Analysis saved to %s\n", json_path);
+    printf("Analysis saved to %s (Uniqueness score: %.6f)\n", json_path, uniqueness_score);
 
     json_object_put(results);
-    free(audio);
     return 0;
 }

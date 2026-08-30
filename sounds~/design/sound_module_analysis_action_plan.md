@@ -2,9 +2,9 @@
 
 ## Overview and Objectives
 
-This report outlines the architecture and action plan for evaluating sound module diversity in the `sounds~` synthesis engine. To ensure that timbral distance and diversity comparisons reflect actual acoustical content rather than statistical artifacts, global mean averaging across temporal frames is replaced with frame-by-frame Mel-Frequency Cepstral Coefficients (MFCC) analysis at uniform 50-millisecond intervals.
+This report outlines the architecture and action plan for evaluating sound module diversity in the `sounds~` synthesis engine. To ensure that timbral distance and diversity comparisons reflect actual acoustical content rather than statistical artifacts, global mean averaging across temporal frames and legacy summary scalar metrics (such as `average_rms`, `peak_rms`, `peak_amplitude`, `mfcc_means`, `spectral_centroid`, etc.) are eliminated.
 
-Furthermore, active region segmentation is implemented to avoid false similarity artifacts resulting from silent trailing frames. Finally, a multi-probe diagnostic test suite evaluates sound design modules across specific physical dimensions: note duration, velocity response, pitch registers, and articulation phrasing.
+The analysis stored in `analysis.json` consists solely of an absolute nearest-neighbor `uniqueness_score` at the top level, pairwise preset `distances`, and frame-by-frame Mel-Frequency Cepstral Coefficients (MFCC) analysis at uniform 50-millisecond intervals for each of the 14 diagnostic probes using active region segmentation.
 
 ---
 
@@ -65,12 +65,10 @@ Evaluates retriggering, overlap behavior, and voice allocation using two standar
 
 ### Pairwise Distance Matrix Computation Across Multi-Probe Outputs
 To determine the distance `D(A, B)` between two sound modules `A` and `B`, pairwise frame-by-frame MFCC distances are evaluated across each diagnostic probe `p` in the test suite:
-- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using Strategy A active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
+- **Probe Pairwise Distance `D_p(A, B)`**: Calculated using active region segmentation over the sequence of 13-band MFCC vectors for probe `p`.
 - **Composite Distance `D(A, B)`**: Computed as the weighted sum of individual probe distances:
-```
-D(A, B) = sum_{p} w_p * D_p(A, B)
-```
-where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
+  `D(A, B) = sum of (w_p * D_p(A, B)) over all probes p`
+where probe weights `w_p` are normalized such that `sum of w_p = 1.0` (with equal weighting `w_p = 1 / N_probes` by default).
 
 ---
 
@@ -82,9 +80,7 @@ To quantify novelty cleanly and directly without artificial parameter tuning or 
 
 Candidate module `N` is compared against every existing module `Module_i` in the sound library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum across all computed pairwise distances represents the candidate's absolute uniqueness score `Uniqueness_Score(N)`:
 
-```
-Uniqueness_Score(N) = D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
-```
+`Uniqueness_Score(N) = D_min_dist(N) = min(D(N, Module_i)) for i = 1 to M`
 
 where `M` is the total number of existing modules in the library.
 
@@ -93,13 +89,8 @@ where `M` is the total number of existing modules in the library.
 - Small `Uniqueness_Score(N)`: Candidate module `N` is timbrally very similar to an existing preset.
 - Large `Uniqueness_Score(N)`: Candidate module `N` is highly distinct and isolated from all current library presets.
 
-#### Benefits
-- **Parameter-Free**: Eliminates the need to choose scaling hyperparameters (e.g., `D_scale`).
-- **Unbounded Timbral Scale**: Preserves raw Euclidean distance relationships across 13-band MFCC feature dimensions directly.
-- **Computationally Direct**: Requires only computing pairwise multi-probe distances to existing library presets and taking the minimum value.
-
 #### Storage Location
-The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `analysis.json` for each preset.
+The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `analysis.json` for each preset. Legacy global scalar metrics are no longer stored in `analysis.json`.
 
 ---
 
@@ -107,16 +98,16 @@ The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `a
 
 1. **`analysis_utils.h` & `analysis_utils.c`**:
    - Define multi-probe MIDI sequence data structures for Length, Velocity, Pitch, and Phrasing tests.
-   - Update `analyze_audio()` to store 50ms temporal MFCC arrays and calculate active region frame limits.
+   - Update `analyze_audio()` to store 50ms frame MFCC arrays (`mfccs`) and frame energy levels (`rms`) for active region segmentation, omitting legacy summary metrics.
    - Update `calculate_distance()` to implement active region segmentation distance logic.
 
 2. **`audio_engine.c` & `migrate_analysis.c`**:
    - Update rendering loops to execute each probe sequence.
    - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs for each preset corresponding to the two phrasing probes.
-   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output detailed `analysis.json` files for each sound design module, storing the `uniqueness_score` at the very beginning of `analysis.json`.
+   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output streamlined `analysis.json` files for each sound design module, storing the `uniqueness_score` at the very beginning of `analysis.json`.
 
 3. **Build & Verification**:
    - Recompile `audio_engine` and `migrate_analysis` binaries.
    - Run verification tests to confirm calculation accuracy and absence of silent zero-frame comparison artifacts.
    - Run the scripts to update each preset with the new analytics and build artifacts.
-   - Update sounds~/design/new_sound.md to reflect the changes that were made here. You don't need to rewrite that report or go into more detail than necessary. Just correct any lingering inconsistencies so that a new designer looking at it will know exactly what to do. 
+   - Update `sounds~/design/new_sound.md` to reflect the changes made.
