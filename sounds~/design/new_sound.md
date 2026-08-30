@@ -11,8 +11,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Browse the `sounds/` directory.
 - Review the `analysis.json` files in each subfolder.
 - Note the `uniqueness_score` at the top of each `analysis.json` file.
-- Inspect the 14 multi-probe diagnostic outputs under `probes`, paying attention to `average_spectral_centroid` (brightness), `average_spectral_bandwidth`, and `mfcc_means` (timbral fingerprint).
-- Look at the `temporal_data` arrays within the probes to understand how existing sounds evolve over time.
+- Inspect the 14 multi-probe diagnostic outputs under `probes`, which contain frame-by-frame 50ms `mfccs` vectors and `rms` energy values for active region segmentation. Legacy global scalar metrics (e.g., `average_rms`, `peak_rms`, `peak_amplitude`, `mfcc_means`, `spectral_centroid`) are no longer used or stored.
 
 ### 2. Formulate a Distinct Timbre
 - First of all, you are allowed and encouraged to be creative.
@@ -73,7 +72,7 @@ The primary objective is to design a sound that is **as perceptually different a
   - On Debian/Ubuntu: `sudo apt-get install libsndfile1-dev libaubio-dev libjson-c-dev libfftw3-dev`
 - **Temporal Analysis:** 50ms hop/window with active region frame-by-frame MFCC distance calculation.
 - **Audio Output Files:** Phrasing probes output `staccato.wav` and `legato.wav`.
-- **JSON Structure:** `analysis.json` puts `uniqueness_score` at the very beginning of the object, followed by `distances` and `probes`.
+- **JSON Structure:** `analysis.json` puts `uniqueness_score` at the very beginning of the object, followed by `distances` and `probes` (containing 50ms frame `rms` and 13-band `mfccs` data for each probe).
 - **MIDI Pitch:** Tonal elements take on MIDI pitch using standard A4 = 440 Hz tuning.
 
 ## Subjective Judgment and Continued Iteration 

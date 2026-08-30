@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <float.h>
+#include <math.h>
 #include <json-c/json.h>
 #include "sound_design.h"
 #include "analysis_utils.h"
@@ -43,15 +44,14 @@ int main(int argc, char** argv) {
             printf("Saved audio probe: %s\n", output_path);
         }
 
-        struct json_object* probe_res = analyze_audio(audio, num_samples, sr);
-
         if (strcmp(cfg->name, "vel_127") == 0) {
-            struct json_object* peak_amp_obj;
-            if (json_object_object_get_ex(probe_res, "peak_amplitude", &peak_amp_obj)) {
-                vel127_peak_amp = json_object_get_double(peak_amp_obj);
+            for (int k = 0; k < num_samples; k++) {
+                double abs_val = fabs(audio[k]);
+                if (abs_val > vel127_peak_amp) vel127_peak_amp = abs_val;
             }
         }
 
+        struct json_object* probe_res = analyze_audio(audio, num_samples, sr);
         json_object_object_add(probes_obj, cfg->name, probe_res);
         free(audio);
     }
