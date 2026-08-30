@@ -72,34 +72,29 @@ where probe weights `w_p` are normalized such that `sum_{p} w_p = 1.0` (with equ
 
 ---
 
-### Smooth Continuous Uniqueness Rating Metric (0.0 to 1.0)
+### Absolute Nearest-Neighbor Uniqueness Metric
 
-To quantify novelty without requiring complex multi-candidate interactions or hard binary thresholds, a continuous uniqueness metric `Uniqueness_Score(N)` is defined for candidate module `N`. The metric maps the distance to the nearest existing library module smoothly onto a normalized scale from `0.0` (identical duplicate) to `1.0` (completely unique and isolated).
+To quantify novelty cleanly and directly without artificial parameter tuning or normalization bounds, the uniqueness of candidate module `N` is defined directly by its absolute distance to its nearest neighbor in the existing sound library.
 
 #### Formulation
 
-Let `D_min_dist(N)` be the minimum composite distance from candidate module `N` to any existing module in the sound library. To find this distance, candidate module `N` is compared against every existing module `Module_i` in the library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum of all these computed pairwise distances represents the distance to the candidate's single nearest neighbor in timbral space:
+Candidate module `N` is compared against every existing module `Module_i` in the sound library by evaluating the composite multi-probe distance `D(N, Module_i)`. The minimum across all computed pairwise distances represents the candidate's absolute uniqueness score `Uniqueness_Score(N)`:
 
 ```
-D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
+Uniqueness_Score(N) = D_min_dist(N) = min_{i = 1..M} D(N, Module_i)
 ```
 
-The normalized Uniqueness Score is calculated using a smooth S-curve / Gaussian saturation function parameterised by a scaling distance `D_scale`:
+where `M` is the total number of existing modules in the library.
 
-```
-Uniqueness_Score(N) = 1.0 - exp( - ( D_min_dist(N) / D_scale )^2 )
-```
-
-#### Metric Behavior
-- **Identical Duplicate (`D_min_dist = 0.0`)**: `Uniqueness_Score = 1.0 - exp(0.0) = 0.0`
-- **Near Duplicate (`D_min_dist << D_scale`)**: Quadradic decay yields scores very close to `0.0`.
-- **Moderate Separation (`D_min_dist = D_scale`)**: `Uniqueness_Score = 1.0 - exp(-1.0) approx 0.632`
-- **Highly Unique / Isolated (`D_min_dist >= 2 * D_scale`)**: `Uniqueness_Score = 1.0 - exp(-4.0) approx 0.982` (saturating gracefully towards `1.0`).
+#### Metric Interpretation
+- `Uniqueness_Score(N) = 0.0`: Candidate module `N` is an identical acoustic duplicate of an existing library preset.
+- Small `Uniqueness_Score(N)`: Candidate module `N` is timbrally very similar to an existing preset.
+- Large `Uniqueness_Score(N)`: Candidate module `N` is highly distinct and isolated from all current library presets.
 
 #### Benefits
-- **No Sharp Discontinuities**: Provides a smooth gradient suitable for ranking presets or driving search algorithms.
-- **Bounded Output Range**: Output is guaranteed to lie within `[0.0, 1.0]`, simplifying interpretation and thresholding.
-- **Standalone Evaluation**: Evaluates each candidate module directly against the existing library state without needing pairwise candidate-to-candidate comparison matrix logic.
+- **Parameter-Free**: Eliminates the need to choose scaling hyperparameters (e.g., `D_scale`).
+- **Unbounded Timbral Scale**: Preserves raw Euclidean distance relationships across 13-band MFCC feature dimensions directly.
+- **Computationally Direct**: Requires only computing pairwise multi-probe distances to existing library presets and taking the minimum value.
 
 ---
 
