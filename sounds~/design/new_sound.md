@@ -11,7 +11,7 @@ The primary objective is to design a sound that is **as perceptually different a
 - Browse the `sounds/` directory.
 - Review the `analysis.json` files in each subfolder.
 - Note the `uniqueness_score` at the top of each `analysis.json` file.
-- Inspect the 14 multi-probe diagnostic outputs under `probes`, which contain frame-by-frame 50ms `mfccs` vectors and `rms` energy values for active region segmentation. Legacy global scalar metrics (e.g., `average_rms`, `peak_rms`, `peak_amplitude`, `mfcc_means`, `spectral_centroid`) are no longer used or stored.
+- Inspect the 14 multi-probe diagnostic outputs under `probes`, which contain frame-by-frame 50ms `mfccs` vectors and `rms` energy values for active region segmentation.
 
 ### 2. Formulate a Distinct Timbre
 - First of all, you are allowed and encouraged to be creative.
