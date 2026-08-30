@@ -41,8 +41,8 @@ Evaluates sustained decay and release characteristics across four standard note-
 ### Probe 2: Dynamic Velocity (Velocity Probe)
 Evaluates velocity response, timbral brightness scaling, and non-linear gain transfer across four standard MIDI velocity levels:
 1. Velocity 16 (Pianissimo)
-2. Velocity 48 (Piano/Mezzo-piano)
-3. Velocity 80 (Mezzo-forte / Median baseline)
+2. Velocity 52 (Piano/Mezzo-piano)
+3. Velocity 96 (Mezzo-forte)
 4. Velocity 127 (Fortissimo)
 
 ### Probe 3: Pitch Frequency (Pitch Probe)
@@ -103,7 +103,7 @@ where `M` is the total number of existing modules in the library.
 ## Technical Implementation Steps
 
 1. **`analysis_utils.h` & `analysis_utils.c`**:
-   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 48, 80, 127), Pitch, and Phrasing tests.
+   - Define multi-probe MIDI sequence data structures for Length, Velocity (16, 52, 96, 127), Pitch, and Phrasing tests.
    - Update `analyze_audio()` to store 50ms temporal MFCC arrays and calculate active region frame limits.
    - Update `calculate_distance()` to implement Strategy A active region segmentation distance logic.
 
