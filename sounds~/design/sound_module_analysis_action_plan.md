@@ -15,7 +15,7 @@ Furthermore, active region segmentation is implemented to avoid false similarity
 - Rather than collapsing resulting temporal frame vectors into a single global mean vector, the complete sequence of 13-coefficient MFCC vectors is retained.
 - This uniform frame-by-frame representation avoids biasing or over-emphasizing specific temporal segments while capturing dynamic envelope changes, timbre shifts, and release decays across time.
 
-### 2. Strategy A: Active Region Segmentation
+### 2. Active Region Segmentation
 When comparing temporal MFCC sequences between two sound modules:
 - An active region for each sound module is determined by detecting frames where signal energy exceeds an RMS silence threshold (0.0001 linear RMS, equivalent to -80 dB relative to full scale).
 - **Active vs. Active Frames**: Standard frame-by-frame Euclidean distance is computed between 13-band MFCC vectors.
