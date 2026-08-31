@@ -119,6 +119,27 @@ int crucible_compare_longs(const void *a, const void *b) {
     return 0;
 }
 
+int crucible_dict_get_float(t_dictionary *dict, t_symbol *key, double *out_val) {
+    if (!dict || !key) return 0;
+    t_atomarray *aa = NULL;
+    t_atom a;
+    if (dictionary_getatomarray(dict, key, (t_object **)&aa) == MAX_ERR_NONE && aa) {
+        long ac = 0;
+        t_atom *av = NULL;
+        atomarray_getatoms(aa, &ac, &av);
+        if (ac > 0) {
+            if (atom_gettype(av) == A_FLOAT) *out_val = atom_getfloat(av);
+            else if (atom_gettype(av) == A_LONG) *out_val = (double)atom_getlong(av);
+            return 1;
+        }
+    } else if (dictionary_getatom(dict, key, &a) == MAX_ERR_NONE) {
+        if (atom_gettype(&a) == A_FLOAT) *out_val = atom_getfloat(&a);
+        else if (atom_gettype(&a) == A_LONG) *out_val = (double)atom_getlong(&a);
+        return 1;
+    }
+    return 0;
+}
+
 int compare_numerical_symbols(const void *a, const void *b) {
     t_symbol *sym_a = *(t_symbol **)a;
     t_symbol *sym_b = *(t_symbol **)b;
@@ -2653,6 +2674,14 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
     }
 
     if (s == gensym("span") && argc > 0) {
+        if (x->rescore) {
+            crucible_log(x, "rescore: Received span message for track %s. Skipping competitive evaluation (@rescore enabled).", x->last_track_id->s_name);
+            x->current_task_seq = -1;
+            if (on_worker) {
+                systhread_mutex_unlock(x->state_mutex);
+            }
+            return;
+        }
         if (x->last_track_id == _sym_nothing || x->last_track_id == gensym("")) {
             object_error((t_object *)x, "Received span message before track ID was set");
             x->current_task_seq = -1;
@@ -2919,6 +2948,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
         if (x->rescore) {
             // When @rescore is enabled, bypass challenger dictionary completely and write directly to incumbent dictionary
+            crucible_log(x, "rescore: Updated %s for track %s bar %s directly in incumbent dictionary.", key_sym->s_name, track_sym->s_name, bar_sym->s_name);
             t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
             if (incumbent_dict) {
                 t_dictionary *incumbent_track_dict = NULL;
@@ -2977,6 +3007,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     dictionary_deleteentry(incumbent_bar_dict, gensym("mean"));
                                 }
                                 dictionary_appendatom(incumbent_bar_dict, gensym("mean"), &mean_atom);
+                                crucible_log(x, "rescore: Reassessed mean score %.4f for track %s bar %s.", new_mean, track_sym->s_name, bar_sym->s_name);
                             }
 
                             // 2. Find span containing this bar and reassess rating for all bars in the span
@@ -3007,9 +3038,8 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                         t_dictionary *b_dict = NULL;
                                         dictionary_getdictionary(incumbent_track_dict, b_sym, (t_object **)&b_dict);
                                         if (b_dict) {
-                                            t_atom m_atom;
-                                            if (dictionary_getatom(b_dict, gensym("mean"), &m_atom) == MAX_ERR_NONE) {
-                                                double bar_mean = atom_getfloat(&m_atom);
+                                            double bar_mean = 0.0;
+                                            if (crucible_dict_get_float(b_dict, gensym("mean"), &bar_mean)) {
                                                 bars_with_mean_count++;
                                                 if (!has_any_valid_mean || bar_mean < lowest_mean) {
                                                     lowest_mean = bar_mean;
@@ -3021,6 +3051,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                 }
 
                                 double new_span_rating = has_any_valid_mean ? (lowest_mean * (double)bars_with_mean_count) : 0.0;
+                                crucible_log(x, "rescore: Reassessed span rating %.4f across %ld bar(s) for track %s.", new_span_rating, span_len, track_sym->s_name);
 
                                 // Update ratings for all bars in the span and collect changed ratings
                                 t_dictionary *changed_bars_dict = dictionary_new();
@@ -3043,10 +3074,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                         dictionary_getdictionary(incumbent_track_dict, b_sym, (t_object **)&b_dict);
                                         if (b_dict) {
                                             double old_rating = -999999.0;
-                                            t_atom old_r_atom;
-                                            if (dictionary_getatom(b_dict, gensym("rating"), &old_r_atom) == MAX_ERR_NONE) {
-                                                old_rating = atom_getfloat(&old_r_atom);
-                                            }
+                                            crucible_dict_get_float(b_dict, gensym("rating"), &old_rating);
 
                                             if (fabs(old_rating - new_span_rating) > 0.000001) {
                                                 if (dictionary_hasentry(b_dict, gensym("rating"))) {
@@ -3057,6 +3085,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                                 dictionary_appendatom(b_dict, gensym("rating"), &new_r_atom);
 
                                                 dictionary_appendfloat(changed_bars_dict, b_sym, new_span_rating);
+                                                crucible_log(x, "rescore: Rating changed for track %s bar %s: %.4f -> %.4f.", track_sym->s_name, b_sym->s_name, old_rating, new_span_rating);
                                             }
                                         }
                                     }
