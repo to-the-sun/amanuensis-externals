@@ -1645,6 +1645,10 @@ void weaver_audio_qtask(t_weaver *x) {
             t_dictionary *track_dict = NULL;
 
             int found_in_dict = 0;
+            t_symbol *palette = _sym_nothing;
+            double offset = 0.0;
+            double rating = 1.0;
+            int palette_exists = 0;
 
             if (dictionary_getdictionary(dict, track_sym, (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
                 t_dictionary *bar_dict = NULL;
@@ -1653,8 +1657,6 @@ void weaver_audio_qtask(t_weaver *x) {
                     if (x->consolidate_running) {
                         weaver_queue_log(x, "Consolidate: processing track %ld bar %s", target_track, bar_key->s_name);
                     }
-                    t_symbol *palette = _sym_nothing;
-                    double offset = 0.0;
 
                     t_atomarray *palette_aa = NULL;
                     t_atom p_atom;
@@ -1672,7 +1674,6 @@ void weaver_audio_qtask(t_weaver *x) {
                         offset = atom_getfloat(&o_atom);
                     }
 
-                    double rating = 1.0;
                     t_atomarray *rating_aa = NULL;
                     t_atom r_atom;
                     if (dictionary_getatomarray(bar_dict, gensym("rating"), (t_object **)&rating_aa) == MAX_ERR_NONE && rating_aa) {
@@ -1681,7 +1682,6 @@ void weaver_audio_qtask(t_weaver *x) {
                         rating = atom_getfloat(&r_atom);
                     }
 
-                    int palette_exists = 0;
                     if (palette != _sym_nothing && palette != _sym_dash) {
                         t_buffer_ref *temp_ref = buffer_ref_new((t_object *)x, palette);
                         if (!buffer_ref_getobject(temp_ref)) {
@@ -1710,50 +1710,52 @@ void weaver_audio_qtask(t_weaver *x) {
                         }
                         object_free(temp_ref);
                     }
-
-                    if (!palette_exists) {
-                        char stems_name[64];
-                        snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
-                        t_symbol *s_stems = gensym(stems_name);
-                        t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
-                        double fallback_offset = hit.value - x->most_negative_bar;
-
-                        if (!buffer_ref_getobject(stems_ref)) {
-                            buffer_ref_set(stems_ref, _sym_nothing);
-                            buffer_ref_set(stems_ref, s_stems);
-                        }
-
-                        if (buffer_ref_getobject(stems_ref)) {
-                            object_warn((t_object *)x, "Track %lld: palette '%s' for bar %s not found. Falling back to stems buffer '%s' at %.2f ms.", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, fallback_offset);
-                            tr->src_found[0] = 1;
-                            tr->src_error_sent[0] = 0;
-                            palette = s_stems;
-                            offset = fallback_offset;
-                        } else {
-                            tr->src_found[0] = 0;
-                            object_error((t_object *)x, "Track %lld: palette '%s' for bar %s not found and fallback stems buffer '%s' could not be bound (attempted read offset: %.2f ms).", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, fallback_offset);
-                            tr->src_error_sent[0] = 1;
-                            palette = _sym_dash;
-                            offset = 0.0;
-                        }
-                        object_free(stems_ref);
-                    } else {
-                        weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
-                    }
-
-                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating);
                 }
             }
 
-            if (!found_in_dict) {
-                // Trigger silence if bar missing from dictionary
-                weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+            if (found_in_dict && palette_exists) {
+                weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
+                weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating);
+            } else {
+                // Fall back to stems buffer if bar is missing from dictionary OR if palette buffer not found
+                char stems_name[64];
+                snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
+                t_symbol *s_stems = gensym(stems_name);
+                t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
+                double song_ms_offset = hit.value - x->most_negative_bar;
+                double fallback_offset = - x->most_negative_bar;
+
+                if (!buffer_ref_getobject(stems_ref)) {
+                    buffer_ref_set(stems_ref, _sym_nothing);
+                    buffer_ref_set(stems_ref, s_stems);
+                }
+
+                if (buffer_ref_getobject(stems_ref)) {
+                    if (found_in_dict) {
+                        weaver_log(x, "Track %lld: palette '%s' for bar %s not found. Falling back to stems buffer '%s' at %.2f ms.", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, song_ms_offset);
+                    } else {
+                        weaver_log(x, "Track %lld: bar %s not found in dictionary. Falling back to stems buffer '%s' at %.2f ms.", (long long)target_track, bar_key->s_name, s_stems->s_name, song_ms_offset);
+                    }
+                    tr->src_found[0] = 1;
+                    tr->src_error_sent[0] = 0;
+                    weaver_update_track_metadata(x, target_track, s_stems, hit.value, fallback_offset, bar_key, hit_entry.rel_time, rating);
+                } else {
+                    if (found_in_dict) {
+                        object_error((t_object *)x, "Track %lld: palette '%s' for bar %s not found and fallback stems buffer '%s' could not be bound (attempted read offset: %.2f ms).", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, song_ms_offset);
+                    } else {
+                        object_error((t_object *)x, "Track %lld: bar %s not found in dictionary and fallback stems buffer '%s' could not be bound (attempted read offset: %.2f ms).", (long long)target_track, bar_key->s_name, s_stems->s_name, song_ms_offset);
+                    }
+                    tr->src_found[0] = 0;
+                    tr->src_error_sent[0] = 1;
+                    weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+                }
+                object_free(stems_ref);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_update_track_metadata(x, target_track, gensym("-"), hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+            weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
         }
     }
 
