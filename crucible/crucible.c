@@ -2947,6 +2947,19 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *key_sym = gensym(key_str);
 
         if (x->rescore) {
+            // If the incoming key is mean or rating, skip writing it when rescore is enabled,
+            // because crucible calculates mean and rating directly from absolutes and scores.
+            if (key_sym == gensym("mean") || key_sym == gensym("rating")) {
+                sysmem_freeptr(track_str);
+                sysmem_freeptr(bar_str);
+                sysmem_freeptr(key_str);
+                x->current_task_seq = -1;
+                if (on_worker) {
+                    systhread_mutex_unlock(x->state_mutex);
+                }
+                return;
+            }
+
             // When @rescore is enabled, bypass challenger dictionary completely and write directly to incumbent dictionary
             crucible_log(x, "rescore: Updated %s for track %s bar %s directly in incumbent dictionary.", key_sym->s_name, track_sym->s_name, bar_sym->s_name);
             t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
@@ -2979,8 +2992,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             dictionary_appendatomarray(incumbent_bar_dict, key_sym, (t_object *)aa);
                         }
 
-                        // Check if both absolutes and scores are present for rescoring calculation
-                        if (dictionary_hasentry(incumbent_bar_dict, gensym("absolutes")) && dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
+                        // Trigger rescoring calculation ONLY when updating absolutes or scores, and both are present
+                        if ((key_sym == gensym("absolutes") || key_sym == gensym("scores")) &&
+                            dictionary_hasentry(incumbent_bar_dict, gensym("absolutes")) &&
+                            dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
                             t_atomarray *src_scores_aa = NULL;
                             t_atom src_scores_single;
                             long scores_count = 0;
