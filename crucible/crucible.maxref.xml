@@ -145,6 +145,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="rescore" get="1" set="1" type="long" size="1">
+			<digest>Enable Rescoring on Selector Input</digest>
+			<description>
+				When enabled (1), receiving both 'absolutes' and 'scores' keys for a bar in the challenger dictionary (via hierarchical selectors or direct binding) replaces those keys directly in the incumbent dictionary, recalculates the bar's mean, and reassesses the rating for all bars in its span following rebar rules. If visualization is enabled, a repopulate packet and replace packets for changed ratings are emitted. When disabled (0, default), selector messages only populate the challenger dictionary.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 		<attribute name="meld" get="1" set="1" type="long" size="1">
 			<digest>Enable Span Rating Averaging on Replace</digest>
 			<description>
