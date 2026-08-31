@@ -631,6 +631,7 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
 
 void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span_atomarray) {
     if (crucible_is_task_cancelled(x, x->current_task_seq)) return;
+    if (x->rescore) return;
     t_atom_long bar_length = crucible_get_bar_length(x);
     crucible_log(x, "crucible: entering crucible_process_span (utilizing bar_length %lld, incumbent dict: '%s')", (long long)bar_length, x->incumbent_dict_name->s_name);
     crucible_log(x, "crucible_process_span: utilizing bar_length %lld", (long long)bar_length);
@@ -2916,99 +2917,59 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *bar_sym = gensym(bar_str);
         t_symbol *key_sym = gensym(key_str);
 
-        // Get or create track dictionary
-        t_dictionary *track_dict = NULL;
-        if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
-            track_dict = dictionary_new();
-            if (track_dict) {
-                dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
-                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
-            }
-        } else {
-            dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
-        }
-
-        if (track_dict) {
-            // Get or create bar dictionary
-            t_dictionary *bar_dict = NULL;
-            if (!dictionary_hasentry(track_dict, bar_sym)) {
-                bar_dict = dictionary_new();
-                if (bar_dict) {
-                    dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
-                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-                }
-            } else {
-                dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
-            }
-
-            // Add data to bar dictionary
-            if (bar_dict) {
-                t_atomarray *aa = atomarray_new(argc, argv);
-                if (aa) {
-                    dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
-                }
-            }
-
-            // Check if @rescore is enabled and both absolutes and scores are present
-            if (x->rescore && bar_dict && dictionary_hasentry(bar_dict, gensym("absolutes")) && dictionary_hasentry(bar_dict, gensym("scores"))) {
-                t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-                if (incumbent_dict) {
-                    t_dictionary *incumbent_track_dict = NULL;
+        if (x->rescore) {
+            // When @rescore is enabled, bypass challenger dictionary completely and write directly to incumbent dictionary
+            t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+            if (incumbent_dict) {
+                t_dictionary *incumbent_track_dict = NULL;
+                if (!dictionary_hasentry(incumbent_dict, track_sym)) {
+                    incumbent_track_dict = dictionary_new();
+                    dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
                     dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
-                    if (incumbent_track_dict && dictionary_hasentry(incumbent_track_dict, bar_sym)) {
-                        t_dictionary *incumbent_bar_dict = NULL;
-                        dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
-                        if (incumbent_bar_dict) {
-                            // 1. Directly replace absolutes and scores keys in the incumbent bar dictionary
-                            t_atomarray *src_abs_aa = NULL;
-                            t_atom src_abs_single;
-                            if (dictionary_getatomarray(bar_dict, gensym("absolutes"), (t_object **)&src_abs_aa) == MAX_ERR_NONE && src_abs_aa) {
-                                long abs_ac = 0;
-                                t_atom *abs_av = NULL;
-                                atomarray_getatoms(src_abs_aa, &abs_ac, &abs_av);
-                                t_atomarray *new_abs_aa = atomarray_new(abs_ac, abs_av);
-                                if (dictionary_hasentry(incumbent_bar_dict, gensym("absolutes"))) {
-                                    dictionary_deleteentry(incumbent_bar_dict, gensym("absolutes"));
-                                }
-                                dictionary_appendatomarray(incumbent_bar_dict, gensym("absolutes"), (t_object *)new_abs_aa);
-                            } else if (dictionary_getatom(bar_dict, gensym("absolutes"), &src_abs_single) == MAX_ERR_NONE) {
-                                if (dictionary_hasentry(incumbent_bar_dict, gensym("absolutes"))) {
-                                    dictionary_deleteentry(incumbent_bar_dict, gensym("absolutes"));
-                                }
-                                dictionary_appendatom(incumbent_bar_dict, gensym("absolutes"), &src_abs_single);
-                            }
+                } else {
+                    dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+                }
 
+                if (incumbent_track_dict) {
+                    t_dictionary *incumbent_bar_dict = NULL;
+                    if (!dictionary_hasentry(incumbent_track_dict, bar_sym)) {
+                        incumbent_bar_dict = dictionary_new();
+                        dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)incumbent_bar_dict);
+                        dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
+                    } else {
+                        dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
+                    }
+
+                    if (incumbent_bar_dict) {
+                        t_atomarray *aa = atomarray_new(argc, argv);
+                        if (aa) {
+                            if (dictionary_hasentry(incumbent_bar_dict, key_sym)) {
+                                dictionary_deleteentry(incumbent_bar_dict, key_sym);
+                            }
+                            dictionary_appendatomarray(incumbent_bar_dict, key_sym, (t_object *)aa);
+                        }
+
+                        // Check if both absolutes and scores are present for rescoring calculation
+                        if (dictionary_hasentry(incumbent_bar_dict, gensym("absolutes")) && dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
                             t_atomarray *src_scores_aa = NULL;
                             t_atom src_scores_single;
                             long scores_count = 0;
                             t_atom *scores_atoms = NULL;
 
-                            if (dictionary_getatomarray(bar_dict, gensym("scores"), (t_object **)&src_scores_aa) == MAX_ERR_NONE && src_scores_aa) {
+                            if (dictionary_getatomarray(incumbent_bar_dict, gensym("scores"), (t_object **)&src_scores_aa) == MAX_ERR_NONE && src_scores_aa) {
                                 atomarray_getatoms(src_scores_aa, &scores_count, &scores_atoms);
-                                t_atomarray *new_scores_aa = atomarray_new(scores_count, scores_atoms);
-                                if (dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
-                                    dictionary_deleteentry(incumbent_bar_dict, gensym("scores"));
-                                }
-                                dictionary_appendatomarray(incumbent_bar_dict, gensym("scores"), (t_object *)new_scores_aa);
-                            } else if (dictionary_getatom(bar_dict, gensym("scores"), &src_scores_single) == MAX_ERR_NONE) {
+                            } else if (dictionary_getatom(incumbent_bar_dict, gensym("scores"), &src_scores_single) == MAX_ERR_NONE) {
                                 scores_atoms = &src_scores_single;
                                 scores_count = 1;
-                                if (dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
-                                    dictionary_deleteentry(incumbent_bar_dict, gensym("scores"));
-                                }
-                                dictionary_appendatom(incumbent_bar_dict, gensym("scores"), &src_scores_single);
                             }
 
-                            // 2. Reassess mean for this bar
-                            double new_mean = 0.0;
-                            int has_mean = 0;
+                            // 1. Reassess mean for this bar
                             if (scores_count > 0 && scores_atoms) {
                                 double scores_sum = 0.0;
                                 for (long k = 0; k < scores_count; k++) {
                                     scores_sum += atom_getfloat(scores_atoms + k);
                                 }
-                                new_mean = scores_sum / (double)scores_count;
-                                has_mean = 1;
+                                double new_mean = scores_sum / (double)scores_count;
 
                                 t_atom mean_atom;
                                 atom_setfloat(&mean_atom, new_mean);
@@ -3018,7 +2979,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                 dictionary_appendatom(incumbent_bar_dict, gensym("mean"), &mean_atom);
                             }
 
-                            // 3. Find span containing this bar and reassess rating for all bars in the span
+                            // 2. Find span containing this bar and reassess rating for all bars in the span
                             t_atomarray *span_aa = crucible_get_span_as_atomarray(incumbent_bar_dict);
                             if (span_aa) {
                                 long span_len = 0;
@@ -3124,7 +3085,41 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             }
                         }
                     }
-                    dictobj_release(incumbent_dict);
+                }
+                dictobj_release(incumbent_dict);
+            }
+        } else {
+            // Get or create track dictionary in challenger dict
+            t_dictionary *track_dict = NULL;
+            if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
+                track_dict = dictionary_new();
+                if (track_dict) {
+                    dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)track_dict);
+                    dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
+                }
+            } else {
+                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&track_dict);
+            }
+
+            if (track_dict) {
+                // Get or create bar dictionary
+                t_dictionary *bar_dict = NULL;
+                if (!dictionary_hasentry(track_dict, bar_sym)) {
+                    bar_dict = dictionary_new();
+                    if (bar_dict) {
+                        dictionary_appenddictionary(track_dict, bar_sym, (t_object *)bar_dict);
+                        dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                    }
+                } else {
+                    dictionary_getdictionary(track_dict, bar_sym, (t_object **)&bar_dict);
+                }
+
+                // Add data to bar dictionary
+                if (bar_dict) {
+                    t_atomarray *aa = atomarray_new(argc, argv);
+                    if (aa) {
+                        dictionary_appendatomarray(bar_dict, key_sym, (t_object *)aa);
+                    }
                 }
             }
         }
