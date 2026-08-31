@@ -1716,30 +1716,23 @@ void weaver_audio_qtask(t_weaver *x) {
                         snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
                         t_symbol *s_stems = gensym(stems_name);
                         t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
+                        double fallback_offset = hit.value - x->most_negative_bar;
 
                         if (!buffer_ref_getobject(stems_ref)) {
-                            if (!tr->src_error_sent[0]) {
-                                object_warn((t_object *)x, "Track %lld: palette fallback '%s' not found. Kicking...", (long long)target_track, s_stems->s_name);
-                                buffer_ref_set(stems_ref, _sym_nothing);
-                                buffer_ref_set(stems_ref, s_stems);
-                            }
+                            buffer_ref_set(stems_ref, _sym_nothing);
+                            buffer_ref_set(stems_ref, s_stems);
                         }
 
                         if (buffer_ref_getobject(stems_ref)) {
-                            double fallback_offset = hit.value - x->most_negative_bar;
-                            if (!tr->src_found[0]) {
-                                weaver_log(x, "Track %lld: bar %s palette '%s' not found, falling back to '%s' (offset %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name, fallback_offset);
-                                tr->src_found[0] = 1;
-                                tr->src_error_sent[0] = 0;
-                            }
+                            object_warn((t_object *)x, "Track %lld: palette '%s' for bar %s not found. Falling back to stems buffer '%s' at %.2f ms.", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, fallback_offset);
+                            tr->src_found[0] = 1;
+                            tr->src_error_sent[0] = 0;
                             palette = s_stems;
                             offset = fallback_offset;
                         } else {
                             tr->src_found[0] = 0;
-                            if (!tr->src_error_sent[0]) {
-                                object_error((t_object *)x, "Track %lld: bar %s palette '%s' not found and fallback '%s' could not be bound after kick", (long long)target_track, bar_key->s_name, palette->s_name, s_stems->s_name);
-                                tr->src_error_sent[0] = 1;
-                            }
+                            object_error((t_object *)x, "Track %lld: palette '%s' for bar %s not found and fallback stems buffer '%s' could not be bound (attempted read offset: %.2f ms).", (long long)target_track, palette->s_name, bar_key->s_name, s_stems->s_name, fallback_offset);
+                            tr->src_error_sent[0] = 1;
                             palette = _sym_dash;
                             offset = 0.0;
                         }
@@ -1798,11 +1791,6 @@ void weaver_audio_qtask(t_weaver *x) {
                 tr->dirty_dest = 0;
             }
 
-            // Busy State Logging
-            if (tr->busy != tr->last_busy_logged) {
-                weaver_log(x, "track %ld busy: %d", t + 1, tr->busy);
-                tr->last_busy_logged = tr->busy;
-            }
         }
     }
 
