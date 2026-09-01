@@ -849,7 +849,7 @@ def run_gui():
                     rating_color = (255, 255, 255)
                     if active_event is not None:
                         is_flash_phase = (int(event_elapsed * 10) % 2 == 0)
-                        is_meld = active_event.get("type") in ["replace", "update"] and (active_event.get("type") == "update" or active_event.get("meld") or not active_event.get("principal", True))
+                        is_meld = active_event.get("type") == "replace" and (active_event.get("meld") or not active_event.get("principal", True))
                         if is_meld:
                             rating_color = (160, 160, 160) if is_flash_phase else (80, 80, 80)
                         else:
