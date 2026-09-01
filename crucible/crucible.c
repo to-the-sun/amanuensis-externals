@@ -3123,8 +3123,8 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                 double new_span_rating = has_any_valid_mean ? (lowest_mean * (double)bars_with_mean_count) : 0.0;
                                 crucible_log(x, "rescore: Reassessed span rating %.4f across %ld bar(s) for track %s.", new_span_rating, span_len, track_sym->s_name);
 
-                                // Update ratings for all bars in the span and collect changed ratings
-                                t_dictionary *changed_bars_dict = dictionary_new();
+                                t_dictionary *replace_bars_dict = dictionary_new();
+                                t_dictionary *update_bars_dict = dictionary_new();
 
                                 for (long k = 0; k < span_len; k++) {
                                     t_symbol *b_sym = NULL;
@@ -3146,7 +3146,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                             double old_rating = -999999.0;
                                             crucible_dict_get_float(b_dict, gensym("rating"), &old_rating);
 
-                                            if (fabs(old_rating - new_span_rating) > 0.000001) {
+                                            int is_altered_bar = (b_sym == bar_sym || strcmp(b_sym->s_name, bar_sym->s_name) == 0);
+                                            int rating_changed = (fabs(old_rating - new_span_rating) > 0.000001);
+
+                                            if (is_altered_bar) {
                                                 if (dictionary_hasentry(b_dict, gensym("rating"))) {
                                                     dictionary_deleteentry(b_dict, gensym("rating"));
                                                 }
@@ -3154,32 +3157,58 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                                 atom_setfloat(&new_r_atom, new_span_rating);
                                                 dictionary_appendatom(b_dict, gensym("rating"), &new_r_atom);
 
-                                                dictionary_appendfloat(changed_bars_dict, b_sym, new_span_rating);
-                                                crucible_log(x, "rescore: Rating changed for track %s bar %s: %.4f -> %.4f.", track_sym->s_name, b_sym->s_name, old_rating, new_span_rating);
+                                                dictionary_appendfloat(replace_bars_dict, b_sym, new_span_rating);
+                                                crucible_log(x, "rescore: Rating set for directly altered track %s bar %s: %.4f -> %.4f.", track_sym->s_name, b_sym->s_name, old_rating, new_span_rating);
+                                            } else if (rating_changed) {
+                                                if (dictionary_hasentry(b_dict, gensym("rating"))) {
+                                                    dictionary_deleteentry(b_dict, gensym("rating"));
+                                                }
+                                                t_atom new_r_atom;
+                                                atom_setfloat(&new_r_atom, new_span_rating);
+                                                dictionary_appendatom(b_dict, gensym("rating"), &new_r_atom);
+
+                                                dictionary_appendfloat(update_bars_dict, b_sym, new_span_rating);
+                                                crucible_log(x, "rescore: Rating changed for span bar %s on track %s: %.4f -> %.4f.", b_sym->s_name, track_sym->s_name, old_rating, new_span_rating);
                                             }
                                         }
                                     }
                                 }
 
                                 if (x->visualize) {
+                                    crucible_query_bar_buffer_length(x);
                                     crucible_visualize_repopulate(x);
 
-                                    t_symbol **changed_keys = NULL;
-                                    long num_changed = 0;
-                                    dictionary_getkeys(changed_bars_dict, &num_changed, &changed_keys);
-                                    for (long c_idx = 0; c_idx < num_changed; c_idx++) {
-                                        t_symbol *c_bar_sym = changed_keys[c_idx];
+                                    t_symbol **replace_keys = NULL;
+                                    long num_replace = 0;
+                                    dictionary_getkeys(replace_bars_dict, &num_replace, &replace_keys);
+                                    for (long c_idx = 0; c_idx < num_replace; c_idx++) {
+                                        t_symbol *c_bar_sym = replace_keys[c_idx];
                                         double updated_rating = 0.0;
-                                        dictionary_getfloat(changed_bars_dict, c_bar_sym, &updated_rating);
+                                        dictionary_getfloat(replace_bars_dict, c_bar_sym, &updated_rating);
                                         char msg[256];
                                         snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}",
                                                  track_sym->s_name, c_bar_sym->s_name, updated_rating);
                                         visualize((t_object *)x, msg);
                                     }
-                                    if (changed_keys) sysmem_freeptr(changed_keys);
+                                    if (replace_keys) sysmem_freeptr(replace_keys);
+
+                                    t_symbol **update_keys = NULL;
+                                    long num_update = 0;
+                                    dictionary_getkeys(update_bars_dict, &num_update, &update_keys);
+                                    for (long u_idx = 0; u_idx < num_update; u_idx++) {
+                                        t_symbol *u_bar_sym = update_keys[u_idx];
+                                        double updated_rating = 0.0;
+                                        dictionary_getfloat(update_bars_dict, u_bar_sym, &updated_rating);
+                                        char msg[256];
+                                        snprintf(msg, 256, "{\"event\":\"update\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}",
+                                                 track_sym->s_name, u_bar_sym->s_name, updated_rating);
+                                        visualize((t_object *)x, msg);
+                                    }
+                                    if (update_keys) sysmem_freeptr(update_keys);
                                 }
 
-                                object_release((t_object *)changed_bars_dict);
+                                object_release((t_object *)replace_bars_dict);
+                                object_release((t_object *)update_bars_dict);
                                 object_release((t_object *)span_aa);
                             }
                         }
