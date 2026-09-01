@@ -3176,7 +3176,11 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                                 crucible_dict_get_float(next_bar_dict, gensym("offset"), &next_off);
                                             }
 
-                                            if (next_pal == start_pal && fabs(next_off - start_off) < 0.000001) {
+                                            int start_is_stems = (strncmp(start_pal->s_name, "stems.", 6) == 0);
+                                            int next_is_stems = (strncmp(next_pal->s_name, "stems.", 6) == 0);
+
+                                            if ((start_is_stems && next_is_stems && start_pal == next_pal) ||
+                                                (next_pal == start_pal && fabs(next_off - start_off) < 0.000001)) {
                                                 span_end++;
                                             } else {
                                                 break;
