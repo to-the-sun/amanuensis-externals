@@ -310,7 +310,7 @@ def process_packet(text, client_sock=None):
                     if "smartloop_end" in pkt: pass # state["smartloop_end"] = pkt["smartloop_end"]
                 return
 
-            if pkt_type != "crucible" and pkt_event not in ["fill_bar", "replace", "new_span", "repopulate", "clear", "update"] and "bar_length" not in pkt:
+            if pkt_type != "crucible" and pkt_event not in ["fill_bar", "replace", "new_span", "repopulate", "clear"] and "bar_length" not in pkt:
                 print(f"DEBUG: Ignoring packet type '{pkt_type}'")
                 continue
 
@@ -458,12 +458,11 @@ def process_packet(text, client_sock=None):
                         "duration": 3.0
                     })
 
-                if pkt.get("event") in ["replace", "update"]:
-                    evt = pkt.get("event")
+                if pkt.get("event") == "replace":
                     track = pkt.get("track")
                     bar = pkt.get("bar")
                     rating = pkt.get("rating")
-                    principal = pkt.get("principal", True if evt == "replace" else False)
+                    principal = pkt.get("principal", True)
                     meld = pkt.get("meld", not principal)
                     if track is not None and bar is not None and rating is not None:
                         t_str = str(track)
@@ -473,10 +472,10 @@ def process_packet(text, client_sock=None):
                         if t_str not in state["bar_ratings"]:
                             state["bar_ratings"][t_str] = {}
                         state["bar_ratings"][t_str][b_str] = float(rating)
-                        print(f"DEBUG: {evt.capitalize()}d rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
+                        print(f"DEBUG: Replaced rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
 
                         state["events"].append({
-                            "type": evt,
+                            "type": "replace",
                             "track": t_str,
                             "bars": [snapped_ts],
                             "rating": float(rating),
