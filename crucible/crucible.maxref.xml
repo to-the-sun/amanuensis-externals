@@ -145,6 +145,15 @@
 				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
 			</attributelist>
 		</attribute>
+		<attribute name="rescore" get="1" set="1" type="long" size="1">
+			<digest>Enable Rescoring on Selector Input</digest>
+			<description>
+				When enabled (1), receiving hierarchical selector messages (e.g. from buildspans) completely bypasses competitive challenger span evaluation. Incoming 'absolutes', 'scores', and 'span' keys are buffered in the challenger dictionary until all three keys have arrived for a bar. Once all three are present, 'absolutes' and 'scores' are written directly into the incumbent dictionary, the bar's mean score is recomputed, and ratings are reassessed across all primary bars in the incoming span (emitting 'replace' packets) and secondary bars in affected incumbent spans (emitting 'update' packets). When disabled (0, default), selector messages populate the challenger dictionary for competitive span evaluation.
+			</description>
+			<attributelist>
+				<attribute name="style" get="1" set="1" type="symbol" size="1" value="onoff" />
+			</attributelist>
+		</attribute>
 		<attribute name="meld" get="1" set="1" type="long" size="1">
 			<digest>Enable Span Rating Averaging on Replace</digest>
 			<description>

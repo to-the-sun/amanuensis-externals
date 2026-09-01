@@ -26,6 +26,7 @@ typedef struct _crucible {
     long visualize;
     long fill;
     long meld;
+    long rescore;
     t_atom_long song_reach;
     t_dictionary *track_reaches_dict;
     double local_bar_length;
