@@ -2947,9 +2947,9 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *key_sym = gensym(key_str);
 
         if (x->rescore) {
-            // If the incoming key is mean or rating, skip writing it when rescore is enabled,
-            // because crucible calculates mean and rating directly from absolutes and scores.
-            if (key_sym == gensym("mean") || key_sym == gensym("rating")) {
+            // When @rescore is enabled, ONLY absolutes and scores keys are accepted and held in challenger_dict until both arrive.
+            // All other keys (offset, palette, span, mean, rating) are ignored and not written.
+            if (key_sym != gensym("absolutes") && key_sym != gensym("scores")) {
                 sysmem_freeptr(track_str);
                 sysmem_freeptr(bar_str);
                 sysmem_freeptr(key_str);
@@ -2960,42 +2960,65 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 return;
             }
 
-            // When @rescore is enabled, bypass challenger dictionary completely and write directly to incumbent dictionary
-            crucible_log(x, "rescore: Updated %s for track %s bar %s directly in incumbent dictionary.", key_sym->s_name, track_sym->s_name, bar_sym->s_name);
-            t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
-            if (incumbent_dict) {
-                t_dictionary *incumbent_track_dict = NULL;
-                if (!dictionary_hasentry(incumbent_dict, track_sym)) {
-                    incumbent_track_dict = dictionary_new();
-                    dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
-                    dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
-                } else {
-                    dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+            // Save incoming absolutes or scores key in challenger_dict under track -> bar
+            t_dictionary *challenger_track_dict = NULL;
+            if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
+                challenger_track_dict = dictionary_new();
+                dictionary_appenddictionary(x->challenger_dict, track_sym, (t_object *)challenger_track_dict);
+                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&challenger_track_dict);
+            } else {
+                dictionary_getdictionary(x->challenger_dict, track_sym, (t_object **)&challenger_track_dict);
+            }
+
+            t_dictionary *challenger_bar_dict = NULL;
+            if (!dictionary_hasentry(challenger_track_dict, bar_sym)) {
+                challenger_bar_dict = dictionary_new();
+                dictionary_appenddictionary(challenger_track_dict, bar_sym, (t_object *)challenger_bar_dict);
+                dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
+            } else {
+                dictionary_getdictionary(challenger_track_dict, bar_sym, (t_object **)&challenger_bar_dict);
+            }
+
+            if (challenger_bar_dict) {
+                t_atomarray *aa = atomarray_new(argc, argv);
+                if (aa) {
+                    if (dictionary_hasentry(challenger_bar_dict, key_sym)) {
+                        dictionary_deleteentry(challenger_bar_dict, key_sym);
+                    }
+                    dictionary_appendatomarray(challenger_bar_dict, key_sym, (t_object *)aa);
                 }
 
-                if (incumbent_track_dict) {
-                    t_dictionary *incumbent_bar_dict = NULL;
-                    if (!dictionary_hasentry(incumbent_track_dict, bar_sym)) {
-                        incumbent_bar_dict = dictionary_new();
-                        dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)incumbent_bar_dict);
-                        dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
-                    } else {
-                        dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
-                    }
+                // Check if BOTH absolutes and scores are now present in challenger_bar_dict for this bar
+                if (dictionary_hasentry(challenger_bar_dict, gensym("absolutes")) &&
+                    dictionary_hasentry(challenger_bar_dict, gensym("scores"))) {
 
-                    if (incumbent_bar_dict) {
-                        t_atomarray *aa = atomarray_new(argc, argv);
-                        if (aa) {
-                            if (dictionary_hasentry(incumbent_bar_dict, key_sym)) {
-                                dictionary_deleteentry(incumbent_bar_dict, key_sym);
-                            }
-                            dictionary_appendatomarray(incumbent_bar_dict, key_sym, (t_object *)aa);
+                    t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
+                    if (incumbent_dict) {
+                        t_dictionary *incumbent_track_dict = NULL;
+                        if (!dictionary_hasentry(incumbent_dict, track_sym)) {
+                            incumbent_track_dict = dictionary_new();
+                            dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
+                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+                        } else {
+                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
                         }
 
-                        // Trigger rescoring calculation ONLY when updating absolutes or scores, and both are present
-                        if ((key_sym == gensym("absolutes") || key_sym == gensym("scores")) &&
-                            dictionary_hasentry(incumbent_bar_dict, gensym("absolutes")) &&
-                            dictionary_hasentry(incumbent_bar_dict, gensym("scores"))) {
+                        if (incumbent_track_dict) {
+                            t_dictionary *incumbent_bar_dict = NULL;
+                            if (!dictionary_hasentry(incumbent_track_dict, bar_sym)) {
+                                incumbent_bar_dict = dictionary_new();
+                                dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)incumbent_bar_dict);
+                                dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
+                            } else {
+                                dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
+                            }
+
+                            if (incumbent_bar_dict) {
+                                // 1. Copy absolutes and scores from challenger_bar_dict into incumbent_bar_dict
+                                copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("absolutes"));
+                                copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("scores"));
+
+                                crucible_log(x, "rescore: Updated absolutes and scores for track %s bar %s directly in incumbent dictionary.", track_sym->s_name, bar_sym->s_name);
                             t_atomarray *src_scores_aa = NULL;
                             t_atom src_scores_single;
                             long scores_count = 0;
@@ -3128,11 +3151,13 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                 object_release((t_object *)span_aa);
                             }
                         }
+                        dictobj_release(incumbent_dict);
                     }
+                    dictionary_deleteentry(challenger_track_dict, bar_sym);
                 }
-                dictobj_release(incumbent_dict);
             }
-        } else {
+        }
+    } else {
             // Get or create track dictionary in challenger dict
             t_dictionary *track_dict = NULL;
             if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
