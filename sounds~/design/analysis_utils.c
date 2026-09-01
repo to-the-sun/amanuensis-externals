@@ -128,7 +128,19 @@ void save_wav(const char* filename, double* buffer, int num_samples, int sample_
         return;
     }
 
-    sf_write_double(outfile, buffer, num_samples);
+    double* clamped = (double*)malloc(num_samples * sizeof(double));
+    if (clamped) {
+        for (int i = 0; i < num_samples; i++) {
+            double val = buffer[i];
+            if (val > 1.0) val = 1.0;
+            else if (val < -1.0) val = -1.0;
+            clamped[i] = val;
+        }
+        sf_write_double(outfile, clamped, num_samples);
+        free(clamped);
+    } else {
+        sf_write_double(outfile, buffer, num_samples);
+    }
     sf_close(outfile);
 }
 

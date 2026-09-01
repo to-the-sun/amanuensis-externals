@@ -143,11 +143,24 @@ void free_voice(void* voice_ptr) {
     if (voice_ptr) free(voice_ptr);
 }
 
+#define MAX_RENDER_VOICES 32
+
+typedef struct {
+    void* voice_ptr;
+    int note;
+    int releasing;
+} RenderVoiceSlot;
+
 double* render_midi(MidiMessage* midi_messages, int num_messages, double duration, int sample_rate, int* num_samples_out) {
     int num_samples = (int)(duration * sample_rate);
     *num_samples_out = num_samples;
     double* output = (double*)calloc(num_samples, sizeof(double));
-    void* active_voices[128] = {NULL};
+    RenderVoiceSlot voices[MAX_RENDER_VOICES];
+    for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+        voices[i].voice_ptr = NULL;
+        voices[i].note = -1;
+        voices[i].releasing = 0;
+    }
 
     int block_size = 64;
     for (int start = 0; start < num_samples; start += block_size) {
@@ -160,22 +173,57 @@ double* render_midi(MidiMessage* midi_messages, int num_messages, double duratio
             if (midi_messages[m].time >= cur_time && midi_messages[m].time < end_time) {
                 int note = midi_messages[m].note;
                 if (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity > 0) {
-                    if (active_voices[note]) free_voice(active_voices[note]);
-                    active_voices[note] = create_voice(note, midi_messages[m].velocity, sample_rate);
+                    for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+                        if (voices[i].voice_ptr && voices[i].note == note && !voices[i].releasing) {
+                            voices[i].releasing = 1;
+                            note_off_voice(voices[i].voice_ptr);
+                        }
+                    }
+                    void* new_v = create_voice(note, midi_messages[m].velocity, sample_rate);
+                    if (new_v) {
+                        int slot = -1;
+                        for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+                            if (!voices[i].voice_ptr) { slot = i; break; }
+                        }
+                        if (slot == -1) {
+                            for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+                                if (voices[i].releasing) { slot = i; break; }
+                            }
+                        }
+                        if (slot == -1) slot = 0;
+                        if (voices[slot].voice_ptr) free_voice(voices[slot].voice_ptr);
+                        voices[slot].voice_ptr = new_v;
+                        voices[slot].note = note;
+                        voices[slot].releasing = 0;
+                    }
                 } else if (strcmp(midi_messages[m].type, "note_off") == 0 || (strcmp(midi_messages[m].type, "note_on") == 0 && midi_messages[m].velocity == 0)) {
-                    if (active_voices[note]) note_off_voice(active_voices[note]);
+                    for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+                        if (voices[i].voice_ptr && voices[i].note == note && !voices[i].releasing) {
+                            voices[i].releasing = 1;
+                            note_off_voice(voices[i].voice_ptr);
+                            break;
+                        }
+                    }
                 }
             }
         }
 
-        for (int n = 0; n < 128; n++) {
-            if (active_voices[n]) {
-                int still_active = process_voice(active_voices[n], output + start, count);
-                if (!still_active) { free_voice(active_voices[n]); active_voices[n] = NULL; }
+        for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+            if (voices[i].voice_ptr) {
+                int still_active = process_voice(voices[i].voice_ptr, output + start, count);
+                if (!still_active) {
+                    free_voice(voices[i].voice_ptr);
+                    voices[i].voice_ptr = NULL;
+                    voices[i].note = -1;
+                    voices[i].releasing = 0;
+                }
             }
         }
     }
 
-    for (int n = 0; n < 128; n++) if (active_voices[n]) free_voice(active_voices[n]);
+    for (int i = 0; i < MAX_RENDER_VOICES; i++) {
+        if (voices[i].voice_ptr) free_voice(voices[i].voice_ptr);
+    }
+
     return output;
 }
