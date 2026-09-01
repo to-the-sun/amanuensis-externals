@@ -3241,7 +3241,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                                                     snprintf(s_ts_str, 64, "%lld", (long long)atom_getlong(&inc_span_atoms[s_idx]));
                                                                     s_sym = gensym(s_ts_str);
                                                                 }
-                                                                if (s_sym && !dictionary_hasentry(primary_bars_dict, s_sym)) {
+                                                                if (s_sym && !dictionary_hasentry(primary_bars_dict, s_sym) && !dictionary_hasentry(update_bars_dict, s_sym)) {
                                                                     t_dictionary *s_dict = NULL;
                                                                     dictionary_getdictionary(incumbent_track_dict, s_sym, (t_object **)&s_dict);
                                                                     if (s_dict) {
