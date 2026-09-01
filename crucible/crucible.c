@@ -2979,9 +2979,9 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *key_sym = gensym(key_str);
 
         if (x->rescore) {
-            // When @rescore is enabled, ONLY absolutes and scores keys are accepted and held in challenger_dict until both arrive.
-            // All other keys (offset, palette, span, mean, rating) are ignored and not written.
-            if (key_sym != gensym("absolutes") && key_sym != gensym("scores")) {
+            // When @rescore is enabled, ONLY absolutes, scores, and span keys are accepted and held in challenger_dict until all three arrive.
+            // All other keys (offset, palette, mean, rating) are ignored and not written.
+            if (key_sym != gensym("absolutes") && key_sym != gensym("scores") && key_sym != gensym("span")) {
                 sysmem_freeptr(track_str);
                 sysmem_freeptr(bar_str);
                 sysmem_freeptr(key_str);
@@ -2992,7 +2992,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                 return;
             }
 
-            // Save incoming absolutes or scores key in challenger_dict under track -> bar
+            // Save incoming absolutes, scores, or span key in challenger_dict under track -> bar
             t_dictionary *challenger_track_dict = NULL;
             if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
                 challenger_track_dict = dictionary_new();
@@ -3020,9 +3020,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     dictionary_appendatomarray(challenger_bar_dict, key_sym, (t_object *)aa);
                 }
 
-                // Check if BOTH absolutes and scores are now present in challenger_bar_dict for this bar
+                // Check if ALL THREE (absolutes, scores, and span) are now present in challenger_bar_dict for this bar
                 if (dictionary_hasentry(challenger_bar_dict, gensym("absolutes")) &&
-                    dictionary_hasentry(challenger_bar_dict, gensym("scores"))) {
+                    dictionary_hasentry(challenger_bar_dict, gensym("scores")) &&
+                    dictionary_hasentry(challenger_bar_dict, gensym("span"))) {
 
                     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
                     if (incumbent_dict) {
@@ -3046,142 +3047,272 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             }
 
                             if (incumbent_bar_dict) {
-                                // 1. Copy absolutes and scores from challenger_bar_dict into incumbent_bar_dict
+                                // 1. Copy absolutes and scores directly into incumbent_bar_dict (do NOT overwrite incumbent span)
                                 copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("absolutes"));
                                 copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("scores"));
 
                                 crucible_log(x, "rescore: Updated absolutes and scores for track %s bar %s directly in incumbent dictionary.", track_sym->s_name, bar_sym->s_name);
-                            t_atomarray *src_scores_aa = NULL;
-                            t_atom src_scores_single;
-                            long scores_count = 0;
-                            t_atom *scores_atoms = NULL;
 
-                            if (dictionary_getatomarray(incumbent_bar_dict, gensym("scores"), (t_object **)&src_scores_aa) == MAX_ERR_NONE && src_scores_aa) {
-                                atomarray_getatoms(src_scores_aa, &scores_count, &scores_atoms);
-                            } else if (dictionary_getatom(incumbent_bar_dict, gensym("scores"), &src_scores_single) == MAX_ERR_NONE) {
-                                scores_atoms = &src_scores_single;
-                                scores_count = 1;
-                            }
+                                // 2. Reassess mean score for this bar in incumbent_bar_dict
+                                t_atomarray *src_scores_aa = NULL;
+                                t_atom src_scores_single;
+                                long scores_count = 0;
+                                t_atom *scores_atoms = NULL;
 
-                            // 1. Reassess mean for this bar
-                            if (scores_count > 0 && scores_atoms) {
-                                double scores_sum = 0.0;
-                                for (long k = 0; k < scores_count; k++) {
-                                    scores_sum += atom_getfloat(scores_atoms + k);
+                                if (dictionary_getatomarray(incumbent_bar_dict, gensym("scores"), (t_object **)&src_scores_aa) == MAX_ERR_NONE && src_scores_aa) {
+                                    atomarray_getatoms(src_scores_aa, &scores_count, &scores_atoms);
+                                } else if (dictionary_getatom(incumbent_bar_dict, gensym("scores"), &src_scores_single) == MAX_ERR_NONE) {
+                                    scores_atoms = &src_scores_single;
+                                    scores_count = 1;
                                 }
-                                double new_mean = scores_sum / (double)scores_count;
 
-                                t_atom mean_atom;
-                                atom_setfloat(&mean_atom, new_mean);
-                                if (dictionary_hasentry(incumbent_bar_dict, gensym("mean"))) {
-                                    dictionary_deleteentry(incumbent_bar_dict, gensym("mean"));
+                                if (scores_count > 0 && scores_atoms) {
+                                    double scores_sum = 0.0;
+                                    for (long k = 0; k < scores_count; k++) {
+                                        scores_sum += atom_getfloat(scores_atoms + k);
+                                    }
+                                    double new_mean = scores_sum / (double)scores_count;
+
+                                    t_atom mean_atom;
+                                    atom_setfloat(&mean_atom, new_mean);
+                                    if (dictionary_hasentry(incumbent_bar_dict, gensym("mean"))) {
+                                        dictionary_deleteentry(incumbent_bar_dict, gensym("mean"));
+                                    }
+                                    dictionary_appendatom(incumbent_bar_dict, gensym("mean"), &mean_atom);
+                                    crucible_log(x, "rescore: Reassessed mean score %.4f for track %s bar %s.", new_mean, track_sym->s_name, bar_sym->s_name);
                                 }
-                                dictionary_appendatom(incumbent_bar_dict, gensym("mean"), &mean_atom);
-                                crucible_log(x, "rescore: Reassessed mean score %.4f for track %s bar %s.", new_mean, track_sym->s_name, bar_sym->s_name);
-                            }
 
-                            // 2. Find span containing this bar and reassess rating for all bars in the span
-                            t_atomarray *span_aa = crucible_get_span_as_atomarray(incumbent_bar_dict);
-                            if (span_aa) {
-                                long span_len = 0;
-                                t_atom *span_atoms = NULL;
-                                atomarray_getatoms(span_aa, &span_len, &span_atoms);
+                                // 3. Primary Bars & Primary Span Rating:
+                                // Read incoming span array from challenger_bar_dict
+                                t_atomarray *primary_span_aa = crucible_get_span_as_atomarray(challenger_bar_dict);
+                                t_dictionary *primary_bars_dict = dictionary_new();
+                                t_dictionary *replace_bars_dict = dictionary_new();
+                                t_dictionary *update_bars_dict = dictionary_new();
 
-                                double lowest_mean = 0.0;
-                                int has_any_valid_mean = 0;
-                                long bars_with_mean_count = 0;
+                                if (primary_span_aa) {
+                                    long pri_len = 0;
+                                    t_atom *pri_atoms = NULL;
+                                    atomarray_getatoms(primary_span_aa, &pri_len, &pri_atoms);
 
-                                for (long k = 0; k < span_len; k++) {
-                                    t_symbol *b_sym = NULL;
-                                    char b_ts_str[64];
-                                    if (atom_gettype(&span_atoms[k]) == A_SYM) {
-                                        b_sym = atom_getsym(&span_atoms[k]);
-                                    } else if (atom_gettype(&span_atoms[k]) == A_LONG) {
-                                        snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[k]));
-                                        b_sym = gensym(b_ts_str);
-                                    } else if (atom_gettype(&span_atoms[k]) == A_FLOAT) {
-                                        snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[k]));
-                                        b_sym = gensym(b_ts_str);
+                                    for (long k = 0; k < pri_len; k++) {
+                                        char b_ts_str[64];
+                                        t_symbol *b_sym = NULL;
+                                        if (atom_gettype(&pri_atoms[k]) == A_SYM) {
+                                            b_sym = atom_getsym(&pri_atoms[k]);
+                                        } else if (atom_gettype(&pri_atoms[k]) == A_LONG) {
+                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&pri_atoms[k]));
+                                            b_sym = gensym(b_ts_str);
+                                        } else if (atom_gettype(&pri_atoms[k]) == A_FLOAT) {
+                                            snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&pri_atoms[k]));
+                                            b_sym = gensym(b_ts_str);
+                                        }
+                                        if (b_sym) {
+                                            dictionary_appendlong(primary_bars_dict, b_sym, 1);
+                                        }
                                     }
 
-                                    if (b_sym) {
-                                        t_dictionary *b_dict = NULL;
-                                        dictionary_getdictionary(incumbent_track_dict, b_sym, (t_object **)&b_dict);
-                                        if (b_dict) {
+                                    // Compute primary span rating using rebar rules across primary bars in incumbent dict
+                                    double pri_lowest_mean = 0.0;
+                                    int pri_has_valid_mean = 0;
+                                    long pri_bars_with_mean_count = 0;
+
+                                    t_symbol **pri_keys = NULL;
+                                    long pri_count = 0;
+                                    dictionary_getkeys(primary_bars_dict, &pri_count, &pri_keys);
+
+                                    for (long k = 0; k < pri_count; k++) {
+                                        t_symbol *p_sym = pri_keys[k];
+                                        t_dictionary *p_dict = NULL;
+                                        dictionary_getdictionary(incumbent_track_dict, p_sym, (t_object **)&p_dict);
+                                        if (p_dict) {
                                             double bar_mean = 0.0;
-                                            if (crucible_dict_get_float(b_dict, gensym("mean"), &bar_mean)) {
-                                                bars_with_mean_count++;
-                                                if (!has_any_valid_mean || bar_mean < lowest_mean) {
-                                                    lowest_mean = bar_mean;
-                                                    has_any_valid_mean = 1;
+                                            if (crucible_dict_get_float(p_dict, gensym("mean"), &bar_mean)) {
+                                                pri_bars_with_mean_count++;
+                                                if (!pri_has_valid_mean || bar_mean < pri_lowest_mean) {
+                                                    pri_lowest_mean = bar_mean;
+                                                    pri_has_valid_mean = 1;
                                                 }
                                             }
                                         }
                                     }
-                                }
 
-                                double new_span_rating = has_any_valid_mean ? (lowest_mean * (double)bars_with_mean_count) : 0.0;
-                                crucible_log(x, "rescore: Reassessed span rating %.4f across %ld bar(s) for track %s.", new_span_rating, span_len, track_sym->s_name);
+                                    double pri_span_rating = pri_has_valid_mean ? (pri_lowest_mean * (double)pri_bars_with_mean_count) : 0.0;
 
-                                // Update ratings for all bars in the span and collect changed ratings
-                                t_dictionary *changed_bars_dict = dictionary_new();
+                                    // Update rating in incumbent dict for all primary bars and stage replace packets
+                                    for (long k = 0; k < pri_count; k++) {
+                                        t_symbol *p_sym = pri_keys[k];
+                                        t_dictionary *p_dict = NULL;
+                                        dictionary_getdictionary(incumbent_track_dict, p_sym, (t_object **)&p_dict);
+                                        if (p_dict) {
+                                            if (dictionary_hasentry(p_dict, gensym("rating"))) {
+                                                dictionary_deleteentry(p_dict, gensym("rating"));
+                                            }
+                                            t_atom r_atom;
+                                            atom_setfloat(&r_atom, pri_span_rating);
+                                            dictionary_appendatom(p_dict, gensym("rating"), &r_atom);
 
-                                for (long k = 0; k < span_len; k++) {
-                                    t_symbol *b_sym = NULL;
-                                    char b_ts_str[64];
-                                    if (atom_gettype(&span_atoms[k]) == A_SYM) {
-                                        b_sym = atom_getsym(&span_atoms[k]);
-                                    } else if (atom_gettype(&span_atoms[k]) == A_LONG) {
-                                        snprintf(b_ts_str, 64, "%lld", (long long)atom_getlong(&span_atoms[k]));
-                                        b_sym = gensym(b_ts_str);
-                                    } else if (atom_gettype(&span_atoms[k]) == A_FLOAT) {
-                                        snprintf(b_ts_str, 64, "%lld", (long long)atom_getfloat(&span_atoms[k]));
-                                        b_sym = gensym(b_ts_str);
+                                            dictionary_appendfloat(replace_bars_dict, p_sym, pri_span_rating);
+                                            crucible_log(x, "rescore: Set primary rating %.4f for track %s bar %s.", pri_span_rating, track_sym->s_name, p_sym->s_name);
+                                        }
                                     }
 
-                                    if (b_sym) {
-                                        t_dictionary *b_dict = NULL;
-                                        dictionary_getdictionary(incumbent_track_dict, b_sym, (t_object **)&b_dict);
-                                        if (b_dict) {
-                                            double old_rating = -999999.0;
-                                            crucible_dict_get_float(b_dict, gensym("rating"), &old_rating);
+                                    // 4. Secondary Bars & Secondary Span Ratings:
+                                    // Check existing incumbent span keys for each primary bar
+                                    t_dictionary *visited_incumbent_spans = dictionary_new();
 
-                                            if (fabs(old_rating - new_span_rating) > 0.000001) {
-                                                if (dictionary_hasentry(b_dict, gensym("rating"))) {
-                                                    dictionary_deleteentry(b_dict, gensym("rating"));
+                                    for (long k = 0; k < pri_count; k++) {
+                                        t_symbol *p_sym = pri_keys[k];
+                                        t_dictionary *p_dict = NULL;
+                                        dictionary_getdictionary(incumbent_track_dict, p_sym, (t_object **)&p_dict);
+                                        if (p_dict) {
+                                            t_atomarray *inc_span_aa = crucible_get_span_as_atomarray(p_dict);
+                                            if (inc_span_aa) {
+                                                long inc_span_len = 0;
+                                                t_atom *inc_span_atoms = NULL;
+                                                atomarray_getatoms(inc_span_aa, &inc_span_len, &inc_span_atoms);
+
+                                                if (inc_span_len > 0) {
+                                                    // Get unique identifier symbol for this incumbent span (its first bar)
+                                                    char span_id_str[64];
+                                                    t_symbol *span_id_sym = NULL;
+                                                    if (atom_gettype(&inc_span_atoms[0]) == A_SYM) span_id_sym = atom_getsym(&inc_span_atoms[0]);
+                                                    else {
+                                                        snprintf(span_id_str, 64, "%lld", (long long)atom_getlong(&inc_span_atoms[0]));
+                                                        span_id_sym = gensym(span_id_str);
+                                                    }
+
+                                                    if (span_id_sym && !dictionary_hasentry(visited_incumbent_spans, span_id_sym)) {
+                                                        dictionary_appendlong(visited_incumbent_spans, span_id_sym, 1);
+
+                                                        // Check if this incumbent span has secondary bars (bars not in primary_bars_dict)
+                                                        int has_secondary_bars = 0;
+                                                        for (long s_idx = 0; s_idx < inc_span_len; s_idx++) {
+                                                            char s_ts_str[64];
+                                                            t_symbol *s_sym = NULL;
+                                                            if (atom_gettype(&inc_span_atoms[s_idx]) == A_SYM) s_sym = atom_getsym(&inc_span_atoms[s_idx]);
+                                                            else {
+                                                                snprintf(s_ts_str, 64, "%lld", (long long)atom_getlong(&inc_span_atoms[s_idx]));
+                                                                s_sym = gensym(s_ts_str);
+                                                            }
+                                                            if (s_sym && !dictionary_hasentry(primary_bars_dict, s_sym)) {
+                                                                has_secondary_bars = 1;
+                                                                break;
+                                                            }
+                                                        }
+
+                                                        if (has_secondary_bars) {
+                                                            // Recalculate rating across all bars in this incumbent span
+                                                            double sec_lowest_mean = 0.0;
+                                                            int sec_has_valid_mean = 0;
+                                                            long sec_bars_with_mean_count = 0;
+
+                                                            for (long s_idx = 0; s_idx < inc_span_len; s_idx++) {
+                                                                char s_ts_str[64];
+                                                                t_symbol *s_sym = NULL;
+                                                                if (atom_gettype(&inc_span_atoms[s_idx]) == A_SYM) s_sym = atom_getsym(&inc_span_atoms[s_idx]);
+                                                                else {
+                                                                    snprintf(s_ts_str, 64, "%lld", (long long)atom_getlong(&inc_span_atoms[s_idx]));
+                                                                    s_sym = gensym(s_ts_str);
+                                                                }
+                                                                if (s_sym) {
+                                                                    t_dictionary *s_dict = NULL;
+                                                                    dictionary_getdictionary(incumbent_track_dict, s_sym, (t_object **)&s_dict);
+                                                                    if (s_dict) {
+                                                                        double bar_mean = 0.0;
+                                                                        if (crucible_dict_get_float(s_dict, gensym("mean"), &bar_mean)) {
+                                                                            sec_bars_with_mean_count++;
+                                                                            if (!sec_has_valid_mean || bar_mean < sec_lowest_mean) {
+                                                                                sec_lowest_mean = bar_mean;
+                                                                                sec_has_valid_mean = 1;
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            double sec_span_rating = sec_has_valid_mean ? (sec_lowest_mean * (double)sec_bars_with_mean_count) : 0.0;
+
+                                                            // Update rating for secondary bars in this incumbent span and stage update packets
+                                                            for (long s_idx = 0; s_idx < inc_span_len; s_idx++) {
+                                                                char s_ts_str[64];
+                                                                t_symbol *s_sym = NULL;
+                                                                if (atom_gettype(&inc_span_atoms[s_idx]) == A_SYM) s_sym = atom_getsym(&inc_span_atoms[s_idx]);
+                                                                else {
+                                                                    snprintf(s_ts_str, 64, "%lld", (long long)atom_getlong(&inc_span_atoms[s_idx]));
+                                                                    s_sym = gensym(s_ts_str);
+                                                                }
+                                                                if (s_sym && !dictionary_hasentry(primary_bars_dict, s_sym)) {
+                                                                    t_dictionary *s_dict = NULL;
+                                                                    dictionary_getdictionary(incumbent_track_dict, s_sym, (t_object **)&s_dict);
+                                                                    if (s_dict) {
+                                                                        double old_rating = -999999.0;
+                                                                        crucible_dict_get_float(s_dict, gensym("rating"), &old_rating);
+
+                                                                        if (fabs(old_rating - sec_span_rating) > 0.000001) {
+                                                                            if (dictionary_hasentry(s_dict, gensym("rating"))) {
+                                                                                dictionary_deleteentry(s_dict, gensym("rating"));
+                                                                            }
+                                                                            t_atom r_atom;
+                                                                            atom_setfloat(&r_atom, sec_span_rating);
+                                                                            dictionary_appendatom(s_dict, gensym("rating"), &r_atom);
+
+                                                                            dictionary_appendfloat(update_bars_dict, s_sym, sec_span_rating);
+                                                                            crucible_log(x, "rescore: Updated secondary rating for track %s bar %s: %.4f -> %.4f.", track_sym->s_name, s_sym->s_name, old_rating, sec_span_rating);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
-                                                t_atom new_r_atom;
-                                                atom_setfloat(&new_r_atom, new_span_rating);
-                                                dictionary_appendatom(b_dict, gensym("rating"), &new_r_atom);
-
-                                                dictionary_appendfloat(changed_bars_dict, b_sym, new_span_rating);
-                                                crucible_log(x, "rescore: Rating changed for track %s bar %s: %.4f -> %.4f.", track_sym->s_name, b_sym->s_name, old_rating, new_span_rating);
+                                                object_release((t_object *)inc_span_aa);
                                             }
                                         }
                                     }
-                                }
 
-                                if (x->visualize) {
-                                    crucible_query_bar_buffer_length(x);
-                                    crucible_visualize_repopulate(x);
+                                    if (pri_keys) sysmem_freeptr(pri_keys);
+                                    object_release((t_object *)visited_incumbent_spans);
 
-                                    t_symbol **changed_keys = NULL;
-                                    long num_changed = 0;
-                                    dictionary_getkeys(changed_bars_dict, &num_changed, &changed_keys);
-                                    for (long c_idx = 0; c_idx < num_changed; c_idx++) {
-                                        t_symbol *c_bar_sym = changed_keys[c_idx];
-                                        double updated_rating = 0.0;
-                                        dictionary_getfloat(changed_bars_dict, c_bar_sym, &updated_rating);
-                                        char msg[256];
-                                        snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}",
-                                                 track_sym->s_name, c_bar_sym->s_name, updated_rating);
-                                        visualize((t_object *)x, msg);
+                                    // 5. Emit Visualization Packets
+                                    if (x->visualize) {
+                                        crucible_query_bar_buffer_length(x);
+                                        crucible_visualize_repopulate(x);
+
+                                        t_symbol **replace_keys = NULL;
+                                        long num_replace = 0;
+                                        dictionary_getkeys(replace_bars_dict, &num_replace, &replace_keys);
+                                        for (long c_idx = 0; c_idx < num_replace; c_idx++) {
+                                            t_symbol *c_bar_sym = replace_keys[c_idx];
+                                            double updated_rating = 0.0;
+                                            dictionary_getfloat(replace_bars_dict, c_bar_sym, &updated_rating);
+                                            char msg[256];
+                                            snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}",
+                                                     track_sym->s_name, c_bar_sym->s_name, updated_rating);
+                                            visualize((t_object *)x, msg);
+                                        }
+                                        if (replace_keys) sysmem_freeptr(replace_keys);
+
+                                        t_symbol **update_keys = NULL;
+                                        long num_update = 0;
+                                        dictionary_getkeys(update_bars_dict, &num_update, &update_keys);
+                                        for (long u_idx = 0; u_idx < num_update; u_idx++) {
+                                            t_symbol *u_bar_sym = update_keys[u_idx];
+                                            double updated_rating = 0.0;
+                                            dictionary_getfloat(update_bars_dict, u_bar_sym, &updated_rating);
+                                            char msg[256];
+                                            snprintf(msg, 256, "{\"event\":\"update\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f}",
+                                                     track_sym->s_name, u_bar_sym->s_name, updated_rating);
+                                            visualize((t_object *)x, msg);
+                                        }
+                                        if (update_keys) sysmem_freeptr(update_keys);
                                     }
-                                    if (changed_keys) sysmem_freeptr(changed_keys);
+
+                                    object_release((t_object *)primary_span_aa);
                                 }
 
-                                object_release((t_object *)changed_bars_dict);
-                                object_release((t_object *)span_aa);
+                                object_release((t_object *)primary_bars_dict);
+                                object_release((t_object *)replace_bars_dict);
+                                object_release((t_object *)update_bars_dict);
                             }
                         }
                         dictobj_release(incumbent_dict);
@@ -3189,8 +3320,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     dictionary_deleteentry(challenger_track_dict, bar_sym);
                 }
             }
-        }
-    } else {
+        } else {
             // Get or create track dictionary in challenger dict
             t_dictionary *track_dict = NULL;
             if (!dictionary_hasentry(x->challenger_dict, track_sym)) {
