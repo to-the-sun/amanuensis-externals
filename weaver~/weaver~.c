@@ -1020,13 +1020,14 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
         tr->viz_track_length = tr->track_length;
     }
 
-    // Pre-bind palette to buffer_ref (slot logic will be applied in DSP thread)
-    // We update both refs because we don't know which slot is currently available,
-    // but the DSP thread will use the palette symbol from metadata to lock the correct buffer.
-    // Actually, it's safer to just set them both if it's a new palette.
+    // Target buffer_ref_set to the inactive slot (other) so the active slot (active)
+    // continues playing its outgoing buffer during the crossfade.
+    int active = (int)round(tr->control);
+    int other = 1 - active;
     if (palette != _sym_nothing && palette != gensym("-")) {
-        buffer_ref_set(tr->src_refs[0], palette);
-        buffer_ref_set(tr->src_refs[1], palette);
+        buffer_ref_set(tr->src_refs[other], palette);
+    } else {
+        buffer_ref_set(tr->src_refs[other], _sym_nothing);
     }
 
     tr->has_pending_data = 1;
