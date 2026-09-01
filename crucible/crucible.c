@@ -1159,6 +1159,37 @@ cleanup:
     if (all_track_keys) sysmem_freeptr(all_track_keys);
 }
 
+t_atom_long crucible_query_bar_buffer_length(t_crucible *x) {
+    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
+    if (!b) {
+        buffer_ref_set(x->buffer_ref, _sym_nothing);
+        buffer_ref_set(x->buffer_ref, gensym("bar"));
+        b = buffer_ref_getobject(x->buffer_ref);
+    }
+    if (b) {
+        x->bar_warn_sent = 0;
+        t_atom_long new_bar_length = 0;
+        critical_enter(0);
+        float *samples = buffer_locksamples(b);
+        if (samples) {
+            if (buffer_getframecount(b) > 0) {
+                new_bar_length = (t_atom_long)samples[0];
+            }
+            buffer_unlocksamples(b);
+        }
+        critical_exit(0);
+
+        if (new_bar_length > 0) {
+            if (new_bar_length != (t_atom_long)x->local_bar_length) {
+                crucible_log(x, "bar_length changed to %lld", (long long)new_bar_length);
+            }
+            x->local_bar_length = (double)new_bar_length;
+            return new_bar_length;
+        }
+    }
+    return crucible_get_bar_length(x);
+}
+
 t_atom_long crucible_get_bar_length(t_crucible *x) {
     if (x->local_bar_length > 0) {
         return (t_atom_long)x->local_bar_length;
@@ -2272,7 +2303,7 @@ void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag) {
     t_dyn_str ds;
     dyn_str_init(&ds, 32768);
 
-    t_atom_long bar_length = crucible_get_bar_length(x);
+    t_atom_long bar_length = crucible_query_bar_buffer_length(x);
 
     if (rebar_flag) {
         dyn_str_append_printf(&ds, "{\"event\":\"repopulate\",\"bar_length\":%lld,\"rebar\":true,\"dictionary\":", (long long)bar_length);
@@ -2880,6 +2911,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                             } else {
                                 dictobj_release(incumbent_dict);
                                 if (x->visualize) {
+                                    crucible_query_bar_buffer_length(x);
                                     crucible_visualize_repopulate(x);
                                     char msg[256];
                                     snprintf(msg, 256, "{\"event\":\"replace\",\"track\":\"%s\",\"bar\":\"%s\",\"rating\":%.6f,\"principal\":true}", track, bar, specified_rating);
@@ -3303,7 +3335,7 @@ void crucible_visualize_state(t_crucible *x, t_symbol *event_type, t_symbol *tra
     }
     long offset = 0;
 
-    t_atom_long bar_length = crucible_get_bar_length(x);
+    t_atom_long bar_length = crucible_query_bar_buffer_length(x);
 
     offset += snprintf(json_buffer + offset, buffer_size - offset, "{\"bar_length\":%lld", (long long)bar_length);
 
