@@ -2999,17 +2999,39 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
                     t_dictionary *incumbent_dict = dictobj_findregistered_retain(x->incumbent_dict_name);
                     if (incumbent_dict) {
+                        int track_existed = dictionary_hasentry(incumbent_dict, track_sym);
                         t_dictionary *incumbent_track_dict = NULL;
-                        if (!dictionary_hasentry(incumbent_dict, track_sym)) {
+                        if (track_existed) {
+                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
+                        }
+
+                        int is_new_bar = (!incumbent_track_dict || !dictionary_hasentry(incumbent_track_dict, bar_sym));
+
+                        if (is_new_bar) {
+                            t_atom_long bar_length = crucible_get_bar_length(x);
+                            t_atom_long bar_ts = atoll(bar_sym->s_name);
+                            if (bar_length <= 0 || (bar_ts % bar_length) != 0) {
+                                crucible_log(x, "rescore: bar %s is not an exact multiple of bar_length %lld and does not exist in incumbent. Ignoring.", bar_sym->s_name, (long long)bar_length);
+                                dictobj_release(incumbent_dict);
+                                dictionary_deleteentry(challenger_track_dict, bar_sym);
+                                sysmem_freeptr(track_str);
+                                sysmem_freeptr(bar_str);
+                                sysmem_freeptr(key_str);
+                                x->current_task_seq = -1;
+                                if (on_worker) {
+                                    systhread_mutex_unlock(x->state_mutex);
+                                }
+                                return;
+                            }
+                        }
+
+                        if (!incumbent_track_dict) {
                             incumbent_track_dict = dictionary_new();
                             dictionary_appenddictionary(incumbent_dict, track_sym, (t_object *)incumbent_track_dict);
-                            dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
-                        } else {
                             dictionary_getdictionary(incumbent_dict, track_sym, (t_object **)&incumbent_track_dict);
                         }
 
                         if (incumbent_track_dict) {
-                            int is_new_bar = !dictionary_hasentry(incumbent_track_dict, bar_sym);
                             t_dictionary *incumbent_bar_dict = NULL;
                             if (is_new_bar) {
                                 incumbent_bar_dict = dictionary_new();
