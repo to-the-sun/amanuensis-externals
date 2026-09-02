@@ -180,6 +180,38 @@ def perform_smartloop_analysis():
         # state["smartloop_start"] = sl_start
         # state["smartloop_end"] = sl_end
 
+def add_event(evt):
+    """
+    Appends a new animation event to state['events'], ending any in-process
+    animations for the same track and bar(s) before starting the new one.
+    """
+    track_str = str(evt.get("track"))
+    bar_length = state.get("bar_length", 125)
+
+    if "bars" in evt:
+        new_bars = [snap_to_bar(b, bar_length) for b in evt["bars"]]
+    elif "dest_bar" in evt:
+        new_bars = [snap_to_bar(evt["dest_bar"], bar_length)]
+    else:
+        new_bars = []
+
+    evt["bars"] = new_bars
+    new_bar_ints = {int(round(float(b))) for b in new_bars}
+
+    updated_events = []
+    for e in state.get("events", []):
+        if str(e.get("track")) == track_str:
+            e_bars = e.get("bars", [])
+            remaining_bars = [b for b in e_bars if int(round(float(b))) not in new_bar_ints]
+            if remaining_bars:
+                e["bars"] = remaining_bars
+                updated_events.append(e)
+        else:
+            updated_events.append(e)
+
+    updated_events.append(evt)
+    state["events"] = updated_events
+
 def update_bar_length(new_bl):
     """Updates bar_length and recalculates display coordinates without purging track data."""
     with state_lock:
@@ -335,6 +367,7 @@ def process_packet(text, client_sock=None):
 
                 if pkt_event == "repopulate":
                     # Replace reference dictionaries in full
+                    state["events"] = []
                     new_tracks = {}
                     new_bar_data = {}
                     new_bar_ratings = {}
@@ -375,7 +408,7 @@ def process_packet(text, client_sock=None):
                                     new_spans_seen[span_id] = {"rating": float(rating), "bars": span_bars}
 
                             if is_rebar:
-                                state["events"].append({
+                                add_event({
                                     "type": "replace",
                                     "track": t_str,
                                     "bars": [snapped_ts],
@@ -425,7 +458,7 @@ def process_packet(text, client_sock=None):
                             state["tracks"][t_str].append(float(dest_bar))
                             dirty = True
                         
-                        state["events"].append({
+                        add_event({
                             "type": "fill_bar",
                             "track": t_str,
                             "dest_bar": float(dest_bar),
@@ -449,7 +482,7 @@ def process_packet(text, client_sock=None):
                     for b in bars:
                         state["bar_ratings"][t_str][str(float(b))] = float(rating)
 
-                    state["events"].append({
+                    add_event({
                         "type": "new_span",
                         "track": t_str,
                         "bars": bars,
@@ -475,7 +508,7 @@ def process_packet(text, client_sock=None):
                         state["bar_ratings"][t_str][b_str] = float(rating)
                         print(f"DEBUG: {evt.capitalize()}d rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
 
-                        state["events"].append({
+                        add_event({
                             "type": evt,
                             "track": t_str,
                             "bars": [snapped_ts],
@@ -870,8 +903,12 @@ def run_gui():
             row = track_to_row[tid]
 
             if e.get("type") == "fill_bar":
-                dest_bar = e["dest_bar"]
-                src_bar = e["src_bar"]
+                dest_bar = e.get("dest_bar")
+                if dest_bar is None and e.get("bars"):
+                    dest_bar = e["bars"][0]
+                if dest_bar is None:
+                    continue
+                src_bar = e.get("src_bar", 0)
                 src_idx = int(src_bar / bar_length) if bar_length > 0 else 0
                 col = int((dest_bar - song_start) // bar_length)
                 float_x = margin_left + col * cell_w + (cell_w / 2)
@@ -889,10 +926,10 @@ def run_gui():
                     valid_bars.append(b_ts)
                 except (ValueError, TypeError): continue
 
-            # Floating Rating for ordinary span updates (new_span) and replace events
+            # Floating Rating for ordinary span updates (new_span) and replace/update events
             if valid_bars and bar_length > 0:
                 e_type = e.get("type")
-                if e_type in ["new_span", "replace"]:
+                if e_type in ["new_span", "replace", "update"]:
                     avg_col = sum((b - song_start) // bar_length for b in valid_bars) / len(valid_bars)
                     float_x = margin_left + avg_col * cell_w + (cell_w / 2)
 
@@ -901,7 +938,7 @@ def run_gui():
 
                     if e_type == "new_span":
                         text_color = (255, 255, 100) # Yellow
-                    else: # replace
+                    else: # replace / update
                         is_principal = e.get("principal", True)
                         if is_principal:
                             text_color = (255, 255, 255) # White
