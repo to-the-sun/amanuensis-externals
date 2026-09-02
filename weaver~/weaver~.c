@@ -1715,6 +1715,9 @@ void weaver_audio_qtask(t_weaver *x) {
             }
 
             if (found_in_dict && palette_exists) {
+                if (strncmp(palette->s_name, "stems.", 6) == 0) {
+                    offset = -x->most_negative_bar;
+                }
                 weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
                 weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating);
             } else {
