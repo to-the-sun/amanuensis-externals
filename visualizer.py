@@ -344,6 +344,10 @@ def process_packet(text, client_sock=None):
                     bar_length = state["bar_length"]
                     is_rebar = pkt.get("rebar", False)
 
+                    # Clear existing events and hash mark logs for a clean redraw from scratch
+                    state["events"] = []
+                    state["logged_hashes"].clear()
+
                     for t_id, t_dict in incoming_dict.items():
                         t_str = str(t_id)
                         new_tracks[t_str] = []
@@ -357,7 +361,9 @@ def process_packet(text, client_sock=None):
                                 continue
 
                             snapped_ts = snap_to_bar(b_ts_val, bar_length)
-                            new_tracks[t_str].append(snapped_ts)
+                            if snapped_ts not in new_tracks[t_str]:
+                                new_tracks[t_str].append(snapped_ts)
+
                             new_bar_data[t_str][str(float(snapped_ts))] = b_dict
 
                             rating = b_dict.get("rating", 0.0)
@@ -467,19 +473,16 @@ def process_packet(text, client_sock=None):
                     meld = pkt.get("meld", not principal)
                     if track is not None and bar is not None and rating is not None:
                         t_str = str(track)
-                        bar_length = state["bar_length"]
-                        snapped_ts = snap_to_bar(bar, bar_length)
+                        cur_bl = state.get("bar_length", 125)
+                        snapped_ts = snap_to_bar(bar, cur_bl)
                         b_str = str(float(snapped_ts))
-                        if t_str not in state["bar_ratings"]:
-                            state["bar_ratings"][t_str] = {}
-                        state["bar_ratings"][t_str][b_str] = float(rating)
                         print(f"DEBUG: {evt.capitalize()}d rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
 
-                        # Remove any existing event for this track and bar to prevent duplicate floating animations
+                        # Remove existing event for same track and bar to prevent event stacking
                         state["events"] = [
                             e for e in state["events"]
                             if not (str(e.get("track")) == t_str and
-                                    any(int(snap_to_bar(b, bar_length)) == int(snapped_ts) for b in e.get("bars", [])))
+                                    any(int(snap_to_bar(b, cur_bl)) == int(snapped_ts) for b in e.get("bars", [])))
                         ]
 
                         state["events"].append({
@@ -904,8 +907,7 @@ def run_gui():
                     float_x = margin_left + avg_col * cell_w + (cell_w / 2)
 
                     alpha = int(255 * (1.0 - t))
-                    # Start above the cell's top boundary so floating text doesn't overlap the centered cell rating
-                    float_y = margin_top + row * cell_h - 20 - (elapsed * 50) # Rise 50px/s
+                    float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
 
                     if e_type == "new_span":
                         text_color = (255, 255, 100) # Yellow
