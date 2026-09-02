@@ -7,14 +7,14 @@ In musical timeline management systems that support bidirectional growth (expand
 Historically, the system accommodated negative bars by calculating a dynamic global metric known as `most_negative_bar` (the most negative timestamp present across all tracks, e.g., -16000 ms). Whenever `most_negative_bar` expanded further in the negative direction, external objects (`crucible`, `weaver~`, `smartloop~`) and transcript dictionary entries had to apply floating-point offsets (such as `offset = -most_negative_bar`) to real-time audio ramps, destination write frames, and stems buffer lookups.
 
 ### The Proposed Paradigm: Center-Anchored Stems Buffers
-Instead of dynamically shifting buffer zero-points and adjusting dictionary offsets whenever a new negative bar is introduced, stems buffers and destination audio buffers are pre-allocated with liberal storage capacity (for example, a 20-minute audio buffer) where the song's origin (timestamp 0 ms) is anchored directly at the buffer's center point (e.g., frame index corresponding to 10 minutes or 600,000 ms).
+Instead of dynamically shifting buffer zero-points and adjusting dictionary offsets whenever a new negative bar is introduced, stems buffers and destination audio buffers are pre-allocated with liberal storage capacity (for example, a 20-minute audio buffer) where the song's origin (timestamp 0 ms) is anchored directly at the buffer's center point (e.g., frame index corresponding to 10 minutes or 600000 ms).
 
 Under this architecture:
-- Timestamp `0 ms` corresponds to a fixed center offset $T_{\text{center}}$ in all stems and destination buffers.
-- Positive bar timestamps (e.g., `+4000 ms`) map directly to $T_{\text{center}} + 4000\text{ ms}$.
-- Negative bar timestamps (e.g., `-8000 ms`) map directly to $T_{\text{center}} - 8000\text{ ms}$.
+- Timestamp 0 ms corresponds to a fixed center offset in all stems and destination buffers.
+- Positive bar timestamps (e.g., +4000 ms) map directly to center offset + 4000 ms.
+- Negative bar timestamps (e.g., -8000 ms) map directly to center offset - 8000 ms.
 
-Because the stems buffers have ample headroom in both directions from $T_{\text{center}}$, the song can expand flexibly into negative or positive time without shifting existing buffer contents or recalculating stems offsets across transcript dictionaries.
+Because the stems buffers have ample headroom in both directions from the center offset, the song can expand flexibly into negative or positive time without shifting existing buffer contents or recalculating stems offsets across transcript dictionaries.
 
 ---
 
@@ -25,7 +25,7 @@ When `@rescore` is enabled in `crucible`, incoming `absolutes` and `scores` sele
 
 ### Center-Anchored Simplification
 1. **Constant Offset of Zero for Stems Bars:**
-   When `@rescore` creates a new stem bar (with `palette = stems.[track_id]`), its `offset` key is simply set to `0.0` (or $T_{\text{center}}$ if absolute stem playback alignment is used) rather than `-most_negative_bar`.
+   When `@rescore` creates a new stem bar (with `palette = stems.[track_id]`), its `offset` key is simply set to 0.0 (or the fixed center offset if absolute stem playback alignment is used) rather than `-most_negative_bar`.
 2. **Elimination of Global `song_min` Re-basing:**
    `crucible` no longer needs to scan the entire incumbent dictionary to find `song_min` solely to calculate a stems offset.
 3. **Transcript Dictionary Invariance:**
@@ -50,11 +50,11 @@ In `weaver~.c`:
 1. **Direct Ramp Mapping:**
    The incoming time ramp `ramp_in[i]` can be processed directly without adding a dynamic `most_negative_bar` scalar.
 2. **Fixed Destination Write Frame Indexing:**
-   Destination frame calculations become $f_{\text{dest}} = \text{round}((current\_scan + T_{\text{center}}) \times \text{sample\_rate} / 1000.0)$. The offset $T_{\text{center}}$ is constant and independent of the active transcript state.
+   Destination frame calculations become: `round((current_scan + center_offset_ms) * sample_rate / 1000.0)`. The center offset is constant and independent of the active transcript state.
 3. **Streamlined Fallback to Stems:**
-   When falling back to `stems.[track_id]`, the read position in the stems buffer aligns 1:1 with the destination write position. The offset for stems buffers is uniformly `0.0` relative to the center anchor $T_{\text{center}}$.
+   When falling back to `stems.[track_id]`, the read position in the stems buffer aligns 1:1 with the destination write position. The offset for stems buffers is uniformly 0.0 relative to the center anchor.
 4. **Consolidation Worker Thread:**
-   In `weaver_consolidate_worker()`, the simulated ramp processing loop no longer needs to query or adjust track-specific `most_negative_bar` limits. The consolidation timeline operates on plain song time centered at $T_{\text{center}}$.
+   In `weaver_consolidate_worker()`, the simulated ramp processing loop no longer needs to query or adjust track-specific `most_negative_bar` limits. The consolidation timeline operates on plain song time centered at the center point.
 
 ---
 
@@ -74,7 +74,7 @@ In `smartloop~.c`:
 2. **Elimination of False Jump Compensation:**
    Because song expansion in the negative direction no longer shifts the origin or updates `most_negative_bar`, DSP state routines do not need special-case logic to adjust `x->last_val`.
 3. **Simplified Outlet Reporting:**
-   Loop start and end millisecond timestamps output directly as song-relative time (e.g., `-8000.0` to `+16000.0`) or as direct offsets relative to $T_{\text{center}}$, removing runtime subtraction.
+   Loop start and end millisecond timestamps output directly as song-relative time (e.g., -8000.0 to +16000.0) or as direct offsets relative to the center point, removing runtime subtraction.
 
 ---
 
@@ -85,18 +85,18 @@ When recording live audio or stem tracks into Max session buffers (`stems.[track
 
 ### Center-Anchored Simplification
 1. **Fixed Recording Origin:**
-   The recording process begins at $T_{\text{center}}$ (representing song timestamp 0 ms).
+   The recording process begins at the center point (representing song timestamp 0 ms).
 2. **Symmetrical Growth:**
-   If the user records a pickup measure or count-in prior to the song start, the write head simply writes to $T_{\text{center}} - t_{\text{pickup}}$.
+   If the user records a pickup measure or count-in prior to the song start, the write head simply writes to `center_offset_ms - pickup_time_ms`.
 3. **No Sample Re-shifting:**
-   Audio recorded at timestamp +4000 ms remains at frame $T_{\text{center}} + 4000\text{ ms}$ indefinitely, regardless of how many negative bars are subsequently added.
+   Audio recorded at timestamp +4000 ms remains at frame `center_offset_ms + 4000 ms` indefinitely, regardless of how many negative bars are subsequently added.
 
 ---
 
 ## 6. Impact on Rebar, Buildspans, and Visualizers (`visualizer.py`)
 
 ### Rebar and Buildspans
-- `crucible_do_rebar` calculates bar quantization via `val = abs_val - offset`. With stem offsets fixed to `0.0` (or $T_{\text{center}}$), timestamp quantization remains stable across rebar operations.
+- `crucible_do_rebar` calculates bar quantization via `val = abs_val - offset`. With stem offsets fixed to 0.0 (or the center point), timestamp quantization remains stable across rebar operations.
 - `buildspans` handles note absolute timestamps (`looped_absolute`). Offset invariance simplifies span validation and discontiguity checks across lingering spans.
 
 ### Visualizer (`visualizer.py`)
@@ -110,8 +110,8 @@ When recording live audio or stem tracks into Max session buffers (`stems.[track
 To ensure the center-anchored approach functions reliably without running out of buffer space:
 
 1. **Pre-Allocation Guidelines:**
-   - Standard stems buffers should be pre-allocated with generous capacity (e.g., 20 minutes / 1,200,000 ms at 44.1 kHz or 48 kHz).
-   - $T_{\text{center}}$ is designated at half the buffer duration (e.g., 10 minutes / 600,000 ms).
+   - Standard stems buffers should be pre-allocated with generous capacity (e.g., 20 minutes / 1200000 ms at 44.1 kHz or 48 kHz).
+   - The center point is designated at half the buffer duration (e.g., 10 minutes / 600000 ms).
 2. **Headroom Capacity:**
    - A 20-minute buffer centered at 10 minutes allows up to 10 minutes of negative timeline expansion and 10 minutes of positive timeline expansion before buffer resizing or boundary wrapping would ever be required.
 3. **Memory Footprint:**
@@ -123,10 +123,10 @@ To ensure the center-anchored approach functions reliably without running out of
 
 | System Component | Legacy Dynamic Shift Paradigm | Center-Anchored Stems Paradigm |
 | :--- | :--- | :--- |
-| **Stems Buffer Origin** | Frame 0 represents `most_negative_bar` | Frame $T_{\text{center}}$ represents 0 ms |
+| **Stems Buffer Origin** | Frame 0 represents `most_negative_bar` | Center point represents 0 ms |
 | **`crucible` `@rescore` Offset** | Sets `offset = -most_negative_bar` | Sets `offset = 0.0` |
 | **Transcript Dict Stability** | Dict offsets mutated on negative song growth | Dict offsets remain completely invariant |
-| **`weaver~` Ramp Processing** | `ramp_in + most_negative_bar` | Direct ramp processing (`ramp_in + T_center`) |
+| **`weaver~` Ramp Processing** | `ramp_in + most_negative_bar` | Direct ramp processing (`ramp_in + center_offset_ms`) |
 | **`weaver~` Stems Fallback** | Dynamic offset calculation (`-most_negative_bar`) | Fixed 1:1 mapping with center offset |
 | **`smartloop~` Jump Detection** | Requires compensation for shifting `most_negative_bar` | Zero false-jump risk on negative expansion |
 | **Buffer Sample Shifting** | Required when song grows negative | Never required |
@@ -135,4 +135,4 @@ To ensure the center-anchored approach functions reliably without running out of
 
 ## 9. Conclusion
 
-Transitioning to a center-anchored stems buffer architecture eliminates complex offset cascades across C external objects (`crucible`, `weaver~`, `smartloop~`), prevents transcript dictionary mutations during song growth, and simplifies real-time DSP ramp processing. By establishing a fixed origin $T_{\text{center}}$ within pre-allocated stems buffers, the system gains complete flexibility to expand in both positive and negative time directions without runtime overhead or sample-shifting artifacts.
+Transitioning to a center-anchored stems buffer architecture eliminates complex offset cascades across C external objects (`crucible`, `weaver~`, `smartloop~`), prevents transcript dictionary mutations during song growth, and simplifies real-time DSP ramp processing. By establishing a fixed origin within pre-allocated stems buffers, the system gains complete flexibility to expand in both positive and negative time directions without runtime overhead or sample-shifting artifacts.
