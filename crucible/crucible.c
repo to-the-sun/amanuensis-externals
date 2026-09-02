@@ -1160,33 +1160,6 @@ cleanup:
 }
 
 t_atom_long crucible_query_bar_buffer_length(t_crucible *x) {
-    t_buffer_obj *b = buffer_ref_getobject(x->buffer_ref);
-    if (!b) {
-        buffer_ref_set(x->buffer_ref, _sym_nothing);
-        buffer_ref_set(x->buffer_ref, gensym("bar"));
-        b = buffer_ref_getobject(x->buffer_ref);
-    }
-    if (b) {
-        x->bar_warn_sent = 0;
-        t_atom_long new_bar_length = 0;
-        critical_enter(0);
-        float *samples = buffer_locksamples(b);
-        if (samples) {
-            if (buffer_getframecount(b) > 0) {
-                new_bar_length = (t_atom_long)samples[0];
-            }
-            buffer_unlocksamples(b);
-        }
-        critical_exit(0);
-
-        if (new_bar_length > 0) {
-            if (new_bar_length != (t_atom_long)x->local_bar_length) {
-                crucible_log(x, "bar_length changed to %lld", (long long)new_bar_length);
-            }
-            x->local_bar_length = (double)new_bar_length;
-            return new_bar_length;
-        }
-    }
     return crucible_get_bar_length(x);
 }
 
