@@ -475,6 +475,13 @@ def process_packet(text, client_sock=None):
                         state["bar_ratings"][t_str][b_str] = float(rating)
                         print(f"DEBUG: {evt.capitalize()}d rating for T{t_str} bar {b_str} with {rating} (principal: {principal}, meld: {meld})")
 
+                        # Remove any existing event for this track and bar to prevent duplicate floating animations
+                        state["events"] = [
+                            e for e in state["events"]
+                            if not (str(e.get("track")) == t_str and
+                                    any(int(snap_to_bar(b, bar_length)) == int(snapped_ts) for b in e.get("bars", [])))
+                        ]
+
                         state["events"].append({
                             "type": evt,
                             "track": t_str,
@@ -897,7 +904,8 @@ def run_gui():
                     float_x = margin_left + avg_col * cell_w + (cell_w / 2)
 
                     alpha = int(255 * (1.0 - t))
-                    float_y = margin_top + row * cell_h - (elapsed * 50) # Rise 50px/s
+                    # Start above the cell's top boundary so floating text doesn't overlap the centered cell rating
+                    float_y = margin_top + row * cell_h - 20 - (elapsed * 50) # Rise 50px/s
 
                     if e_type == "new_span":
                         text_color = (255, 255, 100) # Yellow
