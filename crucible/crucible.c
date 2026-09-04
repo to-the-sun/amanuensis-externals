@@ -3054,42 +3054,11 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     atom_setsym(&pal_atom, gensym(palette_str));
                                     dictionary_appendatom(incumbent_bar_dict, gensym("palette"), &pal_atom);
 
-                                    // Calculate most_negative_bar across all existing bars in incumbent_dict
-                                    t_atom_long bar_length = crucible_get_bar_length(x);
-                                    t_atom_long song_min = 0;
-                                    t_atom_long song_max = 0;
-                                    int song_has = 0;
-
-                                    t_symbol **all_tracks = NULL;
-                                    long num_all_tr = 0;
-                                    dictionary_getkeys(incumbent_dict, &num_all_tr, &all_tracks);
-                                    for (long t = 0; t < num_all_tr; t++) {
-                                        t_dictionary *tr_dict = NULL;
-                                        dictionary_getdictionary(incumbent_dict, all_tracks[t], (t_object **)&tr_dict);
-                                        if (tr_dict) {
-                                            t_atom_long t_min = 0, t_max = 0;
-                                            int t_has = 0;
-                                            get_track_bounds(tr_dict, bar_length, &t_min, &t_max, &t_has);
-                                            if (t_has) {
-                                                if (!song_has) {
-                                                    song_min = t_min;
-                                                    song_max = t_max;
-                                                    song_has = 1;
-                                                } else {
-                                                    if (t_min < song_min) song_min = t_min;
-                                                    if (t_max > song_max) song_max = t_max;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (all_tracks) sysmem_freeptr(all_tracks);
-
-                                    double most_neg_bar = song_has ? (double)song_min : 0.0;
                                     t_atom off_atom;
-                                    atom_setfloat(&off_atom, -most_neg_bar);
+                                    atom_setfloat(&off_atom, 0.0);
                                     dictionary_appendatom(incumbent_bar_dict, gensym("offset"), &off_atom);
 
-                                    crucible_log(x, "rescore: Created new bar %s on track %s with palette %s and offset %.2f.", bar_sym->s_name, track_sym->s_name, palette_str, -most_neg_bar);
+                                    crucible_log(x, "rescore: Created new bar %s on track %s with palette %s and offset 0.0.", bar_sym->s_name, track_sym->s_name, palette_str);
                                 } else {
                                     crucible_log(x, "rescore: Updated absolutes and scores for track %s bar %s directly in incumbent dictionary.", track_sym->s_name, bar_sym->s_name);
                                 }

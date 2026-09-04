@@ -712,34 +712,6 @@ def run_gui():
                     pygame.draw.rect(screen, color, rect)
 
         # Pass 3: Draw note hash marks in dark gray
-        # Calculate most_negative_bar and most_positive_bar (+ bar_length) across all active tracks
-        most_negative_bar = None
-        most_positive_bar_plus_len = None
-        for track_bars in tracks.values():
-            for bar_ts in track_bars:
-                try:
-                    b_ts = float(bar_ts)
-                    if most_negative_bar is None or b_ts < most_negative_bar:
-                        most_negative_bar = b_ts
-                    if most_positive_bar_plus_len is None or b_ts + bar_length > most_positive_bar_plus_len:
-                        most_positive_bar_plus_len = b_ts + bar_length
-                except (ValueError, TypeError):
-                    continue
-
-        if most_negative_bar is None:
-            most_negative_bar = song_start
-        if most_positive_bar_plus_len is None:
-            most_positive_bar_plus_len = song_reach
-
-        # Calculate start_px and pixel_width of the known most negative bar to most positive bar (+ bar_length)
-        if bar_length > 0:
-            start_px = margin_left + ((most_negative_bar - song_start) / bar_length) * cell_w
-            end_px = margin_left + ((most_positive_bar_plus_len - song_start) / bar_length) * cell_w
-            pixel_width = end_px - start_px
-        else:
-            start_px = margin_left
-            pixel_width = 0
-
         for tid, bars_info in bar_data.items():
             if tid not in track_to_row: continue
             row = track_to_row[tid]
@@ -779,15 +751,11 @@ def run_gui():
                     # Unique key to prevent console spam
                     hash_key = (tid, b_ts, i)
                     # x position relative to start of song
-                    # Calculation per user: (absolute - offset).
-                    # This gives song-relative timestamp (assuming offset is standard transcript offset).
-                    # Map this ms value to pixels along the grid:
                     rel_ms = abs_val - off_val
 
-                    # Scale that number (ms) across the pixel width of the known most negative bar to most positive bar (+ bar_length)
-                    total_time_span = most_positive_bar_plus_len - most_negative_bar
-                    if total_time_span > 0:
-                        x_pos = start_px + ((rel_ms - most_negative_bar) / total_time_span) * pixel_width
+                    # Directly map absolute song time rel_ms to grid column position
+                    if bar_length > 0:
+                        x_pos = margin_left + ((rel_ms - song_start) / bar_length) * cell_w
                     else:
                         x_pos = margin_left
 
