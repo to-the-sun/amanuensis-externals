@@ -4,7 +4,8 @@ truncate.py
 
 Truncates all WAV files in the same directory as this script after the 6:30 mark (390.0 seconds).
 Applies a smooth linear fade-out over the final 2 seconds before the 6:30 cutoff so audio ends cleanly.
-Also checks for a transcript.json file in the same directory and removes any bars occurring after 6:30 (390,000 ms).
+Also checks for a transcript.json file in the same directory and removes any bars occurring after 6:30 (390,000 ms)
+of total song time, taking into account any negative bars (most_negative_bar).
 """
 
 import os
@@ -16,6 +17,20 @@ import json
 CUTOFF_SECONDS = 390.0  # 6 minutes 30 seconds
 CUTOFF_MS = CUTOFF_SECONDS * 1000.0  # 390,000 ms
 FADE_SECONDS = 2.0  # 2 second fade out before cutoff
+
+
+def format_ms_time(ms):
+    """
+    Formats a millisecond value into a readable string like '-1:14' or '5:16'.
+    """
+    is_neg = ms < 0
+    total_sec = abs(ms) / 1000.0
+    minutes = int(total_sec // 60)
+    seconds = total_sec % 60
+    sign = "-" if is_neg else ""
+    if seconds == int(seconds):
+        return f"{sign}{minutes}:{int(seconds):02d}"
+    return f"{sign}{minutes}:{seconds:04.1f}"
 
 
 def truncate_wav(filepath, cutoff_sec=CUTOFF_SECONDS, fade_sec=FADE_SECONDS):
@@ -105,9 +120,10 @@ def truncate_wav(filepath, cutoff_sec=CUTOFF_SECONDS, fade_sec=FADE_SECONDS):
         return False
 
 
-def process_transcript(json_filepath, cutoff_ms=CUTOFF_MS):
+def process_transcript(json_filepath, cutoff_duration_ms=CUTOFF_MS):
     """
-    Removes every bar from transcript.json that occurs after cutoff_ms (390,000 ms = 6:30).
+    Removes every bar from transcript.json that occurs after cutoff_duration_ms (390,000 ms = 6:30)
+    of absolute song time, taking into account negative bars (most_negative_bar).
     """
     if not os.path.exists(json_filepath):
         print(f"No 'transcript.json' found in the script directory.")
@@ -120,6 +136,33 @@ def process_transcript(json_filepath, cutoff_ms=CUTOFF_MS):
         if not isinstance(data, dict):
             print("Error: 'transcript.json' does not contain a JSON dictionary.")
             return False
+
+        # Find most_negative_bar across all tracks
+        most_negative_bar = 0.0
+        for track_id, track_data in data.items():
+            if not isinstance(track_data, dict):
+                continue
+            for bar_key, bar_dict in track_data.items():
+                bar_ts = None
+                try:
+                    bar_ts = float(bar_key)
+                except ValueError:
+                    pass
+
+                if bar_ts is None and isinstance(bar_dict, dict):
+                    if "span" in bar_dict and isinstance(bar_dict["span"], list) and len(bar_dict["span"]) > 0:
+                        bar_ts = float(bar_dict["span"][0])
+                    elif "absolutes" in bar_dict and isinstance(bar_dict["absolutes"], list) and len(bar_dict["absolutes"]) > 0:
+                        bar_ts = float(bar_dict["absolutes"][0])
+
+                if bar_ts is not None and bar_ts < most_negative_bar:
+                    most_negative_bar = bar_ts
+
+        cutoff_bar_ts = cutoff_duration_ms + most_negative_bar
+        most_neg_str = format_ms_time(most_negative_bar)
+        cutoff_str = format_ms_time(cutoff_bar_ts)
+
+        print(f"'transcript.json' analysis: most_negative_bar = {most_negative_bar:.1f} ms ({most_neg_str}) -> cutoff bar timestamp = {cutoff_bar_ts:.1f} ms ({cutoff_str}).")
 
         removed_bars_count = 0
         modified = False
@@ -142,7 +185,7 @@ def process_transcript(json_filepath, cutoff_ms=CUTOFF_MS):
                     elif "absolutes" in bar_dict and isinstance(bar_dict["absolutes"], list) and len(bar_dict["absolutes"]) > 0:
                         bar_ts = float(bar_dict["absolutes"][0])
 
-                if bar_ts is not None and bar_ts > cutoff_ms:
+                if bar_ts is not None and bar_ts > cutoff_bar_ts:
                     bars_to_remove.append(bar_key)
 
             for bar_key in bars_to_remove:
@@ -154,7 +197,7 @@ def process_transcript(json_filepath, cutoff_ms=CUTOFF_MS):
             for bar_key, bar_dict in track_data.items():
                 if isinstance(bar_dict, dict) and "span" in bar_dict and isinstance(bar_dict["span"], list):
                     orig_len = len(bar_dict["span"])
-                    bar_dict["span"] = [s for s in bar_dict["span"] if float(s) <= cutoff_ms]
+                    bar_dict["span"] = [s for s in bar_dict["span"] if float(s) <= cutoff_bar_ts]
                     if len(bar_dict["span"]) != orig_len:
                         modified = True
 
@@ -163,9 +206,9 @@ def process_transcript(json_filepath, cutoff_ms=CUTOFF_MS):
             with open(tmp_json, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp_json, json_filepath)
-            print(f"Updated 'transcript.json': removed {removed_bars_count} bar(s) occurring after 6:30 (390,000 ms).")
+            print(f"Updated 'transcript.json': removed {removed_bars_count} bar(s) occurring after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}, 6:30 absolute song time).")
         else:
-            print("'transcript.json' checked: no bars occurred after 6:30.")
+            print(f"'transcript.json' checked: no bars occurred after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}).")
 
         return modified
 
