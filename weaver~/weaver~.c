@@ -165,7 +165,6 @@ typedef struct _weaver {
     double high_ms;
 
     double last_viz_check_ms;
-    double most_negative_bar;
     long dynamic_gain;
     double lowest_rating_seen;
 
@@ -238,7 +237,6 @@ void weaver_recalculate_song_length(t_weaver *x) {
     x->song_length = max_len;
 }
 
-void weaver_update_most_negative_bar(t_weaver *x);
 void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
@@ -278,25 +276,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
     t_symbol **track_keys = NULL;
     dictionary_getkeys(dict, &num_tracks_in_dict, &track_keys);
 
-    double local_most_negative = 0.0;
-    for (long i = 0; i < num_tracks_in_dict; i++) {
-        t_dictionary *track_dict = NULL;
-        if (dictionary_getdictionary(dict, track_keys[i], (t_object **)&track_dict) == MAX_ERR_NONE && track_dict) {
-            long num_bars = 0;
-            t_symbol **bar_keys = NULL;
-            dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-            for (long j = 0; j < num_bars; j++) {
-                double bar_ts = atof(bar_keys[j]->s_name);
-                if (bar_ts < local_most_negative) {
-                    local_most_negative = bar_ts;
-                }
-            }
-            if (bar_keys) sysmem_freeptr(bar_keys);
-        }
-    }
-
     critical_enter(x->lock);
-    x->most_negative_bar = local_most_negative;
     // Reset all track lengths first
     for (long t = 0; t < x->track_cache_count; t++) {
         x->track_cache[t]->track_length = 0.0;
@@ -320,7 +300,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
             }
             if (bar_keys) sysmem_freeptr(bar_keys);
 
-            double absolute_track_length = track_length - local_most_negative;
+            double absolute_track_length = track_length;
             x->track_cache[track_id - 1]->track_length = absolute_track_length;
             if (absolute_track_length > song_length) song_length = absolute_track_length;
         }
@@ -584,52 +564,7 @@ void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job) {
     }
 }
 
-void weaver_update_most_negative_bar(t_weaver *x) {
-    if (x->audio_dict_name == _sym_nothing) {
-        x->most_negative_bar = 0.0;
-        return;
-    }
-    t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
-    if (!d) {
-        return;
-    }
-
-    long num_tracks = 0;
-    t_symbol **track_keys = NULL;
-    dictionary_getkeys(d, &num_tracks, &track_keys);
-
-    double local_most_negative = 0.0;
-
-    for (long i = 0; i < num_tracks; i++) {
-        t_dictionary *track_dict = NULL;
-        if (dictionary_getdictionary(d, track_keys[i], (t_object **)&track_dict) != MAX_ERR_NONE || !track_dict) continue;
-
-        long num_bars = 0;
-        t_symbol **bar_keys = NULL;
-        dictionary_getkeys(track_dict, &num_bars, &bar_keys);
-
-        for (long j = 0; j < num_bars; j++) {
-            double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts < local_most_negative) {
-                local_most_negative = bar_ts;
-            }
-        }
-        if (bar_keys) sysmem_freeptr(bar_keys);
-    }
-
-    if (track_keys) sysmem_freeptr(track_keys);
-    dictobj_release(d);
-
-    if (local_most_negative != x->most_negative_bar) {
-        weaver_log(x, "most_negative_bar updated to %.2f ms", local_most_negative);
-        critical_enter(x->lock);
-        x->most_negative_bar = local_most_negative;
-        critical_exit(x->lock);
-    }
-}
-
 void weaver_check_attachments(t_weaver *x) {
-    weaver_update_most_negative_bar(x);
     // Dictionary check
     if (x->audio_dict_name != _sym_nothing) {
         t_dictionary *d = dictobj_findregistered_retain(x->audio_dict_name);
@@ -781,7 +716,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->high_ms = 4999.0;
         x->track_cache_count = 0;
         x->last_viz_check_ms = 0;
-        x->most_negative_bar = 0.0;
         x->dynamic_gain = 1;
         x->lowest_rating_seen = 0.0;
 
@@ -1057,7 +991,6 @@ void weaver_clear(t_weaver *x) {
     x->last_scan_val = -1.0;
     x->fifo_head = 0;
     x->fifo_tail = 0;
-    x->most_negative_bar = 0.0;
     x->lowest_rating_seen = 0.0;
     x->song_length = 0.0;
     x->rolling_head = 0;
@@ -1201,7 +1134,7 @@ typedef struct {
 void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
     double last_scan = x->last_scan_val;
     double bar_len = round(weaver_get_bar_length(x));
-    double vector_time = (sampleframes > 0) ? (ramp_in[0] + x->most_negative_bar) : 0.0;
+    double vector_time = (sampleframes > 0) ? ramp_in[0] : 0.0;
 
     t_track_buffers tb[MAX_WEAVER_TRACKS];
     memset(tb, 0, sizeof(tb));
@@ -1290,7 +1223,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
     // 3. Sample Loop (Unlocked)
     for (int i = 0; i < sampleframes; i++) {
-        double current_scan = ramp_in[i] + x->most_negative_bar;
+        double current_scan = ramp_in[i];
         int main_looped = (last_scan != -1.0 && current_scan < last_scan);
 
         if (main_looped) {
@@ -1420,10 +1353,9 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             }
 
             double f1, f2;
-            long long f_offset = (long long)round(x->most_negative_bar * tb[t].sr_dest / 1000.0);
             for (long long f = tr->last_f_dest + 1; f <= f_curr; f++) {
                 double v_at_f = (double)f * 1000.0 / tb[t].sr_dest;
-                long long f_dest = f - f_offset;
+                long long f_dest = f;
                 long long f_wrapped = f_dest % tb[t].n_frames_dest;
                 if (f_wrapped < 0) f_wrapped += tb[t].n_frames_dest;
 
@@ -1434,7 +1366,11 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 // Linear Interpolation for source lookups
                 for (int j = 0; j < 2; j++) {
                     if (tb[t].samples_src[j]) {
-                        double src_ms = tr->offset[j] + v_at_f;
+                        double center_ms = 0.0;
+                        if (tr->palette[j] != _sym_nothing && strncmp(tr->palette[j]->s_name, "stems.", 6) == 0) {
+                            center_ms = ((double)tb[t].n_frames_src[j] / 2.0) * 1000.0 / tb[t].sr_src[j];
+                        }
+                        double src_ms = center_ms + tr->offset[j] + v_at_f;
                         double f_src_raw = src_ms * tb[t].sr_src[j] / 1000.0;
                         long long f_low = (long long)floor(f_src_raw);
                         long long f_high = f_low + 1;
@@ -1505,7 +1441,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
         }
     }
 
-    x->last_scan_val = (sampleframes > 0) ? (ramp_in[sampleframes - 1] + x->most_negative_bar) : last_scan;
+    x->last_scan_val = (sampleframes > 0) ? ramp_in[sampleframes - 1] : last_scan;
     qelem_set(x->audio_qelem);
 }
 
@@ -1649,9 +1585,6 @@ void weaver_audio_qtask(t_weaver *x) {
             }
 
             if (found_in_dict && palette_exists) {
-                if (strncmp(palette->s_name, "stems.", 6) == 0) {
-                    offset = -x->most_negative_bar;
-                }
                 weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
                 weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating);
             } else {
@@ -1660,8 +1593,8 @@ void weaver_audio_qtask(t_weaver *x) {
                 snprintf(stems_name, 64, "stems.%lld", (long long)target_track);
                 t_symbol *s_stems = gensym(stems_name);
                 t_buffer_ref *stems_ref = buffer_ref_new((t_object *)x, s_stems);
-                double song_ms_offset = hit.value - x->most_negative_bar;
-                double fallback_offset = - x->most_negative_bar;
+                double song_ms_offset = hit.value;
+                double fallback_offset = 0.0;
 
                 if (!buffer_ref_getobject(stems_ref)) {
                     buffer_ref_set(stems_ref, _sym_nothing);

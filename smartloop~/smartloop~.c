@@ -37,8 +37,6 @@ typedef struct _smartloop {
     long suppress;
     long suppress_next;
     t_clock *suppress_clock;
-    double most_negative_bar;
-    double last_most_negative_bar;
     int has_loop;
 } t_smartloop;
 
@@ -205,8 +203,6 @@ void *smartloop_new(t_symbol *s, long argc, t_atom *argv) {
         x->output_enabled = 1;
         x->suppress = 0;
         x->suppress_next = 0;
-        x->most_negative_bar = 0.0;
-        x->last_most_negative_bar = 0.0;
         x->has_loop = 0;
 
         x->suppress_clock = clock_new(x, (method)smartloop_suppress_tick);
@@ -271,8 +267,8 @@ void smartloop_output_deferred(t_smartloop *x, t_symbol *s, short argc, t_atom *
                  x->current_start, x->current_end);
     if (x->output_enabled) {
         if (x->has_loop) {
-            double mapped_start = x->current_start - x->most_negative_bar;
-            double mapped_end = x->current_end - x->most_negative_bar;
+            double mapped_start = x->current_start;
+            double mapped_end = x->current_end;
             outlet_float(x->out_end, mapped_end);
             outlet_float(x->out_start, mapped_start);
         }
@@ -304,14 +300,6 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     double *in = ins[0];
     long do_output_bang = 0;
 
-    // Detect dynamic change in most_negative_bar to prevent false jump detection
-    if (x->most_negative_bar != x->last_most_negative_bar) {
-        if (!x->first_sample) {
-            x->last_val += (x->most_negative_bar - x->last_most_negative_bar);
-        }
-        x->last_most_negative_bar = x->most_negative_bar;
-    }
-
     // Check if entire vector is stationary relative to last_val.
     // Note: This vector-wide check is a bit arbitrary and it should technically
     // be possible to detect sample by sample, but to improve practical tolerance
@@ -320,7 +308,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
     int all_equal = 1;
     if (!x->first_sample) {
         for (int i = 0; i < sampleframes; i++) {
-            double val = in[i] + x->most_negative_bar;
+            double val = in[i];
             if (val != x->last_val) {
                 all_equal = 0;
                 break;
@@ -337,7 +325,7 @@ void smartloop_perform64(t_smartloop *x, t_object *dsp64, double **ins, long num
         }
     } else {
         for (int i = 0; i < sampleframes; i++) {
-            double val = in[i] + x->most_negative_bar;
+            double val = in[i];
 
             if (x->first_sample) {
                 x->last_val = val;
@@ -532,7 +520,6 @@ void smartloop_calculate(t_smartloop *x) {
     t_aggregated_bar *all_bars = (t_aggregated_bar *)sysmem_newptr(bar_capacity * sizeof(t_aggregated_bar));
     long raw_bar_count = 0;
     short has_bars = 0;
-    double local_most_negative = 0.0;
 
     for (long i = 0; i < num_tracks; i++) {
         t_dictionary *track_dict = NULL;
@@ -547,9 +534,6 @@ void smartloop_calculate(t_smartloop *x) {
             if (dictionary_getdictionary(track_dict, bar_keys[j], (t_object **)&bar_dict) != MAX_ERR_NONE || !bar_dict) continue;
 
             double bar_ts = atof(bar_keys[j]->s_name);
-            if (bar_ts < local_most_negative) {
-                local_most_negative = bar_ts;
-            }
 
             has_bars = 1;
             double rating = get_rating(bar_dict);
@@ -564,8 +548,6 @@ void smartloop_calculate(t_smartloop *x) {
         }
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
-
-    x->most_negative_bar = local_most_negative;
 
     if (!has_bars) {
         if (all_bars) sysmem_freeptr(all_bars);
