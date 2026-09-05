@@ -37,6 +37,7 @@ void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag);
 void *crucible_monitor_thread_proc(t_crucible *x);
 void crucible_defer_monitor_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv);
 void crucible_monitor_qfn(t_crucible *x);
+int crucible_get_palette_from_stem_info(t_crucible *x, t_symbol *track_sym, char *out_palette, size_t out_size);
 
 // Dyn String helper struct and prototypes
 typedef struct {
@@ -3047,9 +3048,9 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                 copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("scores"));
 
                                 if (is_new_bar) {
-                                    // Set palette key to stems.i (where i is track number)
-                                    char palette_str[128];
-                                    snprintf(palette_str, sizeof(palette_str), "stems.%s", track_sym->s_name);
+                                    // Look up palette name from coll stem_info
+                                    char palette_str[256];
+                                    crucible_get_palette_from_stem_info(x, track_sym, palette_str, sizeof(palette_str));
                                     t_atom pal_atom;
                                     atom_setsym(&pal_atom, gensym(palette_str));
                                     dictionary_appendatom(incumbent_bar_dict, gensym("palette"), &pal_atom);
@@ -3352,6 +3353,122 @@ void crucible_assist(t_crucible *x, void *b, long m, long a, char *s) {
             case 3: sprintf(s, "Outlet 4: Logging Outlet. Outputs verbose diagnostic and status messages when the @log attribute is enabled."); break;
         }
     }
+}
+
+int crucible_get_palette_from_stem_info(t_crucible *x, t_symbol *track_sym, char *out_palette, size_t out_size) {
+    if (!out_palette || out_size == 0) return 0;
+
+    const char *tr_name = track_sym ? track_sym->s_name : "1";
+
+    // Default fallback
+    snprintf(out_palette, out_size, "stems.%s", tr_name);
+
+    crucible_log(x, "rescore: Attempting to look up dict stem_info for track %s...", tr_name);
+
+    // Look for registered dictionary named stem_info
+    t_dictionary *stem_dict = dictobj_findregistered_retain(gensym("stem_info"));
+    if (!stem_dict) {
+        object_error((t_object *)x, "rescore: dict stem_info object not found in Max patch at large.");
+        crucible_log(x, "rescore: dict stem_info object not found in Max patch at large. Falling back to default stems buffer '%s'.", out_palette);
+        return 0;
+    }
+
+    crucible_log(x, "rescore: Located dict stem_info object instance %p. Querying entry for track %s...", stem_dict, tr_name);
+
+    t_atomarray *entry_aa = NULL;
+    t_atom entry_atom;
+    long entry_ac = 0;
+    t_atom *entry_av = NULL;
+    int entry_found = 0;
+
+    t_atom_long tr_num = atoll(tr_name);
+    char tr_str[64];
+    snprintf(tr_str, sizeof(tr_str), "%lld", (long long)tr_num);
+    t_symbol *tr_sym = gensym(tr_str);
+
+    if (dictionary_getatomarray(stem_dict, track_sym, (t_object **)&entry_aa) == MAX_ERR_NONE && entry_aa) {
+        atomarray_getatoms(entry_aa, &entry_ac, &entry_av);
+        entry_found = (entry_ac > 0 && entry_av != NULL);
+    } else if (dictionary_getatom(stem_dict, track_sym, &entry_atom) == MAX_ERR_NONE) {
+        entry_av = &entry_atom;
+        entry_ac = 1;
+        entry_found = 1;
+    } else if (dictionary_getatomarray(stem_dict, tr_sym, (t_object **)&entry_aa) == MAX_ERR_NONE && entry_aa) {
+        atomarray_getatoms(entry_aa, &entry_ac, &entry_av);
+        entry_found = (entry_ac > 0 && entry_av != NULL);
+    } else if (dictionary_getatom(stem_dict, tr_sym, &entry_atom) == MAX_ERR_NONE) {
+        entry_av = &entry_atom;
+        entry_ac = 1;
+        entry_found = 1;
+    }
+
+    if (!entry_found || entry_ac <= 0 || !entry_av) {
+        crucible_log(x, "rescore: Entry for track %s not found in dict stem_info. Falling back to default stems buffer '%s'.", tr_name, out_palette);
+        dictobj_release(stem_dict);
+        return 0;
+    }
+
+    crucible_log(x, "rescore: Found entry for track %s in dict stem_info with %ld atom(s).", tr_name, entry_ac);
+
+    // Look in the first index (index 0) to find an absolute path name
+    t_atom *first_atom = &entry_av[0];
+    const char *raw_path = NULL;
+    char long_path_buf[64];
+
+    if (atom_gettype(first_atom) == A_SYM) {
+        raw_path = atom_getsym(first_atom)->s_name;
+    } else if (atom_gettype(first_atom) == A_LONG) {
+        snprintf(long_path_buf, sizeof(long_path_buf), "%lld", (long long)atom_getlong(first_atom));
+        raw_path = long_path_buf;
+    }
+
+    if (!raw_path || raw_path[0] == '\0') {
+        crucible_log(x, "rescore: Entry for track %s in dict stem_info has an empty path at index 0. Falling back to '%s'.", tr_name, out_palette);
+        dictobj_release(stem_dict);
+        return 0;
+    }
+
+    crucible_log(x, "rescore: Extracted raw absolute path from index 0: '%s'.", raw_path);
+
+    // Strip the directory path and only use the file name
+    const char *filename = raw_path;
+    const char *p1 = strrchr(raw_path, '/');
+    const char *p2 = strrchr(raw_path, '\\');
+    if (p1 && p2) {
+        filename = (p1 > p2) ? p1 + 1 : p2 + 1;
+    } else if (p1) {
+        filename = p1 + 1;
+    } else if (p2) {
+        filename = p2 + 1;
+    }
+
+    if (!filename || filename[0] == '\0') {
+        crucible_log(x, "rescore: Stripped filename for track %s is empty. Falling back to '%s'.", tr_name, out_palette);
+        dictobj_release(stem_dict);
+        return 0;
+    }
+
+    crucible_log(x, "rescore: Stripped directory path to obtain filename: '%s'.", filename);
+
+    // Convert all spaces in that file name to underscores, keeping the .wav extension
+    size_t len = strlen(filename);
+    if (len >= out_size) len = out_size - 1;
+
+    int space_count = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (filename[i] == ' ') {
+            out_palette[i] = '_';
+            space_count++;
+        } else {
+            out_palette[i] = filename[i];
+        }
+    }
+    out_palette[len] = '\0';
+
+    dictobj_release(stem_dict);
+
+    crucible_log(x, "rescore: Converted %d space(s) to underscores in filename. Final palette name: '%s'.", space_count, out_palette);
+    return 1;
 }
 
 t_atomarray *crucible_get_span_as_atomarray(t_dictionary *bar_dict) {
