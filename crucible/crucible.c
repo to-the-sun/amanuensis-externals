@@ -1,6 +1,7 @@
 #include "crucible.h"
 #include "ext_critical.h"
 #include "ext_systhread.h"
+#include "ext_globalsymbol.h"
 #include "../shared/logging.h"
 #include "../shared/visualize.h"
 #include "../shared/async_worker.h"
@@ -3364,6 +3365,23 @@ int crucible_get_palette_from_stem_info(t_crucible *x, t_symbol *track_sym, char
     snprintf(out_palette, out_size, "stems.%s", tr_name);
 
     crucible_log(x, "rescore: Attempting to look up dict stem_info for track %s...", tr_name);
+
+    // First, send 'pull_from_coll stem_info' directly to dict stem_info if object instance is bound in Max
+    t_object *dict_box = (t_object *)gensym("stem_info")->s_thing;
+    if (!dict_box) {
+        dict_box = (t_object *)globalsymbol_reference((t_object *)x, "stem_info", "dict");
+    }
+
+    if (dict_box) {
+        crucible_log(x, "rescore: Sending 'pull_from_coll stem_info' directly to dict stem_info...");
+        t_atom arg;
+        atom_setsym(&arg, gensym("stem_info"));
+        t_atom rv;
+        rv.a_type = A_NOTHING;
+        object_method_typed(dict_box, gensym("pull_from_coll"), 1, &arg, &rv);
+    } else {
+        crucible_log(x, "rescore: dict stem_info object box not bound to s_thing; attempting direct dictobj lookup...");
+    }
 
     // Look for registered dictionary named stem_info
     t_dictionary *stem_dict = dictobj_findregistered_retain(gensym("stem_info"));
