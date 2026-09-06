@@ -965,7 +965,7 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     buildspans_log(x, "Decision: CLEAR state. Outcome: Deleting all currently open spans across all tracks/palettes, and resetting all global parameters (current_offset reset to 0.0).");
 
     if (x->bound_crucible) {
-        crucible_do_anything((t_crucible *)x->bound_crucible, gensym("clear"), argc, argv);
+        crucible_anything((t_crucible *)x->bound_crucible, gensym("clear"), argc, argv);
     }
 
     buildspans_visualize_memory(x);
@@ -2170,7 +2170,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
             if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
@@ -2181,7 +2181,7 @@ void buildspans_end_track_span(t_buildspans *x, t_symbol *palette_sym, t_symbol 
 
             // Outlet 1: Span list
             if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
@@ -2503,7 +2503,7 @@ void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_a
     if ((long)x->local_bar_length != old_bar_length) {
         buildspans_log(x, "bar_length changed to %ld", (long)x->local_bar_length);
         if (x->bound_crucible) {
-            crucible_do_local_bar_length((t_crucible *)x->bound_crucible, NULL, 1, argv);
+            crucible_local_bar_length((t_crucible *)x->bound_crucible, f);
         }
     }
     buildspans_log(x, "Local bar length set to: %.2f", x->local_bar_length);
@@ -2544,12 +2544,48 @@ t_max_err buildspans_attr_set_log(t_buildspans *x, void *attr, long ac, t_atom *
     return MAX_ERR_NONE;
 }
 
+static t_object *buildspans_find_crucible_recursive(t_object *patcher, t_symbol *bind_name) {
+    if (!patcher) return NULL;
+    t_object *box = NULL;
+    for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
+        if (!box) continue;
+        t_object *obj = jbox_get_object(box);
+        if (!obj) continue;
+
+        t_symbol *varname = (t_symbol *)object_attr_getsym(box, gensym("varname"));
+        if (varname == bind_name) {
+            if (object_classname_compare(obj, gensym("crucible")) ||
+                object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
+                t_symbol *clsname = object_classname(obj);
+                if (class_findbyname(CLASS_BOX, clsname) || class_findbyname(CLASS_NOBOX, clsname)) {
+                    return obj;
+                }
+            }
+        }
+
+        // Search subpatchers or bpatchers if present
+        t_symbol *clsname = object_classname(obj);
+        if (clsname == gensym("jpatcher") || clsname == gensym("patcher") || clsname == gensym("bpatcher")) {
+            t_object *subpatcher = NULL;
+            if (object_classname_compare(obj, gensym("jpatcher"))) {
+                subpatcher = obj;
+            } else {
+                object_obex_lookup(obj, gensym("#P"), &subpatcher);
+                if (!subpatcher) {
+                    subpatcher = object_attr_getobj(obj, gensym("patcher"));
+                }
+            }
+            if (subpatcher && subpatcher != patcher) {
+                t_object *found = buildspans_find_crucible_recursive(subpatcher, bind_name);
+                if (found) return found;
+            }
+        }
+    }
+    return NULL;
+}
+
 void buildspans_bind_resolve(t_buildspans *x) {
     t_object *patcher = NULL;
-    t_object *box = NULL;
-    t_object *obj = NULL;
-    t_symbol *varname = NULL;
-    int found = 0;
 
     if (x->bind_name == _sym_nothing || x->bind_name == gensym("")) {
         if (x->bound_crucible) {
@@ -2567,56 +2603,43 @@ void buildspans_bind_resolve(t_buildspans *x) {
         return;
     }
 
-    x->bind_attempt_count++;
-
-    for (box = jpatcher_get_firstobject(patcher); box; box = jbox_get_nextobject(box)) {
-        obj = jbox_get_object(box);
-        if (obj) {
-            varname = NULL;
-            varname = (t_symbol *)object_attr_getsym(box, gensym("varname"));
-            if (varname == x->bind_name) {
-                if (object_classname_compare(obj, gensym("crucible")) ||
-                    object_classname_compare(obj, gensym("rebar_crucible_internal"))) {
-
-                    // Ensure the class is actually registered before attaching, 
-                    // to avoid the Max SDK console error "object_attach_byptr: ... is not registered"
-                    t_symbol *clsname = object_classname(obj);
-                    if (!class_findbyname(CLASS_BOX, clsname) && !class_findbyname(CLASS_NOBOX, clsname)) {
-                        continue; // Skip this object for now, it will be retried
-                    }
-
-                    if (x->bound_crucible && x->bound_crucible != obj) {
-                        object_detach_byptr(x, x->bound_crucible);
-                    }
-
-                    x->bound_crucible = obj;
-                    object_attach_byptr(x, x->bound_crucible);
-                    
-                    if (x->bind_attempt_count > 1) {
-                        object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
-                    } else {
-                        object_post((t_object *)x, "Bind to crucible '%s': SUCCESS", x->bind_name->s_name);
-                    }
-                    buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
-
-                    // Sync worker if both are async
-                    if (x->async) {
-                        t_crucible *c = (t_crucible *)obj;
-                        if (c->async && c->worker) {
-                            if (x->worker) async_worker_release(x->worker);
-                            x->worker = c->worker;
-                            async_worker_retain(x->worker);
-                            buildspans_log(x, "Synced background worker with bound crucible.");
-                        }
-                    }
-                    found = 1;
-                    break;
-                }
-            }
-        }
+    // Walk up to top-level root patcher
+    t_object *top = patcher;
+    t_object *parent = (t_object *)object_attr_getobj(top, gensym("parentpatcher"));
+    while (parent) {
+        top = parent;
+        parent = (t_object *)object_attr_getobj(top, gensym("parentpatcher"));
     }
 
-    if (found) {
+    x->bind_attempt_count++;
+
+    t_object *obj = buildspans_find_crucible_recursive(top, x->bind_name);
+    if (obj) {
+        if (x->bound_crucible && x->bound_crucible != obj) {
+            object_detach_byptr(x, x->bound_crucible);
+        }
+
+        x->bound_crucible = obj;
+        object_attach_byptr(x, x->bound_crucible);
+
+        if (x->bind_attempt_count > 1) {
+            object_post((t_object *)x, "Re-attempting bind to crucible '%s': SUCCESS (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
+        } else {
+            object_post((t_object *)x, "Bind to crucible '%s': SUCCESS", x->bind_name->s_name);
+        }
+        buildspans_log(x, "Bound to crucible: %s", x->bind_name->s_name);
+
+        // Sync worker if both are async
+        if (x->async) {
+            t_crucible *c = (t_crucible *)obj;
+            if (c->async && c->worker) {
+                if (x->worker) async_worker_release(x->worker);
+                x->worker = c->worker;
+                async_worker_retain(x->worker);
+                buildspans_log(x, "Synced background worker with bound crucible.");
+            }
+        }
+
         x->bind_attempt_count = 0;
         return;
     }
@@ -2632,7 +2655,7 @@ void buildspans_bind_resolve(t_buildspans *x) {
     } else {
         object_warn((t_object *)x, "Re-attempting bind to crucible '%s': STILL FAILED (Attempt %ld)", x->bind_name->s_name, x->bind_attempt_count);
     }
-    
+
     // If we have a bind name but didn't find the object, retry periodically
     if (x->bind_clock) clock_delay(x->bind_clock, 1000);
 }
@@ -2759,7 +2782,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
             t_atom t_atom_track;
             atom_setlong(&t_atom_track, track_num_to_output);
             if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("track"), 1, &t_atom_track);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->track_outlet, gensym("track"), 1, &t_atom_track);
@@ -2770,7 +2793,7 @@ void buildspans_prune_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *tra
 
             // Outlet 1: Span list
             if (x->bound_crucible) {
-                crucible_do_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
+                crucible_anything((t_crucible *)x->bound_crucible, gensym("span"), (short)span_size, span_atoms);
             } else {
                 if (!x->async || systhread_ismainthread()) {
                     outlet_anything(x->span_outlet, gensym("span"), (short)span_size, span_atoms);
@@ -3246,7 +3269,7 @@ void buildspans_output_span_data(t_buildspans *x, t_symbol *palette_sym, t_symbo
                 snprintf(output_key_str, 256, "%ld::%s::%s", track_num_to_output, bar_sym->s_name, prop_sym->s_name);
                 t_symbol *output_key_sym = gensym(output_key_str);
                 if (x->bound_crucible) {
-                    crucible_do_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
+                    crucible_anything((t_crucible *)x->bound_crucible, output_key_sym, (short)ac, av);
                 } else {
                     if (!x->async || systhread_ismainthread()) {
                         outlet_anything(x->out_bar_data, output_key_sym, (short)ac, av);
