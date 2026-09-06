@@ -3008,22 +3008,19 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
                         int is_new_bar = (!incumbent_track_dict || !dictionary_hasentry(incumbent_track_dict, bar_sym));
 
+                        /* Temporarily disabled adding new bars during @rescore if no bar was found previously */
                         if (is_new_bar) {
-                            t_atom_long bar_length = crucible_get_bar_length(x);
-                            t_atom_long bar_ts = atoll(bar_sym->s_name);
-                            if (bar_length <= 0 || (bar_ts % bar_length) != 0) {
-                                crucible_log(x, "rescore: bar %s is not an exact multiple of bar_length %lld and does not exist in incumbent. Ignoring.", bar_sym->s_name, (long long)bar_length);
-                                dictobj_release(incumbent_dict);
-                                dictionary_deleteentry(challenger_track_dict, bar_sym);
-                                sysmem_freeptr(track_str);
-                                sysmem_freeptr(bar_str);
-                                sysmem_freeptr(key_str);
-                                x->current_task_seq = -1;
-                                if (on_worker) {
-                                    systhread_mutex_unlock(x->state_mutex);
-                                }
-                                return;
+                            crucible_log(x, "rescore: bar %s on track %s does not exist in incumbent. Ignoring (@rescore new bar addition disabled).", bar_sym->s_name, track_sym->s_name);
+                            dictobj_release(incumbent_dict);
+                            dictionary_deleteentry(challenger_track_dict, bar_sym);
+                            sysmem_freeptr(track_str);
+                            sysmem_freeptr(bar_str);
+                            sysmem_freeptr(key_str);
+                            x->current_task_seq = -1;
+                            if (on_worker) {
+                                systhread_mutex_unlock(x->state_mutex);
                             }
+                            return;
                         }
 
                         if (!incumbent_track_dict) {
@@ -3034,19 +3031,17 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
 
                         if (incumbent_track_dict) {
                             t_dictionary *incumbent_bar_dict = NULL;
-                            if (is_new_bar) {
-                                incumbent_bar_dict = dictionary_new();
-                                dictionary_appenddictionary(incumbent_track_dict, bar_sym, (t_object *)incumbent_bar_dict);
-                                dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
-                            } else {
-                                dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
-                            }
+                            dictionary_getdictionary(incumbent_track_dict, bar_sym, (t_object **)&incumbent_bar_dict);
 
                             if (incumbent_bar_dict) {
                                 // 1. Copy absolutes and scores directly into incumbent_bar_dict
                                 copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("absolutes"));
                                 copy_dict_key(challenger_bar_dict, incumbent_bar_dict, gensym("scores"));
 
+                                crucible_log(x, "rescore: Updated absolutes and scores for track %s bar %s directly in incumbent dictionary.", track_sym->s_name, bar_sym->s_name);
+
+                                /*
+                                // CODE TEMPORARILY DISABLED DURING @rescore FOR ADDING NEW BARS:
                                 if (is_new_bar) {
                                     // Look up palette name from coll stem_info
                                     char palette_str[256];
@@ -3091,9 +3086,8 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     dictionary_appendatom(incumbent_bar_dict, gensym("offset"), &off_atom);
 
                                     crucible_log(x, "rescore: Created new bar %s on track %s with palette %s and offset %.2f.", bar_sym->s_name, track_sym->s_name, palette_str, -most_neg_bar);
-                                } else {
-                                    crucible_log(x, "rescore: Updated absolutes and scores for track %s bar %s directly in incumbent dictionary.", track_sym->s_name, bar_sym->s_name);
                                 }
+                                */
 
                                 // 2. Reassess mean score for this bar in incumbent_bar_dict
                                 t_atomarray *src_scores_aa = NULL;
