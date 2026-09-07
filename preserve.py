@@ -1,9 +1,92 @@
 import os
 import re
 import sys
+import json
 from datetime import datetime
+from pathlib import Path
 import soundfile as sf
 import numpy as np
+
+def locate_transcript():
+    """
+    Locates transcript.json three directory levels up from where the script is executed,
+    or three levels up from the script's directory.
+    """
+    cwd_three_up = Path.cwd().parent.parent.parent / "transcript.json"
+    if cwd_three_up.is_file():
+        return cwd_three_up
+
+    script_three_up = Path(__file__).resolve().parent.parent.parent / "transcript.json"
+    if script_three_up.is_file():
+        return script_three_up
+
+    return cwd_three_up
+
+
+def save_formatted_json(data, filepath):
+    """
+    Saves JSON data with indent=2 formatting, but with inline single-line array formatting.
+    """
+    filepath = Path(filepath)
+    raw_str = json.dumps(data, indent=2)
+
+    def collapse_array(match):
+        inner = match.group(1)
+        items = [line.strip().rstrip(',') for line in inner.splitlines() if line.strip()]
+        return '[' + ', '.join(items) + ']'
+
+    formatted_str = re.sub(r'\[\s*([^\[\]\{\}]*?)\s*\]', collapse_array, raw_str)
+
+    tmp_path = filepath.with_suffix('.json.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_str)
+        f.write('\n')
+    os.replace(tmp_path, filepath)
+
+
+def remove_track_from_transcript(track_num):
+    """
+    Removes the specified track entry from transcript.json located three levels up.
+    """
+    transcript_path = locate_transcript()
+    if not transcript_path.is_file():
+        print(f"transcript.json not found at expected location: {transcript_path}")
+        return False
+
+    try:
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error reading '{transcript_path}': {e}")
+        return False
+
+    if not isinstance(data, dict):
+        print(f"Error: '{transcript_path}' does not contain a valid JSON dictionary.")
+        return False
+
+    track_str = str(track_num)
+    track_str_padded = f"{track_num:02d}"
+
+    removed = False
+    keys_to_remove = [k for k in data.keys() if k == track_str or k == track_str_padded]
+
+    for k in keys_to_remove:
+        del data[k]
+        removed = True
+        print(f"Removed track '{k}' from {transcript_path}")
+
+    if removed:
+        try:
+            save_formatted_json(data, transcript_path)
+            print(f"Successfully updated '{transcript_path.name}'.")
+            return True
+        except Exception as e:
+            print(f"Error saving updated '{transcript_path.name}': {e}")
+            return False
+    else:
+        print(f"Track '{track_str}' was not found in {transcript_path}.")
+        return False
+
 
 def get_next_prefix(directory):
     max_prefix = 0
@@ -47,9 +130,10 @@ def process_file(filepath):
         if match:
             original_num = int(match.group(1))
             print(f"Found prefix: {original_num}")
-            if original_num <= 4:
-                print(f"Prefix {original_num} <= 4, will create silenced record.")
+            if 1 <= original_num <= 4:
+                print(f"Prefix {original_num} <= 4, will create silenced record and remove track from transcript.json.")
                 should_silence = True
+                remove_track_from_transcript(original_num)
         else:
             print("No numbered prefix found. Skipping silenced record creation.")
 
