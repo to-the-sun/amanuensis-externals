@@ -6,7 +6,8 @@ Looks for transcript.json in the same folder as the script, or if not found ther
 looks three folder levels up from the script's directory.
 
 Scans transcript.json to identify all palette WAV files referenced across all tracks and bars.
-Compares them against the WAV files located in the same directory as transcript.json.
+Compares them against the WAV files located in the same directory as transcript.json (including checking
+for files with the 'palette_' prefix and '.wav' extension).
 
 For any bar referencing a palette WAV file that does not exist in that directory,
 removes that bar from transcript.json and prints an informative message to the console.
@@ -97,15 +98,19 @@ def clean_missing_palettes():
             if not palette_name:
                 continue
 
-            palette_path = transcript_dir / palette_name
-            palette_name_with_wav = f"{palette_name}.wav" if not palette_name.lower().endswith(".wav") else palette_name
-            palette_wav_path = transcript_dir / palette_name_with_wav
+            # Derive candidate file names to search for on disk (adding 'palette_' prefix and '.wav' if needed)
+            wav_name = palette_name if palette_name.lower().endswith(".wav") else f"{palette_name}.wav"
+            prefixed_name = wav_name if wav_name.lower().startswith("palette_") else f"palette_{wav_name}"
 
-            file_exists = (
-                palette_path.is_file()
-                or palette_wav_path.is_file()
-                or palette_name in existing_files
-                or palette_name_with_wav in existing_files
+            candidate_names = {
+                palette_name,
+                wav_name,
+                prefixed_name
+            }
+
+            file_exists = any(
+                (transcript_dir / c).is_file() or c in existing_files
+                for c in candidate_names
             )
 
             if not file_exists:
