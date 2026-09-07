@@ -66,7 +66,7 @@ def clean_missing_palettes():
         print("Error: 'transcript.json' does not contain a valid JSON dictionary.")
         return
 
-    # Gather set of existing filenames in transcript_dir (case-insensitive and exact)
+    # Gather set of existing filenames in transcript_dir
     existing_files = {f.name for f in transcript_dir.iterdir() if f.is_file()}
 
     total_removed_bars = 0
@@ -83,7 +83,17 @@ def clean_missing_palettes():
             if not isinstance(bar_dict, dict):
                 continue
 
-            palette_name = bar_dict.get("palette")
+            palette_val = bar_dict.get("palette")
+            if not palette_val:
+                continue
+
+            if isinstance(palette_val, (list, tuple)):
+                if len(palette_val) == 0:
+                    continue
+                palette_name = str(palette_val[0]).strip()
+            else:
+                palette_name = str(palette_val).strip()
+
             if not palette_name:
                 continue
 
