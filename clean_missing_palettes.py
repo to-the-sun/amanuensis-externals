@@ -12,12 +12,14 @@ for files with the 'palette_' prefix and '.wav' extension).
 For any bar referencing a palette WAV file that does not exist in that directory,
 removes that bar from transcript.json and prints an informative message to the console.
 
+Formats transcript.json with inline single-line arrays.
 Keeps the console open upon completion.
 """
 
 import os
 import sys
 import json
+import re
 from pathlib import Path
 
 
@@ -37,6 +39,26 @@ def locate_transcript(script_dir):
         return three_up_path, three_up_path.parent
 
     return None, None
+
+
+def save_formatted_json(data, filepath):
+    """
+    Saves JSON data with indent=2 formatting, but with inline single-line array formatting.
+    """
+    raw_str = json.dumps(data, indent=2)
+
+    def collapse_array(match):
+        inner = match.group(1)
+        items = [line.strip().rstrip(',') for line in inner.splitlines() if line.strip()]
+        return '[' + ', '.join(items) + ']'
+
+    formatted_str = re.sub(r'\[\s*([^\[\]\{\}]*?)\s*\]', collapse_array, raw_str)
+
+    tmp_path = filepath.with_suffix('.json.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_str)
+        f.write('\n')
+    os.replace(tmp_path, filepath)
 
 
 def clean_missing_palettes():
@@ -130,10 +152,7 @@ def clean_missing_palettes():
 
     if transcript_modified:
         try:
-            tmp_path = transcript_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, transcript_path)
+            save_formatted_json(data, transcript_path)
             print(f"Successfully updated '{transcript_path.name}': removed {total_removed_bars} bar(s) with missing palettes.")
         except Exception as e:
             print(f"Error saving updated '{transcript_path.name}': {e}")

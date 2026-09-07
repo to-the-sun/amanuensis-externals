@@ -16,6 +16,7 @@ Takes into account that transcript bar timestamps can be negative while audio in
 If a bar-length audio section in a WAV file is silent, removes the associated bar from transcript.json
 and prints an informative message stating both the absolute WAV file song time and the transcript timestamp.
 
+Formats transcript.json with inline single-line arrays.
 Keeps the console open upon completion.
 """
 
@@ -24,6 +25,7 @@ import sys
 import wave
 import struct
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -43,26 +45,29 @@ def format_time_str(ms):
 def extract_bar_timestamp(bar_key, bar_dict):
     """
     Extracts the millisecond timestamp for a bar.
-    Prioritizes explicit 'span' or 'absolutes' list data, falling back to float(bar_key).
+    Prioritizes float(bar_key) since bar_key in transcript.json is the bar's unique timestamp.
+    Falls back to 'absolutes' or 'span' if bar_key is non-numeric.
     Returns float or None.
     """
-    if isinstance(bar_dict, dict):
-        if "span" in bar_dict and isinstance(bar_dict["span"], (list, tuple)) and len(bar_dict["span"]) > 0:
-            try:
-                return float(bar_dict["span"][0])
-            except (ValueError, TypeError):
-                pass
+    try:
+        return float(bar_key)
+    except (ValueError, TypeError):
+        pass
 
+    if isinstance(bar_dict, dict):
         if "absolutes" in bar_dict and isinstance(bar_dict["absolutes"], (list, tuple)) and len(bar_dict["absolutes"]) > 0:
             try:
                 return float(bar_dict["absolutes"][0])
             except (ValueError, TypeError):
                 pass
 
-    try:
-        return float(bar_key)
-    except (ValueError, TypeError):
-        return None
+        if "span" in bar_dict and isinstance(bar_dict["span"], (list, tuple)) and len(bar_dict["span"]) > 0:
+            try:
+                return float(bar_dict["span"][0])
+            except (ValueError, TypeError):
+                pass
+
+    return None
 
 
 def get_most_negative_bar(data):
@@ -122,7 +127,16 @@ def determine_bar_length_and_check_multiples(data):
     default_bar_len = 2000.0
     if all_diffs:
         counts = Counter(all_diffs)
-        most_common_bar_len = float(counts.most_common(1)[0][0])
+        most_common_candidate = float(counts.most_common(1)[0][0])
+
+        min_diff = float(min(all_diffs))
+        if min_diff > 0 and min_diff < most_common_candidate:
+            if all(abs(d % min_diff) < 1e-2 or abs(d % min_diff - min_diff) < 1e-2 for d in all_diffs):
+                most_common_bar_len = min_diff
+            else:
+                most_common_bar_len = most_common_candidate
+        else:
+            most_common_bar_len = most_common_candidate
     else:
         most_common_bar_len = default_bar_len
 
@@ -192,6 +206,26 @@ def is_audio_silent(raw_bytes, sampwidth, comptype, threshold=1e-4):
         pass
 
     return False
+
+
+def save_formatted_json(data, filepath):
+    """
+    Saves JSON data with indent=2 formatting, but with inline single-line array formatting.
+    """
+    raw_str = json.dumps(data, indent=2)
+
+    def collapse_array(match):
+        inner = match.group(1)
+        items = [line.strip().rstrip(',') for line in inner.splitlines() if line.strip()]
+        return '[' + ', '.join(items) + ']'
+
+    formatted_str = re.sub(r'\[\s*([^\[\]\{\}]*?)\s*\]', collapse_array, raw_str)
+
+    tmp_path = filepath.with_suffix('.json.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_str)
+        f.write('\n')
+    os.replace(tmp_path, filepath)
 
 
 def check_and_remove_silent_bars(script_dir):
@@ -329,10 +363,7 @@ def check_and_remove_silent_bars(script_dir):
 
     if transcript_modified:
         try:
-            tmp_path = transcript_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, transcript_path)
+            save_formatted_json(data, transcript_path)
             print(f"Successfully updated '{transcript_path.name}': removed {total_removed_bars} silent bar(s).")
         except Exception as e:
             print(f"Error saving updated '{transcript_path.name}': {e}")
