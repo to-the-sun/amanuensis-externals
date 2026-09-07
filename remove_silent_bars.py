@@ -6,9 +6,12 @@ Looks for transcript.json three folder levels up from the script's directory.
 Scans all WAV files in the script's directory starting with prefixes '01', '02', '03', and '04',
 correlating them with tracks 1, 2, 3, and 4 in transcript.json.
 
+Scans all bar timestamps in transcript.json to determine the most common bar length among timestamp differences.
+Warns if any bar timestamp is not an exact multiple of this bar length (or zero).
+
 For each WAV file, identifies bar-length sections corresponding to all bars in the transcript dictionary.
 Takes into account that transcript bar timestamps can be negative while audio in WAV files is 0-indexed:
-  WAV_start_ms = bar_timestamp - most_negative_bar
+  WAV_start_ms = bar_timestamp_ms - most_negative_bar_ms
 
 If a bar-length audio section in a WAV file is silent, removes the associated bar from transcript.json
 and prints an informative message stating both the absolute WAV file song time and the transcript timestamp.
@@ -21,6 +24,7 @@ import sys
 import wave
 import struct
 import json
+from collections import Counter
 from pathlib import Path
 
 
@@ -36,9 +40,34 @@ def format_time_str(ms):
     return f"{sign}{minutes}:{seconds:04.1f}"
 
 
+def extract_bar_timestamp(bar_key, bar_dict):
+    """
+    Extracts the millisecond timestamp for a bar.
+    Prioritizes explicit 'span' or 'absolutes' list data, falling back to float(bar_key).
+    Returns float or None.
+    """
+    if isinstance(bar_dict, dict):
+        if "span" in bar_dict and isinstance(bar_dict["span"], (list, tuple)) and len(bar_dict["span"]) > 0:
+            try:
+                return float(bar_dict["span"][0])
+            except (ValueError, TypeError):
+                pass
+
+        if "absolutes" in bar_dict and isinstance(bar_dict["absolutes"], (list, tuple)) and len(bar_dict["absolutes"]) > 0:
+            try:
+                return float(bar_dict["absolutes"][0])
+            except (ValueError, TypeError):
+                pass
+
+    try:
+        return float(bar_key)
+    except (ValueError, TypeError):
+        return None
+
+
 def get_most_negative_bar(data):
     """
-    Finds the lowest (most negative) bar timestamp across all tracks in the transcript data.
+    Finds the lowest (most negative) bar millisecond timestamp across all tracks in the transcript.
     Returns 0.0 if no negative bar timestamps exist.
     """
     most_neg = 0.0
@@ -46,88 +75,80 @@ def get_most_negative_bar(data):
         if not isinstance(track_data, dict):
             continue
         for bar_key, bar_dict in track_data.items():
-            bar_ts = None
-            try:
-                bar_ts = float(bar_key)
-            except ValueError:
-                pass
-
-            if bar_ts is None and isinstance(bar_dict, dict):
-                if "span" in bar_dict and isinstance(bar_dict["span"], list) and len(bar_dict["span"]) > 0:
-                    bar_ts = float(bar_dict["span"][0])
-                elif "absolutes" in bar_dict and isinstance(bar_dict["absolutes"], list) and len(bar_dict["absolutes"]) > 0:
-                    bar_ts = float(bar_dict["absolutes"][0])
-
-            if bar_ts is not None and bar_ts < most_neg:
-                most_neg = bar_ts
+            ts = extract_bar_timestamp(bar_key, bar_dict)
+            if ts is not None and ts < most_neg:
+                most_neg = ts
     return most_neg
 
 
-def determine_bar_lengths(data):
+def determine_bar_length_and_check_multiples(data):
     """
-    Determines bar length (duration in ms) for each bar timestamp in the transcript.
-    Returns a dictionary mapping bar_key (str) -> bar_length_ms (float).
+    Scans transcript.json bar timestamps, finds the most common difference between adjacent bar timestamps,
+    and returns it as the global bar length (in ms).
+    Warns if any bar timestamp is not a multiple of this bar length (or zero).
     """
-    # Gather all unique bar timestamps across all tracks
-    all_ts = set()
-    bar_absolutes_diff = {}
+    all_bars = []
+    track_diffs = []
 
     for track_id, track_data in data.items():
         if not isinstance(track_data, dict):
             continue
+
+        track_ts_list = []
         for bar_key, bar_dict in track_data.items():
-            try:
-                ts = float(bar_key)
-                all_ts.add(ts)
-            except ValueError:
-                pass
+            ts = extract_bar_timestamp(bar_key, bar_dict)
+            if ts is not None:
+                all_bars.append((track_id, bar_key, ts))
+                track_ts_list.append(ts)
 
-            if isinstance(bar_dict, dict) and "absolutes" in bar_dict:
-                abss = bar_dict["absolutes"]
-                if isinstance(abss, list) and len(abss) >= 2:
-                    # step between consecutive notes
-                    diffs = [abss[i+1] - abss[i] for i in range(len(abss)-1)]
-                    if diffs and all(d > 0 for d in diffs):
-                        step = diffs[0]
-                        # Estimated bar length = (last note - first note) + step
-                        est_len = (abss[-1] - abss[0]) + step
-                        bar_absolutes_diff[bar_key] = est_len
+        sorted_track_ts = sorted(list(set(track_ts_list)))
+        if len(sorted_track_ts) > 1:
+            for i in range(len(sorted_track_ts) - 1):
+                diff = sorted_track_ts[i+1] - sorted_track_ts[i]
+                if diff > 0:
+                    track_diffs.append(round(diff, 2))
 
-    sorted_ts = sorted(list(all_ts))
+    # Also check differences across all combined unique timestamps
+    combined_ts = sorted(list(set(b[2] for b in all_bars)))
+    combined_diffs = []
+    if len(combined_ts) > 1:
+        for i in range(len(combined_ts) - 1):
+            diff = combined_ts[i+1] - combined_ts[i]
+            if diff > 0:
+                combined_diffs.append(round(diff, 2))
 
-    # Calculate differences between consecutive sorted bar timestamps
-    ts_diffs = []
-    if len(sorted_ts) > 1:
-        for i in range(len(sorted_ts) - 1):
-            d = sorted_ts[i+1] - sorted_ts[i]
-            if d > 0:
-                ts_diffs.append(d)
+    all_diffs = track_diffs if track_diffs else combined_diffs
 
     default_bar_len = 2000.0
-    if ts_diffs:
-        # Use min or most common difference
-        default_bar_len = min(ts_diffs)
+    if all_diffs:
+        counts = Counter(all_diffs)
+        most_common_bar_len = float(counts.most_common(1)[0][0])
+    else:
+        most_common_bar_len = default_bar_len
 
-    bar_lengths = {}
-    for track_id, track_data in data.items():
-        if not isinstance(track_data, dict):
+    if most_common_bar_len <= 0:
+        most_common_bar_len = default_bar_len
+
+    print(f"Detected primary bar length: {most_common_bar_len:.1f} ms")
+
+    # Check for any bar timestamp that is not a multiple of most_common_bar_len (or zero)
+    warnings_found = False
+    for track_id, bar_key, ts in all_bars:
+        if ts == 0.0:
             continue
-        for bar_key, bar_dict in track_data.items():
-            if bar_key in bar_absolutes_diff:
-                bar_lengths[bar_key] = bar_absolutes_diff[bar_key]
-            else:
-                try:
-                    ts = float(bar_key)
-                    # Find next ts in sorted_ts
-                    idx = sorted_ts.index(ts) if ts in sorted_ts else -1
-                    if idx >= 0 and idx + 1 < len(sorted_ts):
-                        bar_lengths[bar_key] = sorted_ts[idx + 1] - ts
-                    else:
-                        bar_lengths[bar_key] = default_bar_len
-                except ValueError:
-                    bar_lengths[bar_key] = default_bar_len
 
-    return bar_lengths
+        rem = abs(ts) % most_common_bar_len
+        is_multiple = (rem < 1e-2) or (abs(rem - most_common_bar_len) < 1e-2)
+
+        if not is_multiple:
+            warnings_found = True
+            print(f"  [WARNING] Track {track_id} | Bar Key '{bar_key}' timestamp ({ts:.1f} ms) is not a multiple of detected bar length ({most_common_bar_len:.1f} ms).")
+
+    if not warnings_found and all_bars:
+        print("  All bar timestamps are exact multiples of the detected bar length (or zero).")
+
+    print()
+    return most_common_bar_len
 
 
 def is_audio_silent(raw_bytes, sampwidth, comptype, threshold=1e-4):
@@ -138,23 +159,18 @@ def is_audio_silent(raw_bytes, sampwidth, comptype, threshold=1e-4):
     if not raw_bytes:
         return True
 
-    # Quick check for pure digital zero bytes
-    if all(b == 0 for b in raw_bytes):
-        return True
-
     num_bytes = len(raw_bytes)
 
     try:
         if sampwidth == 1:
-            # 8-bit unsigned PCM (silence is 128)
+            # 8-bit unsigned PCM (silence is byte value 128)
             samples = [abs(b - 128) for b in raw_bytes]
             return max(samples) <= int(threshold * 128)
         elif sampwidth == 2:
             # 16-bit signed PCM
             num_samples = num_bytes // 2
             samples = struct.unpack(f'<{num_samples}h', raw_bytes)
-            max_val = max(abs(s) for s in samples)
-            return max_val <= int(threshold * 32768)
+            return max(abs(s) for s in samples) <= int(threshold * 32768)
         elif sampwidth == 3:
             # 24-bit signed PCM
             max_val = 0
@@ -200,11 +216,11 @@ def check_and_remove_silent_bars(script_dir):
         print("Error: 'transcript.json' does not contain a valid JSON dictionary.")
         return
 
-    most_negative_bar = get_most_negative_bar(data)
-    bar_lengths = determine_bar_lengths(data)
-
+    most_negative_bar_ms = get_most_negative_bar(data)
     print(f"Loaded 'transcript.json' successfully.")
-    print(f"Most negative bar: {most_negative_bar:.1f} ms ({format_time_str(most_negative_bar)})")
+    print(f"Most negative bar: {most_negative_bar_ms:.1f} ms ({format_time_str(most_negative_bar_ms)})\n")
+
+    bar_len_ms = determine_bar_length_and_check_multiples(data)
 
     # Scan WAV files in script directory starting with '01', '02', '03', '04'
     wav_files = [
@@ -260,15 +276,14 @@ def check_and_remove_silent_bars(script_dir):
                 bars_to_remove = []
 
                 for bar_key in bar_keys:
-                    try:
-                        bar_ts = float(bar_key)
-                    except ValueError:
+                    bar_dict = track_dict[bar_key]
+                    bar_ts_ms = extract_bar_timestamp(bar_key, bar_dict)
+
+                    if bar_ts_ms is None:
                         continue
 
-                    bar_len_ms = bar_lengths.get(bar_key, 2000.0)
-
-                    # WAV file audio is 0-indexed: WAV start time = bar_ts - most_negative_bar
-                    wav_start_ms = bar_ts - most_negative_bar
+                    # WAV file audio is 0-indexed: WAV start time = bar_ts_ms - most_negative_bar_ms
+                    wav_start_ms = bar_ts_ms - most_negative_bar_ms
                     wav_end_ms = wav_start_ms + bar_len_ms
 
                     wav_start_sec = wav_start_ms / 1000.0
@@ -276,8 +291,6 @@ def check_and_remove_silent_bars(script_dir):
 
                     # Check if section falls within extent of WAV file
                     if wav_start_ms >= wav_duration_ms:
-                        # Beyond WAV duration, skip or treat as silent?
-                        # "for the extent of each WAV file, identify bar length sections of it corresponding to all the bars in the transcript dictionary"
                         continue
 
                     start_frame = max(0, int((wav_start_ms / 1000.0) * framerate))
@@ -291,16 +304,16 @@ def check_and_remove_silent_bars(script_dir):
                     raw_bytes = wf.readframes(frames_to_read)
 
                     if is_audio_silent(raw_bytes, sampwidth, comptype):
-                        bars_to_remove.append((bar_key, bar_ts, bar_len_ms, wav_start_sec, wav_end_sec, wav_start_ms, wav_end_ms))
+                        bars_to_remove.append((bar_key, bar_ts_ms, bar_len_ms, wav_start_sec, wav_end_sec, wav_start_ms, wav_end_ms))
 
-                for bar_key, bar_ts, bar_len_ms, wav_start_sec, wav_end_sec, wav_start_ms, wav_end_ms in bars_to_remove:
+                for bar_key, bar_ts_ms, bar_len_ms, wav_start_sec, wav_end_sec, wav_start_ms, wav_end_ms in bars_to_remove:
                     if bar_key in track_dict:
                         del track_dict[bar_key]
                         total_removed_bars += 1
                         transcript_modified = True
 
                         abs_wav_str = f"{wav_start_sec:.2f}s - {wav_end_sec:.2f}s ({wav_start_ms:.1f}ms - {wav_end_ms:.1f}ms)"
-                        ts_str = f"{bar_ts:.1f}ms ({format_time_str(bar_ts)})"
+                        ts_str = f"{bar_ts_ms:.1f}ms ({format_time_str(bar_ts_ms)})"
 
                         print(f"  [REMOVED SILENT BAR] Track {track_id} | Bar Key: '{bar_key}'")
                         print(f"    -> Absolute WAV Song Time : {abs_wav_str}")
