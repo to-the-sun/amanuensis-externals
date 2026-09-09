@@ -87,6 +87,12 @@ typedef struct _weaver_track {
     double pending_rating;
     double gain[2];
     double viz_gain[2];
+
+    // Read position telemetry
+    double viz_src_ms;
+    long long viz_f_low;
+    long long viz_n_frames_src;
+    int viz_in_bounds;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -471,6 +477,11 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->viz_busy = 0;
             tr->last_viz_sent_ms = -1000.0;
             tr->viz_absolute_ms = 0.0;
+
+            tr->viz_src_ms = 0.0;
+            tr->viz_f_low = 0;
+            tr->viz_n_frames_src = 0;
+            tr->viz_in_bounds = 1;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -1431,6 +1442,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 double interleaved_s[2][16]; // Max 16 channels for interpolation
                 memset(interleaved_s, 0, sizeof(interleaved_s));
 
+                int active_slot = (int)round(tr->control);
                 // Linear Interpolation for source lookups
                 for (int j = 0; j < 2; j++) {
                     if (tb[t].samples_src[j]) {
@@ -1440,7 +1452,15 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                         long long f_high = f_low + 1;
                         double frac = f_src_raw - (double)f_low;
 
-                        if (f_low >= 0 && f_high < tb[t].n_frames_src[j]) {
+                        int in_bounds = (f_low >= 0 && f_high < tb[t].n_frames_src[j]);
+                        if (x->visualize && j == active_slot) {
+                            tr->viz_src_ms = src_ms;
+                            tr->viz_f_low = f_low;
+                            tr->viz_n_frames_src = tb[t].n_frames_src[j];
+                            tr->viz_in_bounds = in_bounds;
+                        }
+
+                        if (in_bounds) {
                             long n_chans = tb[t].n_chans_src[j] > 16 ? 16 : tb[t].n_chans_src[j];
                             for (long c = 0; c < n_chans; c++) {
                                 float s_low = tb[t].samples_src[j][f_low * tb[t].n_chans_src[j] + c];
@@ -1733,8 +1753,8 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1]);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }
