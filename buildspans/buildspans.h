@@ -17,6 +17,7 @@ typedef struct _buildspans {
     long current_track;
     double current_offset;
     double loop_start;
+    double most_negative_bar;
     t_buffer_ref *buffer_ref;
     t_symbol *s_buffer_name;
     t_symbol *current_palette;
@@ -58,7 +59,7 @@ typedef struct _buildspans {
 void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_bang(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_track(t_buildspans *x, long n);
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double most_negative_bar);
 void buildspans_do_anything(t_buildspans *x, t_symbol *s, long argc, t_atom *argv, long inlet_num);
 void buildspans_do_local_bar_length(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 

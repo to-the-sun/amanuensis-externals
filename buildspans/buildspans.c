@@ -171,7 +171,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double most_negative_bar);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
@@ -850,6 +850,7 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_track = 0;
         x->current_offset = 0.0;
         x->loop_start = 0.0;
+        x->most_negative_bar = 0.0;
         x->current_palette = gensym("");
         x->log_outlet = NULL;
         x->log = 0;
@@ -959,6 +960,7 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     x->current_track = 0;
     x->current_offset = 0.0;
     x->loop_start = 0.0;
+    x->most_negative_bar = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->last_msg_type = gensym("clear");
@@ -973,8 +975,10 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-    else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0);
+    double f = (argc > 0) ? atom_getfloat(argv) : 0.0;
+    double loop_start = (argc >= 2) ? atom_getfloat(argv + 1) : 0.0;
+    double most_neg = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
+    buildspans_do_offset(x, f, loop_start, most_neg);
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
@@ -990,10 +994,10 @@ void buildspans_offset(t_buildspans *x, double f) {
         defer(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
-    buildspans_do_offset(x, f, 0.0);
+    buildspans_do_offset(x, f, 0.0, 0.0);
 }
 
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double most_negative_bar) {
     long seq = buildspans_get_task_sequence(x);
     x->current_task_seq = seq;
     int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
@@ -1008,16 +1012,20 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         return;
     }
 
-    buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
+    // Subtract loop_start directly from offset when storing in transcript
+    double stored_offset = f - loop_start;
+
+    buildspans_log(x, "buildspans_do_offset received: raw_offset=%.2f, loop_start=%.2f, most_neg=%.2f -> stored_offset=%.2f", f, loop_start, most_negative_bar, stored_offset);
 
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
 
     if (f <= 0.0) {
-        x->current_offset = f;
+        x->current_offset = stored_offset;
         x->loop_start = loop_start;
+        x->most_negative_bar = most_negative_bar;
         x->last_msg_type = gensym("offset");
-        buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
+        buildspans_log(x, "Global offset set to %.2f (stored: %.2f). Auto-initialization enabled. No duplication.", f, stored_offset);
         x->current_task_seq = -1;
         if (on_worker) {
             systhread_mutex_unlock(x->state_mutex);
@@ -1025,13 +1033,14 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         return;
     }
 
-    long new_rounded_offset = (long)round(f);
+    long new_rounded_offset = (long)round(stored_offset);
     long old_rounded_offset = (long)round(x->current_offset);
 
     if (new_rounded_offset == old_rounded_offset) {
-        x->current_offset = f;
+        x->current_offset = stored_offset;
         x->loop_start = loop_start;
-        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
+        x->most_negative_bar = most_negative_bar;
+        buildspans_log(x, "Global offset updated to: %.2f (stored: %.2f, loop_start: %.2f, most_neg: %.2f). No duplication (rounded offset unchanged).", f, stored_offset, loop_start, most_negative_bar);
         x->current_task_seq = -1;
         if (on_worker) {
             systhread_mutex_unlock(x->state_mutex);
@@ -1041,8 +1050,9 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
     // Proceed with duplication
     double old_offset = x->current_offset;
-    x->current_offset = f;
+    x->current_offset = stored_offset;
     x->loop_start = loop_start;
+    x->most_negative_bar = most_negative_bar;
     x->last_msg_type = gensym("offset");
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
@@ -1404,17 +1414,16 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (inlet_num == 1) {
         int valid = 0;
-        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
-            (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-            valid = 1;
-        } else if (argc == 1 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), 0.0);
+        if (argc > 0 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
+            double f = atom_getfloat(argv);
+            double loop_start = (argc >= 2 && (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) ? atom_getfloat(argv + 1) : 0.0;
+            double most_neg = (argc >= 3 && (atom_gettype(argv + 2) == A_FLOAT || atom_gettype(argv + 2) == A_LONG)) ? atom_getfloat(argv + 2) : 0.0;
+            buildspans_do_offset(x, f, loop_start, most_neg);
             valid = 1;
         }
 
         if (!valid) {
-            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start] or float offset.");
+            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start, most_negative_bar] or float offset.");
         }
         return;
     }
@@ -1767,7 +1776,7 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 
 // Helper function to calculate a looped absolute timestamp from a raw absolute timestamp
 double buildspans_calc_looped_absolute(t_buildspans *x, double raw_absolute) {
-    return raw_absolute + x->loop_start;
+    return raw_absolute + x->loop_start + x->most_negative_bar;
 }
 
 void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
@@ -2422,7 +2431,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind/async) attributes.");
                 break;
             case 1:
-                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
+                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start, Most Negative Bar]");
                 break;
             case 2:
                 sprintf(s, "Inlet 3: (int) Track Number");
