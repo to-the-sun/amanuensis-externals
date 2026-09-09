@@ -15,7 +15,8 @@ typedef struct _buildspans {
     t_dictionary *building;
     t_dictionary *tracks_ended_in_current_event;
     long current_track;
-    double current_offset;
+    double current_offset; // stored_offset = raw_offset - loop_start
+    double raw_offset;     // raw_offset before loop_start subtraction
     double loop_start;
     double most_negative_bar;
     t_buffer_ref *buffer_ref;

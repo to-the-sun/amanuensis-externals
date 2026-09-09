@@ -18,11 +18,16 @@ The issue stemmed from how `buildspans` recorded the global `offset` property in
 
    Because `current_scan` reflects absolute song playback time (which includes `loop_start`, e.g., 500,000 ms), an unadjusted offset meant `src_ms` grew linearly with each loop pass. Once `src_ms` exceeded the total duration of the palette WAV buffer (for example, 30,000 ms), `weaver~` evaluated `in_bounds` as 0 and output silence, even though the bar trigger itself was valid.
 
-4. **Direct Loop Start Offset Subtraction:**
-   `stored_offset` is calculated directly by subtracting `loop_start` from the incoming offset:
-   `stored_offset = raw_offset - loop_start`
+4. **Raw Offset vs Stored Offset Distinction:**
+   - `raw_offset`: The absolute song timestamp when the offset message was received (e.g. `510,000 ms`).
+   - `stored_offset`: The loop-relative offset calculated as `stored_offset = raw_offset - loop_start` (e.g. `10,000 ms`).
 
-   Note `absolutes` take both `loop_start` and `most_negative_bar` into account directly when calculating `looped_absolute`.
+   `relative_timestamp` for bar quantization subtracts `raw_offset` from `looped_absolute`:
+   `relative_timestamp = looped_absolute - raw_offset`
+   This allows `loop_start` to cancel out cleanly:
+   `(raw_note + loop_start + most_negative_bar) - (stored_offset + loop_start) = raw_note + most_negative_bar - stored_offset`
+
+   `stored_offset` is recorded strictly as the `offset` property in `transcript.json` for `weaver~` palette buffer lookups.
 
 ## Solution Implemented
 
@@ -31,11 +36,9 @@ Inlet 2 of `buildspans` was updated to accept a three-item list:
 `[offset, loop_start, most_negative_bar]`
 If items 2 or 3 are omitted, they default to 0.0.
 
-### 2. Direct Loop Start Subtraction and Absolute Timestamp Calculation
-Inside `buildspans_do_offset`, `buildspans` computes:
-`stored_offset = raw_offset - loop_start`
-
-The `stored_offset` is stored as the `offset` property in the transcript dictionary and used for active span tracking, while `buildspans_calc_looped_absolute` bakes both `loop_start` and `most_negative_bar` directly into note `absolutes`.
+### 2. Parameter Renaming and Code Commenting
+- Renamed parameter `calc_timestamp` to `looped_absolute` in `buildspans_process_and_add_note` for clarity.
+- Added comprehensive inline comments in `buildspans.c` detailing `looped_absolute`, `raw_offset`, `stored_offset`, and `weaver~` palette mapping logic.
 
 ### 3. Real-Time Telemetry and Debug Inspector
 `weaver~` was updated to output UDP telemetry on TCP/UDP port 8999, reporting source millisecond playback position, frame indices, source buffer length, bounds status (`in_bounds`), and transcript presence. A Raylib-based OpenGL visualizer (`weaver_inspector.py`) was created to render real-time palette buffer waveforms, virtual Max buffer~ boundaries, playhead cursors, and math equation overlays.
