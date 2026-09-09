@@ -975,12 +975,16 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
         tr->viz_track_length = tr->track_length;
     }
 
-    // Target buffer_ref_set to the inactive slot (other) so the active slot (active)
-    // continues playing its outgoing buffer during the crossfade.
+    // Target buffer_ref_set to both slots if necessary or determine target slot.
+    // Setting buffer_ref_set on the inactive slot (other) allows smooth crossfades.
     int active = (int)round(tr->control);
     int other = 1 - active;
     if (palette != _sym_nothing && palette != gensym("-")) {
         buffer_ref_set(tr->src_refs[other], palette);
+        // Also ensure active slot has buffer ref set if it matches
+        if (tr->palette[active] == palette) {
+            buffer_ref_set(tr->src_refs[active], palette);
+        }
     } else {
         buffer_ref_set(tr->src_refs[other], _sym_nothing);
     }
@@ -1221,15 +1225,20 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
         if (has_lock && tr->has_pending_data) {
             int active = (int)round(tr->control);
-            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active] || tr->pending_bar_symbol == _sym_0);
+            int is_silent = (tr->palette[active] == _sym_dash || tr->palette[active] == _sym_nothing || !tr->busy);
+            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active] || tr->pending_bar_symbol == _sym_0 || is_silent);
 
             if (change) {
-                int other = 1 - active;
+                int other = (is_silent && tr->pending_palette != _sym_dash) ? active : 1 - active;
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
                 tr->offset[other] = tr->pending_offset;
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
+                if (tr->xf.direction == 0.0 && tr->pending_palette != _sym_dash) {
+                    // Force a fade-in trigger if control didn't change slot but track was silent
+                    tr->xf.direction = (other == 0) ? -1.0 : 1.0;
+                }
 
                 double target_gain = 1.0;
                 if (x->dynamic_gain) {
@@ -1239,7 +1248,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
                     if (tr->pending_rating < 0.0) {
                         if (min_rating < 0.0) {
-                            target_gain = 1.0 - (tr->pending_rating / min_rating);
+                            // Scale negative ratings with a floor of 0.25 to prevent complete muting
+                            target_gain = 1.0 - 0.75 * (tr->pending_rating / min_rating);
                         }
                     }
                 }
