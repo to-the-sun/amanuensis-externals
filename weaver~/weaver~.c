@@ -93,6 +93,7 @@ typedef struct _weaver_track {
     long long viz_f_low;
     long long viz_n_frames_src;
     int viz_in_bounds;
+    int viz_dict_has_bar;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -260,7 +261,7 @@ void weaver_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_log(t_weaver *x, const char *fmt, ...);
 void weaver_queue_dirty(t_weaver *x, t_buffer_obj *b);
 void weaver_queue_finish(t_weaver *x, t_weaver_consolidate_job *job);
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms, double rating);
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms, double rating, int found_in_dict);
 void weaver_check_attachments(t_weaver *x);
 double weaver_get_bar_length(t_weaver *x);
 void weaver_dsp64(t_weaver *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags);
@@ -970,7 +971,7 @@ double weaver_get_bar_length(t_weaver *x) {
 }
 
 
-void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms, double rating) {
+void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *palette, double bar_ms, double offset_ms, t_symbol *bar_symbol, double absolute_ms, double rating, int found_in_dict) {
     t_weaver_track *tr = weaver_get_track_state(x, track);
     if (!tr) return;
 
@@ -979,6 +980,7 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->pending_rating = rating;
+    tr->viz_dict_has_bar = found_in_dict;
     tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
     tr->viz_absolute_ms = absolute_ms; // Absolute timeline position for viz
     if (x->visualize) {
@@ -1671,26 +1673,26 @@ void weaver_audio_qtask(t_weaver *x) {
             if (found_in_dict) {
                 if (palette == _sym_dash || palette == _sym_nothing) {
                     weaver_log(x, "Track %lld: bar %s found in dictionary (palette: -, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, offset, rating);
-                    weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, offset, bar_key, hit_entry.rel_time, rating);
+                    weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, offset, bar_key, hit_entry.rel_time, rating, 1);
                 } else if (palette_exists) {
                     if (strncmp(palette->s_name, "stems.", 6) == 0) {
                         offset = -x->most_negative_bar;
                     }
                     weaver_log(x, "Track %lld: bar %s found in dictionary (palette: %s, offset: %.2f, rating: %.2f)", (long long)target_track, bar_key->s_name, palette->s_name, offset, rating);
-                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating);
+                    weaver_update_track_metadata(x, target_track, palette, hit.value, offset, bar_key, hit_entry.rel_time, rating, 1);
                 } else {
                     object_error((t_object *)x, "Track %lld: palette '%s' for bar %s not found. Falling back to silence.", (long long)target_track, palette->s_name, bar_key->s_name);
-                    weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+                    weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0, 1);
                 }
             } else {
                 weaver_log(x, "Track %lld: bar %s not found in dictionary. Falling back to silence.", (long long)target_track, bar_key->s_name);
-                weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+                weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0, 0);
             }
 
             dictobj_release(dict);
         } else {
             // Even if dictionary is missing, we must trigger something (e.g. silence) to progress
-            weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0);
+            weaver_update_track_metadata(x, target_track, _sym_dash, hit.value, 0.0, bar_key, hit_entry.rel_time, 1.0, 0);
         }
     }
 
@@ -1746,8 +1748,8 @@ void weaver_audio_qtask(t_weaver *x) {
                 // Capture data quickly under lock
                 critical_enter(x->lock);
                 if (tr->viz_trigger_dirty) {
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d}",
-                             t + 1, tr->viz_absolute_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy);
+                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d, \"dict_has_bar\": %d}",
+                             t + 1, tr->viz_absolute_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy, tr->viz_dict_has_bar);
                     tr->viz_trigger_dirty = 0;
                     has_l = 1;
                 }
