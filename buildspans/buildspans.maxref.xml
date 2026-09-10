@@ -29,8 +29,8 @@
 			</description>
 		</inlet>
 		<inlet id="2" type="list/float">
-			<digest>Inlet 2: Global offset timestamp and loop start</digest>
-			<description>Receives either a single high-precision float representing a global offset in milliseconds, or a list of two floats [offset, loop_start]. The offset is used as a relative anchor for new bars, and the loop_start is added when calculating the absolute bar timestamp. Both are stored with full precision.</description>
+			<digest>Inlet 2: Global offset timestamp, loop start, and most negative bar</digest>
+			<description>Receives either a single high-precision float representing a global offset in milliseconds, or a list of up to three floats [offset, loop_start, most_negative_bar]. The pure loop start (loop_start - most_negative_bar) is subtracted from offset before storing in the transcript, while loop_start is used when calculating absolute timestamps for note grouping.</description>
 		</inlet>
 		<inlet id="3" type="int">
 			<digest>Inlet 3: Track number</digest>

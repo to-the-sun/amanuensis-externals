@@ -171,7 +171,7 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_float(t_buildspans *x, double f);
 void buildspans_offset(t_buildspans *x, double f);
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start);
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double most_negative_bar);
 void buildspans_track(t_buildspans *x, long n);
 void buildspans_track_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv);
@@ -192,7 +192,7 @@ void buildspans_reset_bar_to_standalone(t_buildspans *x, t_symbol *palette_sym, 
 void buildspans_finalize_and_log_span(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, t_atomarray *span_array);
 int buildspans_deferred_rating_check(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, long last_bar_timestamp);
 double buildspans_calc_looped_absolute(t_buildspans *x, double raw_absolute);
-void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length);
+void buildspans_process_and_add_note(t_buildspans *x, double looped_absolute, double store_timestamp, double score, double raw_offset, double stored_offset, long bar_length);
 void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_sym, double relative_comparison_val);
 void buildspans_cleanup_track_offset_if_needed(t_buildspans *x, t_symbol *palette_sym, t_symbol *track_offset_sym);
 double find_next_offset(t_buildspans *x, t_symbol *palette_sym, long track_num_to_check, double offset_val_to_check);
@@ -849,7 +849,9 @@ void *buildspans_new(t_symbol *s, long argc, t_atom *argv) {
         x->current_task_seq = -1;
         x->current_track = 0;
         x->current_offset = 0.0;
+        x->raw_offset = 0.0;
         x->loop_start = 0.0;
+        x->most_negative_bar = 0.0;
         x->current_palette = gensym("");
         x->log_outlet = NULL;
         x->log = 0;
@@ -958,7 +960,9 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
     x->tracks_ended_in_current_event = dictionary_new();
     x->current_track = 0;
     x->current_offset = 0.0;
+    x->raw_offset = 0.0;
     x->loop_start = 0.0;
+    x->most_negative_bar = 0.0;
     x->current_palette = gensym("");
     x->local_bar_length = 0;
     x->last_msg_type = gensym("clear");
@@ -973,8 +977,10 @@ void buildspans_do_clear(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) 
 
 // Handler for float messages on the 2nd inlet (proxy #1, offset)
 void buildspans_offset_deferred(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
-    if (argc >= 2) buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-    else if (argc > 0) buildspans_do_offset(x, atom_getfloat(argv), 0.0);
+    double f = (argc > 0) ? atom_getfloat(argv) : 0.0;
+    double loop_start = (argc >= 2) ? atom_getfloat(argv + 1) : 0.0;
+    double most_neg = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
+    buildspans_do_offset(x, f, loop_start, most_neg);
 }
 
 void buildspans_offset(t_buildspans *x, double f) {
@@ -990,10 +996,10 @@ void buildspans_offset(t_buildspans *x, double f) {
         defer(x, (method)buildspans_offset_deferred, NULL, 1, &a);
         return;
     }
-    buildspans_do_offset(x, f, 0.0);
+    buildspans_do_offset(x, f, 0.0, 0.0);
 }
 
-void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
+void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double most_negative_bar) {
     long seq = buildspans_get_task_sequence(x);
     x->current_task_seq = seq;
     int on_worker = (x->async && x->worker && async_worker_is_worker_thread(x->worker));
@@ -1008,16 +1014,24 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         return;
     }
 
-    buildspans_log(x, "buildspans_do_offset received: %.2f (loop_start: %.2f, current_offset: %.2f)", f, loop_start, x->current_offset);
+    // raw_offset (f) is the absolute song timestamp when the offset was set.
+    // stored_offset (f - loop_start) is the loop-relative offset stored in the transcript
+    // key so downstream weaver~ can apply it directly to the loop-agnostic palette buffer.
+    double stored_offset = f - loop_start;
+    x->raw_offset = f;
+
+    buildspans_log(x, "buildspans_do_offset received: raw_offset=%.2f, loop_start=%.2f, most_neg=%.2f -> stored_offset=%.2f", f, loop_start, most_negative_bar, stored_offset);
 
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
 
     if (f <= 0.0) {
-        x->current_offset = f;
+        x->current_offset = stored_offset;
+        x->raw_offset = f;
         x->loop_start = loop_start;
+        x->most_negative_bar = most_negative_bar;
         x->last_msg_type = gensym("offset");
-        buildspans_log(x, "Global offset set to %.2f. Auto-initialization enabled. No duplication.", f);
+        buildspans_log(x, "Global offset set to %.2f (stored: %.2f). Auto-initialization enabled. No duplication.", f, stored_offset);
         x->current_task_seq = -1;
         if (on_worker) {
             systhread_mutex_unlock(x->state_mutex);
@@ -1025,13 +1039,15 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
         return;
     }
 
-    long new_rounded_offset = (long)round(f);
+    long new_rounded_offset = (long)round(stored_offset);
     long old_rounded_offset = (long)round(x->current_offset);
 
     if (new_rounded_offset == old_rounded_offset) {
-        x->current_offset = f;
+        x->current_offset = stored_offset;
+        x->raw_offset = f;
         x->loop_start = loop_start;
-        buildspans_log(x, "Global offset updated to: %.2f (loop_start: %.2f). No duplication (rounded offset unchanged).", f, loop_start);
+        x->most_negative_bar = most_negative_bar;
+        buildspans_log(x, "Global offset updated to: %.2f (stored: %.2f, loop_start: %.2f, most_neg: %.2f). No duplication (rounded offset unchanged).", f, stored_offset, loop_start, most_negative_bar);
         x->current_task_seq = -1;
         if (on_worker) {
             systhread_mutex_unlock(x->state_mutex);
@@ -1041,8 +1057,10 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
     // Proceed with duplication
     double old_offset = x->current_offset;
-    x->current_offset = f;
+    x->current_offset = stored_offset;
+    x->raw_offset = f;
     x->loop_start = loop_start;
+    x->most_negative_bar = most_negative_bar;
     x->last_msg_type = gensym("offset");
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
@@ -1222,7 +1240,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start) {
 
             for (long k = 0; k < manifest_count; k++) {
                 x->current_track = manifest[k].track_number;
-                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].timestamp, manifest[k].score, f, bar_length);
+                buildspans_process_and_add_note(x, manifest[k].timestamp, manifest[k].timestamp, manifest[k].score, f, stored_offset, bar_length);
             }
 
             x->current_track = original_track;
@@ -1404,17 +1422,16 @@ void buildspans_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     if (inlet_num == 1) {
         int valid = 0;
-        if (argc >= 2 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG) && 
-            (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), atom_getfloat(argv + 1));
-            valid = 1;
-        } else if (argc == 1 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
-            buildspans_do_offset(x, atom_getfloat(argv), 0.0);
+        if (argc > 0 && (atom_gettype(argv) == A_FLOAT || atom_gettype(argv) == A_LONG)) {
+            double f = atom_getfloat(argv);
+            double loop_start = (argc >= 2 && (atom_gettype(argv + 1) == A_FLOAT || atom_gettype(argv + 1) == A_LONG)) ? atom_getfloat(argv + 1) : 0.0;
+            double most_neg = (argc >= 3 && (atom_gettype(argv + 2) == A_FLOAT || atom_gettype(argv + 2) == A_LONG)) ? atom_getfloat(argv + 2) : 0.0;
+            buildspans_do_offset(x, f, loop_start, most_neg);
             valid = 1;
         }
 
         if (!valid) {
-            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start] or float offset.");
+            object_error((t_object *)x, "Offset inlet expects list [offset, loop_start, most_negative_bar] or float offset.");
         }
         return;
     }
@@ -1473,10 +1490,11 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
     // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset == 0),
     // we use the current note's looped_calc_absolute as the effective offset for this processing cycle
     // without persisting it to x->current_offset.
-    double effective_offset = (x->current_offset == 0.0) ? looped_calc_absolute : x->current_offset;
+    double effective_stored_offset = (x->current_offset == 0.0) ? looped_calc_absolute : x->current_offset;
+    double effective_raw_offset = (x->raw_offset == 0.0) ? (looped_calc_absolute + x->loop_start) : x->raw_offset;
 
-    buildspans_log(x, "Palette: %s, Raw calc: %.2f, Looped calc: %.2f, Score: %.2f, Raw store: %.2f, Looped store: %.2f, Effective Offset: %.2f",
-                    x->current_palette->s_name, raw_calc_absolute, looped_calc_absolute, score, raw_store_absolute, looped_store_absolute, effective_offset);
+    buildspans_log(x, "Palette: %s, Raw calc: %.2f, Looped calc: %.2f, Score: %.2f, Raw store: %.2f, Looped store: %.2f, Effective Stored Offset: %.2f",
+                    x->current_palette->s_name, raw_calc_absolute, looped_calc_absolute, score, raw_store_absolute, looped_store_absolute, effective_stored_offset);
 
     // 1. Find all unique track symbols for the current track and CURRENT PALETTE.
     long num_keys;
@@ -1515,7 +1533,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     // 2. Also consider the global current offset as a potential new span
     char current_track_str[64];
-    snprintf(current_track_str, 64, "%ld-%ld", x->current_track, (long)round(effective_offset));
+    snprintf(current_track_str, 64, "%ld-%ld", x->current_track, (long)round(effective_stored_offset));
     t_symbol *current_track_sym = gensym(current_track_str);
     int global_offset_found = 0;
     for (long i = 0; i < unique_tracks_count; i++) {
@@ -1541,13 +1559,11 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
         t_symbol *target_track_sym = unique_track_syms[i];
 
         // ACTUAL OFFSET RESOLUTION HIERARCHY:
-        // We need the high-precision double offset to correctly assign the note to a bar.
-        double actual_offset = 0.0;
+        // stored_offset is the loop-relative offset saved in transcript entries.
+        // raw_offset is stored_offset + loop_start, used to calculate relative_timestamp.
+        double actual_stored_offset = 0.0;
         int offset_found = 0;
 
-        // TIER 1: Dictionary Lookup
-        // We look at the first available bar from the target active span and use its high-precision offset.
-        // This is the authoritative source for spans that have already received data.
         for (long j = 0; j < num_keys; j++) {
             char *key_pal, *key_track, *key_bar, *key_prop;
             if (parse_hierarchical_key(keys[j], &key_pal, &key_track, &key_bar, &key_prop)) {
@@ -1562,7 +1578,7 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
                         off_atoms = &off_atom;
                         off_count = 1;
                     }
-                    if (off_count > 0) actual_offset = atom_getfloat(off_atoms);
+                    if (off_count > 0) actual_stored_offset = atom_getfloat(off_atoms);
                     offset_found = 1;
                     sysmem_freeptr(key_pal);
                     sysmem_freeptr(key_track);
@@ -1577,15 +1593,13 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
             }
         }
 
-        // TIER 2: Effective Global Offset
-        // If no offset was found in the dictionary, we use the effective_offset.
-        // This handles both the manual current_offset (high precision) and 
-        // the ephemeral auto-initialization (looped_calc_absolute).
         if (!offset_found) {
-            actual_offset = effective_offset;
+            actual_stored_offset = effective_stored_offset;
         }
 
-        buildspans_process_and_add_note(x, looped_calc_absolute, looped_store_absolute, score, actual_offset, bar_length);
+        double actual_raw_offset = actual_stored_offset + x->loop_start;
+
+        buildspans_process_and_add_note(x, looped_calc_absolute, looped_store_absolute, score, actual_raw_offset, actual_stored_offset, bar_length);
     }
 
     if (keys) sysmem_freeptr(keys);
@@ -1767,24 +1781,23 @@ void buildspans_check_discontiguity(t_buildspans *x, t_symbol *palette_sym, t_sy
 
 // Helper function to calculate a looped absolute timestamp from a raw absolute timestamp
 double buildspans_calc_looped_absolute(t_buildspans *x, double raw_absolute) {
-    return raw_absolute + x->loop_start;
+    return raw_absolute + x->loop_start + x->most_negative_bar;
 }
 
-void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, double store_timestamp, double score, double offset, long bar_length) {
+void buildspans_process_and_add_note(t_buildspans *x, double looped_absolute, double store_timestamp, double score, double raw_offset, double stored_offset, long bar_length) {
     if (buildspans_is_task_cancelled(x, x->current_task_seq)) return;
-    if (offset == 0.0) {
+    if (stored_offset == 0.0 && raw_offset == 0.0) {
         object_error((t_object *)x, "IMPORTANT: Span initialized with offset 0.0 on track %ld (palette %s)", x->current_track, x->current_palette->s_name);
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
         buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track (%ld).", x->current_track);
 
-        double effective_offset = (x->current_offset == 0.0) ? calc_timestamp : x->current_offset;
+        double effective_offset = (x->current_offset == 0.0) ? looped_absolute : x->current_offset;
         buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
 
         buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
         buildspans_log(x, "*** History: last_msg_type %s", x->last_msg_type->s_name);
-        buildspans_log(x, "*** Last note parameters: looped_absolute (calc) (%.2f), store (%.2f), score (%.2f)", x->last_note_calc, x->last_note_store, x->last_note_score);
-        buildspans_log(x, "*** Current note parameters: looped_absolute (calc) (%.2f), store (%.2f), score (%.2f)", calc_timestamp, store_timestamp, score);
-        buildspans_log(x, "*** Elucidation: Offset 0.0 detected. If this happened during a 'list' message, it means no existing offset was found in the dictionary for this span (Tier 1 fail) AND the fallback (Tier 2) used either a 0.0 global offset or a 0.0 looped_absolute (calc_timestamp).");
+        buildspans_log(x, "*** Last note parameters: looped_absolute (%.2f), store (%.2f), score (%.2f)", x->last_note_calc, x->last_note_store, x->last_note_score);
+        buildspans_log(x, "*** Current note parameters: looped_absolute (%.2f), store (%.2f), score (%.2f)", looped_absolute, store_timestamp, score);
 
         // List active spans
         long num_keys;
@@ -1833,14 +1846,30 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
         return; // Abort processing for this note
     }
     buildspans_log(x, "buildspans_process_and_add_note: utilizing bar_length (%ld)", bar_length);
-    // Get current track symbol (using rounded offset for grouping)
+
+    // Grouping key uses rounded stored_offset (loop-relative offset)
     char track_str[64];
-    snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(offset));
+    snprintf(track_str, 64, "%ld-%ld", x->current_track, (long)round(stored_offset));
     t_symbol *track_sym = gensym(track_str);
 
-    // Calculate bar timestamp (calc_timestamp is already looped_absolute)
-    double relative_timestamp = calc_timestamp - offset;
-    buildspans_log(x, "Relative timestamp (looped_absolute (%.2f) - offset (%.2f)): %.2f", calc_timestamp, offset, relative_timestamp);
+    /*
+     * TIMESTAMP RELATIONSHIPS:
+     * 1. looped_absolute = raw_note_timestamp + loop_start + most_negative_bar
+     * 2. raw_offset      = absolute song timestamp when offset was sent
+     * 3. stored_offset   = raw_offset - loop_start (loop-relative offset stored in transcript)
+     *
+     * relative_timestamp subtracts raw_offset (not stored_offset) from looped_absolute
+     * because loop_start is already baked into looped_absolute. Subtracting raw_offset
+     * cancels loop_start cleanly:
+     * relative_timestamp = (raw_note + loop_start + most_negative_bar) - (stored_offset + loop_start)
+     *                    = raw_note + most_negative_bar - stored_offset
+     *
+     * Downstream, weaver~ calculates palette sample position via:
+     * src_ms = stored_offset + current_scan
+     * where current_scan = ramp_in + most_negative_bar.
+     */
+    double relative_timestamp = looped_absolute - raw_offset;
+    buildspans_log(x, "Relative timestamp (looped_absolute (%.2f) - raw_offset (%.2f)): %.2f", looped_absolute, raw_offset, relative_timestamp);
     long bar_timestamp_val = floor(relative_timestamp / bar_length) * bar_length;
     buildspans_log(x, "Calculated bar timestamp (rounded down to nearest bar_length (%ld)): %ld", bar_length, bar_timestamp_val);
 
@@ -1880,13 +1909,13 @@ void buildspans_process_and_add_note(t_buildspans *x, double calc_timestamp, dou
     snprintf(bar_str, 32, "%ld", bar_timestamp_val);
     t_symbol *bar_sym = gensym(bar_str);
 
-    // Update offset
+    // Update stored offset in transcript (stored_offset is loop-relative offset for weaver~)
     t_symbol *offset_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("offset"));
     if (dictionary_hasentry(x->building, offset_key)) dictionary_deleteentry(x->building, offset_key);
-    dictionary_appendfloat(x->building, offset_key, offset);
-    buildspans_log(x, "%s %.2f", offset_key->s_name, offset);
+    dictionary_appendfloat(x->building, offset_key, stored_offset);
+    buildspans_log(x, "%s %.2f", offset_key->s_name, stored_offset);
     t_atom offset_atom;
-    atom_setfloat(&offset_atom, offset);
+    atom_setfloat(&offset_atom, stored_offset);
 
     // Update palette
     t_symbol *palette_key = generate_hierarchical_key(x->current_palette, track_sym, bar_sym, gensym("palette"));
@@ -2422,7 +2451,7 @@ void buildspans_assist(t_buildspans *x, void *b, long m, long a, char *s) {
                 sprintf(s, "Inlet 1: (list) note data, (bang) flush, (flush) flush track, (clear) clear, (log/visualize/bind/async) attributes.");
                 break;
             case 1:
-                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start]");
+                sprintf(s, "Inlet 2: (list/float) Offset Timestamp, [Offset, Loop Start, Most Negative Bar]");
                 break;
             case 2:
                 sprintf(s, "Inlet 3: (int) Track Number");
