@@ -286,9 +286,8 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                     if span_data:
                         try:
                             offset_val = float(track_id.split('-')[1])
-                            # Relative bar timestamps shown naturally without loop_start offset adjustment
-                            min_abs_span_ts = min(span_data) + offset_val
-                            max_abs_span_ts = max(span_data) + offset_val + bar_length
+                            min_abs_span_ts = min(span_data) + offset_val + loop_start
+                            max_abs_span_ts = max(span_data) + offset_val + bar_length + loop_start
 
                             start_x = grid_left + grid_w * (min_abs_span_ts - min_ts) / span_ts
                             end_x = grid_left + grid_w * (max_abs_span_ts - min_ts) / span_ts
@@ -325,8 +324,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                                 first_r = 0.0
 
                             for bar_relative_ts in span_data:
-                                # Relative bar timestamps shown naturally without loop_start offset adjustment
-                                bar_abs_start_ts = bar_relative_ts + offset_val
+                                bar_abs_start_ts = bar_relative_ts + offset_val + loop_start
                                 bar_start_x = grid_left + grid_w * (bar_abs_start_ts - min_ts) / span_ts
                                 bar_width_pixels = (grid_w * bar_length) / span_ts
 
