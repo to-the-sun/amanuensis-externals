@@ -4,6 +4,7 @@ convert_mp3_to_wav.py
 
 Scans the directory where this script is located for any MP3 files (.mp3)
 and automatically converts them to WAV format (.wav) at a 44.1 kHz (44,100 Hz) sample rate.
+Also checks 3 folder levels up for 'description.txt' and creates it if missing.
 """
 
 import os
@@ -14,6 +15,29 @@ from pathlib import Path
 
 
 TARGET_SAMPLE_RATE = 44100  # 44.1 kHz
+
+
+def ensure_description_txt(mp3_file, script_dir):
+    """
+    Looks 3 folder levels up from the location of the script for 'description.txt'.
+    If it does not exist, creates 'description.txt' with the file name of the MP3
+    file minus the .mp3 extension on the first line, followed by ' by \n'.
+    """
+    three_up_dir = script_dir.parent.parent.parent
+    desc_path = three_up_dir / "description.txt"
+
+    if not desc_path.exists():
+        content = f"{mp3_file.stem} by \n"
+        try:
+            desc_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(desc_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"  [CREATED DESCRIPTION] Created '{desc_path.name}' at 3 levels up ({desc_path})")
+            return True
+        except Exception as e:
+            print(f"  [DESCRIPTION ERROR] Failed to create '{desc_path}': {e}")
+            return False
+    return False
 
 
 def convert_with_ffmpeg(mp3_path, wav_path, sample_rate=TARGET_SAMPLE_RATE):
@@ -123,6 +147,7 @@ def main():
         failed_count = 0
 
         for mp3_file in sorted(mp3_files, key=lambda p: p.name.lower()):
+            ensure_description_txt(mp3_file, script_dir)
             wav_file = mp3_file.with_suffix(".wav")
             print(f"Processing: '{mp3_file.name}' -> '{wav_file.name}'...")
 
