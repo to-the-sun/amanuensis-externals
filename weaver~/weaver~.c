@@ -47,6 +47,7 @@ typedef struct _weaver_track {
     t_symbol *palette[2];
     double offset[2];
     double dict_offset[2];
+    double rating[2];
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -427,9 +428,11 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->palette[0] = gensym("-");
             tr->offset[0] = -1.0;
             tr->dict_offset[0] = -1.0;
+            tr->rating[0] = 1.0;
             tr->palette[1] = gensym("-");
             tr->offset[1] = -1.0;
             tr->dict_offset[1] = -1.0;
+            tr->rating[1] = 1.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -1105,6 +1108,8 @@ void weaver_clear(t_weaver *x) {
             tr->offset[1] = -1.0;
             tr->dict_offset[0] = -1.0;
             tr->dict_offset[1] = -1.0;
+            tr->rating[0] = 1.0;
+            tr->rating[1] = 1.0;
             tr->control = 0.0;
 
             tr->dest_found = 0;
@@ -1234,13 +1239,17 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
         if (has_lock && tr->has_pending_data) {
             int active = (int)round(tr->control);
-            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active] || tr->pending_bar_symbol == _sym_0);
+            int change = (tr->pending_palette != tr->palette[active] ||
+                          tr->pending_offset != tr->dict_offset[active] ||
+                          tr->pending_bar_symbol == _sym_0 ||
+                          (x->dynamic_gain && tr->pending_rating != tr->rating[active]));
 
             if (change) {
                 int other = 1 - active;
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
                 tr->offset[other] = tr->pending_offset;
+                tr->rating[other] = tr->pending_rating;
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
 
@@ -1326,6 +1335,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     tr->offset[1] = -1.0;
                     tr->dict_offset[0] = -1.0;
                     tr->dict_offset[1] = -1.0;
+                    tr->rating[0] = 1.0;
+                    tr->rating[1] = 1.0;
                     tr->control = 0.0;
                     tr->xf.last_control = 0.0;
 
