@@ -179,6 +179,7 @@ typedef struct _weaver {
 
     // Rolling rating window fields
     double song_length;
+    double accumulated_ms;
     t_rating_entry *rolling_ratings;
     int rolling_head;
     int rolling_tail;
@@ -217,6 +218,7 @@ void weaver_expire_ratings(t_weaver *x, double current_time) {
 }
 
 double weaver_get_rolling_min_rating(t_weaver *x) {
+    weaver_expire_ratings(x, x->accumulated_ms);
     if (!x->rolling_ratings || x->rolling_head == x->rolling_tail) {
         return 0.0;
     }
@@ -802,6 +804,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
         // Rolling window fields initialization
         x->song_length = 0.0;
+        x->accumulated_ms = 0.0;
         x->rolling_head = 0;
         x->rolling_tail = 0;
         x->rolling_ratings = (t_rating_entry *)sysmem_newptr(sizeof(t_rating_entry) * MAX_ROLLING_RATINGS);
@@ -1076,6 +1079,7 @@ void weaver_clear(t_weaver *x) {
     x->most_negative_bar = 0.0;
     x->lowest_rating_seen = 0.0;
     x->song_length = 0.0;
+    x->accumulated_ms = 0.0;
     x->rolling_head = 0;
     x->rolling_tail = 0;
 
@@ -1233,6 +1237,13 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
         has_lock = (critical_tryenter(x->lock) == MAX_ERR_NONE);
     }
 
+    if (has_lock) {
+        double sr = sys_getsr();
+        if (sr <= 0) sr = 44100.0;
+        double vector_ms = (double)sampleframes * 1000.0 / sr;
+        x->accumulated_ms += vector_ms;
+    }
+
     for (long t = 0; t < x->track_cache_count; t++) {
         t_weaver_track *tr = x->track_cache[t];
         if (!tr) continue;
@@ -1255,8 +1266,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
                 double target_gain = 1.0;
                 if (x->dynamic_gain) {
-                    weaver_expire_ratings(x, vector_time);
-                    weaver_add_rating(x, vector_time, tr->pending_rating);
+                    weaver_expire_ratings(x, x->accumulated_ms);
+                    weaver_add_rating(x, x->accumulated_ms, tr->pending_rating);
                     double min_rating = weaver_get_rolling_min_rating(x);
 
                     if (tr->pending_rating < 0.0) {
