@@ -160,6 +160,10 @@ def process_packet(text):
                             state["track_lengths"][track_id] = float(pkt["len"])
                         if "busy" in pkt:
                             state["busy_states"][track_id] = bool(pkt["busy"])
+                        if "song_length" in pkt:
+                            state["song_length"] = float(pkt["song_length"])
+                        if "min_rating" in pkt:
+                            state["min_rating"] = float(pkt["min_rating"])
                         state["tracks_seen"].add(track_id)
                         if pkt["ms"] < state["global_min_ms"]:
                             state["global_min_ms"] = pkt["ms"]
