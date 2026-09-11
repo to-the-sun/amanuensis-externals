@@ -57,6 +57,7 @@ The primary objective is to design a sound that is **as perceptually different a
     3. Perform active region frame-by-frame 50ms MFCC analysis.
     4. Calculate composite multi-probe pairwise distances and the absolute nearest-neighbor `uniqueness_score`.
     5. Save `staccato.wav`, `legato.wav`, `sound_design.c` copy, `sound_design.h` copy, and `analysis.json` (with `uniqueness_score` at the very beginning) into the new versioned subfolder.
+- **Important:** If the `uniqueness_score` is not as high as it could be, reason about why that might be. Formulate a new plan and redo steps 1 through 5 until the `uniqueness_score` is as high as you can get it. This iteration is essential to the process. 
 
 ### 6. Reciprocal Library Maintenance
 - After generating a new sound, older sounds' `analysis.json` files must be updated with pairwise distances to the new sound.
@@ -74,6 +75,3 @@ The primary objective is to design a sound that is **as perceptually different a
 - **Temporal Analysis:** 50ms hop/window with active region frame-by-frame MFCC distance calculation.
 - **Audio Output Files:** Phrasing probes output `staccato.wav` and `legato.wav`.
 - **JSON Structure:** `analysis.json` puts `uniqueness_score` at the very beginning of the object, followed by `distances` and `probes` (containing 50ms frame `rms` and 13-band `mfccs` data for each probe).
-
-## Subjective Judgment & Continued Iteration 
-Analyze, compare, and iterate as many times as necessary on the new sound to achieve distinction. While the `uniqueness_score` provides a quantitative guide, prioritize **human perception**. If two sounds have a high statistical distance but sound similar to a person, iterate further on the design to achieve true variety.
