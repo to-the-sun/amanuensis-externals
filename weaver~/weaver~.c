@@ -47,6 +47,7 @@ typedef struct _weaver_track {
     t_symbol *palette[2];
     double offset[2];
     double dict_offset[2];
+    double rating[2];
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -427,9 +428,11 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->palette[0] = gensym("-");
             tr->offset[0] = -1.0;
             tr->dict_offset[0] = -1.0;
+            tr->rating[0] = 1.0;
             tr->palette[1] = gensym("-");
             tr->offset[1] = -1.0;
             tr->dict_offset[1] = -1.0;
+            tr->rating[1] = 1.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -1105,6 +1108,8 @@ void weaver_clear(t_weaver *x) {
             tr->offset[1] = -1.0;
             tr->dict_offset[0] = -1.0;
             tr->dict_offset[1] = -1.0;
+            tr->rating[0] = 1.0;
+            tr->rating[1] = 1.0;
             tr->control = 0.0;
 
             tr->dest_found = 0;
@@ -1234,13 +1239,17 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
         if (has_lock && tr->has_pending_data) {
             int active = (int)round(tr->control);
-            int change = (tr->pending_palette != tr->palette[active] || tr->pending_offset != tr->dict_offset[active] || tr->pending_bar_symbol == _sym_0);
+            int change = (tr->pending_palette != tr->palette[active] ||
+                          tr->pending_offset != tr->dict_offset[active] ||
+                          tr->pending_bar_symbol == _sym_0 ||
+                          (x->dynamic_gain && tr->pending_rating != tr->rating[active]));
 
             if (change) {
                 int other = 1 - active;
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
                 tr->offset[other] = tr->pending_offset;
+                tr->rating[other] = tr->pending_rating;
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
 
@@ -1326,6 +1335,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     tr->offset[1] = -1.0;
                     tr->dict_offset[0] = -1.0;
                     tr->dict_offset[1] = -1.0;
+                    tr->rating[0] = 1.0;
+                    tr->rating[1] = 1.0;
                     tr->control = 0.0;
                     tr->xf.last_control = 0.0;
 
@@ -1755,8 +1766,9 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds);
+                    double min_r = weaver_get_rolling_min_rating(x);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d, \"song_length\": %.2f, \"min_rating\": %.3f}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds, x->song_length, min_r);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }
