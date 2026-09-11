@@ -43,12 +43,6 @@ int main() {
                         int num_samples = 0;
                         double* audio = render_midi_ptr(cfg->sequence, cfg->sequence_len, cfg->duration, 44100, &num_samples);
 
-                        if (cfg->save_wav_filename != NULL) {
-                            char output_path[512];
-                            sprintf(output_path, "%s/%s", folder_path, cfg->save_wav_filename);
-                            save_wav(output_path, audio, num_samples, 44100);
-                        }
-
                         struct json_object* probe_res = analyze_audio(audio, num_samples, 44100);
                         json_object_object_add(probes_obj, cfg->name, probe_res);
                         free(audio);

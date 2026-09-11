@@ -103,8 +103,8 @@ The uniqueness metric (`uniqueness_score`) is stored at the very beginning of `a
 
 2. **`audio_engine.c` & `migrate_analysis.c`**:
    - Update rendering loops to execute each probe sequence.
-   - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs for each preset corresponding to the two phrasing probes.
-   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output streamlined `analysis.json` files for each sound design module, storing the `uniqueness_score` at the very beginning of `analysis.json`.
+   - Replace single `design_output.wav` file generation with dedicated `staccato.wav` and `legato.wav` audio file outputs in `audio_engine.c` for each preset corresponding to the two phrasing probes (generated once during initial sound design).
+   - Aggregate timbral distance metrics across all multi-probe diagnostic outputs and output streamlined `analysis.json` files for each sound design module, storing the `uniqueness_score` at the very beginning of `analysis.json`. Note that `migrate_analysis.c` performs reciprocal analysis maintenance without re-saving `staccato.wav` and `legato.wav` audio files.
 
 3. **Build & Verification**:
    - Recompile `audio_engine` and `migrate_analysis` binaries.
