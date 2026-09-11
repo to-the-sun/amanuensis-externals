@@ -1766,8 +1766,9 @@ void weaver_audio_qtask(t_weaver *x) {
                 }
 
                 if (tr->viz_dirty) {
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds);
+                    double min_r = weaver_get_rolling_min_rating(x);
+                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d, \"song_length\": %.2f, \"min_rating\": %.3f}",
+                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds, x->song_length, min_r);
                     tr->viz_dirty = 0;
                     has_m = 1;
                 }

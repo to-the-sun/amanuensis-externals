@@ -47,6 +47,8 @@ state = {
     "global_min_ms": 0.0,
     "global_max_ms": 0.0,
     "main_ramp_duration": 5000.0,
+    "song_length": 0.0,
+    "min_rating": 0.0,
 
     "error_message": None
 }
@@ -136,6 +138,10 @@ def process_packet(text):
                             state["track_lengths"][track_id] = float(pkt["len"])
                         if "busy" in pkt:
                             state["busy_states"][track_id] = bool(pkt["busy"])
+                        if "song_length" in pkt:
+                            state["song_length"] = float(pkt["song_length"])
+                        if "min_rating" in pkt:
+                            state["min_rating"] = float(pkt["min_rating"])
                         state["tracks_seen"].add(track_id)
                         if pkt["ms"] < state["global_min_ms"]:
                             state["global_min_ms"] = pkt["ms"]
@@ -405,7 +411,7 @@ def draw_building(surface, palettes, bar_length, current_offset, loop_start, fon
                             label = fonts["building_small"].render(f"{ts:.0f}", True, (200, 100, 100))
                             surface.blit(label, (x + int(2 * SCALE), p_top - int(15 * SCALE)))
 
-def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start_ms, view_end_ms, fonts):
+def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start_ms, view_end_ms, song_length, min_rating, fonts):
     w, h = surface.get_size()
     surface.fill((30, 30, 35)) # BACKGROUND_WEAVER
 
@@ -413,8 +419,7 @@ def draw_weaver(surface, points_dict, labels_dict, busy_dict, tracks, view_start
     if view_span_ms <= 0:
         view_span_ms = 1.0
 
-    total_points = sum(len(pts) for pts in points_dict.values())
-    status_text = fonts["weaver_status"].render(f"Tracks: {len(tracks)} Points: {total_points} Duration: {view_span_ms:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
+    status_text = fonts["weaver_status"].render(f"Song Length: {song_length:.0f}ms Lowest Rating: {min_rating:.3f} Duration: {view_span_ms:.0f}ms [Press 'C' to clear]", True, (150, 150, 150))
     surface.blit(status_text, (w - status_text.get_width() - int(20 * SCALE), int(20 * SCALE)))
 
     if not tracks:
@@ -626,6 +631,11 @@ def run_gui():
             p_min_ms = state["global_min_ms"]
             p_max_ms = state["global_max_ms"]
             p_ramp_dur = state["main_ramp_duration"]
+            p_song_len = state["song_length"]
+            p_min_rating = state["min_rating"]
+
+            if p_song_len == 0.0 and state["track_lengths"]:
+                p_song_len = max(state["track_lengths"].values())
 
         building_surf = screen.subsurface((0, 0, int(1200 * SCALE), int(400 * SCALE)))
         draw_building(building_surf, p_palettes, p_bar_len, p_offset, p_loop_start, fonts)
@@ -633,7 +643,7 @@ def run_gui():
         weaver_surf = screen.subsurface((0, int(400 * SCALE), int(1200 * SCALE), int(600 * SCALE)))
         view_start_ms = p_min_ms
         view_end_ms = max(p_min_ms + p_ramp_dur, p_max_ms)
-        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, fonts)
+        draw_weaver(weaver_surf, p_points, p_labels, p_busy, p_tracks, view_start_ms, view_end_ms, p_song_len, p_min_rating, fonts)
 
         pygame.display.flip()
 
