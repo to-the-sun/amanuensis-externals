@@ -40,8 +40,8 @@ If items 2 or 3 are omitted, they default to 0.0.
 - Renamed parameter `calc_timestamp` to `looped_absolute` in `buildspans_process_and_add_note` for clarity.
 - Added comprehensive inline comments in `buildspans.c` detailing `looped_absolute`, `raw_offset`, `stored_offset`, and `weaver~` palette mapping logic.
 
-### 3. Real-Time Telemetry and Debug Inspector
-`weaver~` was updated to output UDP telemetry on TCP/UDP port 8999, reporting source millisecond playback position, frame indices, source buffer length, bounds status (`in_bounds`), and transcript presence. A Raylib-based OpenGL visualizer (`weaver_inspector.py`) was created to render real-time palette buffer waveforms, virtual Max buffer~ boundaries, playhead cursors, and math equation overlays.
+### 3. Real-Time Telemetry and Debug Visualizer Integration
+`weaver~` provides TCP telemetry on port 8999 when the `@visualize` attribute is enabled (sending crossfade ramp telemetry, track lengths, busy states, and ratings to `debug_visualizer.py`). Specific read-position telemetry (`src_ms`, `f_low`, `n_frames_src`, `in_bounds`, `dict_has_bar`) previously added for `weaver_inspector.py` was removed from `weaver~` to streamline telemetry processing.
 
 ## Verification
-With `stored_offset` correctly accounting for `loop_start`, `src_ms` stays anchored within the valid time bounds `[0.0, palette_duration]` regardless of how far out in song time playback progresses. Visual verification in `weaver_inspector.py` confirmed that `in_bounds` remains 1 across repeated loop cycles and `weaver~` consistently writes audio into stem buffers.
+With `stored_offset` correctly accounting for `loop_start`, `src_ms` stays anchored within the valid time bounds regardless of how far out in song time playback progresses, and `weaver~` consistently writes audio into stem buffers.
