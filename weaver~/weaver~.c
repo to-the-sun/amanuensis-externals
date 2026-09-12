@@ -10,7 +10,6 @@
 #include "z_dsp.h"
 #include "../shared/logging.h"
 #include "../shared/crossfade.h"
-#include "../shared/visualize.h"
 
 #include <string.h>
 #include <math.h>
@@ -59,7 +58,6 @@ typedef struct _weaver_track {
     double track_length;
     double last_track_scan;
     long long last_f_dest;
-    double last_visualize_ms;
 
     // Thread-safe state handover
     t_symbol *pending_palette;
@@ -67,34 +65,11 @@ typedef struct _weaver_track {
     t_symbol *pending_bar_symbol;
     int has_pending_data;
     int waiting_for_dict;
-
-    // Visualization state
-    double viz_f1;
-    double viz_f2;
-    t_symbol *viz_palette;
-    double viz_offset;
-    t_symbol *viz_bar_symbol;
-    double viz_ms;
-    int viz_dirty;
-    int viz_trigger_dirty;
     int dirty_dest;
-    double viz_control;
-    double viz_track_length;
 
     int last_busy_logged;
-    int viz_busy;
-    double last_viz_sent_ms;
-    double viz_absolute_ms;
     double pending_rating;
     double gain[2];
-    double viz_gain[2];
-
-    // Read position telemetry
-    double viz_src_ms;
-    long long viz_f_low;
-    long long viz_n_frames_src;
-    int viz_in_bounds;
-    int viz_dict_has_bar;
 } t_weaver_track;
 
 #define MAX_WEAVER_TRACKS 256
@@ -137,7 +112,6 @@ typedef struct _weaver {
     t_pxobject t_obj;
     t_symbol *poly_prefix;
     long log;
-    long visualize;
     void *log_outlet;
     void *bang_outlet;
     void *loop_outlet;
@@ -172,7 +146,6 @@ typedef struct _weaver {
     double low_ms;
     double high_ms;
 
-    double last_viz_check_ms;
     double most_negative_bar;
     long dynamic_gain;
     double lowest_rating_seen;
@@ -253,7 +226,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv);
 void weaver_free(t_weaver *x);
 void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv);
 void weaver_tracks(t_weaver *x, long n);
-t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av);
 t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av);
 t_max_err weaver_attr_set_dynamic_gain(t_weaver *x, void *attr, long ac, t_atom *av);
 t_max_err weaver_attr_set_low(t_weaver *x, void *attr, long ac, t_atom *av);
@@ -453,12 +425,9 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->track_length = 1000.0;
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
-            tr->last_visualize_ms = -1000.0;
             tr->pending_rating = 1.0;
             tr->gain[0] = 1.0;
             tr->gain[1] = 1.0;
-            tr->viz_gain[0] = 1.0;
-            tr->viz_gain[1] = 1.0;
 
             // Thread-safe state handover init
             tr->pending_palette = _sym_nothing;
@@ -466,28 +435,8 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->pending_bar_symbol = _sym_nothing;
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
-
-            // Visualization state init
-            tr->viz_f1 = 0.0;
-            tr->viz_f2 = 0.0;
-            tr->viz_palette = _sym_nothing;
-            tr->viz_offset = 0.0;
-            tr->viz_bar_symbol = _sym_nothing;
-            tr->viz_ms = 0.0;
-            tr->viz_dirty = 0;
-            tr->viz_trigger_dirty = 0;
             tr->dirty_dest = 0;
-            tr->viz_control = 0.0;
-            tr->viz_track_length = 1000.0;
             tr->last_busy_logged = -1;
-            tr->viz_busy = 0;
-            tr->last_viz_sent_ms = -1000.0;
-            tr->viz_absolute_ms = 0.0;
-
-            tr->viz_src_ms = 0.0;
-            tr->viz_f_low = 0;
-            tr->viz_n_frames_src = 0;
-            tr->viz_in_bounds = 1;
 
             hashtab_store(x->track_states, s_track, (t_object *)tr);
         }
@@ -741,11 +690,6 @@ void ext_main(void *r) {
     class_addmethod(c, (method)weaver_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)weaver_assist, "assist", A_CANT, 0);
 
-    CLASS_ATTR_LONG(c, "visualize", 0, t_weaver, visualize);
-    CLASS_ATTR_STYLE_LABEL(c, "visualize", 0, "onoff", "Enable Visualization");
-    CLASS_ATTR_DEFAULT(c, "visualize", 0, "0");
-    CLASS_ATTR_ACCESSORS(c, "visualize", NULL, (method)weaver_attr_set_visualize);
-
     CLASS_ATTR_LONG(c, "tracks", 0, t_weaver, max_tracks);
     CLASS_ATTR_LABEL(c, "tracks", 0, "Number of Tracks");
     CLASS_ATTR_DEFAULT(c, "tracks", 0, "4");
@@ -779,10 +723,8 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
     t_weaver *x = (t_weaver *)object_alloc(weaver_class);
 
     if (x) {
-        visualize_init();
         x->poly_prefix = _sym_nothing;
         x->log = 0;
-        x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_scan_val = -1.0;
         x->fifo_head = 0;
@@ -797,7 +739,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->low_ms = 22.653;
         x->high_ms = 4999.0;
         x->track_cache_count = 0;
-        x->last_viz_check_ms = 0;
         x->most_negative_bar = 0.0;
         x->dynamic_gain = 1;
         x->lowest_rating_seen = 0.0;
@@ -873,7 +814,6 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
 
 void weaver_free(t_weaver *x) {
     dsp_free((t_pxobject *)x);
-    visualize_cleanup();
 
     if (x->consolidate_running && x->consolidate_thread) {
         x->consolidate_stop = 1;
@@ -949,7 +889,7 @@ t_max_err weaver_attr_set_dynamic_gain(t_weaver *x, void *attr, long ac, t_atom 
 void weaver_assist(t_weaver *x, void *b, long m, long a, char *s) {
     if (m == ASSIST_INLET) {
         switch (a) {
-            case 0: sprintf(s, "Control (clear, consolidate, visualize, log, low, high) and Sync Ramp"); break;
+            case 0: sprintf(s, "Control (clear, consolidate, log, low, high) and Sync Ramp"); break;
             case 1: sprintf(s, "Inlet 2 (list): [track_id, length]"); break;
         }
     } else { // ASSIST_OUTLET
@@ -986,13 +926,6 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->pending_rating = rating;
-    tr->viz_dict_has_bar = found_in_dict;
-    tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
-    tr->viz_absolute_ms = absolute_ms; // Absolute timeline position for viz
-    if (x->visualize) {
-        tr->viz_control = tr->control;
-        tr->viz_track_length = tr->track_length;
-    }
 
     // Target buffer_ref_set to the inactive slot (other) so the active slot (active)
     // continues playing its outgoing buffer during the crossfade.
@@ -1020,10 +953,6 @@ void weaver_list(t_weaver *x, t_symbol *s, long argc, t_atom *argv) {
                 if (tr) {
                     critical_enter(x->lock);
                     tr->track_length = length;
-                    if (x->visualize) {
-                        tr->viz_track_length = length;
-                        tr->viz_dirty = 1;
-                    }
                     weaver_recalculate_song_length(x);
                     critical_exit(x->lock);
                     weaver_log(x, "Track %ld length manually updated to %.2f ms", track_id, length);
@@ -1094,7 +1023,6 @@ void weaver_clear(t_weaver *x) {
         t_weaver_track *tr = x->track_cache[t];
         if (tr) {
             tr->track_length = 0.0;
-            tr->viz_track_length = 0.0;
             tr->last_track_scan = -1.0;
             tr->last_f_dest = -1;
             tr->busy = 0;
@@ -1103,8 +1031,6 @@ void weaver_clear(t_weaver *x) {
             tr->pending_rating = 1.0;
             tr->gain[0] = 1.0;
             tr->gain[1] = 1.0;
-            tr->viz_gain[0] = 1.0;
-            tr->viz_gain[1] = 1.0;
 
             tr->palette[0] = _sym_dash;
             tr->palette[1] = _sym_dash;
@@ -1156,7 +1082,6 @@ void weaver_clear(t_weaver *x) {
     weaver_check_attachments(x);
     critical_exit(x->lock);
 
-    if (x->visualize) visualize((t_object *)x, "{\"clear\": 1}");
     weaver_log(x, "cleared all track states and lengths, and reset buffer bindings");
 }
 
@@ -1164,14 +1089,6 @@ void weaver_tracks(t_weaver *x, long n) {
     if (proxy_getinlet((t_object *)x) != 0) return;
     x->max_tracks = n;
     weaver_update_track_cache(x);
-}
-
-t_max_err weaver_attr_set_visualize(t_weaver *x, void *attr, long ac, t_atom *av) {
-    if (ac && av) {
-        x->visualize = atom_getlong(av);
-        weaver_log(x, "visualize attribute set to %ld", x->visualize);
-    }
-    return MAX_ERR_NONE;
 }
 
 t_max_err weaver_attr_set_log(t_weaver *x, void *attr, long ac, t_atom *av) {
@@ -1278,12 +1195,6 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 }
                 tr->gain[other] = target_gain;
             }
-            if (x->visualize) {
-                tr->viz_palette = tr->pending_palette;
-                tr->viz_offset = tr->pending_offset;
-                tr->viz_bar_symbol = tr->pending_bar_symbol;
-                tr->viz_trigger_dirty = 1;
-            }
             tr->has_pending_data = 0;
             tr->waiting_for_dict = 0;
         }
@@ -1366,10 +1277,6 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     // Sync internal timer with the loop destination
                     double sr = tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr();
                     tr->xf.elapsed = (long long)round(current_scan * sr / 1000.0);
-
-                    // Clear visualization flags
-                    tr->viz_trigger_dirty = 0;
-                    tr->viz_dirty = 0;
                 }
             }
         }
@@ -1477,12 +1384,6 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                         double frac = f_src_raw - (double)f_low;
 
                         int in_bounds = (f_low >= 0 && f_high < tb[t].n_frames_src[j]);
-                        if (x->visualize && j == active_slot) {
-                            tr->viz_src_ms = src_ms;
-                            tr->viz_f_low = f_low;
-                            tr->viz_n_frames_src = tb[t].n_frames_src[j];
-                            tr->viz_in_bounds = in_bounds;
-                        }
 
                         if (in_bounds) {
                             long n_chans = tb[t].n_chans_src[j] > 16 ? 16 : tb[t].n_chans_src[j];
@@ -1517,20 +1418,6 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             tr->xf.elapsed = f_curr;
             tr->last_f_dest = f_curr;
             tr->dirty_dest = 1;
-
-            if (x->visualize) {
-                int gain_changed = (tr->viz_gain[0] != tr->gain[0] || tr->viz_gain[1] != tr->gain[1]);
-                tr->viz_f1 = f1;
-                tr->viz_f2 = f2;
-                tr->viz_busy = tr->busy;
-                tr->viz_gain[0] = tr->gain[0];
-                tr->viz_gain[1] = tr->gain[1];
-
-                if (current_scan >= tr->last_viz_sent_ms + 333.33 || current_scan < tr->last_viz_sent_ms || tr->viz_busy != tr->busy || gain_changed) {
-                    tr->viz_dirty = 1;
-                    tr->last_viz_sent_ms = current_scan;
-                }
-            }
 
             tr->last_track_scan = tr_scan;
         }
@@ -1599,10 +1486,6 @@ void weaver_audio_qtask(t_weaver *x) {
 
         if (hit_entry.type == TYPE_LOOP) {
             outlet_int(x->loop_outlet, (t_atom_long)hit_entry.track_id);
-            if (x->visualize && hit_entry.song_loop && !clear_sent) {
-                visualize((t_object *)x, "{\"clear\": 1}");
-                clear_sent = 1;
-            }
             continue;
         }
 
@@ -1752,44 +1635,6 @@ void weaver_audio_qtask(t_weaver *x) {
                 tr->dirty_dest = 0;
             }
 
-        }
-    }
-
-    // 2. Visualization Polling
-    if (x->visualize) {
-        double current_ms = (double)systime_ms();
-        if (current_ms >= x->last_viz_check_ms + 333.33) {
-            for (long t = 0; t < x->track_cache_count; t++) {
-                t_weaver_track *tr = x->track_cache[t];
-                if (!tr) continue;
-
-                char l_msg[256] = "";
-                char msg[256] = "";
-                int has_l = 0, has_m = 0;
-
-                // Capture data quickly under lock
-                critical_enter(x->lock);
-                if (tr->viz_trigger_dirty) {
-                    snprintf(l_msg, sizeof(l_msg), "{\"track\": %ld, \"ms\": %.2f, \"palette\": \"%s\", \"offset\": %.0f, \"bar\": \"%s\", \"len\": %.0f, \"f2\": %.1f, \"busy\": %d, \"dict_has_bar\": %d}",
-                             t + 1, tr->viz_absolute_ms, tr->viz_palette->s_name, tr->viz_offset, tr->viz_bar_symbol->s_name, tr->viz_track_length, (double)round(tr->viz_control), tr->viz_busy, tr->viz_dict_has_bar);
-                    tr->viz_trigger_dirty = 0;
-                    has_l = 1;
-                }
-
-                if (tr->viz_dirty) {
-                    double min_r = weaver_get_rolling_min_rating(x);
-                    snprintf(msg, sizeof(msg), "{\"track\": %ld, \"ms\": %.2f, \"f1\": %.4f, \"f2\": %.4f, \"busy\": %d, \"len\": %.0f, \"dynamic_gain\": %ld, \"g1\": %.4f, \"g2\": %.4f, \"src_ms\": %.2f, \"f_low\": %lld, \"n_frames\": %lld, \"in_bounds\": %d, \"song_length\": %.2f, \"min_rating\": %.3f}",
-                             t + 1, x->last_scan_val, tr->viz_f1, tr->viz_f2, tr->viz_busy, tr->viz_track_length, x->dynamic_gain, tr->viz_gain[0], tr->viz_gain[1], tr->viz_src_ms, tr->viz_f_low, tr->viz_n_frames_src, tr->viz_in_bounds, x->song_length, min_r);
-                    tr->viz_dirty = 0;
-                    has_m = 1;
-                }
-                critical_exit(x->lock);
-
-                // Send data outside lock
-                if (has_l) visualize((t_object *)x, l_msg);
-                if (has_m) visualize((t_object *)x, msg);
-            }
-            x->last_viz_check_ms = current_ms;
         }
     }
 }
