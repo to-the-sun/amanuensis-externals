@@ -48,6 +48,9 @@ typedef struct _weaver_track {
     double offset[2];
     double dict_offset[2];
     double rating[2];
+    double slot_most_negative[2];
+    double pending_most_negative;
+    double track_most_negative;
     double control;
     int busy;
     t_buffer_ref *src_refs[2];
@@ -140,6 +143,7 @@ typedef struct _weaver {
 
     t_symbol *audio_dict_name;
     double last_scan_val;
+    double last_ramp_in_val;
     t_fifo_entry hit_bars[4096];
     int fifo_head;
     int fifo_tail;
@@ -429,6 +433,10 @@ t_weaver_track *weaver_get_track_state(t_weaver *x, t_atom_long track_id) {
             tr->offset[1] = -1.0;
             tr->dict_offset[1] = -1.0;
             tr->rating[1] = 1.0;
+            tr->slot_most_negative[0] = 0.0;
+            tr->slot_most_negative[1] = 0.0;
+            tr->pending_most_negative = 0.0;
+            tr->track_most_negative = 0.0;
             tr->control = 0.0;
             tr->busy = 0;
             tr->src_refs[0] = buffer_ref_new((t_object *)x, _sym_nothing);
@@ -774,6 +782,7 @@ void *weaver_new(t_symbol *s, long argc, t_atom *argv) {
         x->visualize = 0;
         x->audio_dict_name = _sym_nothing;
         x->last_scan_val = -1.0;
+        x->last_ramp_in_val = -1.0;
         x->fifo_head = 0;
         x->fifo_tail = 0;
         x->dict_found = 0;
@@ -975,6 +984,7 @@ void weaver_update_track_metadata(t_weaver *x, t_atom_long track, t_symbol *pale
     tr->pending_offset = offset_ms;
     tr->pending_bar_symbol = bar_symbol;
     tr->pending_rating = rating;
+    tr->pending_most_negative = x->most_negative_bar;
     tr->viz_ms = bar_ms; // Trigger timestamp for playback and viz
     tr->viz_absolute_ms = absolute_ms; // Absolute timeline position for viz
     if (x->visualize) {
@@ -1062,6 +1072,7 @@ void weaver_consolidate(t_weaver *x) {
 void weaver_clear(t_weaver *x) {
     critical_enter(x->lock);
     x->last_scan_val = -1.0;
+    x->last_ramp_in_val = -1.0;
     x->fifo_head = 0;
     x->fifo_tail = 0;
     x->most_negative_bar = 0.0;
@@ -1102,6 +1113,10 @@ void weaver_clear(t_weaver *x) {
             tr->dict_offset[1] = -1.0;
             tr->rating[0] = 1.0;
             tr->rating[1] = 1.0;
+            tr->slot_most_negative[0] = 0.0;
+            tr->slot_most_negative[1] = 0.0;
+            tr->pending_most_negative = 0.0;
+            tr->track_most_negative = 0.0;
             tr->control = 0.0;
 
             tr->dest_found = 0;
@@ -1210,8 +1225,8 @@ typedef struct {
 
 void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
     double last_scan = x->last_scan_val;
+    double last_ramp_in = x->last_ramp_in_val;
     double bar_len = round(weaver_get_bar_length(x));
-    double vector_time = (sampleframes > 0) ? (ramp_in[0] + x->most_negative_bar) : 0.0;
 
     t_track_buffers tb[MAX_WEAVER_TRACKS];
     memset(tb, 0, sizeof(tb));
@@ -1248,7 +1263,20 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 tr->palette[other] = tr->pending_palette;
                 tr->dict_offset[other] = tr->pending_offset;
                 tr->offset[other] = tr->pending_offset;
+                tr->slot_most_negative[other] = tr->pending_most_negative;
                 tr->rating[other] = tr->pending_rating;
+
+                // Sync track_most_negative and compensate last_track_scan at bar handover
+                double old_tr_mn = tr->track_most_negative;
+                double new_tr_mn = tr->pending_most_negative;
+                if (new_tr_mn != old_tr_mn) {
+                    double delta = new_tr_mn - old_tr_mn;
+                    if (tr->last_track_scan != -1.0) {
+                        tr->last_track_scan += delta;
+                    }
+                    tr->track_most_negative = new_tr_mn;
+                }
+
                 tr->control = (double)other;
                 tr->xf.direction = tr->control - tr->xf.last_control;
 
@@ -1311,8 +1339,9 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
 
     // 3. Sample Loop (Unlocked)
     for (int i = 0; i < sampleframes; i++) {
-        double current_scan = ramp_in[i] + x->most_negative_bar;
-        int main_looped = (last_scan != -1.0 && current_scan < last_scan);
+        double current_ramp_in = ramp_in[i];
+        double current_scan = current_ramp_in + x->most_negative_bar;
+        int main_looped = (last_ramp_in != -1.0 && current_ramp_in < last_ramp_in);
 
         if (main_looped) {
             x->fifo_head = x->fifo_tail;
@@ -1336,6 +1365,10 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     tr->dict_offset[1] = -1.0;
                     tr->rating[0] = 1.0;
                     tr->rating[1] = 1.0;
+                    tr->slot_most_negative[0] = 0.0;
+                    tr->slot_most_negative[1] = 0.0;
+                    tr->pending_most_negative = 0.0;
+                    tr->track_most_negative = 0.0;
                     tr->control = 0.0;
                     tr->xf.last_control = 0.0;
 
@@ -1348,12 +1381,14 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                         x->fifo_tail = nt_loop;
                     }
 
+                    tr->track_most_negative = x->most_negative_bar;
+                    tr->pending_most_negative = x->most_negative_bar;
+
                     // Force re-entry into initial bar trigger logic
                     tr->last_track_scan = -1.0;
 
                     // Sync internal timer with the loop destination
-                    double sr = tb[t].sr_dest > 0 ? tb[t].sr_dest : sys_getsr();
-                    tr->xf.elapsed = (long long)round(current_scan * sr / 1000.0);
+                    tr->last_f_dest = -1;
 
                     // Clear visualization flags
                     tr->viz_trigger_dirty = 0;
@@ -1371,7 +1406,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             }
 
             // 2. Continuous Bar Hit Detection (Outside samples_dest check)
-            double tr_scan = current_scan;
+            double tr_scan = current_ramp_in + tr->track_most_negative;
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(tr->last_track_scan);
             int track_looped = (r_scan < r_last);
@@ -1406,7 +1441,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                         if (nt != x->fifo_head) {
                             x->hit_bars[x->fifo_tail].bar.sym = NULL;
                             x->hit_bars[x->fifo_tail].rel_time = (double)latest_j;
-                            x->hit_bars[x->fifo_tail].bar.value = current_scan; // Current ramp
+                            x->hit_bars[x->fifo_tail].bar.value = tr_scan;
                             x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                             x->hit_bars[x->fifo_tail].track_id = t + 1;
                             x->fifo_tail = nt;
@@ -1422,7 +1457,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 if (nt_init != x->fifo_head) {
                     x->hit_bars[x->fifo_tail].bar.sym = NULL;
                     x->hit_bars[x->fifo_tail].rel_time = initial_bar;
-                    x->hit_bars[x->fifo_tail].bar.value = current_scan;
+                    x->hit_bars[x->fifo_tail].bar.value = tr_scan;
                     x->hit_bars[x->fifo_tail].type = TYPE_DATA;
                     x->hit_bars[x->fifo_tail].track_id = t + 1;
                     x->fifo_tail = nt_init;
@@ -1437,27 +1472,24 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                 continue;
             }
 
-            long long f_curr = (long long)round(current_scan * tb[t].sr_dest / 1000.0);
-            if (tr->last_f_dest == -1 || main_looped || (f_curr - tr->last_f_dest > 100000)) {
-                tr->last_f_dest = f_curr - 1;
+            long long f_curr_ramp = (long long)round(current_ramp_in * tb[t].sr_dest / 1000.0);
+            if (tr->last_f_dest == -1 || main_looped || (f_curr_ramp - tr->last_f_dest > 100000)) {
+                tr->last_f_dest = f_curr_ramp - 1;
             }
 
             double f1, f2;
-            long long f_offset = (long long)round(x->most_negative_bar * tb[t].sr_dest / 1000.0);
-            for (long long f = tr->last_f_dest + 1; f <= f_curr; f++) {
-                double v_at_f = (double)f * 1000.0 / tb[t].sr_dest;
-                long long f_dest = f - f_offset;
-                long long f_wrapped = f_dest % tb[t].n_frames_dest;
+            for (long long f_ramp = tr->last_f_dest + 1; f_ramp <= f_curr_ramp; f_ramp++) {
+                long long f_wrapped = f_ramp % tb[t].n_frames_dest;
                 if (f_wrapped < 0) f_wrapped += tb[t].n_frames_dest;
 
                 double max_abs[2] = {0.0, 0.0};
                 double interleaved_s[2][16]; // Max 16 channels for interpolation
                 memset(interleaved_s, 0, sizeof(interleaved_s));
 
-                int active_slot = (int)round(tr->control);
                 // Linear Interpolation for source lookups
                 for (int j = 0; j < 2; j++) {
                     if (tb[t].samples_src[j]) {
+                        double v_at_f = (double)f_ramp * 1000.0 / tb[t].sr_dest + tr->slot_most_negative[j];
                         double src_ms = tr->offset[j] + v_at_f;
                         double f_src_raw = src_ms * tb[t].sr_src[j] / 1000.0;
                         long long f_low = (long long)floor(f_src_raw);
@@ -1478,8 +1510,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                     }
                 }
 
-                ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, f, tb[t].sr_dest, x->low_ms, x->high_ms, &f1);
-                ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, f, tb[t].sr_dest, x->low_ms, x->high_ms, &f2);
+                ramp_process(&tr->xf.ramp1, max_abs[0], tr->xf.direction, f_ramp, tb[t].sr_dest, x->low_ms, x->high_ms, &f1);
+                ramp_process(&tr->xf.ramp2, max_abs[1], tr->xf.direction * -1.0, f_ramp, tb[t].sr_dest, x->low_ms, x->high_ms, &f2);
                 tr->xf.direction = 0.0; // Direction is only applied once
 
                 for (long c = 0; c < tb[t].n_chans_dest; c++) {
@@ -1494,8 +1526,8 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             if (r1_done && r2_done && !tr->waiting_for_dict) tr->busy = 0;
 
             tr->xf.last_control = tr->control;
-            tr->xf.elapsed = f_curr;
-            tr->last_f_dest = f_curr;
+            tr->xf.elapsed = f_curr_ramp;
+            tr->last_f_dest = f_curr_ramp;
             tr->dirty_dest = 1;
 
             if (x->visualize) {
@@ -1515,6 +1547,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             tr->last_track_scan = tr_scan;
         }
         last_scan = current_scan;
+        last_ramp_in = current_ramp_in;
     }
 
     // 4. Unlock Phase
@@ -1530,6 +1563,7 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
     }
 
     x->last_scan_val = (sampleframes > 0) ? (ramp_in[sampleframes - 1] + x->most_negative_bar) : last_scan;
+    x->last_ramp_in_val = (sampleframes > 0) ? ramp_in[sampleframes - 1] : last_ramp_in;
     qelem_set(x->audio_qelem);
 }
 
