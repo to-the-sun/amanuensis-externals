@@ -1025,20 +1025,6 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double m
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
 
-    if (f <= 0.0) {
-        x->current_offset = stored_offset;
-        x->raw_offset = f;
-        x->loop_start = loop_start;
-        x->most_negative_bar = most_negative_bar;
-        x->last_msg_type = gensym("offset");
-        buildspans_log(x, "Global offset set to %.2f (stored: %.2f). Auto-initialization enabled. No duplication.", f, stored_offset);
-        x->current_task_seq = -1;
-        if (on_worker) {
-            systhread_mutex_unlock(x->state_mutex);
-        }
-        return;
-    }
-
     long new_rounded_offset = (long)round(stored_offset);
     long old_rounded_offset = (long)round(x->current_offset);
 
@@ -1487,11 +1473,18 @@ void buildspans_do_list(t_buildspans *x, t_symbol *s, long argc, t_atom *argv) {
 
     buildspans_log(x, "--- New Timestamp-Score Pair Received ---");
 
-    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (current_offset == 0),
+    // EPHEMERAL AUTO-INITIALIZATION: If no global offset has been set (raw_offset == 0.0),
     // we use the current note's looped_calc_absolute as the effective offset for this processing cycle
-    // without persisting it to x->current_offset.
-    double effective_stored_offset = (x->current_offset == 0.0) ? looped_calc_absolute : x->current_offset;
-    double effective_raw_offset = (x->raw_offset == 0.0) ? (looped_calc_absolute + x->loop_start) : x->raw_offset;
+    // without persisting it to x->raw_offset or x->current_offset.
+    double effective_raw_offset;
+    double effective_stored_offset;
+    if (x->raw_offset == 0.0) {
+        effective_raw_offset = looped_calc_absolute;
+        effective_stored_offset = looped_calc_absolute - x->loop_start;
+    } else {
+        effective_raw_offset = x->raw_offset;
+        effective_stored_offset = x->current_offset;
+    }
 
     buildspans_log(x, "Palette: %s, Raw calc: %.2f, Looped calc: %.2f, Score: %.2f, Raw store: %.2f, Looped store: %.2f, Effective Stored Offset: %.2f",
                     x->current_palette->s_name, raw_calc_absolute, looped_calc_absolute, score, raw_store_absolute, looped_store_absolute, effective_stored_offset);
@@ -1791,7 +1784,7 @@ void buildspans_process_and_add_note(t_buildspans *x, double looped_absolute, do
         buildspans_log(x, "*** Span initialization/update with offset 0.0 detected!");
         buildspans_log(x, "*** This occurred during buildspans_process_and_add_note for track (%ld).", x->current_track);
 
-        double effective_offset = (x->current_offset == 0.0) ? looped_absolute : x->current_offset;
+        double effective_offset = (x->raw_offset == 0.0) ? looped_absolute : x->current_offset;
         buildspans_log(x, "*** Current effective_offset: %.2f", effective_offset);
 
         buildspans_log(x, "*** Global State: current_offset %.2f, loop_start %.2f", x->current_offset, x->loop_start);
