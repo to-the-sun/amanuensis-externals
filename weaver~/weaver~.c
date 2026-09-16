@@ -1381,6 +1381,9 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
                         x->fifo_tail = nt_loop;
                     }
 
+                    tr->track_most_negative = x->most_negative_bar;
+                    tr->pending_most_negative = x->most_negative_bar;
+
                     // Force re-entry into initial bar trigger logic
                     tr->last_track_scan = -1.0;
 
