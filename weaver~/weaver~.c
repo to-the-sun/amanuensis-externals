@@ -1409,21 +1409,20 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
             double tr_scan = current_ramp_in + tr->track_most_negative;
             long r_scan = (long)floor(tr_scan);
             long r_last = (long)floor(tr->last_track_scan);
-            int track_looped = (r_scan < r_last);
 
             if (tr->last_track_scan != -1.0) {
-                if (main_looped || track_looped) {
+                if (main_looped) {
                     int nt_loop = (x->fifo_tail + 1) % 4096;
                     if (nt_loop != x->fifo_head) {
                         x->hit_bars[x->fifo_tail].type = TYPE_LOOP;
                         x->hit_bars[x->fifo_tail].track_id = t + 1;
-                        x->hit_bars[x->fifo_tail].song_loop = main_looped;
+                        x->hit_bars[x->fifo_tail].song_loop = 1;
                         x->fifo_tail = nt_loop;
                     }
                 }
 
                 if ((!tr->busy || main_looped) && !tr->waiting_for_dict && r_scan != r_last && bar_len > 0) {
-                    long long start = (track_looped || main_looped) ? 0 : r_last + 1;
+                    long long start = r_last + 1;
                     long long end = r_scan;
                     long long latest_j;
                     if (end >= 0) {
