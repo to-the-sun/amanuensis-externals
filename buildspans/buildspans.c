@@ -1014,13 +1014,16 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double m
         return;
     }
 
+    double clamped_most_neg = (most_negative_bar < 0.0) ? most_negative_bar : 0.0;
+    x->most_negative_bar = clamped_most_neg;
+
     // raw_offset (f) is the absolute song timestamp when the offset was set.
     // stored_offset (f - loop_start) is the loop-relative offset stored in the transcript
     // key so downstream weaver~ can apply it directly to the loop-agnostic palette buffer.
     double stored_offset = f - loop_start;
     x->raw_offset = f;
 
-    buildspans_log(x, "buildspans_do_offset received: raw_offset=%.2f, loop_start=%.2f, most_neg=%.2f -> stored_offset=%.2f", f, loop_start, most_negative_bar, stored_offset);
+    buildspans_log(x, "buildspans_do_offset received: raw_offset=%.2f, loop_start=%.2f, most_neg=%.2f -> stored_offset=%.2f", f, loop_start, clamped_most_neg, stored_offset);
 
     long bar_length = buildspans_get_bar_length(x);
     buildspans_log(x, "buildspans_do_offset: utilizing bar_length %ld", bar_length);
@@ -1032,8 +1035,8 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double m
         x->current_offset = stored_offset;
         x->raw_offset = f;
         x->loop_start = loop_start;
-        x->most_negative_bar = most_negative_bar;
-        buildspans_log(x, "Global offset updated to: %.2f (stored: %.2f, loop_start: %.2f, most_neg: %.2f). No duplication (rounded offset unchanged).", f, stored_offset, loop_start, most_negative_bar);
+        x->most_negative_bar = clamped_most_neg;
+        buildspans_log(x, "Global offset updated to: %.2f (stored: %.2f, loop_start: %.2f, most_neg: %.2f). No duplication (rounded offset unchanged).", f, stored_offset, loop_start, clamped_most_neg);
         x->current_task_seq = -1;
         if (on_worker) {
             systhread_mutex_unlock(x->state_mutex);
@@ -1046,7 +1049,7 @@ void buildspans_do_offset(t_buildspans *x, double f, double loop_start, double m
     x->current_offset = stored_offset;
     x->raw_offset = f;
     x->loop_start = loop_start;
-    x->most_negative_bar = most_negative_bar;
+    x->most_negative_bar = clamped_most_neg;
     x->last_msg_type = gensym("offset");
     buildspans_log(x, "Global offset updated to: %.2f (rounded: %ld). Proceeding with duplication.", f, new_rounded_offset);
 
