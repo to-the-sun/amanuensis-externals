@@ -275,10 +275,13 @@ void sounds_dict_clock_tick(t_sounds* x) {
 void sounds_sync_dict(t_sounds* x) {
     if (!x || x->dict_name == _sym_nothing || x->num_modules == 0) return;
 
-    t_dictionary* d = dictobj_findregistered_retain(x->dict_name);
-    if (!d) return;
-
     critical_enter(x->lock);
+    t_dictionary* d = dictobj_findregistered_retain(x->dict_name);
+    if (!d) {
+        critical_exit(x->lock);
+        return;
+    }
+
     int dict_changed = 0;
 
     for (int i = 0; i < x->num_modules; i++) {
@@ -474,7 +477,17 @@ void sounds_dsp64(t_sounds* x, t_object* dsp64, short* count, double samplerate,
     dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)sounds_perform64, 0, NULL);
 }
 
+static void sounds_log_dsp_stall(void *x, double duration_ms, long sampleframes) {
+    FILE *f = fopen("max_dsp_stall_breadcrumbs.log", "a");
+    if (f) {
+        fprintf(f, "[DSP STALL] sounds~ %p: perform64 took %.3f ms for %ld sampleframes (> 10.0ms)\n", x, duration_ms, sampleframes);
+        fflush(f);
+        fclose(f);
+    }
+}
+
 void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, double** outs, long numouts, long sampleframes, long flags, void* userparam) {
+    double t0 = (double)systime_ms();
     double* outL = outs[0];
     double* outR = outs[1];
 
@@ -606,6 +619,11 @@ void sounds_perform64(t_sounds* x, t_object* dsp64, double** ins, long numins, d
             double delta_sec = (double)sampleframes / x->sample_rate;
             x->preset_durations[x->current_module] += delta_sec;
         }
+    }
+
+    double duration_ms = (double)systime_ms() - t0;
+    if (duration_ms > 10.0) {
+        sounds_log_dsp_stall(x, duration_ms, sampleframes);
     }
 }
 

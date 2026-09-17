@@ -1566,9 +1566,23 @@ void weaver_process_vector(t_weaver *x, double *ramp_in, long sampleframes) {
     qelem_set(x->audio_qelem);
 }
 
+static void weaver_log_dsp_stall(void *x, double duration_ms, long sampleframes) {
+    FILE *f = fopen("max_dsp_stall_breadcrumbs.log", "a");
+    if (f) {
+        fprintf(f, "[DSP STALL] weaver~ %p: perform64 took %.3f ms for %ld sampleframes (> 10.0ms)\n", x, duration_ms, sampleframes);
+        fflush(f);
+        fclose(f);
+    }
+}
+
 void weaver_perform64(t_weaver *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
     if (x->consolidate_running) return;
+    double t0 = (double)systime_ms();
     weaver_process_vector(x, ins[0], sampleframes);
+    double duration_ms = (double)systime_ms() - t0;
+    if (duration_ms > 10.0) {
+        weaver_log_dsp_stall(x, duration_ms, sampleframes);
+    }
 }
 
 void weaver_audio_qtask(t_weaver *x) {
