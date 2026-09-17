@@ -1327,6 +1327,7 @@ void monitor_calculate_reaches(t_crucible *x, t_dictionary *incumbent_dict, t_at
     }
 
     if (song_has) {
+        if (song_min > 0) song_min = 0;
         *out_song_reach = (song_max + bar_length) - song_min;
         *out_song_min = song_min;
     }
@@ -2412,6 +2413,7 @@ void crucible_recalculate_reaches(t_crucible *x) {
     }
 
     if (song_has) {
+        if (song_min > 0) song_min = 0;
         x->song_reach = (song_max + bar_length) - song_min;
         x->song_min = song_min;
     } else {

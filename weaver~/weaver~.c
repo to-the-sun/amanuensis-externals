@@ -303,6 +303,7 @@ void *weaver_consolidate_worker(t_weaver_consolidate_job *job) {
         }
     }
 
+    if (local_most_negative > 0.0) local_most_negative = 0.0;
     critical_enter(x->lock);
     x->most_negative_bar = local_most_negative;
     // Reset all track lengths first
@@ -634,6 +635,7 @@ void weaver_update_most_negative_bar(t_weaver *x) {
     if (track_keys) sysmem_freeptr(track_keys);
     dictobj_release(d);
 
+    if (local_most_negative > 0.0) local_most_negative = 0.0;
     if (local_most_negative != x->most_negative_bar) {
         weaver_log(x, "most_negative_bar updated to %.2f ms", local_most_negative);
         critical_enter(x->lock);
