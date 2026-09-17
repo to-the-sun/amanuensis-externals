@@ -636,6 +636,9 @@ void weaver_update_most_negative_bar(t_weaver *x) {
 
     if (local_most_negative != x->most_negative_bar) {
         weaver_log(x, "most_negative_bar updated to %.2f ms", local_most_negative);
+        if (x->visualize) {
+            visualize((t_object *)x, "{\"clear\": 1}");
+        }
         critical_enter(x->lock);
         x->most_negative_bar = local_most_negative;
         critical_exit(x->lock);
