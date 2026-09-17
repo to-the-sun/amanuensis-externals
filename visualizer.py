@@ -727,8 +727,8 @@ def run_gui():
                 except (ValueError, TypeError):
                     continue
 
-        if most_negative_bar is None:
-            most_negative_bar = song_start
+        if most_negative_bar is None or most_negative_bar > 0.0:
+            most_negative_bar = 0.0
         if most_positive_bar_plus_len is None:
             most_positive_bar_plus_len = song_reach
 

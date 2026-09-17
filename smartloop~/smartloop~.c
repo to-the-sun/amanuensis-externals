@@ -565,6 +565,7 @@ void smartloop_calculate(t_smartloop *x) {
         if (bar_keys) sysmem_freeptr(bar_keys);
     }
 
+    if (local_most_negative > 0.0) local_most_negative = 0.0;
     x->most_negative_bar = local_most_negative;
 
     if (!has_bars) {
