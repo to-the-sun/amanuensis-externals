@@ -2873,7 +2873,6 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                         object_release((t_object *)span_aa);
                                     }
                                 } else {
-                                    dictobj_release(incumbent_dict);
                                     if (x->visualize) {
                                         crucible_visualize_repopulate(x);
                                         char msg[256];
@@ -2882,7 +2881,6 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     }
                                 }
                             } else {
-                                dictobj_release(incumbent_dict);
                                 if (x->visualize) {
                                     crucible_query_bar_buffer_length(x);
                                     crucible_visualize_repopulate(x);
@@ -2891,6 +2889,7 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                                     visualize((t_object *)x, msg);
                                 }
                             }
+                            dictobj_release(incumbent_dict);
                         } else if (x->visualize) {
                             crucible_visualize_repopulate(x);
                             char msg[256];

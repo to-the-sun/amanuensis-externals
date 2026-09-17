@@ -101,7 +101,17 @@ void crossfade_dsp64(t_crossfade *x, t_object *dsp64, short *count, double sampl
     dsp_add64(dsp64, (t_object *)x, (t_perfroutine64)crossfade_perform64, 0, NULL);
 }
 
+static void crossfade_log_dsp_stall(void *x, double duration_ms, long sampleframes) {
+    FILE *f = fopen("max_dsp_stall_breadcrumbs.log", "a");
+    if (f) {
+        fprintf(f, "[DSP STALL] crossfade~ %p: perform64 took %.3f ms for %ld sampleframes (> 10.0ms)\n", x, duration_ms, sampleframes);
+        fflush(f);
+        fclose(f);
+    }
+}
+
 void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long numins, double **outs, long numouts, long sampleframes, long flags, void *userparam) {
+    double t0 = (double)systime_ms();
     double *control = ins[0];
     double *s1 = ins[1];
     double *s2 = ins[2];
@@ -121,6 +131,11 @@ void crossfade_perform64(t_crossfade *x, t_object *dsp64, double **ins, long num
         mix2_out[i] = m2;
         sum_out[i] = sum;
         busy_out[i] = (double)busy;
+    }
+
+    double duration_ms = (double)systime_ms() - t0;
+    if (duration_ms > 10.0) {
+        crossfade_log_dsp_stall(x, duration_ms, sampleframes);
     }
 }
 

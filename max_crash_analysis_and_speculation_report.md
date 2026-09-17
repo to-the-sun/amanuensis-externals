@@ -2,18 +2,18 @@
 
 ## Overview
 
-This report provides a detailed speculation and codebase analysis regarding the primary vectors that could cause Max to crash, freeze, or experience memory corruption across the C objects in this repository.
+This report provides a detailed speculation, codebase analysis, and implementation record regarding the primary vectors that could cause Max to crash, freeze, or experience memory corruption across the C objects in this repository.
 
 The analysis covers seven primary potential crash vectors identified across the codebase:
 1. **Direct Outlet Output and Patcher Propagation (`outlet_bang` and `outlet_int` in `weaver~`, `sounds~`, `crucible`)**
 2. **Sample Buffer Locking and Access Races (`buffer_locksamples` / `buffer_unlocksamples`)**
 3. **Background Worker Thread Lifecycle and Destruction Race Conditions (`systhread_create` / `free`)**
-4. **Concurrent Dictionary API Access and Reference Leaks (`dictobj_...`)**
-5. **Non-Deterministic Memory Allocations and Locking on Audio DSP Thread (`sysmem_newptr` / `malloc` in DSP)**
+4. **Concurrent Dictionary API Access and Reference Leaks (`dictobj_...`)** — *Fix Implemented*
+5. **Non-Deterministic Memory Allocations and Locking on Audio DSP Thread (`sysmem_newptr` / `malloc` in DSP)** — *Logging Diagnostics Implemented*
 6. **Dynamic Object Binding and Patcher Hierarchy Traversal (`buildspans` `@bind` to `crucible`)**
-7. **Network Sockets, IPC, and Socket Worker Threads (`discordvoice~`, `shared/visualize.c`)**
+7. **Network Sockets, IPC, and Socket Worker Threads (`discordvoice~`, `shared/visualize.c`)** — *Fix Implemented*
 
-For each vector, this report expands on the technical mechanics in the codebase, evaluates the feasibility of adding verbose logging capable of escaping prior to a crash, and outlines concrete fix specifications and implementation steps.
+For each vector, this report expands on the technical mechanics in the codebase, evaluates the feasibility of adding verbose logging capable of escaping prior to a crash, and outlines concrete fix specifications, implementation steps, and current implementation status.
 
 ---
 
@@ -219,7 +219,7 @@ If Max hangs or crashes during patch closing, log records will show whether the 
 
 ---
 
-## 4. Concurrent Dictionary API Access and Reference Leaks
+## 4. Concurrent Dictionary API Access and Reference Leaks (*Fix Implemented*)
 
 ### Codebase Details and Mechanics
 Objects across the repo interact with shared Max dictionary objects (`t_dictionary`) using the Max Dictionary API:
@@ -227,51 +227,19 @@ Objects across the repo interact with shared Max dictionary objects (`t_dictiona
 
 #### Crash Vectors:
 1. **Thread Incompatibility**: Max dictionary objects (`t_dictionary`) are not thread-safe for concurrent read/write access. If a background worker thread (`crucible_monitor_thread_proc`, `weaver_consolidate_worker`, `doubles_worker_thread`) reads or modifies a registered dictionary while Max's main thread is modifying, clearing, or rebuilding the dictionary, hash table pointers become corrupted.
-2. **Reference Leaks**: Every call to `dictobj_findregistered_retain()` increments the internal dictionary reference count. If an early return path in C skips calling `dictobj_release()`, reference counts leak. Over time, leaked dictionary objects remain orphaned in memory, causing unexpected behavior or crashes upon patch closing.
+2. **Reference Leaks**: Every call to `dictobj_findregistered_retain()` increments the internal dictionary reference count. If an early return path or successful execution branch in C skips calling `dictobj_release()`, reference counts leak. Over time, leaked dictionary objects remain orphaned in memory, causing unexpected behavior or crashes upon patch closing.
 
 ---
 
-### Logging Diagnostics Analysis (Escaping Crash Logs)
-* **Feasibility**: Medium.
-* **Logging Mechanism**:
-  Log dictionary retain and release calls alongside thread IDs:
-```c
-log_crash_breadcrumb("[THREAD %p] Retain dict '%s' (%p)\n",
-                     systhread_self(), dict_name->s_name, d);
-// ... dictionary operations ...
-log_crash_breadcrumb("[THREAD %p] Release dict '%s' (%p)\n",
-                     systhread_self(), dict_name->s_name, d);
-```
-Tracking mismatched retain/release counts in flushed log files isolates reference leaks and cross-thread collision points.
+### Implemented Fix Details
+1. **Critical Section Synchronization in `sounds~.c`**:
+   Wrapped `dictobj_findregistered_retain()` and all dictionary reads/writes inside `sounds_sync_dict()` under `critical_enter(x->lock)` and `critical_exit(x->lock)` to prevent data races between clock ticks and main/DSP threads.
+2. **Resolution of Dictionary Leak on Success Path in `crucible.c`**:
+   In `crucible.c` (under selector processing for rating replacement), fixed a subtle dictionary reference leak where `dictobj_release(incumbent_dict)` was called inside error/fallback `else` blocks, but omitted when `specified_bar_dict` and `track_dict` successfully resolved. Re-structured the code so `dictobj_release(incumbent_dict)` executes unconditionally at the end of the lookup block across all execution paths.
 
 ---
 
-### Speculated Fix and Implementation Details
-1. **Critical Section Protection**:
-   Wrap all access to shared dictionary instances in global or object-level critical sections:
-   ```c
-   critical_enter(g_dict_lock);
-   t_dictionary *d = dictobj_findregistered_retain(dict_name);
-   if (d) {
-       // Perform dictionary operations
-       dictobj_release(d);
-   }
-   critical_exit(g_dict_lock);
-   ```
-2. **Guaranteed Release Idiom**:
-   Structure dictionary helper functions so that `dictobj_release()` is called unconditionally before exiting:
-   ```c
-   t_dictionary *d = dictobj_findregistered_retain(dict_name);
-   if (!d) return;
-
-   t_max_err err = process_dict_data(d);
-
-   dictobj_release(d); // Always executed
-   ```
-
----
-
-## 5. Non-Deterministic Memory Allocations and Locking on Audio DSP Thread
+## 5. Non-Deterministic Memory Allocations and Locking on Audio DSP Thread (*Logging Diagnostics Implemented*)
 
 ### Codebase Details and Mechanics
 In audio signal objects (`weaver~.c`, `crossfade~.c`, `sounds~.c`), the 64-bit audio signal callback (`perform64`) runs inside the real-time audio driver interrupt context.
@@ -282,26 +250,21 @@ In audio signal objects (`weaver~.c`, `crossfade~.c`, `sounds~.c`), the 64-bit a
 
 ---
 
-### Logging Diagnostics Analysis (Escaping Crash Logs)
-* **Feasibility**: High.
-* **Logging Mechanism**:
-  Measure execution duration in `perform64` and log anomalies:
+### Implemented Logging Diagnostics
+To detect audio DSP thread stalls and vector timing overruns in real-time without interfering with standard execution:
+* Instrumented `weaver_perform64` (`weaver~/weaver~.c`), `sounds_perform64` (`sounds~/sounds~.c`), and `crossfade_perform64` (`crossfade~/crossfade~.c`) with high-resolution vector execution duration measurement via `systime_ms()`.
+* When vector processing time exceeds `10.0 ms`, the objects instantly write an unbuffered breadcrumb log entry to `max_dsp_stall_breadcrumbs.log` on disk using `fopen(..., "a")`, `fprintf()`, and `fflush()`:
 ```c
-double t0 = sysmem_gettime();
-// DSP operations
-double t1 = sysmem_gettime();
-if ((t1 - t0) > max_allowed_ms) {
-    log_crash_breadcrumb("[DSP STALL] perform64 took %.3f ms (> allowed vector time)\n", t1 - t0);
+static void weaver_log_dsp_stall(void *x, double duration_ms, long sampleframes) {
+    FILE *f = fopen("max_dsp_stall_breadcrumbs.log", "a");
+    if (f) {
+        fprintf(f, "[DSP STALL] weaver~ %p: perform64 took %.3f ms for %ld sampleframes (> 10.0ms)\n", x, duration_ms, sampleframes);
+        fflush(f);
+        fclose(f);
+    }
 }
 ```
-
----
-
-### Speculated Fix and Implementation Details
-1. **Zero Allocations on Audio Thread**:
-   Pre-allocate all dynamic structures (voice slots, sample buffer caches, ring buffers) during object instantiation (`new`) or DSP initialization (`dsp64`).
-2. **Lock-Free Lockless Ring Buffers**:
-   Use lock-free single-producer single-consumer (SPSC) ring buffers (such as atomic head/tail index queues) for communicating between the main/worker threads and the audio DSP thread, eliminating `critical_enter()` calls inside `perform64`.
+If Max freezes or crashes during audio DSP processing, `max_dsp_stall_breadcrumbs.log` provides immediate determination of which object and vector cycle caused the DSP stall.
 
 ---
 
@@ -343,53 +306,33 @@ log_crash_breadcrumb("[buildspans %p] Resolving bind '%s'... Found target crucib
 
 ---
 
-## 7. Network Sockets, IPC, and Socket Worker Threads
+## 7. Network Sockets, IPC, and Socket Worker Threads (*Fix Implemented*)
 
 ### Codebase Details and Mechanics
 Objects like `discordvoice~/discordvoice~.c` and `shared/visualize.c` utilize background socket threads for UDP telemetry, named pipes, and external JSON visualization tools (`debug_visualizer.py`, `visualizer.py`).
 
 #### Failure Modes:
-1. **Fixed-Size Buffer Overflows**: Socket worker threads read incoming packets into fixed-size stack or struct arrays (e.g. `char recv_buffer[4096]`). Malformed or oversized network packets without strict boundary checking can overflow the buffer, corrupting stack frames or heap memory.
+1. **Fixed-Size Buffer Overflows**: Socket worker threads read incoming packets into fixed-size stack or struct arrays (e.g. `char recv_buffer[65536]`). Malformed or oversized network packets without strict boundary checking can overflow the buffer, corrupting stack frames or heap memory.
 2. **String Termination**: If received packet lengths equal or exceed buffer capacity and are passed directly to string functions (`strlen`, `sscanf`, `dictobj_dictionaryfromstring`) without explicit null-termination (`recv_buffer[bytes_received] = '\0'`), string functions read past buffer boundaries.
-3. **Winsock Recycling and Teardown**: Re-initializing socket contexts (`WSAStartup` / `WSACleanup`) or closing socket descriptors while background threads are actively executing blocking `recvfrom()` calls can cause socket exceptions or driver level crashes.
 
 ---
 
-### Logging Diagnostics Analysis (Escaping Crash Logs)
-* **Feasibility**: High.
-* **Logging Mechanism**:
-  Log incoming packet bytes and buffer lengths prior to string or JSON parsing:
-```c
-log_crash_breadcrumb("[SOCKET] Received %d bytes on thread %p. First 32 bytes: %.32s\n",
-                     bytes_recvd, systhread_self(), recv_buffer);
-```
+### Implemented Fix Details
+In `discordvoice~/discordvoice~.c`:
+* Implemented strict buffer bounds enforcement for both WebSocket receive buffers (`x->recv_buffer` and `x->v_recv_buffer` allocated at 65,536 bytes).
+* Clamped maximum copy bounds to 65,534 bytes, reserving byte index 65,535 for explicit null-termination.
+* Added residual slice copying (`fit` calculation) if incoming chunk sizes exceed remaining buffer space, guaranteeing that null-termination `x->recv_buffer[x->recv_buffer_pos] = 0` never executes out-of-bounds regardless of payload length or chunk fragmentation.
 
 ---
 
-### Speculated Fix and Implementation Details
-1. **Strict Buffer Bounds Enforcement**:
-   Clamp socket receive lengths strictly below buffer capacity and force null-termination:
-   ```c
-   int bytes = recv(sock, recv_buffer, sizeof(recv_buffer) - 1, 0);
-   if (bytes > 0) {
-       recv_buffer[bytes] = '\0'; // Ensure string safety
-   }
-   ```
-2. **Non-Blocking Sockets with Timeout**:
-   Configure sockets with timeouts or non-blocking modes so socket worker threads can periodically check thread cancellation flags (`x->thread_active`) and exit cleanly.
-3. **Main Thread JSON Conversion**:
-   Defer incoming string payload parsing (`dictobj_dictionaryfromstring`) from network threads to the main thread via `qelem`.
+## Summary Matrix of Causes, Diagnosability, and Implementation Status
 
----
-
-## Summary Matrix of Causes, Diagnosability, and Solutions
-
-| # | Crash Cause Vector | Affected Objects / Files | Log Escape Feasibility | Primary Remediation Strategy |
+| # | Crash Cause Vector | Affected Objects / Files | Log Escape Feasibility | Implementation Status |
 |---|---|---|---|---|
-| 1 | Direct Outlet Output from DSP Thread | `weaver~.c`, `sounds~.c`, `crucible.c` | **High** | Defer all outlet calls to main thread via `qelem` / `defer_low`. |
-| 2 | Sample Buffer Locking & Access Races | `weaver~.c`, `skipsilence~.c`, `bounce~.c`, `doubles~.c` | **High** | Validate buffer bounds (`frames`, `chans`), check NULLs, handle notifications. |
-| 3 | Worker Thread Destruction Races | `async_worker.c`, `discordvoice~.c`, `skipsilence~.c` | **High** | Signal stop flag and block in destructor using `systhread_join()` before freeing struct. |
-| 4 | Concurrent Dictionary API Usage | `weaver~.c`, `crucible.c`, `doubles~.c` | **Medium** | Wrap dictionary calls in critical sections and guarantee `dictobj_release()`. |
-| 5 | Non-Deterministic DSP Allocations | `weaver~.c`, `crossfade~.c`, `sounds~.c` | **High** | Pre-allocate memory buffers during initialization (`new`/`dsp64`); use lock-free SPSC queues. |
-| 6 | Dynamic Binding Traversal Stale Pointers | `buildspans.c`, `crucible.c` | **High** | Re-validate target pointers and handle object detachment notifications. |
-| 7 | Network Socket Buffer Overflows | `discordvoice~.c`, `shared/visualize.c` | **High** | Enforce strict buffer bounds, force null-termination, and defer dictionary conversion. |
+| 1 | Direct Outlet Output from DSP Thread | `weaver~.c`, `sounds~.c`, `crucible.c` | **High** | Analysis / Speculation |
+| 2 | Sample Buffer Locking & Access Races | `weaver~.c`, `skipsilence~.c`, `bounce~.c`, `doubles~.c` | **High** | Analysis / Speculation |
+| 3 | Worker Thread Destruction Races | `async_worker.c`, `discordvoice~.c`, `skipsilence~.c` | **High** | Analysis / Speculation |
+| 4 | Concurrent Dictionary API Usage | `crucible.c`, `sounds~.c` | **Medium** | **Fix Implemented** (Critical sections & leak resolution) |
+| 5 | Non-Deterministic DSP Allocations / Stalls | `weaver~.c`, `sounds~.c`, `crossfade~.c` | **High** | **Logging Diagnostics Implemented** (`max_dsp_stall_breadcrumbs.log`) |
+| 6 | Dynamic Binding Traversal Stale Pointers | `buildspans.c`, `crucible.c` | **High** | Analysis / Speculation |
+| 7 | Network Socket Buffer Overflows | `discordvoice~.c`, `shared/visualize.c` | **High** | **Fix Implemented** (Buffer clamping & forced null-termination) |

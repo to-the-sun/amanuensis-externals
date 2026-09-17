@@ -451,12 +451,19 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
         DWORD err = WinHttpWebSocketReceive(hWebSocket, chunk, sizeof(chunk), &bytesRead, &bufferType);
 
         if (err == ERROR_SUCCESS) {
-            if (x->recv_buffer_pos + bytesRead < 65536) {
+            if (x->recv_buffer_pos + bytesRead < 65535) {
                 memcpy(x->recv_buffer + x->recv_buffer_pos, chunk, bytesRead);
                 x->recv_buffer_pos += bytesRead;
+            } else {
+                DWORD fit = (x->recv_buffer_pos < 65534) ? (65534 - x->recv_buffer_pos) : 0;
+                if (fit > 0) {
+                    memcpy(x->recv_buffer + x->recv_buffer_pos, chunk, fit);
+                    x->recv_buffer_pos += fit;
+                }
             }
 
             if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+                if (x->recv_buffer_pos >= 65535) x->recv_buffer_pos = 65534;
                 x->recv_buffer[x->recv_buffer_pos] = 0;
                 // discordvoice_log(x, "Received: %s", (char *)x->recv_buffer);
                 
@@ -588,12 +595,19 @@ void *discordvoice_thread_proc(t_discordvoice *x) {
 
             DWORD vErr = WinHttpWebSocketReceive(hVWebSocket, vChunk, sizeof(vChunk), &vBytesRead, &vBufferType);
             if (vErr == ERROR_SUCCESS) {
-                if (x->v_recv_buffer_pos + vBytesRead < 65536) {
+                if (x->v_recv_buffer_pos + vBytesRead < 65535) {
                     memcpy(x->v_recv_buffer + x->v_recv_buffer_pos, vChunk, vBytesRead);
                     x->v_recv_buffer_pos += vBytesRead;
+                } else {
+                    DWORD fit = (x->v_recv_buffer_pos < 65534) ? (65534 - x->v_recv_buffer_pos) : 0;
+                    if (fit > 0) {
+                        memcpy(x->v_recv_buffer + x->v_recv_buffer_pos, vChunk, fit);
+                        x->v_recv_buffer_pos += fit;
+                    }
                 }
 
                 if (vBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+                    if (x->v_recv_buffer_pos >= 65535) x->v_recv_buffer_pos = 65534;
                     x->v_recv_buffer[x->v_recv_buffer_pos] = 0;
                     t_dictionary *vd = NULL;
                     char verrstr[256];
