@@ -37,6 +37,8 @@ void crucible_visualize_repopulate_ex(t_crucible *x, int rebar_flag);
 void *crucible_monitor_thread_proc(t_crucible *x);
 void crucible_defer_monitor_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv);
 void crucible_monitor_qfn(t_crucible *x);
+void crucible_queue_deferred_output(t_crucible *x, t_symbol *msg_type, t_symbol *s, long argc, t_atom *argv);
+void crucible_outlet_qfn(t_crucible *x);
 
 // Dyn String helper struct and prototypes
 typedef struct {
@@ -263,21 +265,51 @@ int crucible_is_task_cancelled(t_crucible *x, long seq) {
     return 0;
 }
 
-void crucible_defer_output(t_crucible *x, t_symbol *s, short argc, t_atom *argv) {
-    if (s == gensym("-")) {
-        outlet_anything(x->outlet_data, s, argc, argv);
-    } else if (s == gensym("data_list")) {
-        outlet_list(x->outlet_data, NULL, argc, argv);
-    } else if (s == gensym("reach_song")) {
-        outlet_anything(x->outlet_reach_int, gensym("song"), argc, argv);
-    } else if (s == gensym("reach_list")) {
-        outlet_list(x->outlet_reach_int, NULL, argc, argv);
-    } else if (s == gensym("reach_min")) {
-        outlet_anything(x->outlet_reach_int, gensym("min"), argc, argv);
-    } else if (s == gensym("rebar_status")) {
-        if (argc > 0) {
-            outlet_int(x->outlet_rebar, atom_getlong(argv));
+void crucible_queue_deferred_output(t_crucible *x, t_symbol *msg_type, t_symbol *s, long argc, t_atom *argv) {
+    t_crucible_outlet_msg *msg = (t_crucible_outlet_msg *)sysmem_newptr(sizeof(t_crucible_outlet_msg));
+    if (!msg) return;
+    msg->msg_type = msg_type;
+    msg->s = s;
+    msg->argc = argc > 4 ? 4 : argc;
+    for (long i = 0; i < msg->argc; i++) {
+        msg->argv[i] = argv[i];
+    }
+    systhread_mutex_lock(x->outlet_queue_mutex);
+    linklist_append(x->deferred_outlet_queue, msg);
+    systhread_mutex_unlock(x->outlet_queue_mutex);
+    if (x->outlet_qelem) {
+        qelem_set(x->outlet_qelem);
+    }
+}
+
+void crucible_outlet_qfn(t_crucible *x) {
+    while (1) {
+        t_crucible_outlet_msg *msg = NULL;
+        systhread_mutex_lock(x->outlet_queue_mutex);
+        if (linklist_getsize(x->deferred_outlet_queue) > 0) {
+            msg = (t_crucible_outlet_msg *)linklist_getindex(x->deferred_outlet_queue, 0);
+            linklist_chuckindex(x->deferred_outlet_queue, 0);
         }
+        systhread_mutex_unlock(x->outlet_queue_mutex);
+
+        if (!msg) break;
+
+        if (msg->msg_type == gensym("-")) {
+            if (x->outlet_data) outlet_anything(x->outlet_data, msg->s, msg->argc, msg->argv);
+        } else if (msg->msg_type == gensym("data_list")) {
+            if (x->outlet_data) outlet_list(x->outlet_data, NULL, msg->argc, msg->argv);
+        } else if (msg->msg_type == gensym("reach_song")) {
+            if (x->outlet_reach_int) outlet_anything(x->outlet_reach_int, gensym("song"), msg->argc, msg->argv);
+        } else if (msg->msg_type == gensym("reach_list")) {
+            if (x->outlet_reach_int) outlet_list(x->outlet_reach_int, NULL, msg->argc, msg->argv);
+        } else if (msg->msg_type == gensym("reach_min")) {
+            if (x->outlet_reach_int) outlet_anything(x->outlet_reach_int, gensym("min"), msg->argc, msg->argv);
+        } else if (msg->msg_type == gensym("rebar_status")) {
+            if (x->outlet_rebar && msg->argc > 0) {
+                outlet_int(x->outlet_rebar, atom_getlong(msg->argv));
+            }
+        }
+        sysmem_freeptr(msg);
     }
 }
 
@@ -288,7 +320,7 @@ void crucible_send_rebar_status(t_crucible *x, t_atom_long status) {
         } else {
             t_atom a;
             atom_setlong(&a, status);
-            defer(x, (method)crucible_defer_output, gensym("rebar_status"), 1, &a);
+            crucible_queue_deferred_output(x, gensym("rebar_status"), NULL, 1, &a);
         }
     }
 }
@@ -443,7 +475,10 @@ void *crucible_new(t_symbol *s, long argc, t_atom *argv) {
 
         systhread_mutex_new(&x->sequence_mutex, 0);
         systhread_mutex_new(&x->state_mutex, 0);
+        systhread_mutex_new(&x->outlet_queue_mutex, 0);
         x->pending_sequences = linklist_new();
+        x->deferred_outlet_queue = linklist_new();
+        x->outlet_qelem = qelem_new((t_object *)x, (method)crucible_outlet_qfn);
         x->enqueue_sequence = 0;
         x->last_clear_sequence = 0;
         x->current_task_seq = -1;
@@ -526,7 +561,25 @@ void crucible_free(t_crucible *x) {
 
     if (x->worker) {
         async_worker_release(x->worker);
+        x->worker = NULL;
     }
+
+    if (x->outlet_qelem) {
+        qelem_free(x->outlet_qelem);
+        x->outlet_qelem = NULL;
+    }
+    if (x->deferred_outlet_queue) {
+        systhread_mutex_lock(x->outlet_queue_mutex);
+        while (linklist_getsize(x->deferred_outlet_queue) > 0) {
+            t_crucible_outlet_msg *msg = (t_crucible_outlet_msg *)linklist_getindex(x->deferred_outlet_queue, 0);
+            linklist_chuckindex(x->deferred_outlet_queue, 0);
+            if (msg) sysmem_freeptr(msg);
+        }
+        systhread_mutex_unlock(x->outlet_queue_mutex);
+        linklist_chuck(x->deferred_outlet_queue);
+    }
+    systhread_mutex_free(x->outlet_queue_mutex);
+
     if (x->challenger_dict) {
         object_release((t_object *)x->challenger_dict);
     }
@@ -586,10 +639,10 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
             atom_setfloat(reach_list + 2, -999999.0);
 
             if (x->outlet_data) {
-                if (!x->async || systhread_ismainthread()) {
+                if (systhread_ismainthread()) {
                     outlet_anything(x->outlet_data, gensym("-"), 3, reach_list);
                 } else {
-                    defer(x, (method)crucible_defer_output, gensym("-"), 3, reach_list);
+                    crucible_queue_deferred_output(x, gensym("-"), gensym("-"), 3, reach_list);
                 }
             }
         }
@@ -642,10 +695,10 @@ void crucible_output_bar_data(t_crucible *x, t_dictionary *bar_dict, t_atom_long
     atom_setfloat(list + 3, offset_val);
 
     if (x->outlet_data) {
-        if (!x->async || systhread_ismainthread()) {
+        if (systhread_ismainthread()) {
             outlet_list(x->outlet_data, NULL, 4, list);
         } else {
-            defer(x, (method)crucible_defer_output, gensym("data_list"), 4, list);
+            crucible_queue_deferred_output(x, gensym("data_list"), NULL, 4, list);
         }
     }
 }
@@ -1105,10 +1158,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                 if (song_grew) {
                     t_atom reach_atom;
                     atom_setlong(&reach_atom, (t_atom_long)x->song_reach);
-                    if (!x->async || systhread_ismainthread()) {
+                    if (systhread_ismainthread()) {
                         outlet_anything(x->outlet_reach_int, gensym("song"), 1, &reach_atom);
                     } else {
-                        defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &reach_atom);
+                        crucible_queue_deferred_output(x, gensym("reach_song"), gensym("song"), 1, &reach_atom);
                     }
                 }
                 t_symbol **tr_keys = NULL;
@@ -1124,10 +1177,10 @@ void crucible_process_span(t_crucible *x, t_symbol *track_sym, t_atomarray *span
                         t_atom reach_list[2];
                         atom_setlong(reach_list, (t_atom_long)atol(tr_sym->s_name));
                         atom_setlong(reach_list + 1, new_r);
-                        if (!x->async || systhread_ismainthread()) {
+                        if (systhread_ismainthread()) {
                             outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
                         } else {
-                            defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                            crucible_queue_deferred_output(x, gensym("reach_list"), NULL, 2, reach_list);
                         }
                     }
                 }
@@ -2424,10 +2477,10 @@ void crucible_recalculate_reaches(t_crucible *x) {
     if (!x->monitor && x->outlet_reach_int) {
         t_atom song_min_atom;
         atom_setlong(&song_min_atom, x->song_min);
-        if (!x->async || systhread_ismainthread()) {
+        if (systhread_ismainthread()) {
             outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
         } else {
-            defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
+            crucible_queue_deferred_output(x, gensym("reach_min"), gensym("min"), 1, &song_min_atom);
         }
     }
 }
@@ -2613,19 +2666,19 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
             if (x->monitor) {
                 t_atom song_min_atom;
                 atom_setlong(&song_min_atom, x->song_min);
-                if (!x->async || systhread_ismainthread()) {
+                if (systhread_ismainthread()) {
                     outlet_anything(x->outlet_reach_int, gensym("min"), 1, &song_min_atom);
                 } else {
-                    defer(x, (method)crucible_defer_output, gensym("reach_min"), 1, &song_min_atom);
+                    crucible_queue_deferred_output(x, gensym("reach_min"), gensym("min"), 1, &song_min_atom);
                 }
             }
 
             t_atom song_reach_atom;
             atom_setlong(&song_reach_atom, x->song_reach);
-            if (!x->async || systhread_ismainthread()) {
+            if (systhread_ismainthread()) {
                 outlet_anything(x->outlet_reach_int, gensym("song"), 1, &song_reach_atom);
             } else {
-                defer(x, (method)crucible_defer_output, gensym("reach_song"), 1, &song_reach_atom);
+                crucible_queue_deferred_output(x, gensym("reach_song"), gensym("song"), 1, &song_reach_atom);
             }
 
             if (x->track_reaches_dict) {
@@ -2639,10 +2692,10 @@ void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv) {
                     t_atom reach_list[2];
                     atom_setlong(reach_list, (t_atom_long)atol(track_id_sym->s_name));
                     atom_setlong(reach_list + 1, reach);
-                    if (!x->async || systhread_ismainthread()) {
+                    if (systhread_ismainthread()) {
                         outlet_list(x->outlet_reach_int, NULL, 2, reach_list);
                     } else {
-                        defer(x, (method)crucible_defer_output, gensym("reach_list"), 2, reach_list);
+                        crucible_queue_deferred_output(x, gensym("reach_list"), NULL, 2, reach_list);
                     }
                 }
                 if (keys) sysmem_freeptr(keys);

@@ -49,7 +49,18 @@ typedef struct _crucible {
     long last_clear_sequence;
     long current_task_seq;
     long rebar_in_progress;
+
+    void *outlet_qelem;
+    t_linklist *deferred_outlet_queue;
+    t_systhread_mutex outlet_queue_mutex;
 } t_crucible;
+
+typedef struct _crucible_outlet_msg {
+    t_symbol *msg_type;
+    t_symbol *s;
+    long argc;
+    t_atom argv[4];
+} t_crucible_outlet_msg;
 
 void crucible_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);
 void crucible_do_anything(t_crucible *x, t_symbol *s, long argc, t_atom *argv);

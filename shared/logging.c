@@ -1,4 +1,5 @@
 #include "logging.h"
+#include "ext_systhread.h"
 #include <stdio.h>
 
 void common_log(void *log_outlet, long log_enabled, const char *object_name, const char *fmt, ...) {
@@ -14,6 +15,10 @@ void vcommon_log(void *log_outlet, long log_enabled, const char *object_name, co
         char final_buf[4200];
         vsnprintf(buf, 4096, fmt, args);
         snprintf(final_buf, 4200, "%s: %s", object_name, buf);
-        outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
+        if (systhread_ismainthread()) {
+            outlet_anything(log_outlet, gensym(final_buf), 0, NULL);
+        } else {
+            post("%s", final_buf);
+        }
     }
 }
