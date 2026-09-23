@@ -41,14 +41,17 @@ The primary objective is to design a sound that is **as perceptually different a
     3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`). A hard linear scaling should be applied after the rest of the sound synthesis as a last step. 
 
 ### 4. Volume Calibration & Normalization
-- All sounds must be normalized to a peak amplitude of **exactly 1.0 at velocity 127**.
-- This normalization must be achieved by adjusting internal synthesis gain constants (e.g., scaling final output) rather than limiters or compressors.
+- Volume calibration must occur across the entirety of the velocity spectrum (MIDI velocity 0 to 127) and across all pitch registers.
+- All sounds must exhibit linear peak amplitude scaling from 0.0 at velocity 0 to exactly 1.0 at velocity 127 (where expected peak amplitude for velocity `velocity` is `velocity / 127.0`).
+- This linear scaling and normalization must be achieved by adjusting internal synthesis gain constants (e.g., scaling final output and pitch/velocity-dependent synthesis parameters) rather than using limiters or compressors.
 - **Calibration Loop:**
     1. Compile with `make`.
     2. Run `./audio_engine`.
-    3. Observe the `Peak amplitude` reported in the console for the `vel_127` probe.
-    4. If the peak is not 1.0, calculate correction factor: `new_gain = old_gain * (1.0 / current_peak)`.
-    5. Update `sound_design.c` and repeat until peak amplitude is exactly 1.0.
+    3. Review the Volume Calibration Analysis table printed in the console for all diagnostic probes across velocity levels (`vel_16`, `vel_52`, `vel_96`, `vel_127`) and pitch registers (`pitch_24`, `pitch_48`, `pitch_72`, `pitch_96`).
+    4. Verify that peak amplitude at velocity 127 is exactly 1.0, and that peak amplitudes across lower velocities and different pitch registers match linear scaling (`velocity / 127.0`).
+    5. If the peak amplitude at velocity 127 is not 1.0, calculate the master gain correction factor: `new_gain = old_gain * (1.0 / current_peak)`.
+    6. If the response across velocities or pitch registers deviates from linear scaling (for instance, lower velocities or high/low pitch registers being disproportionately loud or soft), modify the sound design in `sound_design.c` to correct parameter response.
+    7. Update `sound_design.c` and repeat the calibration loop until peak amplitudes across all velocity levels and pitch registers match linear scaling expectations.
 
 ### 5. Standardized Analysis
 - After calibration, running `./audio_engine` will:
