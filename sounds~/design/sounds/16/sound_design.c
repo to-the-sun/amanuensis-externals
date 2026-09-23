@@ -15,7 +15,7 @@ typedef struct {
 
 static void setup_lowpass(BiquadFilter* f, double freq, double Q, double sample_rate) {
     if (freq < 20.0) freq = 20.0;
-    if (freq > sample_rate * 0.45) freq = sample_rate * 0.45;
+    if (freq > sample_rate * 0.40) freq = sample_rate * 0.40;
     double w0 = 2.0 * M_PI * freq / sample_rate;
     double alpha = sin(w0) / (2.0 * Q);
     double b0 = (1.0 - cos(w0)) / 2.0;
@@ -52,14 +52,11 @@ typedef struct {
 
     double main_phase;
     double sub1_phase;
-    double sub2_phase;
     double ring_phase;
     double lfo_phase;
     double t_local;
 
-    // Bitcrush / sample hold state
-    double hold_sample;
-    int hold_count;
+    double pitch_comp;
 
     BiquadFilter lp_filter;
 } Sound16Voice;
@@ -79,24 +76,23 @@ void* create_voice(int note, int velocity, int sample_rate) {
     v->is_note_on = 1;
 
     // ADSR Envelope
-    v->attack_time = 0.050;
-    v->decay_time = 0.300;
-    v->sustain_level = 0.50;
-    v->release_time = 0.250;
+    v->attack_time = 0.040;
+    v->decay_time = 0.280;
+    v->sustain_level = 0.45;
+    v->release_time = 0.220;
     v->env_level = 0.0;
     v->env_stage = 0;
 
     v->main_phase = 0.0;
     v->sub1_phase = 0.0;
-    v->sub2_phase = 0.0;
     v->ring_phase = 0.0;
     v->lfo_phase = 0.0;
     v->t_local = 0.0;
 
-    v->hold_sample = 0.0;
-    v->hold_count = 0;
+    // Keybed pitch compensation
+    v->pitch_comp = pow(261.63 / v->freq, 0.50);
 
-    setup_lowpass(&v->lp_filter, v->freq * 3.0, 1.5, (double)sample_rate);
+    setup_lowpass(&v->lp_filter, 2000.0, 0.707, (double)sample_rate);
 
     srand(note * 313 + velocity * 53);
     return v;
@@ -118,7 +114,7 @@ int process_voice(void* voice_ptr, double* buffer, int num_samples) {
     if (v->env_stage == 4) return 0;
 
     double dt = 1.0 / v->sample_rate;
-    double gain = 68.5769443;
+    double gain = 12.397002;
 
     for (int i = 0; i < num_samples; i++) {
         // ADSR Envelope
@@ -132,7 +128,7 @@ int process_voice(void* voice_ptr, double* buffer, int num_samples) {
             v->env_level = v->sustain_level;
             if (!v->is_note_on) { v->env_stage = 3; v->release_start_level = v->env_level; }
         } else if (v->env_stage == 3) {
-            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.50) / v->release_time;
+            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.45) / v->release_time;
             if (v->env_level <= 0.0) { v->env_level = 0.0; v->env_stage = 4; }
         }
 
@@ -143,41 +139,39 @@ int process_voice(void* voice_ptr, double* buffer, int num_samples) {
         if (v->lfo_phase > 2.0 * M_PI) v->lfo_phase -= 2.0 * M_PI;
         double lfo_val = sin(v->lfo_phase);
         double pitch_mod = 1.0 + 0.005 * lfo_val;
-        double tremolo = 1.0 + 0.12 * lfo_val;
+        double tremolo = 1.0 + 0.10 * lfo_val;
 
         double cur_freq = v->freq * pitch_mod;
 
         // Main oscillator (saw / triangle morph)
         v->main_phase += 2.0 * M_PI * cur_freq * dt;
         if (v->main_phase > 2.0 * M_PI) v->main_phase -= 2.0 * M_PI;
-        double main_osc = sin(v->main_phase) + 0.3 * sin(v->main_phase * 2.0);
+        double main_osc = sin(v->main_phase) + 0.25 * sin(v->main_phase * 2.0);
 
         // Sub-harmonic oscillator 1 (freq / 2.0)
         v->sub1_phase += 2.0 * M_PI * (cur_freq * 0.5) * dt;
         if (v->sub1_phase > 2.0 * M_PI) v->sub1_phase -= 2.0 * M_PI;
         double sub1 = sin(v->sub1_phase);
 
-        // Inharmonic metallic ring mod (freq * sqrt(7) = 2.645751)
+        // Inharmonic metallic ring mod (freq * sqrt(7) = 2.6457513)
         v->ring_phase += 2.0 * M_PI * (cur_freq * 2.6457513) * dt;
         if (v->ring_phase > 2.0 * M_PI) v->ring_phase -= 2.0 * M_PI;
         double ring = sin(v->ring_phase) * main_osc;
 
-        double raw_mix = main_osc * 0.5 + sub1 * 0.4 + ring * 0.35;
+        double raw_mix = main_osc * 0.45 + sub1 * 0.35 + ring * 0.25;
 
-        // Dynamic bitcrush / downsampling (hold every 4-8 samples based on velocity)
-        int hold_period = 4 + (int)(4.0 * (1.0 - v->vel_scale));
-        v->hold_count++;
-        if (v->hold_count >= hold_period) {
-            v->hold_sample = raw_mix;
-            v->hold_count = 0;
-        }
+        // Dynamic bit-depth quantization (smoother velocity response)
+        double quant_steps = 8.0 + 24.0 * v->vel_scale;
+        double quantized = floor(raw_mix * quant_steps + 0.5) / quant_steps;
 
-        // Dynamic lowpass filter sweep (starts high, sweeps down)
-        double lp_cutoff = cur_freq * (1.5 + 6.0 * exp(-v->t_local / 0.18));
-        setup_lowpass(&v->lp_filter, lp_cutoff, 1.2, (double)v->sample_rate);
-        double filtered = process_biquad(&v->lp_filter, v->hold_sample);
+        // Dynamic lowpass filter sweep (clamped safely between 1000 Hz and 7000 Hz)
+        double lp_cutoff = 1000.0 + (cur_freq * 1.5) + 3000.0 * exp(-v->t_local / 0.15);
+        if (lp_cutoff > 7000.0) lp_cutoff = 7000.0;
 
-        double voice_out = filtered * tremolo;
+        setup_lowpass(&v->lp_filter, lp_cutoff, 0.707, (double)v->sample_rate);
+        double filtered = process_biquad(&v->lp_filter, quantized);
+
+        double voice_out = filtered * tremolo * v->pitch_comp;
 
         buffer[i] += voice_out * v->env_level * v->vel_scale * gain;
         v->t_local += dt;
