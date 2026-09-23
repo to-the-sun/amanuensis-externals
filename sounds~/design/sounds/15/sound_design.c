@@ -8,19 +8,21 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define NUM_CRYSTAL_PARTIALS 6
+
 typedef struct {
     double b0, b1, b2, a1, a2;
     double x1, x2, y1, y2;
 } BiquadFilter;
 
-static void setup_lowpass(BiquadFilter* f, double freq, double Q, double sample_rate) {
+static void setup_notch(BiquadFilter* f, double freq, double Q, double sample_rate) {
     if (freq < 20.0) freq = 20.0;
     if (freq > sample_rate * 0.45) freq = sample_rate * 0.45;
     double w0 = 2.0 * M_PI * freq / sample_rate;
     double alpha = sin(w0) / (2.0 * Q);
-    double b0 = (1.0 - cos(w0)) / 2.0;
-    double b1 = 1.0 - cos(w0);
-    double b2 = (1.0 - cos(w0)) / 2.0;
+    double b0 = 1.0;
+    double b1 = -2.0 * cos(w0);
+    double b2 = 1.0;
     double a0 = 1.0 + alpha;
     double a1 = -2.0 * cos(w0);
     double a2 = 1.0 - alpha;
@@ -50,26 +52,24 @@ typedef struct {
     int env_stage; // 0=attack, 1=decay, 2=sustain, 3=release, 4=done
     double release_start_level;
 
-    double main_phase;
-    double sub1_phase;
-    double sub2_phase;
-    double ring_phase;
+    double partial_phases[NUM_CRYSTAL_PARTIALS];
+    double partial_ratios[NUM_CRYSTAL_PARTIALS];
+    double partial_amps[NUM_CRYSTAL_PARTIALS];
+    double partial_decays[NUM_CRYSTAL_PARTIALS];
+
+    double chirp_phase;
     double lfo_phase;
     double t_local;
 
-    // Bitcrush / sample hold state
-    double hold_sample;
-    int hold_count;
-
-    BiquadFilter lp_filter;
-} Sound16Voice;
+    BiquadFilter filter;
+} Sound15Voice;
 
 static double midi_to_hz_tuned(int midi_note, double a4_hz) {
     return a4_hz * pow(2.0, ((double)midi_note - 69.0) / 12.0);
 }
 
 void* create_voice(int note, int velocity, int sample_rate) {
-    Sound16Voice* v = (Sound16Voice*)calloc(1, sizeof(Sound16Voice));
+    Sound15Voice* v = (Sound15Voice*)calloc(1, sizeof(Sound15Voice));
     if (!v) return NULL;
     v->note = note;
     v->velocity = velocity;
@@ -79,32 +79,37 @@ void* create_voice(int note, int velocity, int sample_rate) {
     v->is_note_on = 1;
 
     // ADSR Envelope
-    v->attack_time = 0.050;
-    v->decay_time = 0.300;
-    v->sustain_level = 0.50;
-    v->release_time = 0.250;
+    v->attack_time = 0.005;
+    v->decay_time = 0.350;
+    v->sustain_level = 0.40;
+    v->release_time = 0.300;
     v->env_level = 0.0;
     v->env_stage = 0;
 
-    v->main_phase = 0.0;
-    v->sub1_phase = 0.0;
-    v->sub2_phase = 0.0;
-    v->ring_phase = 0.0;
+    static const double ratios[NUM_CRYSTAL_PARTIALS] = {1.0, 2.756, 5.404, 8.931, 11.23, 15.67};
+    static const double base_amps[NUM_CRYSTAL_PARTIALS] = {1.0, 0.65, 0.45, 0.30, 0.20, 0.12};
+    static const double decay_rates[NUM_CRYSTAL_PARTIALS] = {0.8, 1.8, 3.2, 5.0, 7.5, 11.0};
+
+    for (int k = 0; k < NUM_CRYSTAL_PARTIALS; k++) {
+        v->partial_phases[k] = 0.0;
+        v->partial_ratios[k] = ratios[k];
+        v->partial_amps[k] = base_amps[k] * (0.5 + 0.5 * v->vel_scale);
+        v->partial_decays[k] = decay_rates[k] / (0.7 + 0.3 * v->vel_scale);
+    }
+
+    v->chirp_phase = 0.0;
     v->lfo_phase = 0.0;
     v->t_local = 0.0;
 
-    v->hold_sample = 0.0;
-    v->hold_count = 0;
+    setup_notch(&v->filter, v->freq * 4.5, 1.2, (double)sample_rate);
 
-    setup_lowpass(&v->lp_filter, v->freq * 3.0, 1.5, (double)sample_rate);
-
-    srand(note * 313 + velocity * 53);
+    srand(note * 199 + velocity * 31);
     return v;
 }
 
 void note_off_voice(void* voice_ptr) {
     if (!voice_ptr) return;
-    Sound16Voice* v = (Sound16Voice*)voice_ptr;
+    Sound15Voice* v = (Sound15Voice*)voice_ptr;
     v->is_note_on = 0;
     if (v->env_stage < 3) {
         v->env_stage = 3;
@@ -114,11 +119,11 @@ void note_off_voice(void* voice_ptr) {
 
 int process_voice(void* voice_ptr, double* buffer, int num_samples) {
     if (!voice_ptr) return 0;
-    Sound16Voice* v = (Sound16Voice*)voice_ptr;
+    Sound15Voice* v = (Sound15Voice*)voice_ptr;
     if (v->env_stage == 4) return 0;
 
     double dt = 1.0 / v->sample_rate;
-    double gain = 68.5769443;
+    double gain = 0.41603595;
 
     for (int i = 0; i < num_samples; i++) {
         // ADSR Envelope
@@ -132,50 +137,46 @@ int process_voice(void* voice_ptr, double* buffer, int num_samples) {
             v->env_level = v->sustain_level;
             if (!v->is_note_on) { v->env_stage = 3; v->release_start_level = v->env_level; }
         } else if (v->env_stage == 3) {
-            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.50) / v->release_time;
+            v->env_level -= dt * (v->release_start_level > 0 ? v->release_start_level : 0.40) / v->release_time;
             if (v->env_level <= 0.0) { v->env_level = 0.0; v->env_stage = 4; }
         }
 
         if (v->env_stage == 4) break;
 
-        // Vibrato and tremolo LFO (3.5 Hz)
-        v->lfo_phase += 2.0 * M_PI * 3.5 * dt;
+        // LFO (5.5 Hz) for pitch vibrato and tremolo
+        v->lfo_phase += 2.0 * M_PI * 5.5 * dt;
         if (v->lfo_phase > 2.0 * M_PI) v->lfo_phase -= 2.0 * M_PI;
         double lfo_val = sin(v->lfo_phase);
-        double pitch_mod = 1.0 + 0.005 * lfo_val;
-        double tremolo = 1.0 + 0.12 * lfo_val;
+        double vibrato = 1.0 + 0.003 * lfo_val;
+        double tremolo = 1.0 + 0.15 * lfo_val;
 
-        double cur_freq = v->freq * pitch_mod;
+        // Crystal partials generator
+        double mix = 0.0;
+        for (int k = 0; k < NUM_CRYSTAL_PARTIALS; k++) {
+            double p_freq = v->freq * v->partial_ratios[k] * vibrato;
+            v->partial_phases[k] += 2.0 * M_PI * p_freq * dt;
+            if (v->partial_phases[k] > 2.0 * M_PI) v->partial_phases[k] -= 2.0 * M_PI;
 
-        // Main oscillator (saw / triangle morph)
-        v->main_phase += 2.0 * M_PI * cur_freq * dt;
-        if (v->main_phase > 2.0 * M_PI) v->main_phase -= 2.0 * M_PI;
-        double main_osc = sin(v->main_phase) + 0.3 * sin(v->main_phase * 2.0);
-
-        // Sub-harmonic oscillator 1 (freq / 2.0)
-        v->sub1_phase += 2.0 * M_PI * (cur_freq * 0.5) * dt;
-        if (v->sub1_phase > 2.0 * M_PI) v->sub1_phase -= 2.0 * M_PI;
-        double sub1 = sin(v->sub1_phase);
-
-        // Inharmonic metallic ring mod (freq * sqrt(7) = 2.645751)
-        v->ring_phase += 2.0 * M_PI * (cur_freq * 2.6457513) * dt;
-        if (v->ring_phase > 2.0 * M_PI) v->ring_phase -= 2.0 * M_PI;
-        double ring = sin(v->ring_phase) * main_osc;
-
-        double raw_mix = main_osc * 0.5 + sub1 * 0.4 + ring * 0.35;
-
-        // Dynamic bitcrush / downsampling (hold every 4-8 samples based on velocity)
-        int hold_period = 4 + (int)(4.0 * (1.0 - v->vel_scale));
-        v->hold_count++;
-        if (v->hold_count >= hold_period) {
-            v->hold_sample = raw_mix;
-            v->hold_count = 0;
+            double p_env = exp(-v->t_local * v->partial_decays[k]);
+            mix += sin(v->partial_phases[k]) * v->partial_amps[k] * p_env;
         }
 
-        // Dynamic lowpass filter sweep (starts high, sweeps down)
-        double lp_cutoff = cur_freq * (1.5 + 6.0 * exp(-v->t_local / 0.18));
-        setup_lowpass(&v->lp_filter, lp_cutoff, 1.2, (double)v->sample_rate);
-        double filtered = process_biquad(&v->lp_filter, v->hold_sample);
+        // Crystal attack chime burst (first 18ms)
+        if (v->t_local < 0.018) {
+            double burst_env = exp(-v->t_local / 0.004);
+            double noise = ((double)rand() / RAND_MAX * 2.0 - 1.0);
+
+            v->chirp_phase += 2.0 * M_PI * (v->freq * (8.0 + 20.0 * exp(-v->t_local / 0.003))) * dt;
+            if (v->chirp_phase > 2.0 * M_PI) v->chirp_phase -= 2.0 * M_PI;
+
+            double chirp = sin(v->chirp_phase);
+            mix += (noise * 0.4 + chirp * 0.6) * burst_env * 0.5;
+        }
+
+        // Dynamic notch filter sweep downwards
+        double sweep_cutoff = v->freq * (1.2 + 3.3 * exp(-v->t_local / 0.20));
+        setup_notch(&v->filter, sweep_cutoff, 1.2, (double)v->sample_rate);
+        double filtered = process_biquad(&v->filter, mix);
 
         double voice_out = filtered * tremolo;
 

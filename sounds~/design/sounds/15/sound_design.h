@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define SOUND_DESIGN_VERSION 16
+#define SOUND_DESIGN_VERSION 15
 
 typedef struct {
     char type[16];
