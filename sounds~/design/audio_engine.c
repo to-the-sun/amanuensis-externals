@@ -30,7 +30,9 @@ int main(int argc, char** argv) {
     printf("Rendering diagnostic probes for version %d...\n", SOUND_DESIGN_VERSION);
 
     struct json_object* probes_obj = json_object_new_object();
-    double vel127_peak_amp = 0.0;
+    double probe_peaks[NUM_PROBES];
+    int probe_max_vels[NUM_PROBES];
+    double probe_expected_peaks[NUM_PROBES];
 
     for (int p = 0; p < NUM_PROBES; p++) {
         ProbeConfig* cfg = &PROBE_CONFIGS[p];
@@ -44,23 +46,50 @@ int main(int argc, char** argv) {
             printf("Saved audio probe: %s\n", output_path);
         }
 
-        if (strcmp(cfg->name, "vel_127") == 0) {
-            for (int k = 0; k < num_samples; k++) {
-                double abs_val = fabs(audio[k]);
-                if (abs_val > vel127_peak_amp) vel127_peak_amp = abs_val;
+        double peak = 0.0;
+        for (int k = 0; k < num_samples; k++) {
+            double abs_val = fabs(audio[k]);
+            if (abs_val > peak) peak = abs_val;
+        }
+        probe_peaks[p] = peak;
+
+        int max_v = 0;
+        for (int m = 0; m < cfg->sequence_len; m++) {
+            if (strcmp(cfg->sequence[m].type, "note_on") == 0 && cfg->sequence[m].velocity > max_v) {
+                max_v = cfg->sequence[m].velocity;
             }
         }
+        probe_max_vels[p] = max_v;
+        probe_expected_peaks[p] = (double)max_v / 127.0;
 
         struct json_object* probe_res = analyze_audio(audio, num_samples, sr);
         json_object_object_add(probes_obj, cfg->name, probe_res);
         free(audio);
     }
 
-    printf("Peak amplitude: %f\n", vel127_peak_amp);
+    printf("\n=== Volume Calibration Analysis ===\n");
+    printf("%-20s %-10s %-15s %-15s %-10s\n", "Probe", "Max Vel", "Observed Peak", "Expected Peak", "Status");
+    printf("--------------------------------------------------------------------\n");
+    int all_calibrated = 1;
+    for (int p = 0; p < NUM_PROBES; p++) {
+        ProbeConfig* cfg = &PROBE_CONFIGS[p];
+        double diff = fabs(probe_peaks[p] - probe_expected_peaks[p]);
+        const char* status = (diff <= 0.01) ? "OK" : "WARN";
+        if (diff > 0.01) all_calibrated = 0;
+        printf("%-20s %-10d %-15.6f %-15.6f %-10s\n",
+               cfg->name, probe_max_vels[p], probe_peaks[p], probe_expected_peaks[p], status);
+    }
+    if (all_calibrated) {
+        printf("Volume calibration verified: Linear amplitude scaling matched across full range.\n");
+    } else {
+        printf("Notice: Some probes deviate from expected linear amplitude scaling.\n");
+    }
+    printf("--------------------------------------------------------------------\n\n");
 
     char cmd[1024];
     sprintf(cmd, "cp sound_design.c sound_design.h %s/", subfolder);
-    system(cmd);
+    int sys_res = system(cmd);
+    (void)sys_res;
 
     struct json_object* distances = json_object_new_object();
     double min_dist = DBL_MAX;
