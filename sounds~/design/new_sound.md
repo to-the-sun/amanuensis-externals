@@ -43,7 +43,7 @@ The primary objective is to design a sound that is **as perceptually different a
 ### 4. Volume Calibration & Normalization
 - Volume calibration must occur across the entirety of the velocity spectrum (MIDI velocity 0 to 127) and across all pitch registers.
 - All sounds must exhibit linear peak amplitude scaling from 0.0 at velocity 0 to exactly 1.0 at velocity 127 (where expected peak amplitude for velocity `velocity` is `velocity / 127.0`).
-- This linear scaling and normalization must be achieved by adjusting internal synthesis gain constants (e.g., scaling final output and pitch/velocity-dependent synthesis parameters) rather than using limiters or compressors.
+- This linear scaling and normalization must be achieved by adjusting the hard linear scaling mentioned in the prior step. 
 - **Calibration Loop:**
     1. Compile with `make`.
     2. Run `./audio_engine`.
