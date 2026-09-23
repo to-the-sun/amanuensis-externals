@@ -65,7 +65,7 @@ The primary objective is to design a sound that is **as perceptually different a
 ### 6. Reciprocal Library Maintenance
 - After generating a new sound, older sounds' `analysis.json` files must be updated with pairwise distances to the new sound.
 - Run `./migrate_analysis` to re-analyze all sound presets across the 14 diagnostic probes. This updates every preset's `analysis.json` with complete composite `distances` and `uniqueness_score`.
-- Reciprocal maintenance does not include generating new `.dll` plugins for any of the old sounds. 
+- Reciprocal maintenance does **not** include generating new `.dll` plugins for any of the old sounds. 
 
 ### 7. Create a New `sounds~` Plugin 
 - When finished with the above steps, move up to the parent `sounds~/` folder and:
