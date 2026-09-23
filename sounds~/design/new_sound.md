@@ -38,12 +38,12 @@ The primary objective is to design a sound that is **as perceptually different a
         ```
 
         Again, there may be an atonal portion to the sound as well, which this would not apply to. However, being atonal or non-tonal is different than simply being out-of-tune, so nothing microtonal.
-    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`). A hard linear scaling should be applied after the rest of the sound synthesis. This will be utilized in the next step. 
+    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`). This linear scaling will be utilized in the next step. 
 
 ### 4. Volume Calibration & Normalization
 - Volume calibration must occur across the entirety of the velocity spectrum (MIDI velocity 0 to 127) and across all pitch registers.
 - All sounds must exhibit linear peak amplitude scaling from 0.0 at velocity 0 to exactly 1.0 at velocity 127 (where expected peak amplitude for velocity `velocity` is `velocity / 127.0`).
-- This linear scaling and normalization must be achieved by adjusting the hard linear scaling mentioned in the prior step. 
+- This linear scaling and normalization must be achieved by adjusting internal synthesis gain constants, e.g. scaling final output.
 - **Calibration Loop:**
     1. Compile with `make`.
     2. Run `./audio_engine`.
