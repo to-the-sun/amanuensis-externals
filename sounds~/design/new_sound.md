@@ -38,7 +38,7 @@ The primary objective is to design a sound that is **as perceptually different a
         ```
 
         Again, there may be an atonal portion to the sound as well, which this would not apply to. However, being atonal or non-tonal is different than simply being out-of-tune, so nothing microtonal.
-    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`).
+    3. **`velocity`:** An integer `0` through `127` will arrive (typically coinciding with `note_on`) indicating the peak amplitude the sound must have at its loudest over the course of the note. The `velocity` must scale peak amplitude linearly from silence (`0`) to full volume (`127`). A hard linear scaling should be applied after the rest of the sound synthesis as a last step. 
 
 ### 4. Volume Calibration & Normalization
 - All sounds must be normalized to a peak amplitude of **exactly 1.0 at velocity 127**.
