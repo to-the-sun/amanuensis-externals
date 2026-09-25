@@ -271,38 +271,45 @@ def process_transcript(json_filepath, cutoff_duration_ms=CUTOFF_MS):
 
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    print(f"Running truncation in: {script_dir}")
-    print(f"Target duration: {CUTOFF_SECONDS:.1f}s (6:30) with {FADE_SECONDS:.1f}s fade out.\n")
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        print(f"Running truncation in: {script_dir}")
+        print(f"Target duration: {CUTOFF_SECONDS:.1f}s (6:30) with {FADE_SECONDS:.1f}s fade out.\n")
 
-    # 1. Process all WAV files in script directory
-    wav_files = [
-        f for f in os.listdir(script_dir)
-        if f.lower().endswith('.wav') and not f.endswith('.tmp') and os.path.isfile(os.path.join(script_dir, f))
-    ]
+        # 1. Process all WAV files in script directory
+        wav_files = [
+            f for f in os.listdir(script_dir)
+            if f.lower().endswith('.wav') and not f.endswith('.tmp') and os.path.isfile(os.path.join(script_dir, f))
+        ]
 
-    if not wav_files:
-        print("No WAV files found in the script directory.")
-    else:
-        print(f"Found {len(wav_files)} WAV file(s). Processing...")
-        for wav_file in sorted(wav_files):
-            wav_path = os.path.join(script_dir, wav_file)
-            truncate_wav(wav_path)
+        if not wav_files:
+            print("No WAV files found in the script directory.")
+        else:
+            print(f"Found {len(wav_files)} WAV file(s). Processing...")
+            for wav_file in sorted(wav_files):
+                wav_path = os.path.join(script_dir, wav_file)
+                truncate_wav(wav_path)
 
-    print()
+        print()
 
-    # 2. Process transcript.json
-    script_dir_path = Path(script_dir)
-    json_path = locate_transcript(script_dir_path)
-    if json_path is None:
-        local_check = script_dir_path / "transcript.json"
-        three_up_check = script_dir_path.parent.parent.parent / "transcript.json"
-        print(f"No 'transcript.json' found. Checked:\n  1. {local_check}\n  2. {three_up_check}")
-    else:
-        print(f"Found 'transcript.json' at: {json_path}")
-        process_transcript(json_path)
+        # 2. Process transcript.json
+        script_dir_path = Path(script_dir)
+        json_path = locate_transcript(script_dir_path)
+        if json_path is None:
+            local_check = script_dir_path / "transcript.json"
+            three_up_check = script_dir_path.parent.parent.parent / "transcript.json"
+            print(f"No 'transcript.json' found. Checked:\n  1. {local_check}\n  2. {three_up_check}")
+        else:
+            print(f"Found 'transcript.json' at: {json_path}")
+            process_transcript(json_path)
 
-    print("\nProcessing complete.")
+        print("\nProcessing complete.")
+    except Exception as e:
+        print(f"\nAn error occurred during execution: {e}")
+        import traceback
+        traceback.print_exc()
+
+    input("\nPress Enter to exit...")
 
 
 if __name__ == '__main__':
