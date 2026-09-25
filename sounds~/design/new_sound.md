@@ -69,7 +69,7 @@ The primary objective is to design a sound that is **as perceptually different a
 
 ### 7. Create a New `sounds~` Plugin 
 - When finished with the above steps, move up to the parent `sounds~/` folder and:
-    1. Create a new `.dll` in the `modules/` folder for the new sound only.
+    1. Create a new `.dll` in the `modules/` folder for the new sound only. Do **not** compile new `.dll` plugins for any of the old sounds. 
     2. Recompile `sounds~.mxe64` to incorporate the new sound into the object.
 
 ## Technical Constraints & Format
