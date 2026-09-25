@@ -13,6 +13,10 @@ import sys
 import wave
 import struct
 import json
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
 
 CUTOFF_SECONDS = 390.0  # 6 minutes 30 seconds
 CUTOFF_MS = CUTOFF_SECONDS * 1000.0  # 390,000 ms
@@ -120,13 +124,52 @@ def truncate_wav(filepath, cutoff_sec=CUTOFF_SECONDS, fade_sec=FADE_SECONDS):
         return False
 
 
+def locate_transcript(script_dir):
+    """
+    Locates transcript.json:
+      1. In the same directory as the script.
+      2. If not found, 3 folder levels up from the script's directory.
+    Returns transcript_path or None.
+    """
+    local_path = script_dir / "transcript.json"
+    if local_path.is_file():
+        return local_path
+
+    three_up_path = script_dir.parent.parent.parent / "transcript.json"
+    if three_up_path.is_file():
+        return three_up_path
+
+    return None
+
+
+def save_formatted_json(data, filepath):
+    """
+    Saves JSON data with indent=2 formatting, but with inline single-line array formatting.
+    """
+    filepath = Path(filepath)
+    raw_str = json.dumps(data, indent=2)
+
+    def collapse_array(match):
+        inner = match.group(1)
+        items = [line.strip().rstrip(',') for line in inner.splitlines() if line.strip()]
+        return '[' + ', '.join(items) + ']'
+
+    formatted_str = re.sub(r'\[\s*([^\[\]\{\}]*?)\s*\]', collapse_array, raw_str)
+
+    tmp_path = filepath.with_suffix('.json.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_str)
+        f.write('\n')
+    os.replace(tmp_path, filepath)
+
+
 def process_transcript(json_filepath, cutoff_duration_ms=CUTOFF_MS):
     """
     Removes every bar from transcript.json that occurs after cutoff_duration_ms (390,000 ms = 6:30)
     of absolute song time, taking into account negative bars (most_negative_bar).
     """
-    if not os.path.exists(json_filepath):
-        print(f"No 'transcript.json' found in the script directory.")
+    if json_filepath is None or not os.path.exists(json_filepath):
+        print(f"No 'transcript.json' found.")
         return False
 
     try:
@@ -202,13 +245,23 @@ def process_transcript(json_filepath, cutoff_duration_ms=CUTOFF_MS):
                         modified = True
 
         if modified:
-            tmp_json = json_filepath + ".tmp"
-            with open(tmp_json, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_json, json_filepath)
-            print(f"Updated 'transcript.json': removed {removed_bars_count} bar(s) occurring after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}, 6:30 absolute song time).")
+            # Check for Backup/ directory in the transcript's parent folder
+            tx_path = Path(json_filepath)
+            backup_dir = tx_path.parent / "Backup"
+            if backup_dir.is_dir():
+                timestamp_str = datetime.now().strftime("%Y-%m-%d %H%M%S")
+                backup_filename = f"transcript [{timestamp_str}].json"
+                backup_filepath = backup_dir / backup_filename
+                try:
+                    shutil.copy2(tx_path, backup_filepath)
+                    print(f"Created backup at: {backup_filepath}")
+                except Exception as e:
+                    print(f"Warning: Failed to create backup in '{backup_dir}': {e}")
+
+            save_formatted_json(data, json_filepath)
+            print(f"Updated '{os.path.basename(json_filepath)}': removed {removed_bars_count} bar(s) occurring after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}, 6:30 absolute song time).")
         else:
-            print(f"'transcript.json' checked: no bars occurred after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}).")
+            print(f"'{os.path.basename(json_filepath)}' checked: no bars occurred after timestamp {cutoff_bar_ts:.1f} ms ({cutoff_str}).")
 
         return modified
 
@@ -218,31 +271,45 @@ def process_transcript(json_filepath, cutoff_duration_ms=CUTOFF_MS):
 
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    print(f"Running truncation in: {script_dir}")
-    print(f"Target duration: {CUTOFF_SECONDS:.1f}s (6:30) with {FADE_SECONDS:.1f}s fade out.\n")
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        print(f"Running truncation in: {script_dir}")
+        print(f"Target duration: {CUTOFF_SECONDS:.1f}s (6:30) with {FADE_SECONDS:.1f}s fade out.\n")
 
-    # 1. Process all WAV files in script directory
-    wav_files = [
-        f for f in os.listdir(script_dir)
-        if f.lower().endswith('.wav') and not f.endswith('.tmp') and os.path.isfile(os.path.join(script_dir, f))
-    ]
+        # 1. Process all WAV files in script directory
+        wav_files = [
+            f for f in os.listdir(script_dir)
+            if f.lower().endswith('.wav') and not f.endswith('.tmp') and os.path.isfile(os.path.join(script_dir, f))
+        ]
 
-    if not wav_files:
-        print("No WAV files found in the script directory.")
-    else:
-        print(f"Found {len(wav_files)} WAV file(s). Processing...")
-        for wav_file in sorted(wav_files):
-            wav_path = os.path.join(script_dir, wav_file)
-            truncate_wav(wav_path)
+        if not wav_files:
+            print("No WAV files found in the script directory.")
+        else:
+            print(f"Found {len(wav_files)} WAV file(s). Processing...")
+            for wav_file in sorted(wav_files):
+                wav_path = os.path.join(script_dir, wav_file)
+                truncate_wav(wav_path)
 
-    print()
+        print()
 
-    # 2. Process transcript.json in script directory
-    json_path = os.path.join(script_dir, "transcript.json")
-    process_transcript(json_path)
+        # 2. Process transcript.json
+        script_dir_path = Path(script_dir)
+        json_path = locate_transcript(script_dir_path)
+        if json_path is None:
+            local_check = script_dir_path / "transcript.json"
+            three_up_check = script_dir_path.parent.parent.parent / "transcript.json"
+            print(f"No 'transcript.json' found. Checked:\n  1. {local_check}\n  2. {three_up_check}")
+        else:
+            print(f"Found 'transcript.json' at: {json_path}")
+            process_transcript(json_path)
 
-    print("\nProcessing complete.")
+        print("\nProcessing complete.")
+    except Exception as e:
+        print(f"\nAn error occurred during execution: {e}")
+        import traceback
+        traceback.print_exc()
+
+    input("\nPress Enter to exit...")
 
 
 if __name__ == '__main__':
