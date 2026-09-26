@@ -149,21 +149,59 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     print(f"Accumulated {len(raw_diffs)} peak difference values.")
     print(f"Calculated most common cluster center point: {center_point_ms:.2f} ms")
 
-    # Graph all floating-point differences on a scatter plot with marked cluster center
+    # Graph all floating-point differences on a 1D scatter plot with marked cluster center
     if gui_mode:
         try:
             import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(10, 6))
-            x_indices = np.arange(len(raw_diffs))
-            ax.scatter(x_indices, raw_diffs, color='#3498db', alpha=0.6, edgecolors='none', s=25, label='Transient Differences (ms)')
-            ax.axhline(center_point_ms, color='#e74c3c', linestyle='--', linewidth=2, label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)')
-            mid_x = len(raw_diffs) / 2.0 if len(raw_diffs) > 0 else 0
-            ax.scatter([mid_x], [center_point_ms], color='#e74c3c', s=120, zorder=5, marker='X', label='Cluster Center Marker')
-            ax.set_title("Transient Pairwise Time Differences & Primary Cluster Center", fontsize=12, fontweight='bold')
-            ax.set_xlabel("Difference Pair Index")
-            ax.set_ylabel("Time Difference (ms)")
-            ax.grid(True, alpha=0.3)
-            ax.legend()
+            fig, ax = plt.subplots(figsize=(6, 8))
+            diffs_arr = np.array(raw_diffs, dtype=np.float64)
+
+            # Calculate density along y-axis to scale point transparency (alpha)
+            if len(diffs_arr) > 1 and np.min(diffs_arr) != np.max(diffs_arr):
+                try:
+                    from scipy.stats import gaussian_kde
+                    kde = gaussian_kde(diffs_arr)
+                    densities = kde(diffs_arr)
+                    max_d = np.max(densities)
+                    min_d = np.min(densities)
+                    if max_d > min_d:
+                        norm_density = (densities - min_d) / (max_d - min_d)
+                        alphas = 0.05 + 0.95 * norm_density
+                    else:
+                        alphas = np.full(len(diffs_arr), 0.5)
+                except Exception:
+                    num_bins = max(10, min(100, len(diffs_arr) // 2))
+                    counts, bin_edges = np.histogram(diffs_arr, bins=num_bins)
+                    bin_idx = np.clip(np.digitize(diffs_arr, bin_edges) - 1, 0, len(counts) - 1)
+                    point_counts = counts[bin_idx]
+                    max_c = np.max(point_counts)
+                    min_c = np.min(point_counts)
+                    if max_c > min_c:
+                        alphas = 0.05 + 0.95 * ((point_counts - min_c) / (max_c - min_c))
+                    else:
+                        alphas = np.full(len(diffs_arr), 0.5)
+            else:
+                alphas = np.full(len(diffs_arr), 1.0)
+
+            # Build RGBA color matrix for scatter plot
+            colors = np.zeros((len(raw_diffs), 4))
+            colors[:, 0] = 0.2039  # Red (#3498db)
+            colors[:, 1] = 0.5961  # Green (#3498db)
+            colors[:, 2] = 0.8588  # Blue (#3498db)
+            colors[:, 3] = alphas
+
+            x_zeros = np.zeros(len(raw_diffs))
+            ax.axvline(0, color='#bdc3c7', linestyle=':', linewidth=1.5, zorder=1)
+            ax.scatter(x_zeros, raw_diffs, c=colors, s=30, edgecolors='none', zorder=2, label='Transient Differences (ms)')
+            ax.axhline(center_point_ms, color='#e74c3c', linestyle='--', linewidth=2, zorder=4, label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)')
+            ax.scatter([0], [center_point_ms], color='#e74c3c', s=120, zorder=5, marker='X', label='Cluster Center Marker')
+
+            ax.set_title("1D Transient Pairwise Time Differences\n& Primary Cluster Center", fontsize=12, fontweight='bold')
+            ax.set_ylabel("Time Difference (ms)", fontsize=10)
+            ax.set_xlim(-0.5, 0.5)
+            ax.set_xticks([])
+            ax.grid(True, axis='y', alpha=0.3)
+            ax.legend(loc='upper right')
             fig.tight_layout()
             plt.show()
         except Exception as e:
