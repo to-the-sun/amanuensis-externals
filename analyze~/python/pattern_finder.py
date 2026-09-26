@@ -55,11 +55,57 @@ def ensure_ct_initialized():
         return None
 
 
-def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None):
+def find_most_common_cluster_center(diffs_ms):
     """
-    Detects transients in the entire audio file using cumulative_transience peak detection,
-    computes pairwise time differences between all transients, rounds each difference to the nearest
-    atom_ms (50ms), and returns a sorted list of unique candidate segment lengths.
+    Calculates the center point of the most common cluster of floating-point difference values.
+    Uses Gaussian Kernel Density Estimation (KDE) with fallback to histogram mode binning.
+    """
+    if not diffs_ms:
+        return float(MIN_SEGMENT_LEN_MS)
+    if len(diffs_ms) == 1:
+        return float(diffs_ms[0])
+
+    diffs_arr = np.array(diffs_ms, dtype=np.float64)
+    min_v = float(np.min(diffs_arr))
+    max_v = float(np.max(diffs_arr))
+
+    if min_v == max_v:
+        return min_v
+
+    try:
+        from scipy.stats import gaussian_kde
+        kde = gaussian_kde(diffs_arr)
+        grid = np.linspace(min_v, max_v, 1000)
+        density = kde(grid)
+        max_idx = np.argmax(density)
+        peak_val = grid[max_idx]
+
+        # Calculate centroid of values around the peak (window of 5% range or min 10ms)
+        window = max(10.0, (max_v - min_v) * 0.05)
+        cluster_mask = np.abs(diffs_arr - peak_val) <= window
+        cluster_points = diffs_arr[cluster_mask]
+
+        if len(cluster_points) > 0:
+            return float(np.mean(cluster_points))
+        return float(peak_val)
+    except Exception as e:
+        # Fallback to histogram mode binning
+        num_bins = max(10, min(50, len(diffs_arr) // 2))
+        counts, bin_edges = np.histogram(diffs_arr, bins=num_bins)
+        max_bin = np.argmax(counts)
+        bin_low, bin_high = bin_edges[max_bin], bin_edges[max_bin + 1]
+        cluster_points = diffs_arr[(diffs_arr >= bin_low) & (diffs_arr <= bin_high)]
+        if len(cluster_points) > 0:
+            return float(np.mean(cluster_points))
+        return float((bin_low + bin_high) / 2.0)
+
+
+def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True):
+    """
+    Detects transients across the audio file using cumulative_transience peak detection,
+    computes full floating-point pairwise time differences between all transients,
+    plots them on a pop-up scatter plot, marks the center point of the most common cluster,
+    and returns a list containing that single cluster center segment length.
     """
     print("Detecting transients across audio file using cumulative_transience peak detection...")
     ct = ensure_ct_initialized()
@@ -80,41 +126,50 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     print(f"Detected {len(onset_times_ms)} transients.")
 
     if len(onset_times_ms) < 2:
-        print("Not enough transients detected. Falling back to default range.")
-        total_dur_ms = (len(y) / sr) * 1000.0
-        upper_ms = total_dur_ms / 2.0 if max_seg_ms is None else min(total_dur_ms / 2.0, max_seg_ms)
-        curr = min_seg_ms
-        candidates = []
-        while curr <= upper_ms:
-            candidates.append(curr)
-            curr += atom_ms
-        return candidates
+        print("Not enough transients detected. Falling back to default segment length.")
+        return [float(min_seg_ms)]
 
-    candidate_set = set()
+    raw_diffs = []
     total_dur_ms = (len(y) / sr) * 1000.0
     upper_ms = total_dur_ms / 2.0 if max_seg_ms is None else min(total_dur_ms / 2.0, max_seg_ms)
 
-    # Assess time difference between every transient with every other transient
+    # Assess full floating-point time differences between all transient pairs
     for i in range(len(onset_times_ms)):
         for j in range(i + 1, len(onset_times_ms)):
-            diff_ms = abs(onset_times_ms[j] - onset_times_ms[i])
-            # Round to nearest atom_ms (50ms)
-            rounded_ms = int(round(diff_ms / atom_ms)) * atom_ms
+            diff_ms = float(abs(onset_times_ms[j] - onset_times_ms[i]))
+            if min_seg_ms <= diff_ms <= upper_ms:
+                raw_diffs.append(diff_ms)
 
-            if min_seg_ms <= rounded_ms <= upper_ms:
-                candidate_set.add(rounded_ms)
+    if not raw_diffs:
+        print("No valid transient interval candidates found in range. Falling back to default segment length.")
+        return [float(min_seg_ms)]
 
-    candidate_lengths = sorted(list(candidate_set))
+    # Calculate center point of the most common cluster of floating-point values
+    center_point_ms = find_most_common_cluster_center(raw_diffs)
+    print(f"Accumulated {len(raw_diffs)} peak difference values.")
+    print(f"Calculated most common cluster center point: {center_point_ms:.2f} ms")
 
-    if not candidate_lengths:
-        print("No valid transient interval candidates found in range. Falling back to default step range.")
-        curr = min_seg_ms
-        while curr <= upper_ms:
-            candidate_lengths.append(curr)
-            curr += atom_ms
+    # Graph all floating-point differences on a scatter plot with marked cluster center
+    if gui_mode:
+        try:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(10, 6))
+            x_indices = np.arange(len(raw_diffs))
+            ax.scatter(x_indices, raw_diffs, color='#3498db', alpha=0.6, edgecolors='none', s=25, label='Transient Differences (ms)')
+            ax.axhline(center_point_ms, color='#e74c3c', linestyle='--', linewidth=2, label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)')
+            mid_x = len(raw_diffs) / 2.0 if len(raw_diffs) > 0 else 0
+            ax.scatter([mid_x], [center_point_ms], color='#e74c3c', s=120, zorder=5, marker='X', label='Cluster Center Marker')
+            ax.set_title("Transient Pairwise Time Differences & Primary Cluster Center", fontsize=12, fontweight='bold')
+            ax.set_xlabel("Difference Pair Index")
+            ax.set_ylabel("Time Difference (ms)")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            fig.tight_layout()
+            plt.show()
+        except Exception as e:
+            print(f"Could not display scatter plot GUI: {e}")
 
-    print(f"Generated {len(candidate_lengths)} plausible segment lengths from transient intervals.")
-    return candidate_lengths
+    return [center_point_ms]
 
 
 def compute_segment_dtw_similarity(feat1, feat2):
@@ -237,41 +292,26 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
     print(f"Audio duration: {total_duration_ms:.2f} ms ({total_duration_ms/1000.0:.2f} s)")
 
-    # Conduct transient detection to find candidate segment lengths
+    # Conduct transient detection to find candidate segment length (center of primary cluster)
     segment_lengths = detect_transient_candidate_lengths(
         y=y,
         sr=sr,
         min_seg_ms=min_segment_ms,
         atom_ms=atom_iteration_ms,
-        max_seg_ms=max_len_ms
+        max_seg_ms=max_len_ms,
+        gui_mode=gui_mode
     )
-
-    print(f"Testing {len(segment_lengths)} plausible segment lengths (range: {segment_lengths[0]} ms to {segment_lengths[-1]} ms)...")
-
-    gui_handler = None
-    if gui_mode:
-        try:
-            from pattern_gui import PatternGUIHandler
-            gui_handler = PatternGUIHandler(y, sr, total_duration_ms)
-        except Exception as e:
-            print(f"GUI Initialization skipped/failed: {e}. Falling back to CLI mode.")
-            gui_handler = None
 
     best_bar_length = None
     max_total_pattern_len_ms = -1.0
     best_patterns = []
     results = {}
 
-    def step_gui_callback(seg_len_ms, seg1, seg2, sim):
-        if gui_handler:
-            gui_handler.update_testing_segment(seg_len_ms, seg1, seg2, sim)
-
     for seg_len in segment_lengths:
-        print(f"\nAnalyzing segment length: {seg_len} ms...")
+        print(f"\nAnalyzing target segment length: {seg_len:.2f} ms...")
         patterns, total_pat_len_ms = analyze_segment_length(
             y, sr, features, frame_dur_ms, seg_len,
-            similarity_threshold=similarity_threshold,
-            gui_callback=step_gui_callback if gui_handler else None
+            similarity_threshold=similarity_threshold
         )
 
         results[seg_len] = {
@@ -279,10 +319,7 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
             'total_pattern_len_ms': total_pat_len_ms
         }
 
-        print(f"Segment length {seg_len} ms: Found {len(patterns)} patterns, Total Duration = {total_pat_len_ms:.2f} ms")
-
-        if gui_handler:
-            gui_handler.update_completed_length(seg_len, patterns, total_pat_len_ms)
+        print(f"Segment length {seg_len:.2f} ms: Found {len(patterns)} patterns, Total Duration = {total_pat_len_ms:.2f} ms")
 
         if total_pat_len_ms > max_total_pattern_len_ms and total_pat_len_ms > 0:
             max_total_pattern_len_ms = total_pat_len_ms
@@ -291,8 +328,6 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
     if best_bar_length is None or not best_patterns:
         print("\nNo repeating patterns were detected across tested segment lengths.")
-        if gui_handler:
-            gui_handler.finish_analysis(None, [], 0)
         return
 
     print("\n" + "="*60)
@@ -318,9 +353,6 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         sf.write(out_filepath, pattern_audio, orig_sr)
         saved_files.append(out_filepath)
         print(f"Saved pattern {idx}: {out_filepath} (Start: {pat['start_ms']:.1f}ms, End: {pat['end_ms']:.1f}ms)")
-
-    if gui_handler:
-        gui_handler.finish_analysis(best_bar_length, best_patterns, max_total_pattern_len_ms)
 
     return best_bar_length, best_patterns, saved_files
 
