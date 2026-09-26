@@ -149,25 +149,55 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     print(f"Accumulated {len(raw_diffs)} peak difference values.")
     print(f"Calculated most common cluster center point: {center_point_ms:.2f} ms")
 
-    # Graph all floating-point differences on a scatter plot with marked cluster center
+    # Graph all floating-point differences on a histogram (bar graph) with marked cluster center
     if gui_mode:
         try:
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(10, 6))
-            x_indices = np.arange(len(raw_diffs))
-            ax.scatter(x_indices, raw_diffs, color='#3498db', alpha=0.6, edgecolors='none', s=25, label='Transient Differences (ms)')
-            ax.axhline(center_point_ms, color='#e74c3c', linestyle='--', linewidth=2, label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)')
-            mid_x = len(raw_diffs) / 2.0 if len(raw_diffs) > 0 else 0
-            ax.scatter([mid_x], [center_point_ms], color='#e74c3c', s=120, zorder=5, marker='X', label='Cluster Center Marker')
-            ax.set_title("Transient Pairwise Time Differences & Primary Cluster Center", fontsize=12, fontweight='bold')
-            ax.set_xlabel("Difference Pair Index")
-            ax.set_ylabel("Time Difference (ms)")
+            diffs_arr = np.array(raw_diffs, dtype=np.float64)
+
+            # Choose appropriate small bin interval (~10ms bins or dynamic bin count)
+            min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
+            range_v = max(1.0, max_v - min_v)
+            num_bins = max(20, min(100, int(range_v / 10.0)))
+
+            counts, bin_edges, patches = ax.hist(
+                diffs_arr,
+                bins=num_bins,
+                color='#3498db',
+                edgecolor='#2980b9',
+                alpha=0.75,
+                rwidth=0.85,
+                label='Time Differences Count'
+            )
+
+            max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
+            ax.axvline(
+                center_point_ms,
+                color='#e74c3c',
+                linestyle='--',
+                linewidth=2,
+                label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
+            )
+            ax.scatter(
+                [center_point_ms],
+                [max_count],
+                color='#e74c3c',
+                s=120,
+                zorder=5,
+                marker='X',
+                label='Cluster Center Marker'
+            )
+
+            ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
+            ax.set_xlabel("Time Difference (ms)", fontsize=10)
+            ax.set_ylabel("Count / Frequency", fontsize=10)
             ax.grid(True, alpha=0.3)
-            ax.legend()
+            ax.legend(loc='upper right')
             fig.tight_layout()
             plt.show()
         except Exception as e:
-            print(f"Could not display scatter plot GUI: {e}")
+            print(f"Could not display histogram plot GUI: {e}")
 
     return [center_point_ms]
 
