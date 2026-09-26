@@ -7,6 +7,12 @@ import soundfile as sf
 import librosa
 from scipy.spatial.distance import cdist
 
+try:
+    import ct_utils
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    import ct_utils
+
 # Global defaults
 MIN_SEGMENT_LEN_MS = 100
 ATOM_ITERATION_MS = 50
@@ -39,17 +45,37 @@ def extract_frame_features(y, sr, hop_length=160):
     return y, sr, features, frame_duration_ms
 
 
+def ensure_ct_initialized():
+    try:
+        ct_utils.ensure_extension_built()
+        import cumulative_transience as ct
+        return ct
+    except Exception as e:
+        print(f"Warning: Could not initialize cumulative_transience: {e}")
+        return None
+
+
 def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None):
     """
-    Detects transients in the entire audio file, computes pairwise time differences between all transients,
-    rounds each difference to the nearest atom_ms (50ms), and returns a sorted list of unique candidate
-    segment lengths.
+    Detects transients in the entire audio file using cumulative_transience peak detection,
+    computes pairwise time differences between all transients, rounds each difference to the nearest
+    atom_ms (50ms), and returns a sorted list of unique candidate segment lengths.
     """
-    print("Detecting transients across audio file...")
-    # Onset strength envelope and peak detection
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-    onset_frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, backtrack=False)
-    onset_times_ms = librosa.frames_to_time(onset_frames, sr=sr) * 1000.0
+    print("Detecting transients across audio file using cumulative_transience peak detection...")
+    ct = ensure_ct_initialized()
+    onset_times_ms = []
+
+    if ct is not None:
+        try:
+            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+            if analysis_res and 'peaks' in analysis_res:
+                for band_peaks in analysis_res['peaks']:
+                    for p in band_peaks:
+                        onset_times_ms.append(p['time'] * 1000.0)
+                onset_times_ms = sorted(onset_times_ms)
+        except Exception as e:
+            print(f"Error running cumulative_transience peak detection: {e}")
+            onset_times_ms = []
 
     print(f"Detected {len(onset_times_ms)} transients.")
 
