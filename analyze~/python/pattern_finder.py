@@ -19,10 +19,11 @@ ATOM_ITERATION_MS = 50
 SIMILARITY_THRESHOLD = 0.75  # Normalized similarity threshold (0.0 to 1.0)
 
 
-def extract_frame_features(y, sr, analysis_res=None):
+def extract_frame_features(y, sr, analysis_res=None, hop_ms=10):
     """
     Extract frame-level features based on the prominence of the smooth transience
     for DTW comparison using cumulative_transience peak detection results.
+    hop_ms=10 downsamples the 1ms transience envelopes to ~10ms frame resolution (100 Hz).
     """
     if analysis_res is None:
         ct = ensure_ct_initialized()
@@ -37,16 +38,18 @@ def extract_frame_features(y, sr, analysis_res=None):
     prominences = analysis_res['rolling_prominences']
     features = np.column_stack(prominences)
 
+    times = analysis_res.get('times', [])
+    raw_frame_dur_ms = float((times[1] - times[0]) * 1000.0) if len(times) > 1 else 1.0
+
+    # Downsample features to target hop_ms (~10ms per frame / 100 Hz resolution)
+    step = max(1, int(round(hop_ms / raw_frame_dur_ms)))
+    features = features[::step]
+    frame_duration_ms = raw_frame_dur_ms * step
+
     # Normalize features (zero mean, unit variance per feature dimension)
     mean = np.mean(features, axis=0, keepdims=True)
     std = np.std(features, axis=0, keepdims=True) + 1e-8
     features = (features - mean) / std
-
-    times = analysis_res.get('times', [])
-    if len(times) > 1:
-        frame_duration_ms = float((times[1] - times[0]) * 1000.0)
-    else:
-        frame_duration_ms = 1.0
 
     return y, sr, features, frame_duration_ms, analysis_res
 
@@ -252,6 +255,15 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
     against each other using Dynamic Time Warping.
     Returns (patterns, total_pattern_duration_ms)
     """
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        def tqdm(iterable=None, total=None, desc="", **kwargs):
+            class DummyPbar:
+                def update(self, n=1): pass
+                def close(self): pass
+            return DummyPbar()
+
     frames_per_seg = max(1, int(round(seg_len_ms / frame_dur_ms)))
     n_frames = len(features)
     num_segments = n_frames // frames_per_seg
@@ -273,6 +285,15 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
     matched_segment_indices = set()
     matches = []
 
+    total_comparisons = (num_segments * (num_segments - 1)) // 2
+    pbar = tqdm(
+        total=total_comparisons,
+        desc=f"DTW Comparing Segments ({seg_len_ms:.0f}ms)",
+        unit="pair",
+        dynamic_ncols=True,
+        ascii=os.name == 'nt'
+    )
+
     for i in range(num_segments):
         for j in range(i + 1, num_segments):
             sim = compute_segment_dtw_similarity(segments[i]['features'], segments[j]['features'])
@@ -284,6 +305,10 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
                 matched_segment_indices.add(i)
                 matched_segment_indices.add(j)
                 matches.append((i, j, sim))
+
+            pbar.update(1)
+
+    pbar.close()
 
     if not matched_segment_indices:
         return [], 0.0
