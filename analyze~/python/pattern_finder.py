@@ -254,6 +254,8 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
     total_pattern_duration_ms = 0.0
 
     for group in pattern_groups:
+        if len(group) < 2:
+            continue
         start_idx = group[0]
         end_idx = group[-1]
         start_ms = segments[start_idx]['start_ms']
@@ -331,30 +333,62 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         return
 
     print("\n" + "="*60)
-    print(f"ANALYSIS COMPLETE: Bar length determined to be {best_bar_length} ms")
+    print(f"ANALYSIS COMPLETE: Bar length determined to be {best_bar_length:.2f} ms")
     print(f"Total pattern duration at bar length: {max_total_pattern_len_ms:.2f} ms")
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
 
-    # Export WAV files for patterns at the best bar length
-    audio_dir = os.path.dirname(os.path.abspath(audio_path))
-    audio_base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    # Graph waveform with highlighted patterns and segment boundaries
+    if gui_mode and best_patterns:
+        try:
+            import matplotlib.pyplot as plt
 
-    saved_files = []
-    for idx, pat in enumerate(best_patterns, 1):
-        start_samp = int(round((pat['start_ms'] / 1000.0) * orig_sr))
-        end_samp = int(round((pat['end_ms'] / 1000.0) * orig_sr))
+            fig, ax = plt.subplots(figsize=(12, 6))
+            time_axis_s = np.linspace(0, total_duration_ms / 1000.0, len(y))
+            ax.plot(time_axis_s, y, color='#2c3e50', alpha=0.6, linewidth=0.8, label='Waveform')
 
-        pattern_audio = raw_y[start_samp:end_samp]
+            colors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22', '#3498db']
+            y_max = float(np.max(y)) if len(y) > 0 else 1.0
 
-        out_filename = f"{audio_base_name}_bar_{int(best_bar_length)}ms_pattern_{idx}.wav"
-        out_filepath = os.path.join(audio_dir, out_filename)
+            frames_per_seg = max(1, int(round(best_bar_length / frame_dur_ms)))
 
-        sf.write(out_filepath, pattern_audio, orig_sr)
-        saved_files.append(out_filepath)
-        print(f"Saved pattern {idx}: {out_filepath} (Start: {pat['start_ms']:.1f}ms, End: {pat['end_ms']:.1f}ms)")
+            for pat_idx, pat in enumerate(best_patterns, 1):
+                color = colors[(pat_idx - 1) % len(colors)]
+                pat_start_s = pat['start_ms'] / 1000.0
+                pat_end_s = pat['end_ms'] / 1000.0
 
-    return best_bar_length, best_patterns, saved_files
+                # Highlight pattern span
+                ax.axvspan(pat_start_s, pat_end_s, color=color, alpha=0.35,
+                           label=f"Pattern {pat_idx} ({pat['duration_ms']:.0f} ms)")
+
+                # Mark constituent segments
+                for seg_i, seg_idx in enumerate(pat['segments']):
+                    s_start_ms = seg_idx * frames_per_seg * frame_dur_ms
+                    s_end_ms = (seg_idx + 1) * frames_per_seg * frame_dur_ms
+                    s_start_s = s_start_ms / 1000.0
+                    s_end_s = s_end_ms / 1000.0
+
+                    ax.axvline(s_start_s, color=color, linestyle='--', alpha=0.7, linewidth=1.2)
+                    if seg_i == len(pat['segments']) - 1:
+                        ax.axvline(s_end_s, color=color, linestyle='--', alpha=0.7, linewidth=1.2)
+
+                    mid_s = (s_start_s + s_end_s) / 2.0
+                    ax.text(mid_s, y_max * 0.85, f"Seg {seg_idx}", color=color, fontsize=9,
+                            fontweight='bold', ha='center', va='center',
+                            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.75, edgecolor=color))
+
+            ax.set_title(f"Audio Waveform & Detected Patterns (Bar Length: {best_bar_length:.2f} ms)",
+                         fontsize=12, fontweight='bold')
+            ax.set_xlabel("Time (seconds)", fontsize=10)
+            ax.set_ylabel("Amplitude", fontsize=10)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right')
+            fig.tight_layout()
+            plt.show()
+        except Exception as e:
+            print(f"Could not display pattern waveform plot GUI: {e}")
+
+    return best_bar_length, best_patterns
 
 
 def main():
