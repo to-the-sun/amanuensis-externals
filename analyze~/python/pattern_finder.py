@@ -19,30 +19,36 @@ ATOM_ITERATION_MS = 50
 SIMILARITY_THRESHOLD = 0.75  # Normalized similarity threshold (0.0 to 1.0)
 
 
-def extract_frame_features(y, sr, hop_length=160):
+def extract_frame_features(y, sr, analysis_res=None):
     """
-    Extract frame-level features (MFCC + Delta + Chroma) for DTW comparison.
-    hop_length=160 samples at 16kHz corresponds to 10ms per frame.
+    Extract frame-level features based on the prominence of the smooth transience
+    for DTW comparison using cumulative_transience peak detection results.
     """
-    # Force 16kHz for uniform temporal resolution
-    if sr != 16000:
-        y = librosa.resample(y, orig_sr=sr, target_sr=16000)
-        sr = 16000
+    if analysis_res is None:
+        ct = ensure_ct_initialized()
+        if ct is None:
+            raise RuntimeError("cumulative_transience module could not be initialized.")
+        analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
 
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
-    mfcc_delta = librosa.feature.delta(mfcc)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length)
+    if not analysis_res or 'rolling_prominences' not in analysis_res:
+        raise ValueError("Transience analysis failed or missing 'rolling_prominences' in analysis results.")
 
-    # Stack features along feature axis: (n_frames, n_features)
-    features = np.vstack([mfcc, mfcc_delta, chroma]).T
+    # Stack 4-band smooth transience prominence features along feature axis: (n_frames, 4)
+    prominences = analysis_res['rolling_prominences']
+    features = np.column_stack(prominences)
 
     # Normalize features (zero mean, unit variance per feature dimension)
     mean = np.mean(features, axis=0, keepdims=True)
     std = np.std(features, axis=0, keepdims=True) + 1e-8
     features = (features - mean) / std
 
-    frame_duration_ms = (hop_length / sr) * 1000.0
-    return y, sr, features, frame_duration_ms
+    times = analysis_res.get('times', [])
+    if len(times) > 1:
+        frame_duration_ms = float((times[1] - times[0]) * 1000.0)
+    else:
+        frame_duration_ms = 1.0
+
+    return y, sr, features, frame_duration_ms, analysis_res
 
 
 def ensure_ct_initialized():
@@ -100,7 +106,7 @@ def find_most_common_cluster_center(diffs_ms):
         return float((bin_low + bin_high) / 2.0)
 
 
-def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True):
+def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True, analysis_res=None):
     """
     Detects transients across the audio file using cumulative_transience peak detection,
     computes full floating-point pairwise time differences between all transients,
@@ -108,20 +114,22 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     and returns a list containing that single cluster center segment length.
     """
     print("Detecting transients across audio file using cumulative_transience peak detection...")
-    ct = ensure_ct_initialized()
     onset_times_ms = []
 
-    if ct is not None:
-        try:
-            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
-            if analysis_res and 'peaks' in analysis_res:
-                for band_peaks in analysis_res['peaks']:
-                    for p in band_peaks:
-                        onset_times_ms.append(p['time'] * 1000.0)
-                onset_times_ms = sorted(onset_times_ms)
-        except Exception as e:
-            print(f"Error running cumulative_transience peak detection: {e}")
-            onset_times_ms = []
+    if analysis_res is None:
+        ct = ensure_ct_initialized()
+        if ct is not None:
+            try:
+                analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+            except Exception as e:
+                print(f"Error running cumulative_transience peak detection: {e}")
+                analysis_res = None
+
+    if analysis_res and 'peaks' in analysis_res:
+        for band_peaks in analysis_res['peaks']:
+            for p in band_peaks:
+                onset_times_ms.append(p['time'] * 1000.0)
+        onset_times_ms = sorted(onset_times_ms)
 
     print(f"Detected {len(onset_times_ms)} transients.")
 
@@ -195,7 +203,8 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
             ax.grid(True, alpha=0.3)
             ax.legend(loc='upper right')
             fig.tight_layout()
-            plt.show()
+            plt.show(block=False)
+            plt.pause(0.1)
         except Exception as e:
             print(f"Could not display histogram plot GUI: {e}")
 
@@ -318,8 +327,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     else:
         raw_y_mono = raw_y
 
-    # Extract audio and features at 16kHz
-    y, sr, features, frame_dur_ms = extract_frame_features(raw_y_mono, orig_sr)
+    # Extract frame features based on smooth transience prominence
+    y, sr, features, frame_dur_ms, analysis_res = extract_frame_features(raw_y_mono, orig_sr)
     total_duration_ms = (len(y) / sr) * 1000.0
 
     print(f"Audio duration: {total_duration_ms:.2f} ms ({total_duration_ms/1000.0:.2f} s)")
@@ -331,7 +340,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         min_seg_ms=min_segment_ms,
         atom_ms=atom_iteration_ms,
         max_seg_ms=max_len_ms,
-        gui_mode=gui_mode
+        gui_mode=gui_mode,
+        analysis_res=analysis_res
     )
 
     best_bar_length = None
