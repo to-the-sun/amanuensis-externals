@@ -575,13 +575,17 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     return html_filepath
 
 
-def analyze_cumulative_transience_high_points(y, sr, analysis_res=None):
+def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode=True):
     """
     Performs first-pass cumulative transience analysis on the entire audio file to accumulate
     waveforms into the 15-second cumulative transience history graph.
     Tracks the x-axis value (ms) of the high point in the cumulative history graph across frames,
     determines the high point value that persisted for the longest total duration over the course
     of the audio file, and records change events where the high point value transitioned.
+
+    When gui_mode is enabled, it identifies the longest steady span for the selected high point value
+    and pops up a window displaying the cumulative history buffer at the moment just before it
+    changed away to something else.
 
     Returns:
       longest_high_point_ms: float (the x-axis value of the high point active for the longest duration)
@@ -606,12 +610,17 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None):
 
     hp_durations = {}
     hp_changes = []
+    runs = []
+    current_run = None
     last_val = None
 
     frame_dt_s = (times[1] - times[0]) if len(times) > 1 else 0.001
 
-    for t_s, raw_hp in zip(times, highest_peaks):
+    for i, (t_s, raw_hp) in enumerate(zip(times, highest_peaks)):
         if raw_hp == -999.0:
+            if current_run is not None:
+                runs.append(current_run)
+                current_run = None
             continue
 
         val_ms = float(abs(raw_hp))
@@ -627,6 +636,26 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None):
             })
             last_val = val_ms
 
+        # Group contiguous steady runs
+        if current_run is None or abs(val_ms - current_run['val_ms']) > 1e-3:
+            if current_run is not None:
+                runs.append(current_run)
+            current_run = {
+                'val_ms': val_ms,
+                'start_idx': i,
+                'end_idx': i,
+                'start_time_s': float(t_s),
+                'end_time_s': float(t_s),
+                'duration_s': frame_dt_s
+            }
+        else:
+            current_run['end_idx'] = i
+            current_run['end_time_s'] = float(t_s)
+            current_run['duration_s'] = float(t_s) - current_run['start_time_s'] + frame_dt_s
+
+    if current_run is not None:
+        runs.append(current_run)
+
     if not hp_durations:
         print("Warning: No valid cumulative history high points found across frames.")
         return float(MIN_SEGMENT_LEN_MS), [], analysis_res
@@ -634,9 +663,82 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None):
     # Select the x-axis high point value active for the longest total duration
     longest_high_point_ms = max(hp_durations.items(), key=lambda item: item[1])[0]
 
+    # Find the longest steady run for the selected high point value
+    hp_runs = [r for r in runs if abs(r['val_ms'] - longest_high_point_ms) < 1e-3]
+    longest_run = max(hp_runs, key=lambda r: r['duration_s']) if hp_runs else None
+
     print(f"\nFirst Pass Cumulative Transience Analysis:")
     print(f"Tracked {len(hp_changes)} high point change events across audio.")
     print(f"High point active for the longest duration: {longest_high_point_ms:.2f} ms ({hp_durations[longest_high_point_ms]:.2f} s total)")
+    if longest_run:
+        print(f"Longest steady span for high point {longest_high_point_ms:.2f} ms:")
+        print(f"  Duration: {longest_run['duration_s']:.2f} s (from {longest_run['start_time_s']:.2f} s to {longest_run['end_time_s']:.2f} s)")
+        print(f"  Target snapshot time just before change: {longest_run['end_time_s']:.2f} s (Frame {longest_run['end_idx']})")
+
+    if gui_mode and longest_run:
+        try:
+            import matplotlib.pyplot as plt
+
+            ct = ensure_ct_initialized()
+            if ct is not None:
+                target_frame = longest_run['end_idx']
+                target_time_s = times[target_frame]
+
+                a = ct.TransientAnalyzer(1.0, int(sr))
+                hop = int(sr * 0.001)
+                step = hop * 100
+                target_sample = int(round(target_time_s * sr)) + hop
+
+                for last_t in range(0, target_sample, step):
+                    act_s = last_t - int(sr * 0.2)
+                    win_s = act_s - int(sr * 15.0)
+                    if win_s < 0:
+                        win_s = 0
+                    rem = target_sample - last_t
+                    chunk_len = rem if rem < step else step
+                    push_y = y[last_t : last_t + chunk_len].astype(np.float32)
+                    if len(push_y) < step:
+                        push_y = np.pad(push_y, (0, step - len(push_y)))
+                    a.analyze_chunk(push_y, int(sr), win_s // hop, act_s // hop)
+
+                acc_buf = a.accumulated_buffer
+                buffer_times = np.linspace(-15000, 0, 15001)
+
+                hp_idx = 15000 - int(round(longest_high_point_ms))
+                if hp_idx < 0:
+                    hp_idx = 0
+                if hp_idx >= 15001:
+                    hp_idx = 15000
+                val_at_hp = acc_buf[hp_idx]
+
+                fig, ax = plt.subplots(figsize=(12, 6))
+                ax.plot(buffer_times, acc_buf, color='#3498db', linewidth=1.5, label='Cumulative History Buffer')
+                ax.fill_between(buffer_times, acc_buf, color='#3498db', alpha=0.2)
+
+                ax.axvline(-longest_high_point_ms, color='#e74c3c', linestyle='--', linewidth=2.0,
+                           label=f'High Point ({longest_high_point_ms:.2f} ms)')
+                ax.plot(-longest_high_point_ms, val_at_hp, marker='o', color='#e74c3c', markersize=8)
+
+                ax.annotate(f'High Point: {longest_high_point_ms:.2f} ms\nEnergy: {val_at_hp:.2f}',
+                            xy=(-longest_high_point_ms, val_at_hp),
+                            xytext=(-longest_high_point_ms - 2000, val_at_hp * 0.9 if val_at_hp > 0 else 1.0),
+                            arrowprops=dict(facecolor='#e74c3c', shrink=0.05, width=1.5, headwidth=8),
+                            fontsize=10, fontweight='bold', color='#c0392b',
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='#fadbd8', edgecolor='#e74c3c', alpha=0.9))
+
+                ax.set_title(f'Cumulative History Buffer at Peak Stability (t = {target_time_s:.2f}s)\n'
+                             f'Segment Length (High Point) = {longest_high_point_ms:.2f} ms | Longest Steady Span = {longest_run["duration_s"]:.2f}s',
+                             fontsize=12, fontweight='bold', pad=12)
+                ax.set_xlabel('Time Relative to Peak (ms)', fontsize=10)
+                ax.set_ylabel('Accumulated Energy', fontsize=10)
+                ax.set_xlim(-15000, 0)
+                ax.grid(True, alpha=0.3)
+                ax.legend(loc='upper left')
+
+                fig.tight_layout()
+                plt.show()
+        except Exception as e:
+            print(f"Could not display cumulative history buffer popup window: {e}")
 
     return longest_high_point_ms, hp_changes, analysis_res
 
@@ -745,7 +847,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     longest_hp_ms, hp_changes, analysis_res = analyze_cumulative_transience_high_points(
         y=y,
         sr=sr,
-        analysis_res=analysis_res
+        analysis_res=analysis_res,
+        gui_mode=gui_mode
     )
 
     best_bar_length = longest_hp_ms
