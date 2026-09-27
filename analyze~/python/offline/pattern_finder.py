@@ -671,9 +671,11 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
     print(f"Tracked {len(hp_changes)} high point change events across audio.")
     print(f"High point active for the longest duration: {longest_high_point_ms:.2f} ms ({hp_durations[longest_high_point_ms]:.2f} s total)")
     if longest_run:
+        target_frame = (longest_run['start_idx'] + longest_run['end_idx']) // 2
+        target_time_s = times[target_frame]
         print(f"Longest steady span for high point {longest_high_point_ms:.2f} ms:")
         print(f"  Duration: {longest_run['duration_s']:.2f} s (from {longest_run['start_time_s']:.2f} s to {longest_run['end_time_s']:.2f} s)")
-        print(f"  Target snapshot time just before change: {longest_run['end_time_s']:.2f} s (Frame {longest_run['end_idx']})")
+        print(f"  Target snapshot time at steady span midpoint: {target_time_s:.2f} s (Frame {target_frame})")
 
     if gui_mode and longest_run:
         try:
@@ -681,9 +683,6 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
 
             ct = ensure_ct_initialized()
             if ct is not None:
-                target_frame = longest_run['end_idx']
-                target_time_s = times[target_frame]
-
                 a = ct.TransientAnalyzer(1.0, int(sr))
                 hop = int(sr * 0.001)
                 step = hop * 100
@@ -726,7 +725,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                             fontsize=10, fontweight='bold', color='#c0392b',
                             bbox=dict(boxstyle='round,pad=0.3', facecolor='#fadbd8', edgecolor='#e74c3c', alpha=0.9))
 
-                ax.set_title(f'Cumulative History Buffer at Peak Stability (t = {target_time_s:.2f}s)\n'
+                ax.set_title(f'Cumulative History Buffer at Peak Stability Midpoint (t = {target_time_s:.2f}s)\n'
                              f'Segment Length (High Point) = {longest_high_point_ms:.2f} ms | Longest Steady Span = {longest_run["duration_s"]:.2f}s',
                              fontsize=12, fontweight='bold', pad=12)
                 ax.set_xlabel('Time Relative to Peak (ms)', fontsize=10)
@@ -736,7 +735,8 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                 ax.legend(loc='upper left')
 
                 fig.tight_layout()
-                plt.show()
+                plt.show(block=False)
+                plt.pause(0.1)
         except Exception as e:
             print(f"Could not display cumulative history buffer popup window: {e}")
 
