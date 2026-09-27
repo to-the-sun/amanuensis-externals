@@ -19,30 +19,39 @@ ATOM_ITERATION_MS = 50
 SIMILARITY_THRESHOLD = 0.75  # Normalized similarity threshold (0.0 to 1.0)
 
 
-def extract_frame_features(y, sr, hop_length=160):
+def extract_frame_features(y, sr, analysis_res=None, hop_ms=10):
     """
-    Extract frame-level features (MFCC + Delta + Chroma) for DTW comparison.
-    hop_length=160 samples at 16kHz corresponds to 10ms per frame.
+    Extract frame-level features based on the prominence of the smooth transience
+    for DTW comparison using cumulative_transience peak detection results.
+    hop_ms=10 downsamples the 1ms transience envelopes to ~10ms frame resolution (100 Hz).
     """
-    # Force 16kHz for uniform temporal resolution
-    if sr != 16000:
-        y = librosa.resample(y, orig_sr=sr, target_sr=16000)
-        sr = 16000
+    if analysis_res is None:
+        ct = ensure_ct_initialized()
+        if ct is None:
+            raise RuntimeError("cumulative_transience module could not be initialized.")
+        analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
 
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
-    mfcc_delta = librosa.feature.delta(mfcc)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length)
+    if not analysis_res or 'rolling_prominences' not in analysis_res:
+        raise ValueError("Transience analysis failed or missing 'rolling_prominences' in analysis results.")
 
-    # Stack features along feature axis: (n_frames, n_features)
-    features = np.vstack([mfcc, mfcc_delta, chroma]).T
+    # Stack 4-band smooth transience prominence features along feature axis: (n_frames, 4)
+    prominences = analysis_res['rolling_prominences']
+    features = np.column_stack(prominences)
+
+    times = analysis_res.get('times', [])
+    raw_frame_dur_ms = float((times[1] - times[0]) * 1000.0) if len(times) > 1 else 1.0
+
+    # Downsample features to target hop_ms (~10ms per frame / 100 Hz resolution)
+    step = max(1, int(round(hop_ms / raw_frame_dur_ms)))
+    features = features[::step]
+    frame_duration_ms = raw_frame_dur_ms * step
 
     # Normalize features (zero mean, unit variance per feature dimension)
     mean = np.mean(features, axis=0, keepdims=True)
     std = np.std(features, axis=0, keepdims=True) + 1e-8
     features = (features - mean) / std
 
-    frame_duration_ms = (hop_length / sr) * 1000.0
-    return y, sr, features, frame_duration_ms
+    return y, sr, features, frame_duration_ms, analysis_res
 
 
 def ensure_ct_initialized():
@@ -53,6 +62,437 @@ def ensure_ct_initialized():
     except Exception as e:
         print(f"Warning: Could not initialize cumulative_transience: {e}")
         return None
+
+
+def _plot_histogram_process(raw_diffs, center_point_ms):
+    try:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(10, 6))
+        diffs_arr = np.array(raw_diffs, dtype=np.float64)
+
+        # Choose appropriate small bin interval (~10ms bins or dynamic bin count)
+        min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
+        range_v = max(1.0, max_v - min_v)
+        num_bins = max(20, min(100, int(range_v / 10.0)))
+
+        counts, bin_edges, patches = ax.hist(
+            diffs_arr,
+            bins=num_bins,
+            color='#3498db',
+            edgecolor='#2980b9',
+            alpha=0.75,
+            rwidth=0.85,
+            label='Time Differences Count'
+        )
+
+        max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
+        ax.axvline(
+            center_point_ms,
+            color='#e74c3c',
+            linestyle='--',
+            linewidth=2,
+            label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
+        )
+        ax.scatter(
+            [center_point_ms],
+            [max_count],
+            color='#e74c3c',
+            s=120,
+            zorder=5,
+            marker='X',
+            label='Cluster Center Marker'
+        )
+
+        ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Time Difference (ms)", fontsize=10)
+        ax.set_ylabel("Count / Frequency", fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+        fig.tight_layout()
+        plt.show()
+    except Exception as e:
+        print(f"Could not display histogram plot GUI: {e}")
+
+
+def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms, best_bar_length, best_patterns):
+    """
+    Exports an interactive HTML report containing:
+    1. Histogram of transient time differences distribution with marked cluster center.
+    2. Interactive waveform graph with pattern overlays, real-time playhead cursor tracking,
+       HTML5 audio playback, and click-to-seek waveform navigation.
+    """
+    import io
+    import base64
+    import json
+    import webbrowser
+
+    print("\nGenerating interactive HTML report...")
+
+    # 1. Render Histogram Plot to Base64 PNG
+    hist_b64 = ""
+    try:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+        diffs_arr = np.array(raw_diffs, dtype=np.float64)
+        min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
+        range_v = max(1.0, max_v - min_v)
+        num_bins = max(20, min(100, int(range_v / 10.0)))
+
+        counts, bin_edges, patches = ax.hist(
+            diffs_arr,
+            bins=num_bins,
+            color='#3498db',
+            edgecolor='#2980b9',
+            alpha=0.75,
+            rwidth=0.85,
+            label='Time Differences Count'
+        )
+
+        max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
+        ax.axvline(
+            center_point_ms,
+            color='#e74c3c',
+            linestyle='--',
+            linewidth=2,
+            label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
+        )
+        ax.scatter(
+            [center_point_ms],
+            [max_count],
+            color='#e74c3c',
+            s=120,
+            zorder=5,
+            marker='X',
+            label='Cluster Center Marker'
+        )
+
+        ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Time Difference (ms)", fontsize=10)
+        ax.set_ylabel("Count / Frequency", fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+        fig.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=120)
+        plt.close(fig)
+        buf.seek(0)
+        hist_b64 = base64.b64encode(buf.read()).decode('utf-8')
+    except Exception as e:
+        print(f"Could not generate histogram image for HTML report: {e}")
+
+    # 2. Downsample Audio Waveform for Canvas Rendering (e.g. 1500 points)
+    num_waveform_pts = 1500
+    if len(y) > num_waveform_pts:
+        step = len(y) // num_waveform_pts
+        waveform_min = [float(np.min(y[i*step:(i+1)*step])) for i in range(num_waveform_pts)]
+        waveform_max = [float(np.max(y[i*step:(i+1)*step])) for i in range(num_waveform_pts)]
+    else:
+        waveform_min = [float(val) for val in y]
+        waveform_max = [float(val) for val in y]
+
+    total_dur_s = float(len(y)) / float(sr)
+
+    # 3. Read audio file to Base64 for embedded HTML playback
+    audio_b64 = ""
+    audio_mime = "audio/wav"
+    if audio_path.lower().endswith(".mp3"):
+        audio_mime = "audio/mp3"
+    elif audio_path.lower().endswith(".ogg"):
+        audio_mime = "audio/ogg"
+    elif audio_path.lower().endswith(".flac"):
+        audio_mime = "audio/flac"
+
+    try:
+        with open(audio_path, "rb") as af:
+            audio_b64 = base64.b64encode(af.read()).decode("utf-8")
+    except Exception as e:
+        print(f"Could not embed base64 audio in HTML: {e}")
+
+    audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.basename(audio_path)
+
+    # Convert pattern data for JS consumption
+    patterns_js = json.dumps(best_patterns)
+
+    audio_filename = os.path.basename(audio_path)
+    html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pattern Analysis Report - {audio_filename}</title>
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            color: #2c3e50;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #2c3e50;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }}
+        .metrics-card {{
+            display: flex;
+            gap: 20px;
+            margin-bottom: 25px;
+        }}
+        .metric-box {{
+            flex: 1;
+            background: #eef2f7;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #3498db;
+        }}
+        .metric-value {{
+            font-size: 22px;
+            font-weight: bold;
+            color: #2980b9;
+        }}
+        .metric-label {{
+            font-size: 13px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+        }}
+        .section-title {{
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            color: #34495e;
+        }}
+        .img-container {{
+            text-align: center;
+            margin-bottom: 25px;
+        }}
+        .img-container img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }}
+        .audio-controls {{
+            margin: 20px 0;
+            text-align: center;
+        }}
+        audio {{
+            width: 100%;
+            max-width: 800px;
+            outline: none;
+        }}
+        .canvas-container {{
+            position: relative;
+            margin-top: 15px;
+            border: 1px solid #dcdde1;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #ffffff;
+            cursor: pointer;
+        }}
+        canvas {{
+            display: block;
+            width: 100%;
+            height: 300px;
+        }}
+        .hint {{
+            font-size: 12px;
+            color: #7f8c8d;
+            text-align: center;
+            margin-top: 6px;
+        }}
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Audio Pattern Analysis Report</h1>
+    <div style="font-size: 14px; color: #7f8c8d; margin-bottom: 20px;">
+        File: <strong>{audio_filename}</strong> | Total Duration: <strong>{total_dur_s:.2f}s</strong>
+    </div>
+
+    <div class="metrics-card">
+        <div class="metric-box">
+            <div class="metric-value">{best_bar_length:.2f} ms</div>
+            <div class="metric-label">Determined Bar Length</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-value">{center_point_ms:.2f} ms</div>
+            <div class="metric-label">Transient Cluster Center</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-value">{len(best_patterns)}</div>
+            <div class="metric-label">Patterns Identified</div>
+        </div>
+    </div>
+
+    <div class="section-title">1. Transient Pairwise Time Differences Distribution</div>
+    <div class="img-container">
+        <img src="data:image/png;base64,{hist_b64}" alt="Histogram Plot">
+    </div>
+
+    <div class="section-title">2. Interactive Audio Waveform & Pattern Map</div>
+    <div class="audio-controls">
+        <audio id="audioPlayer" controls src="{audio_src}"></audio>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="waveformCanvas" width="1150" height="300"></canvas>
+    </div>
+    <div class="hint">💡 Click anywhere on the waveform graph above to seek to that point in the song and play audio.</div>
+</div>
+
+<script>
+    const waveformMin = {json.dumps(waveform_min)};
+    const waveformMax = {json.dumps(waveform_max)};
+    const totalDurationS = {total_dur_s};
+    const bestBarLengthMs = {best_bar_length};
+    const patterns = {patterns_js};
+
+    const canvas = document.getElementById('waveformCanvas');
+    const ctx = canvas.getContext('2d');
+    const audio = document.getElementById('audioPlayer');
+
+    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)',
+                    'rgba(241, 196, 15, 0.35)', 'rgba(26, 188, 156, 0.35)', 'rgba(230, 126, 34, 0.35)'];
+    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22'];
+
+    function draw() {{
+        const W = canvas.width;
+        const H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+
+        // Background
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(0, 0, W, H);
+
+        // Pattern Highlight Spans
+        patterns.forEach((pat, idx) => {{
+            const color = colors[idx % colors.length];
+            const borderColor = borderColors[idx % borderColors.length];
+
+            const startX = (pat.start_ms / 1000.0 / totalDurationS) * W;
+            const endX = (pat.end_ms / 1000.0 / totalDurationS) * W;
+            const spanW = endX - startX;
+
+            ctx.fillStyle = color;
+            ctx.fillRect(startX, 0, spanW, H);
+
+            // Pattern Banner
+            ctx.fillStyle = borderColor;
+            ctx.font = 'bold 12px Segoe UI, sans-serif';
+            ctx.fillText(`Pattern ${{idx + 1}} (${{Math.round(pat.duration_ms)}}ms)`, startX + 5, 20);
+
+            // Segment Dividers
+            if (pat.segments) {{
+                pat.segments.forEach((segIdx) => {{
+                    const segStartMs = segIdx * bestBarLengthMs;
+                    const segStartX = (segStartMs / 1000.0 / totalDurationS) * W;
+
+                    ctx.strokeStyle = borderColor;
+                    ctx.setLineDash([4, 4]);
+                    ctx.beginPath();
+                    ctx.moveTo(segStartX, 25);
+                    ctx.lineTo(segStartX, H);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    ctx.fillStyle = borderColor;
+                    ctx.font = '10px Segoe UI, sans-serif';
+                    ctx.fillText(`Seg ${{segIdx}}`, segStartX + 3, 38);
+                }});
+            }}
+        }});
+
+        // Waveform
+        const centerY = H / 2;
+        const numPts = waveformMin.length;
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = '#2c3e50';
+
+        ctx.beginPath();
+        for (let i = 0; i < numPts; i++) {{
+            const x = (i / numPts) * W;
+            const minY = centerY - (waveformMin[i] * (H * 0.4));
+            const maxY = centerY - (waveformMax[i] * (H * 0.4));
+
+            ctx.moveTo(x, minY);
+            ctx.lineTo(x, maxY);
+        }}
+        ctx.stroke();
+
+        // Center Axis Line
+        ctx.strokeStyle = 'rgba(127, 140, 141, 0.3)';
+        ctx.beginPath();
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(W, centerY);
+        ctx.stroke();
+
+        // Playhead Cursor
+        if (audio.duration) {{
+            const progress = audio.currentTime / audio.duration;
+            const cursorX = progress * W;
+
+            ctx.strokeStyle = '#e67e22';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(cursorX, 0);
+            ctx.lineTo(cursorX, H);
+            ctx.stroke();
+
+            // Cursor Time Badge
+            const curTimeS = audio.currentTime.toFixed(2);
+            ctx.fillStyle = '#e67e22';
+            ctx.fillRect(cursorX + 2, H - 25, 60, 20);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px Segoe UI, sans-serif';
+            ctx.fillText(`${{curTimeS}}s`, cursorX + 8, H - 11);
+        }}
+    }}
+
+    draw();
+
+    audio.addEventListener('timeupdate', draw);
+    audio.addEventListener('play', draw);
+    audio.addEventListener('pause', draw);
+
+    canvas.addEventListener('click', (e) => {{
+        const rect = canvas.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickFraction = clickX / rect.width;
+
+        if (audio.duration) {{
+            audio.currentTime = clickFraction * audio.duration;
+            audio.play();
+        }}
+    }});
+</script>
+</body>
+</html>
+"""
+
+    with open(html_filepath, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    print(f"Interactive HTML report generated successfully: {html_filepath}")
+
+    try:
+        webbrowser.open(os.path.abspath(html_filepath))
+    except Exception as e:
+        print(f"Could not open browser automatically: {e}")
+
+    return html_filepath
 
 
 def find_most_common_cluster_center(diffs_ms):
@@ -100,7 +540,7 @@ def find_most_common_cluster_center(diffs_ms):
         return float((bin_low + bin_high) / 2.0)
 
 
-def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True):
+def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True, analysis_res=None):
     """
     Detects transients across the audio file using cumulative_transience peak detection,
     computes full floating-point pairwise time differences between all transients,
@@ -108,20 +548,22 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     and returns a list containing that single cluster center segment length.
     """
     print("Detecting transients across audio file using cumulative_transience peak detection...")
-    ct = ensure_ct_initialized()
     onset_times_ms = []
 
-    if ct is not None:
-        try:
-            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
-            if analysis_res and 'peaks' in analysis_res:
-                for band_peaks in analysis_res['peaks']:
-                    for p in band_peaks:
-                        onset_times_ms.append(p['time'] * 1000.0)
-                onset_times_ms = sorted(onset_times_ms)
-        except Exception as e:
-            print(f"Error running cumulative_transience peak detection: {e}")
-            onset_times_ms = []
+    if analysis_res is None:
+        ct = ensure_ct_initialized()
+        if ct is not None:
+            try:
+                analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+            except Exception as e:
+                print(f"Error running cumulative_transience peak detection: {e}")
+                analysis_res = None
+
+    if analysis_res and 'peaks' in analysis_res:
+        for band_peaks in analysis_res['peaks']:
+            for p in band_peaks:
+                onset_times_ms.append(p['time'] * 1000.0)
+        onset_times_ms = sorted(onset_times_ms)
 
     print(f"Detected {len(onset_times_ms)} transients.")
 
@@ -149,55 +591,18 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     print(f"Accumulated {len(raw_diffs)} peak difference values.")
     print(f"Calculated most common cluster center point: {center_point_ms:.2f} ms")
 
-    # Graph all floating-point differences on a histogram (bar graph) with marked cluster center
+    # Graph all floating-point differences on a histogram (bar graph) with marked cluster center in a separate process
     if gui_mode:
         try:
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(10, 6))
-            diffs_arr = np.array(raw_diffs, dtype=np.float64)
-
-            # Choose appropriate small bin interval (~10ms bins or dynamic bin count)
-            min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
-            range_v = max(1.0, max_v - min_v)
-            num_bins = max(20, min(100, int(range_v / 10.0)))
-
-            counts, bin_edges, patches = ax.hist(
-                diffs_arr,
-                bins=num_bins,
-                color='#3498db',
-                edgecolor='#2980b9',
-                alpha=0.75,
-                rwidth=0.85,
-                label='Time Differences Count'
+            import multiprocessing
+            p = multiprocessing.Process(
+                target=_plot_histogram_process,
+                args=(raw_diffs, center_point_ms),
+                daemon=True
             )
-
-            max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
-            ax.axvline(
-                center_point_ms,
-                color='#e74c3c',
-                linestyle='--',
-                linewidth=2,
-                label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
-            )
-            ax.scatter(
-                [center_point_ms],
-                [max_count],
-                color='#e74c3c',
-                s=120,
-                zorder=5,
-                marker='X',
-                label='Cluster Center Marker'
-            )
-
-            ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
-            ax.set_xlabel("Time Difference (ms)", fontsize=10)
-            ax.set_ylabel("Count / Frequency", fontsize=10)
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc='upper right')
-            fig.tight_layout()
-            plt.show()
+            p.start()
         except Exception as e:
-            print(f"Could not display histogram plot GUI: {e}")
+            print(f"Could not display histogram plot GUI process: {e}")
 
     return [center_point_ms]
 
@@ -231,6 +636,15 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
     against each other using Dynamic Time Warping.
     Returns (patterns, total_pattern_duration_ms)
     """
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        def tqdm(iterable=None, total=None, desc="", **kwargs):
+            class DummyPbar:
+                def update(self, n=1): pass
+                def close(self): pass
+            return DummyPbar()
+
     frames_per_seg = max(1, int(round(seg_len_ms / frame_dur_ms)))
     n_frames = len(features)
     num_segments = n_frames // frames_per_seg
@@ -252,6 +666,15 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
     matched_segment_indices = set()
     matches = []
 
+    total_comparisons = (num_segments * (num_segments - 1)) // 2
+    pbar = tqdm(
+        total=total_comparisons,
+        desc=f"DTW Comparing Segments ({seg_len_ms:.0f}ms)",
+        unit="pair",
+        dynamic_ncols=True,
+        ascii=os.name == 'nt'
+    )
+
     for i in range(num_segments):
         for j in range(i + 1, num_segments):
             sim = compute_segment_dtw_similarity(segments[i]['features'], segments[j]['features'])
@@ -263,6 +686,10 @@ def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity
                 matched_segment_indices.add(i)
                 matched_segment_indices.add(j)
                 matches.append((i, j, sim))
+
+            pbar.update(1)
+
+    pbar.close()
 
     if not matched_segment_indices:
         return [], 0.0
@@ -318,8 +745,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     else:
         raw_y_mono = raw_y
 
-    # Extract audio and features at 16kHz
-    y, sr, features, frame_dur_ms = extract_frame_features(raw_y_mono, orig_sr)
+    # Extract frame features based on smooth transience prominence
+    y, sr, features, frame_dur_ms, analysis_res = extract_frame_features(raw_y_mono, orig_sr)
     total_duration_ms = (len(y) / sr) * 1000.0
 
     print(f"Audio duration: {total_duration_ms:.2f} ms ({total_duration_ms/1000.0:.2f} s)")
@@ -331,7 +758,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         min_seg_ms=min_segment_ms,
         atom_ms=atom_iteration_ms,
         max_seg_ms=max_len_ms,
-        gui_mode=gui_mode
+        gui_mode=gui_mode,
+        analysis_res=analysis_res
     )
 
     best_bar_length = None
@@ -368,8 +796,23 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
 
-    # Graph waveform with highlighted patterns and segment boundaries
+    # Graph waveform with highlighted patterns and segment boundaries & Export Interactive HTML Report
     if gui_mode and best_patterns:
+        try:
+            # Export interactive HTML report with audio player, playhead tracking & click-to-seek waveform
+            raw_diffs = segment_lengths if len(segment_lengths) > 0 else []
+            export_interactive_html_report(
+                audio_path=audio_path,
+                y=y,
+                sr=sr,
+                raw_diffs=raw_diffs,
+                center_point_ms=best_bar_length,
+                best_bar_length=best_bar_length,
+                best_patterns=best_patterns
+            )
+        except Exception as e:
+            print(f"Could not generate interactive HTML report: {e}")
+
         try:
             import matplotlib.pyplot as plt
 
