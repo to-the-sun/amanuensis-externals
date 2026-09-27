@@ -13,6 +13,8 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     import ct_utils
 
+from offline_transience import compute_offline_segment_transience
+
 # Global defaults
 MIN_SEGMENT_LEN_MS = 100
 ATOM_ITERATION_MS = 50
@@ -114,12 +116,15 @@ def _plot_histogram_process(raw_diffs, center_point_ms):
         print(f"Could not display histogram plot GUI: {e}")
 
 
-def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms, best_bar_length, best_patterns):
+def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms, best_bar_length, best_patterns, segments_transience_data, open_browser=True):
     """
     Exports an interactive HTML report containing:
     1. Histogram of transient time differences distribution with marked cluster center.
     2. Interactive waveform graph with pattern overlays, real-time playhead cursor tracking,
        HTML5 audio playback, and click-to-seek waveform navigation.
+    3. Zoomed-In Segment Inspector displaying stacked vertical views for Previous (k-1),
+       Current (k), and Next (k+1) segments with transient peaks, individual peak scores,
+       and segment average ratings.
     """
     import io
     import base64
@@ -211,8 +216,22 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
 
     audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.basename(audio_path)
 
-    # Convert pattern data for JS consumption
-    patterns_js = json.dumps(best_patterns)
+    # Clean JSON serialization helper
+    def clean_json(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        if isinstance(obj, (np.int32, np.int64)):
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: clean_json(v) for k, v in obj.items() if k != 'snapshot'}
+        if isinstance(obj, list):
+            return [clean_json(i) for i in obj]
+        return obj
+
+    patterns_js = json.dumps(clean_json(best_patterns))
+    segments_js = json.dumps(clean_json(segments_transience_data))
 
     audio_filename = os.path.basename(audio_path)
     html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
@@ -305,13 +324,59 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
         canvas {{
             display: block;
             width: 100%;
-            height: 300px;
+        }}
+        #waveformCanvas {{
+            height: 250px;
         }}
         .hint {{
             font-size: 12px;
             color: #7f8c8d;
             text-align: center;
             margin-top: 6px;
+        }}
+        .segment-inspector-container {{
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 15px;
+        }}
+        .segment-box {{
+            border: 1px solid #dcdde1;
+            border-radius: 8px;
+            padding: 12px;
+            background: #fdfdfd;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            position: relative;
+        }}
+        .segment-box.active-seg-box {{
+            border: 2px solid #3498db;
+            background: #f4f8fc;
+        }}
+        .segment-box-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }}
+        .seg-title {{
+            font-size: 14px;
+            font-weight: bold;
+            color: #2c3e50;
+        }}
+        .seg-rating {{
+            font-size: 14px;
+            font-weight: bold;
+            color: #27ae60;
+            background: #e8f8f5;
+            padding: 4px 10px;
+            border-radius: 12px;
+            border: 1px solid #2ecc71;
+        }}
+        .seg-canvas {{
+            height: 120px;
+            border: 1px solid #e1e8ed;
+            border-radius: 6px;
+            background: #ffffff;
         }}
     </style>
 </head>
@@ -348,9 +413,34 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     </div>
 
     <div class="canvas-container">
-        <canvas id="waveformCanvas" width="1150" height="300"></canvas>
+        <canvas id="waveformCanvas" width="1150" height="250"></canvas>
     </div>
     <div class="hint">💡 Click anywhere on the waveform graph above to seek to that point in the song and play audio.</div>
+
+    <div class="section-title">3. Zoomed-In Segment Inspector (Vertically Stacked)</div>
+    <div class="segment-inspector-container">
+        <div class="segment-box" id="boxPrev">
+            <div class="segment-box-header">
+                <span class="seg-title" id="titlePrev">Previous Segment (Seg -1)</span>
+                <span class="seg-rating" id="ratingPrev">Average Rating: --</span>
+            </div>
+            <canvas id="canvasPrev" class="seg-canvas" width="1150" height="120"></canvas>
+        </div>
+        <div class="segment-box active-seg-box" id="boxCurr">
+            <div class="segment-box-header">
+                <span class="seg-title" id="titleCurr">Current Playing Segment (Seg 0)</span>
+                <span class="seg-rating" id="ratingCurr">Average Rating: --</span>
+            </div>
+            <canvas id="canvasCurr" class="seg-canvas" width="1150" height="120"></canvas>
+        </div>
+        <div class="segment-box" id="boxNext">
+            <div class="segment-box-header">
+                <span class="seg-title" id="titleNext">Next Segment (Seg 1)</span>
+                <span class="seg-rating" id="ratingNext">Average Rating: --</span>
+            </div>
+            <canvas id="canvasNext" class="seg-canvas" width="1150" height="120"></canvas>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -359,6 +449,7 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     const totalDurationS = {total_dur_s};
     const bestBarLengthMs = {best_bar_length};
     const patterns = {patterns_js};
+    const segmentsData = {segments_js};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -367,8 +458,9 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)',
                     'rgba(241, 196, 15, 0.35)', 'rgba(26, 188, 156, 0.35)', 'rgba(230, 126, 34, 0.35)'];
     const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22'];
+    const bandColors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f'];
 
-    function draw() {{
+    function drawWaveformMap() {{
         const W = canvas.width;
         const H = canvas.height;
         ctx.clearRect(0, 0, W, H);
@@ -461,11 +553,131 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
         }}
     }}
 
-    draw();
+    function drawSegmentBox(canvasId, titleId, ratingId, seg, labelPrefix, currentAudioTimeMs) {{
+        const c = document.getElementById(canvasId);
+        const t = document.getElementById(titleId);
+        const r = document.getElementById(ratingId);
+        const sCtx = c.getContext('2d');
+        const W = c.width;
+        const H = c.height;
 
-    audio.addEventListener('timeupdate', draw);
-    audio.addEventListener('play', draw);
-    audio.addEventListener('pause', draw);
+        sCtx.clearRect(0, 0, W, H);
+
+        if (!seg) {{
+            t.textContent = `${{labelPrefix}} Segment (Out of Range)`;
+            r.textContent = `Average Rating: N/A`;
+
+            sCtx.fillStyle = '#f8f9fa';
+            sCtx.fillRect(0, 0, W, H);
+            sCtx.fillStyle = '#bdc3c7';
+            sCtx.font = '14px Segoe UI, sans-serif';
+            sCtx.textAlign = 'center';
+            sCtx.fillText('No Segment Data', W / 2, H / 2);
+            return;
+        }}
+
+        t.textContent = `${{labelPrefix}} Segment (Seg ${{seg.segment_index}} : ${{Math.round(seg.start_ms)}} - ${{Math.round(seg.end_ms)}} ms)`;
+        r.textContent = `Average Rating: ${{seg.rating.toFixed(4)}}`;
+
+        // Background
+        sCtx.fillStyle = '#ffffff';
+        sCtx.fillRect(0, 0, W, H);
+
+        // Center Axis
+        const centerY = H / 2;
+        sCtx.strokeStyle = 'rgba(189, 195, 199, 0.4)';
+        sCtx.beginPath();
+        sCtx.moveTo(0, centerY);
+        sCtx.lineTo(W, centerY);
+        sCtx.stroke();
+
+        // Waveform
+        if (seg.waveform_min && seg.waveform_min.length > 0) {{
+            const numPts = seg.waveform_min.length;
+            sCtx.lineWidth = 1.0;
+            sCtx.strokeStyle = '#34495e';
+            sCtx.beginPath();
+            for (let i = 0; i < numPts; i++) {{
+                const x = (i / numPts) * W;
+                const minY = centerY - (seg.waveform_min[i] * (H * 0.38));
+                const maxY = centerY - (seg.waveform_max[i] * (H * 0.38));
+                sCtx.moveTo(x, minY);
+                sCtx.lineTo(x, maxY);
+            }}
+            sCtx.stroke();
+        }}
+
+        const segDurMs = seg.end_ms - seg.start_ms;
+
+        // Draw Peaks, Peak Marker Lines, and Peak Scores
+        if (seg.peaks && seg.peaks.length > 0) {{
+            seg.peaks.forEach((p, pIdx) => {{
+                const relMs = p.time_ms - seg.start_ms;
+                const x = (relMs / segDurMs) * W;
+                const color = bandColors[p.band_idx % bandColors.length];
+
+                // Peak line
+                sCtx.strokeStyle = color;
+                sCtx.lineWidth = 1.8;
+                sCtx.beginPath();
+                sCtx.moveTo(x, 0);
+                sCtx.lineTo(x, H);
+                sCtx.stroke();
+
+                // Peak Dot
+                sCtx.fillStyle = color;
+                sCtx.beginPath();
+                sCtx.arc(x, centerY, 4, 0, 2 * Math.PI);
+                sCtx.fill();
+
+                // Peak Score Label
+                const scoreStr = `Score: ${{p.total_score.toFixed(3)}}`;
+                sCtx.font = 'bold 10px Segoe UI, sans-serif';
+                sCtx.fillStyle = color;
+                sCtx.textAlign = (x > W - 70) ? 'right' : 'left';
+                const labelX = (x > W - 70) ? x - 6 : x + 6;
+                const labelY = 15 + (pIdx % 3) * 16;
+                sCtx.fillText(scoreStr, labelX, labelY);
+            }});
+        }}
+
+        // Draw Playhead Cursor inside current playing segment
+        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {{
+            const relMs = currentAudioTimeMs - seg.start_ms;
+            const cursorX = (relMs / segDurMs) * W;
+
+            sCtx.strokeStyle = '#e67e22';
+            sCtx.lineWidth = 2.5;
+            sCtx.beginPath();
+            sCtx.moveTo(cursorX, 0);
+            sCtx.lineTo(cursorX, H);
+            sCtx.stroke();
+        }}
+    }}
+
+    function updateSegmentInspector() {{
+        const curTimeMs = (audio.currentTime || 0) * 1000.0;
+        const curSegIdx = Math.floor(curTimeMs / bestBarLengthMs);
+
+        const prevSeg = segmentsData.find(s => s.segment_index === curSegIdx - 1);
+        const currSeg = segmentsData.find(s => s.segment_index === curSegIdx);
+        const nextSeg = segmentsData.find(s => s.segment_index === curSegIdx + 1);
+
+        drawSegmentBox('canvasPrev', 'titlePrev', 'ratingPrev', prevSeg, 'Previous', curTimeMs);
+        drawSegmentBox('canvasCurr', 'titleCurr', 'ratingCurr', currSeg, 'Current Playing', curTimeMs);
+        drawSegmentBox('canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);
+    }}
+
+    function renderAll() {{
+        drawWaveformMap();
+        updateSegmentInspector();
+    }}
+
+    renderAll();
+
+    audio.addEventListener('timeupdate', renderAll);
+    audio.addEventListener('play', renderAll);
+    audio.addEventListener('pause', renderAll);
 
     canvas.addEventListener('click', (e) => {{
         const rect = canvas.getBoundingClientRect();
@@ -487,10 +699,11 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
 
     print(f"Interactive HTML report generated successfully: {html_filepath}")
 
-    try:
-        webbrowser.open(os.path.abspath(html_filepath))
-    except Exception as e:
-        print(f"Could not open browser automatically: {e}")
+    if open_browser:
+        try:
+            webbrowser.open(os.path.abspath(html_filepath))
+        except Exception as e:
+            print(f"Could not open browser automatically: {e}")
 
     return html_filepath
 
@@ -796,10 +1009,41 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
 
-    # Graph waveform with highlighted patterns and segment boundaries & Export Interactive HTML Report
-    if gui_mode and best_patterns:
+    # Extract all peaks across bands for segment-based transience scoring
+    all_peaks_flat = []
+    if analysis_res and 'peaks' in analysis_res:
+        for band_idx, band_peaks in enumerate(analysis_res['peaks']):
+            for p in band_peaks:
+                p_copy = dict(p)
+                p_copy['band_idx'] = band_idx
+                all_peaks_flat.append(p_copy)
+
+    # Compute offline segment transience scoring & ratings
+    segments_transience_data = compute_offline_segment_transience(
+        all_peaks_flat=all_peaks_flat,
+        total_duration_ms=total_duration_ms,
+        bar_length_ms=best_bar_length
+    )
+
+    # Downsample segment audio waveforms for zoomed-in rendering
+    waveform_pts_per_seg = 300
+    for seg in segments_transience_data:
+        s_sample = max(0, int(round((seg['start_ms'] / 1000.0) * sr)))
+        e_sample = min(len(y), int(round((seg['end_ms'] / 1000.0) * sr)))
+        seg_y = y[s_sample:e_sample]
+
+        if len(seg_y) > 0:
+            step = max(1, len(seg_y) // waveform_pts_per_seg)
+            seg['waveform_min'] = [float(np.min(seg_y[i*step:(i+1)*step])) for i in range(len(seg_y)//step)]
+            seg['waveform_max'] = [float(np.max(seg_y[i*step:(i+1)*step])) for i in range(len(seg_y)//step)]
+        else:
+            seg['waveform_min'] = []
+            seg['waveform_max'] = []
+
+    # Export Interactive HTML Report & Graph Waveform with highlighted patterns
+    if best_patterns:
         try:
-            # Export interactive HTML report with audio player, playhead tracking & click-to-seek waveform
+            # Export interactive HTML report with audio player, playhead tracking, click-to-seek waveform & segment inspector
             raw_diffs = segment_lengths if len(segment_lengths) > 0 else []
             export_interactive_html_report(
                 audio_path=audio_path,
@@ -808,11 +1052,14 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
                 raw_diffs=raw_diffs,
                 center_point_ms=best_bar_length,
                 best_bar_length=best_bar_length,
-                best_patterns=best_patterns
+                best_patterns=best_patterns,
+                segments_transience_data=segments_transience_data,
+                open_browser=gui_mode
             )
         except Exception as e:
             print(f"Could not generate interactive HTML report: {e}")
 
+    if gui_mode and best_patterns:
         try:
             import matplotlib.pyplot as plt
 
