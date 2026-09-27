@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define BUFFER_LEN 5001
+#define BUFFER_LEN 15001
 #define MAX_BANDS 4
 #define MAX_QUALIFIERS 256
 
@@ -109,7 +109,7 @@ typedef struct {
     int lookback_p_count[MAX_BANDS];
 
     // Bar Length History for Stability
-    int bar_length_counts[5001];
+    int bar_length_counts[15001];
 
     // Snapshots tracking (queue per band)
     SnapshotEntry* snapshot_heads[MAX_BANDS];

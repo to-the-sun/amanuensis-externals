@@ -28,125 +28,22 @@ def ensure_ct_initialized():
         return None
 
 
-def _plot_histogram_process(raw_diffs, center_point_ms):
-    try:
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(10, 6))
-        diffs_arr = np.array(raw_diffs, dtype=np.float64)
-
-        # Choose appropriate small bin interval (~10ms bins or dynamic bin count)
-        min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
-        range_v = max(1.0, max_v - min_v)
-        num_bins = max(20, min(100, int(range_v / 10.0)))
-
-        counts, bin_edges, patches = ax.hist(
-            diffs_arr,
-            bins=num_bins,
-            color='#3498db',
-            edgecolor='#2980b9',
-            alpha=0.75,
-            rwidth=0.85,
-            label='Time Differences Count'
-        )
-
-        max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
-        ax.axvline(
-            center_point_ms,
-            color='#e74c3c',
-            linestyle='--',
-            linewidth=2,
-            label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
-        )
-        ax.scatter(
-            [center_point_ms],
-            [max_count],
-            color='#e74c3c',
-            s=120,
-            zorder=5,
-            marker='X',
-            label='Cluster Center Marker'
-        )
-
-        ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
-        ax.set_xlabel("Time Difference (ms)", fontsize=10)
-        ax.set_ylabel("Count / Frequency", fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right')
-        fig.tight_layout()
-        plt.show()
-    except Exception as e:
-        print(f"Could not display histogram plot GUI: {e}")
-
-
-def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms, best_bar_length, best_patterns, segments_transience_data, open_browser=True):
+def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True):
     """
     Exports an interactive HTML report containing:
-    1. Histogram of transient time differences distribution with marked cluster center.
-    2. Interactive waveform graph with pattern overlays, real-time playhead cursor tracking,
-       HTML5 audio playback, and click-to-seek waveform navigation.
+    1. Cumulative history graph high point analysis summary.
+    2. Interactive waveform graph with pattern overlays, marked cumulative history graph
+       high point change markers, real-time playhead cursor tracking, HTML5 audio playback,
+       and click-to-seek waveform navigation.
     3. Zoomed-In Segment Inspector displaying stacked vertical views for Previous (k-1),
        Current (k), and Next (k+1) segments with transient peaks, individual peak scores,
        and segment average ratings.
     """
-    import io
     import base64
     import json
     import webbrowser
 
     print("\nGenerating interactive HTML report...")
-
-    # 1. Render Histogram Plot to Base64 PNG
-    hist_b64 = ""
-    try:
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        diffs_arr = np.array(raw_diffs, dtype=np.float64)
-        min_v, max_v = float(np.min(diffs_arr)), float(np.max(diffs_arr))
-        range_v = max(1.0, max_v - min_v)
-        num_bins = max(20, min(100, int(range_v / 10.0)))
-
-        counts, bin_edges, patches = ax.hist(
-            diffs_arr,
-            bins=num_bins,
-            color='#3498db',
-            edgecolor='#2980b9',
-            alpha=0.75,
-            rwidth=0.85,
-            label='Time Differences Count'
-        )
-
-        max_count = float(np.max(counts)) if len(counts) > 0 else 1.0
-        ax.axvline(
-            center_point_ms,
-            color='#e74c3c',
-            linestyle='--',
-            linewidth=2,
-            label=f'Most Common Cluster Center ({center_point_ms:.2f} ms)'
-        )
-        ax.scatter(
-            [center_point_ms],
-            [max_count],
-            color='#e74c3c',
-            s=120,
-            zorder=5,
-            marker='X',
-            label='Cluster Center Marker'
-        )
-
-        ax.set_title("Transient Pairwise Time Differences Distribution", fontsize=12, fontweight='bold')
-        ax.set_xlabel("Time Difference (ms)", fontsize=10)
-        ax.set_ylabel("Count / Frequency", fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right')
-        fig.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=120)
-        plt.close(fig)
-        buf.seek(0)
-        hist_b64 = base64.b64encode(buf.read()).decode('utf-8')
-    except Exception as e:
-        print(f"Could not generate histogram image for HTML report: {e}")
 
     # 2. Downsample Audio Waveform for Canvas Rendering (e.g. 1500 points)
     num_waveform_pts = 1500
@@ -194,6 +91,7 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
 
     patterns_js = json.dumps(clean_json(best_patterns))
     segments_js = json.dumps(clean_json(segments_transience_data))
+    hp_changes_js = json.dumps(clean_json(hp_changes))
 
     audio_filename = os.path.basename(audio_path)
     html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
@@ -254,16 +152,6 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
             margin-top: 25px;
             margin-bottom: 15px;
             color: #34495e;
-        }}
-        .img-container {{
-            text-align: center;
-            margin-bottom: 25px;
-        }}
-        .img-container img {{
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }}
         .audio-controls {{
             margin: 20px 0;
@@ -352,11 +240,11 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     <div class="metrics-card">
         <div class="metric-box">
             <div class="metric-value">{best_bar_length:.2f} ms</div>
-            <div class="metric-label">Determined Bar Length</div>
+            <div class="metric-label">Segment Length (Longest High Point)</div>
         </div>
         <div class="metric-box">
-            <div class="metric-value">{center_point_ms:.2f} ms</div>
-            <div class="metric-label">Transient Cluster Center</div>
+            <div class="metric-value">{len(hp_changes)}</div>
+            <div class="metric-label">High Point Change Events</div>
         </div>
         <div class="metric-box">
             <div class="metric-value">{len(best_patterns)}</div>
@@ -364,12 +252,7 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
         </div>
     </div>
 
-    <div class="section-title">1. Transient Pairwise Time Differences Distribution</div>
-    <div class="img-container">
-        <img src="data:image/png;base64,{hist_b64}" alt="Histogram Plot">
-    </div>
-
-    <div class="section-title">2. Interactive Audio Waveform & Pattern Map</div>
+    <div class="section-title">1. Interactive Audio Waveform, Pattern Map & Cumulative History High Point Changes</div>
     <div class="audio-controls">
         <audio id="audioPlayer" controls src="{audio_src}"></audio>
     </div>
@@ -377,9 +260,9 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     <div class="canvas-container">
         <canvas id="waveformCanvas" width="1150" height="250"></canvas>
     </div>
-    <div class="hint">💡 Click anywhere on the waveform graph above to seek to that point in the song and play audio.</div>
+    <div class="hint">💡 Click anywhere on the waveform graph above to seek to that point in the song and play audio. Red markers denote points where the cumulative transience history high point changed.</div>
 
-    <div class="section-title">3. Zoomed-In Segment Inspector (Vertically Stacked)</div>
+    <div class="section-title">2. Zoomed-In Segment Inspector (Vertically Stacked)</div>
     <div class="segment-inspector-container">
         <div class="segment-box" id="boxPrev">
             <div class="segment-box-header">
@@ -412,6 +295,7 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     const bestBarLengthMs = {best_bar_length};
     const patterns = {patterns_js};
     const segmentsData = {segments_js};
+    const hpChanges = {hp_changes_js};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -492,6 +376,27 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
         ctx.moveTo(0, centerY);
         ctx.lineTo(W, centerY);
         ctx.stroke();
+
+        // High Point Change Markers
+        hpChanges.forEach((ch, idx) => {{
+            const x = (ch.time_s / totalDurationS) * W;
+
+            ctx.strokeStyle = '#e74c3c';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Label marker
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 9px Segoe UI, sans-serif';
+            const labelStr = `HP: ${{ch.new_value_ms.toFixed(0)}}ms`;
+            const yPos = 45 + (idx % 4) * 14;
+            ctx.fillText(labelStr, Math.min(x + 2, W - 60), yPos);
+        }});
 
         // Playhead Cursor
         if (audio.duration) {{
@@ -670,116 +575,70 @@ def export_interactive_html_report(audio_path, y, sr, raw_diffs, center_point_ms
     return html_filepath
 
 
-def find_most_common_cluster_center(diffs_ms):
+def analyze_cumulative_transience_high_points(y, sr, analysis_res=None):
     """
-    Calculates the center point of the most common cluster of floating-point difference values.
-    Uses Gaussian Kernel Density Estimation (KDE) with fallback to histogram mode binning.
+    Performs first-pass cumulative transience analysis on the entire audio file to accumulate
+    waveforms into the 15-second cumulative transience history graph.
+    Tracks the x-axis value (ms) of the high point in the cumulative history graph across frames,
+    determines the high point value that persisted for the longest total duration over the course
+    of the audio file, and records change events where the high point value transitioned.
+
+    Returns:
+      longest_high_point_ms: float (the x-axis value of the high point active for the longest duration)
+      hp_changes: list of dicts [{'time_s': float, 'new_value_ms': float}] recording change events
+      analysis_res: dict (the result from ct.analyze_audio)
     """
-    if not diffs_ms:
-        return float(MIN_SEGMENT_LEN_MS)
-    if len(diffs_ms) == 1:
-        return float(diffs_ms[0])
-
-    diffs_arr = np.array(diffs_ms, dtype=np.float64)
-    min_v = float(np.min(diffs_arr))
-    max_v = float(np.max(diffs_arr))
-
-    if min_v == max_v:
-        return min_v
-
-    try:
-        from scipy.stats import gaussian_kde
-        kde = gaussian_kde(diffs_arr)
-        grid = np.linspace(min_v, max_v, 1000)
-        density = kde(grid)
-        max_idx = np.argmax(density)
-        peak_val = grid[max_idx]
-
-        # Calculate centroid of values around the peak (window of 5% range or min 10ms)
-        window = max(10.0, (max_v - min_v) * 0.05)
-        cluster_mask = np.abs(diffs_arr - peak_val) <= window
-        cluster_points = diffs_arr[cluster_mask]
-
-        if len(cluster_points) > 0:
-            return float(np.mean(cluster_points))
-        return float(peak_val)
-    except Exception as e:
-        # Fallback to histogram mode binning
-        num_bins = max(10, min(50, len(diffs_arr) // 2))
-        counts, bin_edges = np.histogram(diffs_arr, bins=num_bins)
-        max_bin = np.argmax(counts)
-        bin_low, bin_high = bin_edges[max_bin], bin_edges[max_bin + 1]
-        cluster_points = diffs_arr[(diffs_arr >= bin_low) & (diffs_arr <= bin_high)]
-        if len(cluster_points) > 0:
-            return float(np.mean(cluster_points))
-        return float((bin_low + bin_high) / 2.0)
-
-
-def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, atom_ms=ATOM_ITERATION_MS, max_seg_ms=None, gui_mode=True, analysis_res=None):
-    """
-    Detects transients across the audio file using cumulative_transience peak detection,
-    computes full floating-point pairwise time differences between all transients,
-    plots them on a pop-up scatter plot, marks the center point of the most common cluster,
-    and returns a list containing that single cluster center segment length.
-    """
-    print("Detecting transients across audio file using cumulative_transience peak detection...")
-    onset_times_ms = []
-
     if analysis_res is None:
         ct = ensure_ct_initialized()
         if ct is not None:
             try:
                 analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
             except Exception as e:
-                print(f"Error running cumulative_transience peak detection: {e}")
+                print(f"Error running cumulative_transience analysis: {e}")
                 analysis_res = None
 
-    if analysis_res and 'peaks' in analysis_res:
-        for band_peaks in analysis_res['peaks']:
-            for p in band_peaks:
-                onset_times_ms.append(p['time'] * 1000.0)
-        onset_times_ms = sorted(onset_times_ms)
+    if not analysis_res or 'highest_peaks_ms' not in analysis_res or 'times' not in analysis_res:
+        print("Warning: Cumulative transience analysis yielded no high point history data.")
+        return float(MIN_SEGMENT_LEN_MS), [], analysis_res
 
-    print(f"Detected {len(onset_times_ms)} transients.")
+    times = analysis_res['times']
+    highest_peaks = analysis_res['highest_peaks_ms']
 
-    if len(onset_times_ms) < 2:
-        print("Not enough transients detected. Falling back to default segment length.")
-        return [float(min_seg_ms)]
+    hp_durations = {}
+    hp_changes = []
+    last_val = None
 
-    raw_diffs = []
-    total_dur_ms = (len(y) / sr) * 1000.0
-    upper_ms = total_dur_ms / 2.0 if max_seg_ms is None else min(total_dur_ms / 2.0, max_seg_ms)
+    frame_dt_s = (times[1] - times[0]) if len(times) > 1 else 0.001
 
-    # Assess full floating-point time differences between all transient pairs
-    for i in range(len(onset_times_ms)):
-        for j in range(i + 1, len(onset_times_ms)):
-            diff_ms = float(abs(onset_times_ms[j] - onset_times_ms[i]))
-            if min_seg_ms <= diff_ms <= upper_ms:
-                raw_diffs.append(diff_ms)
+    for t_s, raw_hp in zip(times, highest_peaks):
+        if raw_hp == -999.0:
+            continue
 
-    if not raw_diffs:
-        print("No valid transient interval candidates found in range. Falling back to default segment length.")
-        return [float(min_seg_ms)]
+        val_ms = float(abs(raw_hp))
 
-    # Calculate center point of the most common cluster of floating-point values
-    center_point_ms = find_most_common_cluster_center(raw_diffs)
-    print(f"Accumulated {len(raw_diffs)} peak difference values.")
-    print(f"Calculated most common cluster center point: {center_point_ms:.2f} ms")
+        # Accumulate duration for this x-axis high point value
+        hp_durations[val_ms] = hp_durations.get(val_ms, 0.0) + frame_dt_s
 
-    # Graph all floating-point differences on a histogram (bar graph) with marked cluster center in a separate process
-    if gui_mode:
-        try:
-            import multiprocessing
-            p = multiprocessing.Process(
-                target=_plot_histogram_process,
-                args=(raw_diffs, center_point_ms),
-                daemon=True
-            )
-            p.start()
-        except Exception as e:
-            print(f"Could not display histogram plot GUI process: {e}")
+        # Record high point changes
+        if last_val is None or abs(val_ms - last_val) > 1e-3:
+            hp_changes.append({
+                'time_s': float(t_s),
+                'new_value_ms': val_ms
+            })
+            last_val = val_ms
 
-    return [center_point_ms]
+    if not hp_durations:
+        print("Warning: No valid cumulative history high points found across frames.")
+        return float(MIN_SEGMENT_LEN_MS), [], analysis_res
+
+    # Select the x-axis high point value active for the longest total duration
+    longest_high_point_ms = max(hp_durations.items(), key=lambda item: item[1])[0]
+
+    print(f"\nFirst Pass Cumulative Transience Analysis:")
+    print(f"Tracked {len(hp_changes)} high point change events across audio.")
+    print(f"High point active for the longest duration: {longest_high_point_ms:.2f} ms ({hp_durations[longest_high_point_ms]:.2f} s total)")
+
+    return longest_high_point_ms, hp_changes, analysis_res
 
 
 def analyze_segment_length(segments_transience_data):
@@ -882,16 +741,14 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     else:
         analysis_res = None
 
-    # Conduct transient detection to find candidate segment length (center of primary cluster)
-    segment_lengths = detect_transient_candidate_lengths(
+    # First pass: Cumulative transience high point analysis over entire audio
+    longest_hp_ms, hp_changes, analysis_res = analyze_cumulative_transience_high_points(
         y=y,
         sr=sr,
-        min_seg_ms=min_segment_ms,
-        atom_ms=atom_iteration_ms,
-        max_seg_ms=max_len_ms,
-        gui_mode=gui_mode,
         analysis_res=analysis_res
     )
+
+    best_bar_length = longest_hp_ms
 
     # Extract all peaks across bands for segment-based transience scoring
     all_peaks_flat = []
@@ -902,42 +759,22 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
                 p_copy['band_idx'] = band_idx
                 all_peaks_flat.append(p_copy)
 
-    best_bar_length = None
-    max_total_pattern_len_ms = -1.0
-    best_patterns = []
-    best_segments_transience_data = []
+    print(f"\nAnalyzing segment length determined from cumulative history high point: {best_bar_length:.2f} ms...")
 
-    for seg_len in segment_lengths:
-        print(f"\nAnalyzing target segment length: {seg_len:.2f} ms...")
+    # Compute offline segment transience scoring & ratings
+    segments_transience_data = compute_offline_segment_transience(
+        all_peaks_flat=all_peaks_flat,
+        total_duration_ms=total_duration_ms,
+        bar_length_ms=best_bar_length
+    )
 
-        # Compute offline segment transience scoring & ratings
-        segments_transience_data = compute_offline_segment_transience(
-            all_peaks_flat=all_peaks_flat,
-            total_duration_ms=total_duration_ms,
-            bar_length_ms=seg_len
-        )
-
-        patterns, total_pat_len_ms = analyze_segment_length(segments_transience_data)
-
-        print(f"Segment length {seg_len:.2f} ms: Found {len(patterns)} patterns, Total Duration = {total_pat_len_ms:.2f} ms")
-
-        if total_pat_len_ms > max_total_pattern_len_ms and total_pat_len_ms > 0:
-            max_total_pattern_len_ms = total_pat_len_ms
-            best_bar_length = seg_len
-            best_patterns = patterns
-            best_segments_transience_data = segments_transience_data
-
-    if best_bar_length is None or not best_patterns:
-        print("\nNo repeating patterns were detected across tested segment lengths.")
-        return
+    best_patterns, max_total_pattern_len_ms = analyze_segment_length(segments_transience_data)
 
     print("\n" + "="*60)
     print(f"ANALYSIS COMPLETE: Bar length determined to be {best_bar_length:.2f} ms")
     print(f"Total pattern duration at bar length: {max_total_pattern_len_ms:.2f} ms")
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
-
-    segments_transience_data = best_segments_transience_data
 
     # Downsample segment audio waveforms for zoomed-in rendering
     waveform_pts_per_seg = 300
@@ -957,14 +794,11 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     # Export Interactive HTML Report & Graph Waveform with highlighted patterns
     if best_patterns:
         try:
-            # Export interactive HTML report with audio player, playhead tracking, click-to-seek waveform & segment inspector
-            raw_diffs = segment_lengths if len(segment_lengths) > 0 else []
             export_interactive_html_report(
                 audio_path=audio_path,
                 y=y,
                 sr=sr,
-                raw_diffs=raw_diffs,
-                center_point_ms=best_bar_length,
+                hp_changes=hp_changes,
                 best_bar_length=best_bar_length,
                 best_patterns=best_patterns,
                 segments_transience_data=segments_transience_data,
