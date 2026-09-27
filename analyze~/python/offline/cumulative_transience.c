@@ -38,7 +38,7 @@ static void fft(double* real, double* imag, int n) {
                 double v_r = real[i + k + len / 2] * w_r - imag[i + k + len / 2] * w_i;
                 double v_i = real[i + k + len / 2] * w_i + imag[i + k + len / 2] * w_r;
                 real[i + k] = u_r + v_r; imag[i + k] = u_i + v_i;
-                real[i + k + len / 2] = u_r - v_r; imag[i + k + len / 2] = u_r - v_i;
+                real[i + k + len / 2] = u_r - v_r; imag[i + k + len / 2] = u_i - v_i;
                 double tmp_r = w_r * wlen_r - w_i * wlen_i;
                 w_i = w_r * wlen_i + w_i * wlen_r; w_r = tmp_r;
             }
