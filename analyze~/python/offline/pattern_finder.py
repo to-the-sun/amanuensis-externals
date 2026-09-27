@@ -4,6 +4,7 @@ import argparse
 import traceback
 import numpy as np
 import soundfile as sf
+from tqdm import tqdm
 
 try:
     import ct_utils
@@ -616,7 +617,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
 
     frame_dt_s = (times[1] - times[0]) if len(times) > 1 else 0.001
 
-    for i, (t_s, raw_hp) in enumerate(zip(times, highest_peaks)):
+    for i, (t_s, raw_hp) in enumerate(tqdm(zip(times, highest_peaks), total=len(times), desc="First Pass Segment Length Identification", unit="frame", dynamic_ncols=True, ascii=os.name == 'nt')):
         if raw_hp == -999.0:
             if current_run is not None:
                 runs.append(current_run)
