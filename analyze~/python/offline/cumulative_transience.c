@@ -124,7 +124,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
         self->lookback_total_delta[b] = 0.0;
         self->lookback_p_count[b] = 0;
     }
-    for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = -5000.0 + i;
+    for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = -15000.0 + i;
     self->frame_duration_ms = 1.0;
     self->mel_spectrogram = (double*)calloc(N_MELS * CACHE_SIZE, sizeof(double));
     self->flux_envelopes = (float*)calloc(MAX_BANDS * CACHE_SIZE, sizeof(float));
@@ -237,7 +237,7 @@ void analyzer_set_sample_rate(TransientAnalyzer* self, int sr) {
         self->mel_filters = create_mel_filterbank(sr, N_FFT, N_MELS);
     }
     int hop = (int)(sr * 0.001); self->frame_duration_ms = 1000.0 * (double)hop / (double)sr;
-    for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - 5000) * self->frame_duration_ms;
+    for (int i = 0; i < BUFFER_LEN; i++) self->buffer_times[i] = (double)(i - 15000) * self->frame_duration_ms;
 }
 
 double analyzer_get_max_peak(TransientAnalyzer* self) {
@@ -251,7 +251,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     result_out->detected_peak_val = detected_peak_val; result_out->thresh_val = thresh_val;
     result_out->left_min = left_min; result_out->right_min = right_min; result_out->prominence = prominence;
     result_out->num_qualifiers = 0;
-    int start = p_idx - 5000;
+    int start = p_idx - 15000;
     for (int i = 0; i < BUFFER_LEN; i++) {
         int idx = start + i;
         result_out->snapshot[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
@@ -284,8 +284,8 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     for (int i = 0; i < all_valid_count; i++) {
         int s_idx = all_valid_peak_indices[i];
         // Qualifiers must be at least 99ms in the past to avoid self-reference.
-        if (s_idx >= p_idx - 5000 && s_idx <= p_idx - 99) {
-            int sp_idx = 5000 - (p_idx - s_idx);
+        if (s_idx >= p_idx - 15000 && s_idx <= p_idx - 99) {
+            int sp_idx = 15000 - (p_idx - s_idx);
 
             // Apply snapping within 2*tolerance (one tolerance on each side)
             int start_k = sp_idx - tol_idx;
@@ -416,14 +416,14 @@ void analyzer_update_metrics(TransientAnalyzer* self, int frame, AnalyzerMetrics
 
     if (metrics_out->highest_peak_valid) {
         int bar_length = (int)round(fabs(metrics_out->highest_peak_ms));
-        if (bar_length >= 0 && bar_length <= 5000) {
+        if (bar_length >= 0 && bar_length <= 15000) {
             self->bar_length_counts[bar_length]++;
         }
     }
 
     double stability_sum = 0;
     int stability_count = 0;
-    for (int i = 0; i <= 5000; i++) {
+    for (int i = 0; i <= 15000; i++) {
         if (self->bar_length_counts[i] > 0) {
             stability_sum += (double)self->bar_length_counts[i];
             stability_count++;

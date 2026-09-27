@@ -86,8 +86,8 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         for p in curr_peaks:
             p_frame = int(round(p['time_ms']))
 
-            # 10001-element accumulator buffer centered at p_frame (index 5000 is offset 0 ms)
-            acc_buf = np.zeros(10001, dtype=np.float64)
+            # 30001-element accumulator buffer centered at p_frame (index 15000 is offset 0 ms)
+            acc_buf = np.zeros(30001, dtype=np.float64)
 
             # Add peak snapshots from segment k-1 and segment k+1 to acc_buf
             for s in acc_peaks:
@@ -97,10 +97,10 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
                 if s_snap is None or len(s_snap) == 0:
                     continue
 
-                snap_len = len(s_snap)  # 5001
+                snap_len = len(s_snap)  # 15001
                 # Target index for snapshot element i: i - shift
                 i_start = max(0, shift)
-                i_end = min(snap_len, 10001 + shift)
+                i_end = min(snap_len, 30001 + shift)
 
                 if i_start < i_end:
                     buf_start = i_start - shift
@@ -124,10 +124,10 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
 
             for s in acc_peaks:
                 s_frame = int(round(s['time_ms']))
-                sp_idx = 5000 - (p_frame - s_frame)
+                sp_idx = 15000 - (p_frame - s_frame)
 
                 low = max(0, sp_idx - tol_idx)
-                high = min(10000, sp_idx + tol_idx + 1)
+                high = min(30000, sp_idx + tol_idx + 1)
 
                 if high > low:
                     sub_buf = acc_buf[low:high]
@@ -143,7 +143,7 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
 
                     q_sum += q
                     qualifiers.append({
-                        'ms': float(snap_idx - 5000),
+                        'ms': float(snap_idx - 15000),
                         'orig_ms': float(s_frame - p_frame),
                         'val': float(q)
                     })
