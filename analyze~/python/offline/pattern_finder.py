@@ -4,8 +4,6 @@ import argparse
 import traceback
 import numpy as np
 import soundfile as sf
-import librosa
-from scipy.spatial.distance import cdist
 
 try:
     import ct_utils
@@ -18,42 +16,6 @@ from offline_transience import compute_offline_segment_transience
 # Global defaults
 MIN_SEGMENT_LEN_MS = 100
 ATOM_ITERATION_MS = 50
-SIMILARITY_THRESHOLD = 0.75  # Normalized similarity threshold (0.0 to 1.0)
-
-
-def extract_frame_features(y, sr, analysis_res=None, hop_ms=10):
-    """
-    Extract frame-level features based on the prominence of the smooth transience
-    for DTW comparison using cumulative_transience peak detection results.
-    hop_ms=10 downsamples the 1ms transience envelopes to ~10ms frame resolution (100 Hz).
-    """
-    if analysis_res is None:
-        ct = ensure_ct_initialized()
-        if ct is None:
-            raise RuntimeError("cumulative_transience module could not be initialized.")
-        analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
-
-    if not analysis_res or 'rolling_prominences' not in analysis_res:
-        raise ValueError("Transience analysis failed or missing 'rolling_prominences' in analysis results.")
-
-    # Stack 4-band smooth transience prominence features along feature axis: (n_frames, 4)
-    prominences = analysis_res['rolling_prominences']
-    features = np.column_stack(prominences)
-
-    times = analysis_res.get('times', [])
-    raw_frame_dur_ms = float((times[1] - times[0]) * 1000.0) if len(times) > 1 else 1.0
-
-    # Downsample features to target hop_ms (~10ms per frame / 100 Hz resolution)
-    step = max(1, int(round(hop_ms / raw_frame_dur_ms)))
-    features = features[::step]
-    frame_duration_ms = raw_frame_dur_ms * step
-
-    # Normalize features (zero mean, unit variance per feature dimension)
-    mean = np.mean(features, axis=0, keepdims=True)
-    std = np.std(features, axis=0, keepdims=True) + 1e-8
-    features = (features - mean) / std
-
-    return y, sr, features, frame_duration_ms, analysis_res
 
 
 def ensure_ct_initialized():
@@ -820,133 +782,81 @@ def detect_transient_candidate_lengths(y, sr, min_seg_ms=MIN_SEGMENT_LEN_MS, ato
     return [center_point_ms]
 
 
-def compute_segment_dtw_similarity(feat1, feat2):
+def analyze_segment_length(segments_transience_data):
     """
-    Computes DTW similarity score between two segment feature matrices feat1 and feat2.
-    Returns normalized similarity score in range [0, 1].
-    """
-    if len(feat1) == 0 or len(feat2) == 0:
-        return 0.0
-
-    # Compute pairwise cosine distance matrix
-    dist_matrix = cdist(feat1, feat2, metric='cosine')
-
-    # Run DTW
-    D, wp = librosa.sequence.dtw(C=dist_matrix)
-    path_len = len(wp)
-    if path_len == 0:
-        return 0.0
-
-    norm_cost = D[-1, -1] / path_len
-    # Convert distance to similarity score in [0, 1]
-    similarity = max(0.0, 1.0 - norm_cost)
-    return similarity
-
-
-def analyze_segment_length(y, sr, features, frame_dur_ms, seg_len_ms, similarity_threshold=SIMILARITY_THRESHOLD, gui_callback=None):
-    """
-    Divides audio into contiguous segments of seg_len_ms and analyzes each segment
-    against each other using Dynamic Time Warping.
+    Analyzes contiguous segments using cumulative transience segment ratings to group
+    contiguous patterns.
+    Pattern rating = min(segment_ratings in pattern) * number_of_segments.
+    A segment is included in a potential pattern if:
+      1. Its inclusion raises (or does not lower) the overall pattern rating.
+      2. Its standalone rating is not higher than the resulting pattern rating (not better off on its own).
     Returns (patterns, total_pattern_duration_ms)
     """
-    try:
-        from tqdm import tqdm
-    except ImportError:
-        def tqdm(iterable=None, total=None, desc="", **kwargs):
-            class DummyPbar:
-                def update(self, n=1): pass
-                def close(self): pass
-            return DummyPbar()
-
-    frames_per_seg = max(1, int(round(seg_len_ms / frame_dur_ms)))
-    n_frames = len(features)
-    num_segments = n_frames // frames_per_seg
-
-    if num_segments < 2:
+    if len(segments_transience_data) < 2:
         return [], 0.0
-
-    segments = []
-    for i in range(num_segments):
-        start_f = i * frames_per_seg
-        end_f = (i + 1) * frames_per_seg
-        segments.append({
-            'index': i,
-            'start_ms': start_f * frame_dur_ms,
-            'end_ms': end_f * frame_dur_ms,
-            'features': features[start_f:end_f]
-        })
-
-    matched_segment_indices = set()
-    matches = []
-
-    total_comparisons = (num_segments * (num_segments - 1)) // 2
-    pbar = tqdm(
-        total=total_comparisons,
-        desc=f"DTW Comparing Segments ({seg_len_ms:.0f}ms)",
-        unit="pair",
-        dynamic_ncols=True,
-        ascii=os.name == 'nt'
-    )
-
-    for i in range(num_segments):
-        for j in range(i + 1, num_segments):
-            sim = compute_segment_dtw_similarity(segments[i]['features'], segments[j]['features'])
-
-            if gui_callback:
-                gui_callback(seg_len_ms, segments[i], segments[j], sim)
-
-            if sim >= similarity_threshold:
-                matched_segment_indices.add(i)
-                matched_segment_indices.add(j)
-                matches.append((i, j, sim))
-
-            pbar.update(1)
-
-    pbar.close()
-
-    if not matched_segment_indices:
-        return [], 0.0
-
-    # Group contiguous matched segments into patterns
-    sorted_matched = sorted(list(matched_segment_indices))
-    pattern_groups = []
-    current_group = [sorted_matched[0]]
-
-    for idx in sorted_matched[1:]:
-        if idx == current_group[-1] + 1:
-            current_group.append(idx)
-        else:
-            pattern_groups.append(current_group)
-            current_group = [idx]
-    pattern_groups.append(current_group)
 
     patterns = []
     total_pattern_duration_ms = 0.0
 
-    for group in pattern_groups:
-        if len(group) < 2:
-            continue
-        start_idx = group[0]
-        end_idx = group[-1]
-        start_ms = segments[start_idx]['start_ms']
-        end_ms = segments[end_idx]['end_ms']
+    current_pattern = [segments_transience_data[0]]
+
+    for seg in segments_transience_data[1:]:
+        # Current pattern rating
+        lowest_without = min(s['rating'] for s in current_pattern)
+        rating_without = lowest_without * len(current_pattern)
+
+        # Potential pattern rating if included
+        lowest_with = min(lowest_without, seg['rating'])
+        rating_with = lowest_with * (len(current_pattern) + 1)
+
+        standalone_rating = seg['rating']
+
+        # Exclude segment if it lowers the overall pattern rating OR if it's better off on its own
+        if rating_with < rating_without or standalone_rating > rating_with:
+            # End current pattern if it contains 2 or more segments
+            if len(current_pattern) >= 2:
+                start_ms = current_pattern[0]['start_ms']
+                end_ms = current_pattern[-1]['end_ms']
+                duration_ms = end_ms - start_ms
+                pat_rating = min(s['rating'] for s in current_pattern) * len(current_pattern)
+
+                patterns.append({
+                    'start_ms': start_ms,
+                    'end_ms': end_ms,
+                    'duration_ms': duration_ms,
+                    'rating': pat_rating,
+                    'segments': [s['segment_index'] for s in current_pattern]
+                })
+                total_pattern_duration_ms += duration_ms
+
+            # Start new candidate pattern with current segment
+            current_pattern = [seg]
+        else:
+            current_pattern.append(seg)
+
+    # Check last remaining pattern candidate
+    if len(current_pattern) >= 2:
+        start_ms = current_pattern[0]['start_ms']
+        end_ms = current_pattern[-1]['end_ms']
         duration_ms = end_ms - start_ms
+        pat_rating = min(s['rating'] for s in current_pattern) * len(current_pattern)
 
         patterns.append({
             'start_ms': start_ms,
             'end_ms': end_ms,
             'duration_ms': duration_ms,
-            'segments': group
+            'rating': pat_rating,
+            'segments': [s['segment_index'] for s in current_pattern]
         })
         total_pattern_duration_ms += duration_ms
 
     return patterns, total_pattern_duration_ms
 
 
-def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_ms=ATOM_ITERATION_MS, similarity_threshold=SIMILARITY_THRESHOLD, max_len_ms=None, gui_mode=True):
+def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_ms=ATOM_ITERATION_MS, max_len_ms=None, gui_mode=True):
     """
     Full pipeline to search for patterns across transient-derived segment lengths,
-    determine optimal bar length, and export pattern WAV files.
+    determine optimal bar length, and export pattern analysis reports.
     """
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
@@ -954,15 +864,23 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Loading audio file: {audio_path}")
     raw_y, orig_sr = sf.read(audio_path)
     if raw_y.ndim > 1:
-        raw_y_mono = np.mean(raw_y, axis=1)
+        y = np.mean(raw_y, axis=1)
     else:
-        raw_y_mono = raw_y
+        y = raw_y
+    sr = orig_sr
 
-    # Extract frame features based on smooth transience prominence
-    y, sr, features, frame_dur_ms, analysis_res = extract_frame_features(raw_y_mono, orig_sr)
     total_duration_ms = (len(y) / sr) * 1000.0
-
     print(f"Audio duration: {total_duration_ms:.2f} ms ({total_duration_ms/1000.0:.2f} s)")
+
+    ct = ensure_ct_initialized()
+    if ct is not None:
+        try:
+            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+        except Exception as e:
+            print(f"Error running cumulative_transience peak detection: {e}")
+            analysis_res = None
+    else:
+        analysis_res = None
 
     # Conduct transient detection to find candidate segment length (center of primary cluster)
     segment_lengths = detect_transient_candidate_lengths(
@@ -975,22 +893,31 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         analysis_res=analysis_res
     )
 
+    # Extract all peaks across bands for segment-based transience scoring
+    all_peaks_flat = []
+    if analysis_res and 'peaks' in analysis_res:
+        for band_idx, band_peaks in enumerate(analysis_res['peaks']):
+            for p in band_peaks:
+                p_copy = dict(p)
+                p_copy['band_idx'] = band_idx
+                all_peaks_flat.append(p_copy)
+
     best_bar_length = None
     max_total_pattern_len_ms = -1.0
     best_patterns = []
-    results = {}
+    best_segments_transience_data = []
 
     for seg_len in segment_lengths:
         print(f"\nAnalyzing target segment length: {seg_len:.2f} ms...")
-        patterns, total_pat_len_ms = analyze_segment_length(
-            y, sr, features, frame_dur_ms, seg_len,
-            similarity_threshold=similarity_threshold
+
+        # Compute offline segment transience scoring & ratings
+        segments_transience_data = compute_offline_segment_transience(
+            all_peaks_flat=all_peaks_flat,
+            total_duration_ms=total_duration_ms,
+            bar_length_ms=seg_len
         )
 
-        results[seg_len] = {
-            'patterns': patterns,
-            'total_pattern_len_ms': total_pat_len_ms
-        }
+        patterns, total_pat_len_ms = analyze_segment_length(segments_transience_data)
 
         print(f"Segment length {seg_len:.2f} ms: Found {len(patterns)} patterns, Total Duration = {total_pat_len_ms:.2f} ms")
 
@@ -998,6 +925,7 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
             max_total_pattern_len_ms = total_pat_len_ms
             best_bar_length = seg_len
             best_patterns = patterns
+            best_segments_transience_data = segments_transience_data
 
     if best_bar_length is None or not best_patterns:
         print("\nNo repeating patterns were detected across tested segment lengths.")
@@ -1009,21 +937,7 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
 
-    # Extract all peaks across bands for segment-based transience scoring
-    all_peaks_flat = []
-    if analysis_res and 'peaks' in analysis_res:
-        for band_idx, band_peaks in enumerate(analysis_res['peaks']):
-            for p in band_peaks:
-                p_copy = dict(p)
-                p_copy['band_idx'] = band_idx
-                all_peaks_flat.append(p_copy)
-
-    # Compute offline segment transience scoring & ratings
-    segments_transience_data = compute_offline_segment_transience(
-        all_peaks_flat=all_peaks_flat,
-        total_duration_ms=total_duration_ms,
-        bar_length_ms=best_bar_length
-    )
+    segments_transience_data = best_segments_transience_data
 
     # Downsample segment audio waveforms for zoomed-in rendering
     waveform_pts_per_seg = 300
@@ -1070,8 +984,6 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
             colors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22', '#3498db']
             y_max = float(np.max(y)) if len(y) > 0 else 1.0
 
-            frames_per_seg = max(1, int(round(best_bar_length / frame_dur_ms)))
-
             for pat_idx, pat in enumerate(best_patterns, 1):
                 color = colors[(pat_idx - 1) % len(colors)]
                 pat_start_s = pat['start_ms'] / 1000.0
@@ -1083,8 +995,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
                 # Mark constituent segments
                 for seg_i, seg_idx in enumerate(pat['segments']):
-                    s_start_ms = seg_idx * frames_per_seg * frame_dur_ms
-                    s_end_ms = (seg_idx + 1) * frames_per_seg * frame_dur_ms
+                    s_start_ms = seg_idx * best_bar_length
+                    s_end_ms = (seg_idx + 1) * best_bar_length
                     s_start_s = s_start_ms / 1000.0
                     s_end_s = s_end_ms / 1000.0
 
@@ -1112,11 +1024,10 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Find audio patterns and bar length using transient-guided Dynamic Time Warping (DTW).")
+    parser = argparse.ArgumentParser(description="Find audio patterns and bar length using cumulative transience segment ratings.")
     parser.add_argument("audio_file", nargs="?", help="Path to input audio file.")
     parser.add_argument("--min-segment", type=int, default=MIN_SEGMENT_LEN_MS, help="Minimum segment length in ms (default: 100ms).")
     parser.add_argument("--atom-iteration", type=int, default=ATOM_ITERATION_MS, help="Atom of iteration in ms (default: 50ms).")
-    parser.add_argument("--threshold", type=float, default=SIMILARITY_THRESHOLD, help="DTW similarity threshold (default: 0.75).")
     parser.add_argument("--max-len", type=int, default=None, help="Maximum segment length to test in ms.")
     parser.add_argument("--no-gui", action="store_true", help="Run in headless mode without GUI visualization.")
 
@@ -1140,7 +1051,6 @@ def main():
         audio_path=audio_path,
         min_segment_ms=args.min_segment,
         atom_iteration_ms=args.atom_iteration,
-        similarity_threshold=args.threshold,
         max_len_ms=args.max_len,
         gui_mode=gui_mode
     )
