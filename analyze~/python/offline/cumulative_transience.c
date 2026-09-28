@@ -779,7 +779,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
     for(int b=0; b<MAX_BANDS; b++) { pcap[b] = 1024; pband[b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[b]); }
     int flush_samples = (int)(sr * 0.3);
     for (int last_t = 0; last_t < len + flush_samples; last_t += step) {
-        int act_s = last_t - (int)(sr * 0.2), win_s = act_s - (int)(sr * 15.0); if (win_s < 0) win_s = 0;
+        int act_s = last_t, win_s = act_s - (int)(sr * 15.0); if (win_s < 0) win_s = 0;
         ChunkAnalysisResult* res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
         if (!res) { analyzer_destroy(a); return 0; }
         float* push_ptr = (float*)calloc(step, sizeof(float));

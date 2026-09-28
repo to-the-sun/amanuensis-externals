@@ -777,7 +777,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                 target_sample = int(round(target_time_s * sr)) + hop
 
                 for last_t in range(0, target_sample, step):
-                    act_s = last_t - int(sr * 0.2)
+                    act_s = last_t
                     win_s = act_s - int(sr * 15.0)
                     if win_s < 0:
                         win_s = 0
