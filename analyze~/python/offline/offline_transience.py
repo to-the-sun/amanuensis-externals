@@ -47,9 +47,11 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
     segment_envs = []
     num_frames = len(onset_envs[0]) if (onset_envs and len(onset_envs) > 0) else 0
 
+    lookahead_offset_frames = 200  # 200 ms lookahead offset alignment for display/scoring sync
+
     for seg_i in range(num_segments):
-        start_frame = int(round(seg_i * bar_length_ms))
-        end_frame = min(num_frames, int(round((seg_i + 1) * bar_length_ms)))
+        start_frame = int(round(seg_i * bar_length_ms)) + lookahead_offset_frames
+        end_frame = min(num_frames, int(round((seg_i + 1) * bar_length_ms)) + lookahead_offset_frames)
         if onset_envs and num_frames > 0 and start_frame < num_frames:
             seg_slice = np.zeros(max(1, end_frame - start_frame), dtype=np.float64)
             for b_env in onset_envs:
