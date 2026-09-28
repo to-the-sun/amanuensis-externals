@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_length_ms, onset_envs=None, tolerance_ms=9.0):
+def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_length_ms, onset_envs=None, tolerance_ms=9.0, sr=44100, n_fft=2048):
     """
     Computes segment-based cumulative transience scoring for offline audio analysis.
 
@@ -42,14 +42,23 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         p_copy['time_ms'] = time_ms
         segment_peaks[seg_i].append(p_copy)
 
+    # Frame duration and STFT window group delay compensation
+    hop = int(sr * 0.001) if sr > 0 else 44
+    frame_duration_ms = 1000.0 * hop / float(sr) if sr > 0 else 1.0
+    stft_delay_ms = (n_fft / 2.0) / float(sr) * 1000.0 if sr > 0 else 0.0
+
     # Extract segment envelope slices per band if onset_envs is provided
-    # onset_envs is a list of 4 float arrays, frame duration = 1 ms
     segment_envs = []
     num_frames = len(onset_envs[0]) if (onset_envs and len(onset_envs) > 0) else 0
 
     for seg_i in range(num_segments):
-        start_frame = int(round(seg_i * bar_length_ms))
-        end_frame = min(num_frames, int(round((seg_i + 1) * bar_length_ms)))
+        start_ms = seg_i * bar_length_ms
+        end_ms = (seg_i + 1) * bar_length_ms
+
+        # Convert millisecond segment bounds to frame indices, compensating for STFT window group delay
+        start_frame = max(0, int(round((start_ms + stft_delay_ms) / frame_duration_ms)))
+        end_frame = min(num_frames, int(round((end_ms + stft_delay_ms) / frame_duration_ms)))
+
         if onset_envs and num_frames > 0 and start_frame < num_frames:
             seg_slice = np.zeros(max(1, end_frame - start_frame), dtype=np.float64)
             for b_env in onset_envs:

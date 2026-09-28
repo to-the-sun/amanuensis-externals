@@ -966,7 +966,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
         all_peaks_flat=all_peaks_flat,
         total_duration_ms=total_duration_ms,
         bar_length_ms=best_bar_length,
-        onset_envs=onset_envs
+        onset_envs=onset_envs,
+        sr=sr
     )
 
     best_patterns, max_total_pattern_len_ms = analyze_segment_length(segments_transience_data)
