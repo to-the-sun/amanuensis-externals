@@ -790,12 +790,17 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                            label=f'High Point ({longest_high_point_ms:.2f} ms)')
                 ax.plot(-longest_high_point_ms, val_at_hp, marker='o', color='#e74c3c', markersize=8)
 
+                offset_x = -600 if -longest_high_point_ms > -7500 else 600
+                ha_align = 'right' if -longest_high_point_ms > -7500 else 'left'
+
                 ax.annotate(f'High Point: {longest_high_point_ms:.2f} ms\nEnergy: {val_at_hp:.2f}',
                             xy=(-longest_high_point_ms, val_at_hp),
-                            xytext=(-longest_high_point_ms - 2000, val_at_hp * 0.9 if val_at_hp > 0 else 1.0),
-                            arrowprops=dict(facecolor='#e74c3c', shrink=0.05, width=1.5, headwidth=8),
+                            xytext=(-longest_high_point_ms + offset_x, 0.92),
+                            textcoords=('data', 'axes fraction'),
+                            arrowprops=dict(facecolor='#e74c3c', shrink=0.08, width=1.5, headwidth=8),
                             fontsize=10, fontweight='bold', color='#c0392b',
-                            bbox=dict(boxstyle='round,pad=0.3', facecolor='#fadbd8', edgecolor='#e74c3c', alpha=0.9))
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='#fadbd8', edgecolor='#e74c3c', alpha=0.9),
+                            ha=ha_align, va='top')
 
                 ax.set_title(f'Cumulative History Buffer at Peak Stability Midpoint (t = {target_time_s:.2f}s)\n'
                              f'Segment Length (High Point) = {longest_high_point_ms:.2f} ms | Longest Steady Span = {longest_run["duration_s"]:.2f}s',
