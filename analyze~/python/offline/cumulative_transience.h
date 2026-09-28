@@ -32,7 +32,6 @@ typedef struct {
 
 typedef struct SnapshotEntry {
     int p_idx;
-    double snapshot[BUFFER_LEN];
     struct SnapshotEntry* next;
 } SnapshotEntry;
 

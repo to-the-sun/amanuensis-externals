@@ -209,8 +209,7 @@ cdef class TransientAnalyzer:
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
-                'qualifiers': [],
-                'snapshot': np.zeros(15001, dtype=np.float64)
+                'qualifiers': []
             }
             for j in range(pr.num_qualifiers):
                 peak_data['qualifiers'].append({
@@ -218,8 +217,6 @@ cdef class TransientAnalyzer:
                     'orig_ms': pr.qualifiers[j].orig_ms,
                     'val': pr.qualifiers[j].val
                 })
-
-            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 15001 * sizeof(double))
             peaks.append(peak_data)
 
         m = res.metrics
@@ -410,8 +407,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
-                'qualifiers': [],
-                'snapshot': np.zeros(15001, dtype=np.float64)
+                'qualifiers': []
             }
             for j in range(pr.num_qualifiers):
                 peak_data['qualifiers'].append({
@@ -419,7 +415,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
                     'orig_ms': pr.qualifiers[j].orig_ms,
                     'val': pr.qualifiers[j].val
                 })
-            memcpy(cnp.PyArray_DATA(peak_data['snapshot']), pr.snapshot, 15001 * sizeof(double))
             band_peaks.append(peak_data)
         full_peaks_list.append(band_peaks)
 

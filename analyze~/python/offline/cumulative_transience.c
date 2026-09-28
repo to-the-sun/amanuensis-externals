@@ -146,19 +146,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
 void analyzer_destroy(TransientAnalyzer* self) {
     if (!self) return;
 
-    // Fix Ghost Peak Bug: Subtract all remaining active snapshots from shared/private buffer before destruction
     if (self->lock_func) self->lock_func(self->lock_obj);
-    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
-    for (int b = 0; b < MAX_BANDS; b++) {
-        SnapshotEntry* curr = self->snapshot_heads[b];
-        while (curr) {
-            for (int j = 0; j < BUFFER_LEN; j++) {
-                acc_buf[j] -= curr->snapshot[j];
-            }
-            curr = curr->next;
-        }
-    }
-
     for (int b = 0; b < MAX_BANDS; b++) {
         SnapshotEntry* curr = self->snapshot_heads[b];
         while (curr) { SnapshotEntry* next = curr->next; free(curr); curr = next; }
@@ -340,7 +328,6 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
     if (entry) {
         entry->p_idx = global_p_idx;
-        memcpy(entry->snapshot, result_out->snapshot, sizeof(double) * BUFFER_LEN);
         entry->next = NULL;
         if (self->snapshot_tails[band_idx]) { self->snapshot_tails[band_idx]->next = entry; self->snapshot_tails[band_idx] = entry; }
         else { self->snapshot_heads[band_idx] = entry; self->snapshot_tails[band_idx] = entry; }
@@ -355,12 +342,10 @@ bool analyzer_cleanup_snapshots(TransientAnalyzer* self, int frame) {
     int cleanup = frame - 15000; bool updated = false;
 
     if (self->lock_func) self->lock_func(self->lock_obj);
-    double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
 
     for (int b = 0; b < MAX_BANDS; b++) {
         while (self->snapshot_heads[b] && self->snapshot_heads[b]->p_idx <= cleanup) {
             SnapshotEntry* e = self->snapshot_heads[b];
-            for (int j = 0; j < BUFFER_LEN; j++) acc_buf[j] -= e->snapshot[j];
             self->snapshot_heads[b] = e->next; if (!self->snapshot_heads[b]) self->snapshot_tails[b] = NULL;
             free(e); updated = true;
         }
