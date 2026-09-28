@@ -789,9 +789,10 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                     a.analyze_chunk(push_y, int(sr), win_s // hop, act_s // hop)
 
                 acc_buf = a.accumulated_buffer
-                buffer_times = np.linspace(-15000, 0, 15001)
+                frame_duration_ms = 1000.0 * hop / float(sr)
+                buffer_times = (np.arange(15001) - 15000) * frame_duration_ms
 
-                hp_idx = 15000 - int(round(longest_high_point_ms))
+                hp_idx = 15000 - int(round(longest_high_point_ms / frame_duration_ms))
                 if hp_idx < 0:
                     hp_idx = 0
                 if hp_idx >= 15001:
