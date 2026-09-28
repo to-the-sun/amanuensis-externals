@@ -251,7 +251,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     result_out->detected_peak_val = detected_peak_val; result_out->thresh_val = thresh_val;
     result_out->left_min = left_min; result_out->right_min = right_min; result_out->prominence = prominence;
     result_out->num_qualifiers = 0;
-    int start = p_idx - 15000;
+    int start = p_idx - 7500;
     for (int i = 0; i < BUFFER_LEN; i++) {
         int idx = start + i;
         result_out->snapshot[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];

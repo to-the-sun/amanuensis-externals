@@ -9,9 +9,10 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
       1. The cumulative transience buffer for segment k is populated from the 4-band segment-length
          snapshots of segment k-1 (if present) and segment k+1 (if present) — yielding up to 8
          snapshots (4 bands x 2 adjacent segments).
-      2. For all detected peaks in segment k, scores are derived against this accumulated buffer.
-      3. All peak scores in segment k are averaged together at the same time to produce a
-         single `rating` for the segment.
+      2. Snapshots are centered at index 7500 (representing offset 0 ms relative to peak timestamp),
+         enabling symmetric evaluation of both build-up energy before peak and decay energy after peak.
+      3. For all detected peaks in segment k, scores are derived against this accumulated buffer.
+      4. All peak scores in segment k are averaged together to produce a single `rating` for the segment.
 
     Returns:
       segments_data: list of dicts, one for each segment from 0 to num_segments - 1.
@@ -100,7 +101,7 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
             min_written_idx = 30001
             max_written_idx = -1
 
-            # Add segment-length snapshots per band from segment k-1 and k+1
+            # Add segment-length snapshots per band from segment k-1 and k+1 (centered at index 7500)
             for s in acc_peaks:
                 s_frame = int(round(s['time_ms']))
                 shift = p_frame - s_frame
@@ -108,12 +109,12 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
                 if s_snap is None or len(s_snap) == 0:
                     continue
 
-                snap_len = len(s_snap)  # 15001
-                start_snap_idx = max(0, 15000 - seg_len_ms)
-                end_snap_idx = min(snap_len, 15001)
+                snap_len = len(s_snap)  # 15001 (index 7500 is offset 0 ms)
+                start_snap_idx = max(0, 7500 - seg_len_ms)
+                end_snap_idx = min(snap_len, 7500 + seg_len_ms + 1)
 
                 for snap_idx in range(start_snap_idx, end_snap_idx):
-                    buf_idx = snap_idx - shift
+                    buf_idx = 15000 + (snap_idx - 7500) - shift
                     if 0 <= buf_idx < 30001:
                         acc_buf[buf_idx] += float(s_snap[snap_idx])
                         if buf_idx < min_written_idx:
@@ -167,7 +168,7 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         seg_scores = [p['total_score'] for p in curr_peaks]
         seg_rating = float(np.mean(seg_scores)) if seg_scores else 0.0
 
-        # Compute cumulative history buffer across segment duration (300 points)
+        # Compute cumulative history buffer across segment duration (300 points) centered at index 7500
         num_cum_pts = 300
         cum_history = [0.0] * num_cum_pts
         if acc_peaks:
@@ -176,7 +177,7 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
                 val = 0.0
                 for s in acc_peaks:
                     s_frame = int(round(s['time_ms']))
-                    snap_idx = 15000 + int(round(t_ms - s_frame))
+                    snap_idx = 7500 + int(round(t_ms - s_frame))
                     s_snap = s.get('snapshot', None)
                     if s_snap is not None and 0 <= snap_idx < len(s_snap):
                         val += float(s_snap[snap_idx])
