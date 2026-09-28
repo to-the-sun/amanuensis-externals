@@ -6,8 +6,9 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
     Computes segment-based cumulative transience scoring for offline audio analysis.
 
     For each segment k:
-      1. The cumulative transience buffer for segment k is populated strictly from the peak
-         snapshots of segment k-1 (if present) and segment k+1 (if present).
+      1. The cumulative transience buffer for segment k is populated from the 4-band segment-length
+         snapshots of segment k-1 (if present) and segment k+1 (if present) — yielding up to 8
+         snapshots (4 bands x 2 adjacent segments).
       2. For all detected peaks in segment k, scores are derived against this accumulated buffer.
       3. All peak scores in segment k are averaged together at the same time to produce a
          single `rating` for the segment.
@@ -48,15 +49,17 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         start_ms = seg_i * bar_length_ms
         end_ms = min(total_duration_ms, (seg_i + 1) * bar_length_ms)
 
-        # Gather peak snapshots from segment before (seg_i - 1) and segment after (seg_i + 1)
-        # Select strictly one representative snapshot from seg_i - 1 and one from seg_i + 1
+        # Gather representative peak snapshots per frequency band from prior (seg_i - 1) and next (seg_i + 1) segments
+        # Up to 4 band snapshots from seg_i - 1 and 4 band snapshots from seg_i + 1 (total up to 8 snapshots)
         acc_peaks = []
-        if seg_i > 0 and segment_peaks[seg_i - 1]:
-            prior_peak = max(segment_peaks[seg_i - 1], key=lambda pk: pk.get('peak_val', 0.0))
-            acc_peaks.append(prior_peak)
-        if seg_i < num_segments - 1 and segment_peaks[seg_i + 1]:
-            succ_peak = max(segment_peaks[seg_i + 1], key=lambda pk: pk.get('peak_val', 0.0))
-            acc_peaks.append(succ_peak)
+        for neighbor_seg_idx in (seg_i - 1, seg_i + 1):
+            if 0 <= neighbor_seg_idx < num_segments and segment_peaks[neighbor_seg_idx]:
+                peaks_by_band = {}
+                for pk in segment_peaks[neighbor_seg_idx]:
+                    b_idx = pk.get('band_idx', 0)
+                    if b_idx not in peaks_by_band or pk.get('peak_val', 0.0) > peaks_by_band[b_idx].get('peak_val', 0.0):
+                        peaks_by_band[b_idx] = pk
+                acc_peaks.extend(peaks_by_band.values())
 
         curr_peaks = segment_peaks[seg_i]
 
@@ -97,7 +100,7 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
             min_written_idx = 30001
             max_written_idx = -1
 
-            # Add peak snapshots (trimmed to segment duration) from segment k-1 and k+1
+            # Add segment-length snapshots per band from segment k-1 and k+1
             for s in acc_peaks:
                 s_frame = int(round(s['time_ms']))
                 shift = p_frame - s_frame
