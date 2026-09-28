@@ -49,11 +49,14 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         end_ms = min(total_duration_ms, (seg_i + 1) * bar_length_ms)
 
         # Gather peak snapshots from segment before (seg_i - 1) and segment after (seg_i + 1)
+        # Select strictly one representative snapshot from seg_i - 1 and one from seg_i + 1
         acc_peaks = []
-        if seg_i > 0:
-            acc_peaks.extend(segment_peaks[seg_i - 1])
-        if seg_i < num_segments - 1:
-            acc_peaks.extend(segment_peaks[seg_i + 1])
+        if seg_i > 0 and segment_peaks[seg_i - 1]:
+            prior_peak = max(segment_peaks[seg_i - 1], key=lambda pk: pk.get('peak_val', 0.0))
+            acc_peaks.append(prior_peak)
+        if seg_i < num_segments - 1 and segment_peaks[seg_i + 1]:
+            succ_peak = max(segment_peaks[seg_i + 1], key=lambda pk: pk.get('peak_val', 0.0))
+            acc_peaks.append(succ_peak)
 
         curr_peaks = segment_peaks[seg_i]
 
@@ -82,14 +85,19 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
             continue
 
         tol_idx = int(round(tolerance_ms))
+        seg_len_ms = int(round(bar_length_ms))
+        if seg_len_ms < 1:
+            seg_len_ms = 1
 
         for p in curr_peaks:
             p_frame = int(round(p['time_ms']))
 
             # 30001-element accumulator buffer centered at p_frame (index 15000 is offset 0 ms)
             acc_buf = np.zeros(30001, dtype=np.float64)
+            min_written_idx = 30001
+            max_written_idx = -1
 
-            # Add peak snapshots from segment k-1 and segment k+1 to acc_buf
+            # Add peak snapshots (trimmed to segment duration) from segment k-1 and k+1
             for s in acc_peaks:
                 s_frame = int(round(s['time_ms']))
                 shift = p_frame - s_frame
@@ -98,26 +106,28 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
                     continue
 
                 snap_len = len(s_snap)  # 15001
-                # Target index for snapshot element i: i - shift
-                i_start = max(0, shift)
-                i_end = min(snap_len, 30001 + shift)
+                start_snap_idx = max(0, 15000 - seg_len_ms)
+                end_snap_idx = min(snap_len, 15001)
 
-                if i_start < i_end:
-                    buf_start = i_start - shift
-                    buf_end = i_end - shift
-                    acc_buf[buf_start:buf_end] += s_snap[i_start:i_end]
+                for snap_idx in range(start_snap_idx, end_snap_idx):
+                    buf_idx = snap_idx - shift
+                    if 0 <= buf_idx < 30001:
+                        acc_buf[buf_idx] += float(s_snap[snap_idx])
+                        if buf_idx < min_written_idx:
+                            min_written_idx = buf_idx
+                        if buf_idx > max_written_idx:
+                            max_written_idx = buf_idx
 
-            # Calculate statistics across non-zero regions of acc_buf
-            non_zero_mask = acc_buf != 0
-            if not np.any(non_zero_mask):
+            if max_written_idx < min_written_idx:
                 p['total_score'] = 0.0
                 p['qualifiers'] = []
                 continue
 
-            non_zero_vals = acc_buf[non_zero_mask]
-            midpoint = float(np.mean(non_zero_vals))
-            max_v = float(np.max(non_zero_vals))
-            min_v = float(np.min(non_zero_vals))
+            # Calculate statistics across all values in the active snapshot region (including zeros)
+            active_slice = acc_buf[min_written_idx : max_written_idx + 1]
+            midpoint = float(np.mean(active_slice))
+            max_v = float(np.max(active_slice))
+            min_v = float(np.min(active_slice))
 
             q_sum = 0.0
             qualifiers = []
