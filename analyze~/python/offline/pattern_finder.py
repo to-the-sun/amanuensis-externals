@@ -468,8 +468,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         sCtx.lineTo(W, centerY);
         sCtx.stroke();
 
-        // Helper function for score color gradation
-        function getScoreColor(score) {{
+        // Helper function for score color gradation (semi-transparent)
+        function getScoreColor(score, alpha = 0.55) {{
             let norm = 0;
             if (score > 0) {{
                 norm = Math.min(1.0, score / (globalMaxPosScore || 1.0));
@@ -490,7 +490,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 g = Math.round(128 + (76 - 128) * absNorm);
                 b = Math.round(128 + (60 - 128) * absNorm);
             }}
-            return `rgb(${{r}}, ${{g}}, ${{b}})`;
+            return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
         }}
 
         // Cumulative History Buffer (Lighter, transparent curve in background)
@@ -557,15 +557,17 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 const relMs = p.time_ms - seg.start_ms;
                 const x = (relMs / segDurMs) * W;
                 const score = p.total_score;
-                const scoreColor = getScoreColor(score);
+                const scoreColor = getScoreColor(score, 0.55);
 
-                // Peak line
+                // Peak line (dashed and semi-transparent)
                 sCtx.strokeStyle = scoreColor;
                 sCtx.lineWidth = 1.8;
+                sCtx.setLineDash([4, 4]);
                 sCtx.beginPath();
                 sCtx.moveTo(x, 0);
                 sCtx.lineTo(x, H);
                 sCtx.stroke();
+                sCtx.setLineDash([]);
 
                 // Compute Y height based on scaled score
                 let scoreY = centerY;
@@ -797,12 +799,12 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
                 val_at_hp = acc_buf[hp_idx]
 
                 fig, ax = plt.subplots(figsize=(12, 6))
-                ax.plot(buffer_times, acc_buf, color='#3498db', linewidth=1.5, label='Cumulative History Buffer')
-                ax.fill_between(buffer_times, acc_buf, color='#3498db', alpha=0.2)
-
                 ax.axvline(-longest_high_point_ms, color='#e74c3c', linestyle='--', linewidth=2.0,
-                           label=f'High Point ({longest_high_point_ms:.2f} ms)')
-                ax.plot(-longest_high_point_ms, val_at_hp, marker='o', color='#e74c3c', markersize=8)
+                           label=f'High Point ({longest_high_point_ms:.2f} ms)', zorder=1)
+                ax.plot(-longest_high_point_ms, val_at_hp, marker='o', color='#e74c3c', markersize=8, zorder=1)
+
+                ax.plot(buffer_times, acc_buf, color='#3498db', linewidth=1.5, label='Cumulative History Buffer', zorder=2)
+                ax.fill_between(buffer_times, acc_buf, color='#3498db', alpha=0.2, zorder=2)
 
                 offset_x = -600 if -longest_high_point_ms > -7500 else 600
                 ha_align = 'right' if -longest_high_point_ms > -7500 else 'left'
