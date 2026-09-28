@@ -93,6 +93,14 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     segments_js = json.dumps(clean_json(segments_transience_data))
     hp_changes_js = json.dumps(clean_json(hp_changes))
 
+    # Compute global extreme positive and negative scores across all segments
+    all_scores = [p['total_score'] for seg in segments_transience_data if 'peaks' in seg for p in seg['peaks']]
+    pos_scores = [s for s in all_scores if s > 0]
+    neg_scores = [s for s in all_scores if s < 0]
+
+    global_max_pos_score = float(max(pos_scores)) if pos_scores else 1.0
+    global_min_neg_score = float(min(neg_scores)) if neg_scores else -1.0
+
     audio_filename = os.path.basename(audio_path)
     html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
 
@@ -296,6 +304,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const patterns = {patterns_js};
     const segmentsData = {segments_js};
     const hpChanges = {hp_changes_js};
+    const globalMaxPosScore = {global_max_pos_score};
+    const globalMinNegScore = {global_min_neg_score};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -458,6 +468,57 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         sCtx.lineTo(W, centerY);
         sCtx.stroke();
 
+        // Helper function for score color gradation
+        function getScoreColor(score) {{
+            let norm = 0;
+            if (score > 0) {{
+                norm = Math.min(1.0, score / (globalMaxPosScore || 1.0));
+            }} else if (score < 0) {{
+                norm = -Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0));
+            }}
+
+            let r = 128, g = 128, b = 128;
+            if (norm > 0) {{
+                // Gradate from Gray (128, 128, 128) to Bright Green (46, 204, 113)
+                r = Math.round(128 + (46 - 128) * norm);
+                g = Math.round(128 + (204 - 128) * norm);
+                b = Math.round(128 + (113 - 128) * norm);
+            }} else if (norm < 0) {{
+                // Gradate from Gray (128, 128, 128) to Bright Red (231, 76, 60)
+                const absNorm = Math.abs(norm);
+                r = Math.round(128 + (231 - 128) * absNorm);
+                g = Math.round(128 + (76 - 128) * absNorm);
+                b = Math.round(128 + (60 - 128) * absNorm);
+            }}
+            return `rgb(${{r}}, ${{g}}, ${{b}})`;
+        }}
+
+        // Cumulative History Buffer (Lighter, transparent curve in background)
+        if (seg.cum_history && seg.cum_history.length > 0) {{
+            const numPts = seg.cum_history.length;
+            const maxCum = Math.max(...seg.cum_history) || 1.0;
+
+            sCtx.fillStyle = 'rgba(52, 152, 219, 0.08)';
+            sCtx.strokeStyle = 'rgba(52, 152, 219, 0.25)';
+            sCtx.lineWidth = 1.2;
+
+            sCtx.beginPath();
+            sCtx.moveTo(0, H);
+            for (let i = 0; i < numPts; i++) {{
+                const x = (i / (numPts - 1)) * W;
+                const cumVal = seg.cum_history[i];
+                const y = H - (cumVal / maxCum) * (H * 0.85);
+                if (i === 0) sCtx.moveTo(x, y);
+                else sCtx.lineTo(x, y);
+            }}
+            sCtx.stroke();
+
+            sCtx.lineTo(W, H);
+            sCtx.lineTo(0, H);
+            sCtx.closePath();
+            sCtx.fill();
+        }}
+
         // Waveform
         if (seg.waveform_min && seg.waveform_min.length > 0) {{
             const numPts = seg.waveform_min.length;
@@ -476,34 +537,45 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         const segDurMs = seg.end_ms - seg.start_ms;
 
-        // Draw Peaks, Peak Marker Lines, and Peak Scores
+        // Draw Peaks, Peak Marker Lines, Peak Dots, and Peak Scores
         if (seg.peaks && seg.peaks.length > 0) {{
             seg.peaks.forEach((p, pIdx) => {{
                 const relMs = p.time_ms - seg.start_ms;
                 const x = (relMs / segDurMs) * W;
-                const color = bandColors[p.band_idx % bandColors.length];
+                const score = p.total_score;
+                const scoreColor = getScoreColor(score);
 
                 // Peak line
-                sCtx.strokeStyle = color;
+                sCtx.strokeStyle = scoreColor;
                 sCtx.lineWidth = 1.8;
                 sCtx.beginPath();
                 sCtx.moveTo(x, 0);
                 sCtx.lineTo(x, H);
                 sCtx.stroke();
 
-                // Peak Dot
-                sCtx.fillStyle = color;
+                // Compute Y height based on scaled score
+                let scoreY = centerY;
+                if (score > 0) {{
+                    const ratio = Math.min(1.0, score / (globalMaxPosScore || 1.0));
+                    scoreY = centerY - ratio * (centerY * 0.85);
+                }} else if (score < 0) {{
+                    const ratio = Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0));
+                    scoreY = centerY + ratio * ((H - centerY) * 0.85);
+                }}
+
+                // Peak Dot at Score Height
+                sCtx.fillStyle = scoreColor;
                 sCtx.beginPath();
-                sCtx.arc(x, centerY, 4, 0, 2 * Math.PI);
+                sCtx.arc(x, scoreY, 4.5, 0, 2 * Math.PI);
                 sCtx.fill();
 
-                // Peak Score Label
-                const scoreStr = `Score: ${{p.total_score.toFixed(3)}}`;
+                // Peak Score Label at Score Height
+                const scoreStr = `Score: ${{score.toFixed(3)}}`;
                 sCtx.font = 'bold 10px Segoe UI, sans-serif';
-                sCtx.fillStyle = color;
+                sCtx.fillStyle = scoreColor;
                 sCtx.textAlign = (x > W - 70) ? 'right' : 'left';
                 const labelX = (x > W - 70) ? x - 6 : x + 6;
-                const labelY = 15 + (pIdx % 3) * 16;
+                const labelY = Math.max(12, Math.min(H - 6, scoreY + 3));
                 sCtx.fillText(scoreStr, labelX, labelY);
             }});
         }}

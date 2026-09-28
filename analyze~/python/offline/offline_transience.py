@@ -154,12 +154,28 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         seg_scores = [p['total_score'] for p in curr_peaks]
         seg_rating = float(np.mean(seg_scores)) if seg_scores else 0.0
 
+        # Compute cumulative history buffer across segment duration (300 points)
+        num_cum_pts = 300
+        cum_history = [0.0] * num_cum_pts
+        if acc_peaks:
+            for pt_i in range(num_cum_pts):
+                t_ms = start_ms + (pt_i / float(num_cum_pts - 1 if num_cum_pts > 1 else 1)) * (end_ms - start_ms)
+                val = 0.0
+                for s in acc_peaks:
+                    s_frame = int(round(s['time_ms']))
+                    snap_idx = 15000 + int(round(t_ms - s_frame))
+                    s_snap = s.get('snapshot', None)
+                    if s_snap is not None and 0 <= snap_idx < len(s_snap):
+                        val += float(s_snap[snap_idx])
+                cum_history[pt_i] = val
+
         segments_data.append({
             'segment_index': seg_i,
             'start_ms': start_ms,
             'end_ms': end_ms,
             'rating': seg_rating,
-            'peaks': curr_peaks
+            'peaks': curr_peaks,
+            'cum_history': cum_history
         })
 
     return segments_data
