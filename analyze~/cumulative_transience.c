@@ -695,10 +695,9 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         int curr = 0; for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < bpeak_counts[b]; i++) { pref[curr].p_idx = bpeaks[b][i]; pref[curr].band_idx = b; aind[curr] = bpeaks[b][i]; curr++; }
         qsort(pref, tot, sizeof(PeakRef), compare_peaks);
         result_out->peak_list.num_peaks = 0;
-        long long realtime_start_frame = self->total_frames_pushed - 100;
         long long gstart = self->total_frames_pushed - self->cache_count;
         for (int b = 0; b < MAX_BANDS; b++) for (int i = 0; i < 100; i++) {
-            long long gf = realtime_start_frame + i, lf = gf - gstart;
+            long long gf = (long long)active_start_frame + i, lf = gf - gstart;
             result_out->last_flux[b][i] = (lf >= 0 && lf < nf) ? envs[b][lf] : 0;
             
             float smooth = 0;
@@ -716,7 +715,7 @@ int analyzer_analyze_chunk(TransientAnalyzer* self, const float* y, int len, int
         }
         for (int i = 0; i < tot; i++) {
             int p_idx = pref[i].p_idx, b = pref[i].band_idx; long long gp = gstart + p_idx;
-            if (gp >= realtime_start_frame && gp < realtime_start_frame + 100) {
+            if (gp >= (long long)active_start_frame && gp < (long long)active_start_frame + 100) {
                 double pv = 0, tv = 0, lv = 0, rv = 0, prv = 0;
                 for (int k = 0; k < bpeak_counts[b]; k++) if (bpeaks[b][k] == p_idx) { pv = envs[b][p_idx]; tv = bth[b][k]; lv = bl[b][k]; rv = br[b][k]; prv = bp[b][k]; break; }
                 PeakResult pr; double time = (double)gp * self->frame_duration_ms / 1000.0;
@@ -805,10 +804,9 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
         }
         analyzer_analyze_chunk(a, push_ptr, step, sr, win_s / hop, act_s / hop, res);
         free(push_ptr);
-        int realtime_frame = last_t / hop;
         for (int b = 0; b < MAX_BANDS; b++) {
             for (int i = 0; i < 100; i++) {
-                int f = realtime_frame + i;
+                int f = act_s / hop + i;
                 if (f >= 0 && f < num_f) {
                     result_out->bands[b].envelope[f] = res->last_flux[b][i];
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
@@ -825,7 +823,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* 
                 }
             }
         }
-        for (int i = 0; i < 100; i++) { int f = realtime_frame + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->demarcation_lines[f] = res->metrics.demarcation_line; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->demarcation_lines[f] = res->metrics.demarcation_line; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
         for (int i = 0; i < res->peak_list.num_peaks; i++) {
             PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
             if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
