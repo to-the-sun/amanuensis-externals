@@ -517,6 +517,20 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             sCtx.lineTo(0, H);
             sCtx.closePath();
             sCtx.fill();
+
+            // Demarcation midpoint line (faint dashed horizontal line across canvas)
+            const sumCum = seg.cum_history.reduce((a, b) => a + b, 0);
+            const avgCum = sumCum / numPts;
+            const midY = H - (avgCum / maxCum) * (H * 0.85);
+
+            sCtx.strokeStyle = 'rgba(52, 152, 219, 0.35)';
+            sCtx.lineWidth = 1.0;
+            sCtx.setLineDash([4, 4]);
+            sCtx.beginPath();
+            sCtx.moveTo(0, midY);
+            sCtx.lineTo(W, midY);
+            sCtx.stroke();
+            sCtx.setLineDash([]);
         }}
 
         // Waveform
