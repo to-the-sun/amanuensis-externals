@@ -32,6 +32,7 @@ typedef struct {
 
 typedef struct SnapshotEntry {
     int p_idx;
+    double snapshot[BUFFER_LEN];
     struct SnapshotEntry* next;
 } SnapshotEntry;
 
@@ -108,13 +109,14 @@ typedef struct {
     int lookback_p_count[MAX_BANDS];
 
     // Bar Length History for Stability
-    int bar_length_counts[15001];
+    int bar_length_counts[BUFFER_LEN];
 
     // Snapshots tracking (queue per band)
     SnapshotEntry* snapshot_heads[MAX_BANDS];
     SnapshotEntry* snapshot_tails[MAX_BANDS];
 
     double frame_duration_ms;
+    int window_ms;
 
     // Incremental Cache State
     double* mel_spectrogram;    // Mel bands cache
@@ -142,7 +144,7 @@ typedef struct {
     double tolerance;
 } TransientAnalyzer;
 
-TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func);
+TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func, int window_ms);
 void analyzer_destroy(TransientAnalyzer* self);
 void analyzer_clear(TransientAnalyzer* self);
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr);
@@ -218,7 +220,7 @@ typedef struct {
     double tolerance;
 } FullAnalysisResult;
 
-int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out);
+int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
 
 #endif

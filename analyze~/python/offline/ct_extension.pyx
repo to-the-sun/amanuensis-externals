@@ -73,8 +73,9 @@ cdef extern from "cumulative_transience.h":
 
     ctypedef struct TransientAnalyzer_c "TransientAnalyzer":
         double tolerance
+        int window_ms
 
-    TransientAnalyzer_c* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func)
+    TransientAnalyzer_c* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func, int window_ms)
     void analyzer_destroy(TransientAnalyzer_c* self)
     void analyzer_set_sample_rate(TransientAnalyzer_c* self, int sr)
     double analyzer_get_max_peak(TransientAnalyzer_c* self)
@@ -140,7 +141,7 @@ cdef extern from "cumulative_transience.h":
         float* rolling_global_smoothing_avg
         double tolerance
 
-    int analyzer_batch_analyze(const float* y, int len, int sr, FullAnalysisResult* result_out)
+    int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out)
     void analyzer_free_analysis(FullAnalysisResult* result)
 
 cdef void dummy_lock(void* lock_obj) noexcept:
@@ -153,8 +154,8 @@ cdef class TransientAnalyzer:
     cdef public double max_peak
     cdef object _processed_peaks
 
-    def __cinit__(self, double max_peak_value=1.0, int sr=44100):
-        self._c_analyzer = analyzer_create(max_peak_value, NULL, NULL, dummy_lock, dummy_lock)
+    def __cinit__(self, double max_peak_value=1.0, int sr=44100, int window_ms=15000):
+        self._c_analyzer = analyzer_create(max_peak_value, NULL, NULL, dummy_lock, dummy_lock, window_ms)
         if self._c_analyzer == NULL:
             raise MemoryError()
         analyzer_set_sample_rate(self._c_analyzer, sr)
@@ -175,10 +176,15 @@ cdef class TransientAnalyzer:
         self._c_analyzer.tolerance = value
 
     @property
+    def window_ms(self):
+        return self._c_analyzer.window_ms
+
+    @property
     def accumulated_buffer(self):
         cdef double* buf_ptr = analyzer_get_buffer(self._c_analyzer)
-        cdef cnp.ndarray[double, ndim=1] res = np.zeros(15001, dtype=np.float64)
-        memcpy(res.data, buf_ptr, 15001 * sizeof(double))
+        cdef int win_len = self._c_analyzer.window_ms + 1
+        cdef cnp.ndarray[double, ndim=1] res = np.zeros(win_len, dtype=np.float64)
+        memcpy(res.data, buf_ptr, win_len * sizeof(double))
         return res
 
     def push_audio(self, cnp.ndarray[float, ndim=1] y, int sr):
@@ -305,9 +311,9 @@ cdef class TransientAnalyzer:
             'global_smoothing_avg': m.global_smoothing_avg
         }
 
-def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr):
+def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
     cdef FullAnalysisResult res
-    cdef int ret = analyzer_batch_analyze(<float*>y.data, len(y), sr, &res)
+    cdef int ret = analyzer_batch_analyze(<float*>y.data, len(y), sr, window_ms, &res)
 
     if not ret:
         return None
