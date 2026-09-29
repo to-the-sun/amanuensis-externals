@@ -42,10 +42,9 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         p_copy['time_ms'] = time_ms
         segment_peaks[seg_i].append(p_copy)
 
-    # Frame duration and STFT window group delay compensation
+    # Frame duration conversion
     hop = int(sr * 0.001) if sr > 0 else 44
     frame_duration_ms = 1000.0 * hop / float(sr) if sr > 0 else 1.0
-    stft_delay_ms = (n_fft / 2.0) / float(sr) * 1000.0 if sr > 0 else 0.0
 
     # Extract segment envelope slices per band if onset_envs is provided
     segment_envs = []
@@ -55,9 +54,9 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
         start_ms = seg_i * bar_length_ms
         end_ms = (seg_i + 1) * bar_length_ms
 
-        # Convert millisecond segment bounds to frame indices, compensating for STFT window group delay
-        start_frame = max(0, int(round((start_ms + stft_delay_ms) / frame_duration_ms)))
-        end_frame = min(num_frames, int(round((end_ms + stft_delay_ms) / frame_duration_ms)))
+        # Convert millisecond segment bounds to frame indices using frame_duration_ms
+        start_frame = max(0, int(round(start_ms / frame_duration_ms)))
+        end_frame = min(num_frames, int(round(end_ms / frame_duration_ms)))
 
         if onset_envs and num_frames > 0 and start_frame < num_frames:
             seg_slice = np.zeros(max(1, end_frame - start_frame), dtype=np.float64)
