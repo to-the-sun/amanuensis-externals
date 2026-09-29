@@ -202,7 +202,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         }}
         #historyBufferCanvas {{
             height: 220px;
-            background-color: #121216;
+            background-color: #ffffff;
         }}
         .hint {{
             font-size: 12px;
@@ -253,6 +253,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             border: 1px solid #e1e8ed;
             border-radius: 6px;
             background: #ffffff;
+            cursor: pointer;
         }}
     </style>
 </head>
@@ -312,9 +313,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             <canvas id="canvasNext" class="seg-canvas" width="1150" height="120"></canvas>
         </div>
     </div>
+    <div class="hint">💡 Click anywhere on any of the segment graphs above to jump to that exact point in the song and play audio.</div>
 
     <div class="section-title">3. Real-Time Accumulated History Buffer</div>
-    <div class="canvas-container" style="cursor: default; background: #121216;">
+    <div class="canvas-container" style="cursor: default; background: #ffffff;">
         <canvas id="historyBufferCanvas" width="1150" height="220"></canvas>
     </div>
     <div class="hint">💡 Graph updates in real time during audio playback, displaying accumulated energy, score heights, qualifiers, tolerance band, and midpoint demarcation line.</div>
@@ -630,8 +632,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const H = bufCanvas.height;
         bufCtx.clearRect(0, 0, W, H);
 
-        // Dark charcoal background matching raylib_renderer / MP4
-        bufCtx.fillStyle = '#121216';
+        // White background matching color scheme of the other panels
+        bufCtx.fillStyle = '#ffffff';
         bufCtx.fillRect(0, 0, W, H);
 
         const curTimeMs = (audio.currentTime || 0) * 1000.0;
@@ -679,13 +681,13 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const yMax = curMax * 1.1;
 
         // Draw Outer Border
-        bufCtx.strokeStyle = '#282830';
+        bufCtx.strokeStyle = '#dcdde1';
         bufCtx.lineWidth = 1;
         bufCtx.strokeRect(padLeft, padTop, graphW, graphH);
 
         // Draw Vertical Grid Lines & X-Axis Time Ticks (-pass2WinMs to 0ms)
         const numTicks = 5;
-        bufCtx.fillStyle = '#8c8c96';
+        bufCtx.fillStyle = '#7f8c8d';
         bufCtx.font = '11px Segoe UI, sans-serif';
         bufCtx.textAlign = 'center';
 
@@ -694,7 +696,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             const x = padLeft + frac * graphW;
             const msVal = -pass2WinMs + frac * pass2WinMs;
 
-            bufCtx.strokeStyle = 'rgba(40, 40, 48, 0.8)';
+            bufCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)';
             bufCtx.beginPath();
             bufCtx.moveTo(x, padTop);
             bufCtx.lineTo(x, padTop + graphH);
@@ -708,7 +710,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.textAlign = 'right';
         for (let ratio of [0.0, 0.25, 0.5, 0.75, 1.0]) {{
             const y = padTop + graphH - ratio * graphH;
-            bufCtx.strokeStyle = 'rgba(40, 40, 48, 0.8)';
+            bufCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)';
             bufCtx.beginPath();
             bufCtx.moveTo(padLeft, y);
             bufCtx.lineTo(padLeft + graphW, y);
@@ -726,7 +728,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const meanVal = numBufPts > 0 ? (bufSum / numBufPts) : 0;
         const meanY = padTop + graphH - (meanVal / yMax) * graphH;
 
-        bufCtx.strokeStyle = '#808080';
+        bufCtx.strokeStyle = '#7f8c8d';
         bufCtx.lineWidth = 1.2;
         bufCtx.setLineDash([5, 5]);
         bufCtx.beginPath();
@@ -736,10 +738,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.setLineDash([]);
 
 
-        // Draw Accumulated History Buffer Curve (Yellow line + area fill)
-        bufCtx.strokeStyle = '#f1c40f';
+        // Draw Accumulated History Buffer Curve (Primary blue line + area fill)
+        bufCtx.strokeStyle = '#3498db';
         bufCtx.lineWidth = 2.0;
-        bufCtx.fillStyle = 'rgba(241, 196, 15, 0.12)';
+        bufCtx.fillStyle = 'rgba(52, 152, 219, 0.15)';
 
         bufCtx.beginPath();
         bufCtx.moveTo(padLeft, padTop + graphH);
@@ -814,7 +816,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         }}
 
         // Title
-        bufCtx.fillStyle = '#ffffff';
+        bufCtx.fillStyle = '#2c3e50';
         bufCtx.font = 'bold 13px Segoe UI, sans-serif';
         bufCtx.textAlign = 'left';
         bufCtx.fillText(`Accumulated ${{Math.round(pass2WinMs)}}ms Historical Buffer`, padLeft, padTop - 10);
@@ -835,13 +837,59 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     canvas.addEventListener('click', (e) => {{
         const rect = canvas.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
-        const clickFraction = clickX / rect.width;
+        const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));
+        const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;
 
-        if (audio.duration) {{
-            audio.currentTime = clickFraction * audio.duration;
-            audio.play();
+        if (dur > 0) {{
+            const wasPaused = audio.paused;
+            audio.currentTime = clickFraction * dur;
+            if (!wasPaused) {{
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {{
+                    playPromise.catch(e => console.log('Audio play error:', e));
+                }}
+            }}
+            renderAll();
         }}
     }});
+
+    function setupSegmentClickListener(canvasId, segOffset) {{
+        const canvasElem = document.getElementById(canvasId);
+        if (!canvasElem) return;
+
+        canvasElem.addEventListener('click', (e) => {{
+            const curTimeMs = (audio.currentTime || 0) * 1000.0;
+            const curSegIdx = Math.floor(curTimeMs / bestBarLengthMs);
+            const targetSegIdx = curSegIdx + segOffset;
+            const seg = segmentsData.find(s => s.segment_index === targetSegIdx);
+            if (!seg) return;
+
+            const rect = canvasElem.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));
+
+            const segDurMs = seg.end_ms - seg.start_ms;
+            const targetTimeMs = seg.start_ms + clickFraction * segDurMs;
+            const targetTimeS = targetTimeMs / 1000.0;
+            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;
+
+            if (targetTimeS >= 0 && targetTimeS <= dur) {{
+                const wasPaused = audio.paused;
+                audio.currentTime = targetTimeS;
+                if (!wasPaused) {{
+                    const playPromise = audio.play();
+                    if (playPromise !== undefined) {{
+                        playPromise.catch(e => console.log('Audio play error:', e));
+                    }}
+                }}
+                renderAll();
+            }}
+        }});
+    }}
+
+    setupSegmentClickListener('canvasPrev', -1);
+    setupSegmentClickListener('canvasCurr', 0);
+    setupSegmentClickListener('canvasNext', 1);
 </script>
 </body>
 </html>
