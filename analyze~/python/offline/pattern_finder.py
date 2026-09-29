@@ -101,6 +101,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     global_max_pos_score = float(max(pos_scores)) if pos_scores else 1.0
     global_min_neg_score = float(min(neg_scores)) if neg_scores else -1.0
 
+    stft_delay_ms = (2048.0 / 2.0) / float(sr) * 1000.0 if sr > 0 else 0.0
+
     audio_filename = os.path.basename(audio_path)
     html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
 
@@ -306,6 +308,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const hpChanges = {hp_changes_js};
     const globalMaxPosScore = {global_max_pos_score};
     const globalMinNegScore = {global_min_neg_score};
+    const stftDelayMs = {stft_delay_ms};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -497,6 +500,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         if (seg.cum_history && seg.cum_history.length > 0) {{
             const numPts = seg.cum_history.length;
             const maxCum = Math.max(...seg.cum_history) || 1.0;
+            const segDurMs = seg.end_ms - seg.start_ms;
 
             sCtx.fillStyle = 'rgba(52, 152, 219, 0.08)';
             sCtx.strokeStyle = 'rgba(52, 152, 219, 0.25)';
@@ -505,7 +509,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             sCtx.beginPath();
             sCtx.moveTo(0, H);
             for (let i = 0; i < numPts; i++) {{
-                const x = (i / (numPts - 1)) * W;
+                const relMs = (i / (numPts - 1)) * segDurMs - stftDelayMs;
+                const x = (relMs / segDurMs) * W;
                 const cumVal = seg.cum_history[i];
                 const y = H - (cumVal / maxCum) * (H * 0.85);
                 if (i === 0) sCtx.moveTo(x, y);
