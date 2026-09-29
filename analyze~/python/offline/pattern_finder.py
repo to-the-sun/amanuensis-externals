@@ -841,10 +841,13 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;
 
         if (dur > 0) {{
+            const wasPaused = audio.paused;
             audio.currentTime = clickFraction * dur;
-            const playPromise = audio.play();
-            if (playPromise !== undefined) {{
-                playPromise.catch(e => console.log('Audio play error:', e));
+            if (!wasPaused) {{
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {{
+                    playPromise.catch(e => console.log('Audio play error:', e));
+                }}
             }}
             renderAll();
         }}
@@ -871,10 +874,13 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;
 
             if (targetTimeS >= 0 && targetTimeS <= dur) {{
+                const wasPaused = audio.paused;
                 audio.currentTime = targetTimeS;
-                const playPromise = audio.play();
-                if (playPromise !== undefined) {{
-                    playPromise.catch(e => console.log('Audio play error:', e));
+                if (!wasPaused) {{
+                    const playPromise = audio.play();
+                    if (playPromise !== undefined) {{
+                        playPromise.catch(e => console.log('Audio play error:', e));
+                    }}
                 }}
                 renderAll();
             }}
