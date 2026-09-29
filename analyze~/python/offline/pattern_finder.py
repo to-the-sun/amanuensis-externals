@@ -684,7 +684,8 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
         ct = ensure_ct_initialized()
         if ct is not None:
             try:
-                analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+                # Pass 1: 15-second (15000 ms) rolling window and cumulative history buffer
+                analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=15000)
             except Exception as e:
                 print(f"Error running cumulative_transience analysis: {e}")
                 analysis_res = None
@@ -771,7 +772,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
 
             ct = ensure_ct_initialized()
             if ct is not None:
-                a = ct.TransientAnalyzer(1.0, int(sr))
+                a = ct.TransientAnalyzer(1.0, int(sr), window_ms=15000)
                 hop = int(sr * 0.001)
                 step = hop * 100
                 target_sample = int(round(target_time_s * sr)) + hop
@@ -930,7 +931,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     ct = ensure_ct_initialized()
     if ct is not None:
         try:
-            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr))
+            # First pass: 15-second (15000 ms) window for determining segment length
+            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=15000)
         except Exception as e:
             print(f"Error running cumulative_transience peak detection: {e}")
             analysis_res = None
@@ -946,6 +948,14 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     )
 
     best_bar_length = longest_hp_ms
+
+    # Second pass: Find actual peaks and score them using window_ms = segment length found in Pass 1
+    if ct is not None:
+        try:
+            pass2_win_ms = int(round(best_bar_length))
+            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=pass2_win_ms)
+        except Exception as e:
+            print(f"Error running Pass 2 cumulative_transience analysis: {e}")
 
     # Extract all peaks across bands for segment-based transience scoring
     all_peaks_flat = []
