@@ -28,7 +28,7 @@ def ensure_ct_initialized():
         return None
 
 
-def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True):
+def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True, pass2_res=None):
     """
     Exports an interactive HTML report containing:
     1. Cumulative history graph high point analysis summary.
@@ -38,6 +38,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     3. Zoomed-In Segment Inspector displaying stacked vertical views for Previous (k-1),
        Current (k), and Next (k+1) segments with transient peaks, individual peak scores,
        and segment average ratings.
+    4. Real-Time Accumulated History Buffer Graph updating in sync with audio playhead.
     """
     import base64
     import json
@@ -84,11 +85,24 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         if isinstance(obj, (np.int32, np.int64)):
             return int(obj)
         if isinstance(obj, dict):
-            return {k: clean_json(v) for k, v in obj.items() if k != 'snapshot'}
+            return {k: clean_json(v) for k, v in obj.items()}
         if isinstance(obj, list):
             return [clean_json(i) for i in obj]
         return obj
 
+    pass2_win_ms = int(round(best_bar_length * 2))
+    tolerance_ms = float(pass2_res.get('tolerance', 19.0)) if (pass2_res and isinstance(pass2_res, dict)) else 19.0
+
+    pass2_peaks_flat = []
+    if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
+        for band_idx, band_peaks in enumerate(pass2_res['peaks']):
+            for p in band_peaks:
+                p_copy = dict(p)
+                p_copy['band_idx'] = band_idx
+                p_copy['time_ms'] = float(p.get('time', 0.0) * 1000.0)
+                pass2_peaks_flat.append(p_copy)
+
+    pass2_peaks_js = json.dumps(clean_json(pass2_peaks_flat))
     patterns_js = json.dumps(clean_json(best_patterns))
     segments_js = json.dumps(clean_json(segments_transience_data))
     hp_changes_js = json.dumps(clean_json(hp_changes))
@@ -185,6 +199,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         }}
         #waveformCanvas {{
             height: 250px;
+        }}
+        #historyBufferCanvas {{
+            height: 220px;
+            background-color: #121216;
         }}
         .hint {{
             font-size: 12px;
@@ -294,6 +312,12 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             <canvas id="canvasNext" class="seg-canvas" width="1150" height="120"></canvas>
         </div>
     </div>
+
+    <div class="section-title">3. Real-Time Accumulated History Buffer</div>
+    <div class="canvas-container" style="cursor: default; background: #121216;">
+        <canvas id="historyBufferCanvas" width="1150" height="220"></canvas>
+    </div>
+    <div class="hint">💡 Graph updates in real time during audio playback, displaying accumulated energy, score heights, qualifiers, tolerance band, and midpoint demarcation line.</div>
 </div>
 
 <script>
@@ -306,15 +330,56 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const hpChanges = {hp_changes_js};
     const globalMaxPosScore = {global_max_pos_score};
     const globalMinNegScore = {global_min_neg_score};
+    const pass2WinMs = {pass2_win_ms};
+    const toleranceMs = {tolerance_ms};
+    const pass2Peaks = {pass2_peaks_js};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
     const audio = document.getElementById('audioPlayer');
+    const bufCanvas = document.getElementById('historyBufferCanvas');
+    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;
 
     const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)',
                     'rgba(241, 196, 15, 0.35)', 'rgba(26, 188, 156, 0.35)', 'rgba(230, 126, 34, 0.35)'];
     const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22'];
     const bandColors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f'];
+
+    function getScoreColor(score, alpha = 1.0) {{
+        if (score === 0) return `rgba(128, 128, 128, ${{alpha}})`;
+        let r = 128, g = 128, b = 128;
+        if (score < 0) {{
+            let t = globalMinNegScore < 0 ? score / globalMinNegScore : 0.0;
+            t = Math.max(0.0, Math.min(1.0, t));
+            r = Math.round(128 + (255 - 128) * t);
+            g = Math.round(128 + (0 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }} else {{
+            let t = globalMaxPosScore > 0 ? score / globalMaxPosScore : 0.0;
+            t = Math.max(0.0, Math.min(1.0, t));
+            r = Math.round(128 + (0 - 128) * t);
+            g = Math.round(128 + (255 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }}
+        return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
+    }}
+
+    function getQualifierColor(val, alpha = 1.0) {{
+        if (val === 0) return `rgba(128, 128, 128, ${{alpha}})`;
+        let r = 128, g = 128, b = 128;
+        if (val < 0) {{
+            let t = Math.max(0.0, Math.min(1.0, val / -1.0));
+            r = Math.round(128 + (255 - 128) * t);
+            g = Math.round(128 + (0 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }} else {{
+            let t = Math.max(0.0, Math.min(1.0, val / 1.0));
+            r = Math.round(128 + (0 - 128) * t);
+            g = Math.round(128 + (255 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }}
+        return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
+    }}
 
     function drawWaveformMap() {{
         const W = canvas.width;
@@ -468,70 +533,6 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         sCtx.lineTo(W, centerY);
         sCtx.stroke();
 
-        // Helper function for score color gradation (semi-transparent)
-        function getScoreColor(score, alpha = 0.55) {{
-            let norm = 0;
-            if (score > 0) {{
-                norm = Math.min(1.0, score / (globalMaxPosScore || 1.0));
-            }} else if (score < 0) {{
-                norm = -Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0));
-            }}
-
-            let r = 128, g = 128, b = 128;
-            if (norm > 0) {{
-                // Gradate from Gray (128, 128, 128) to Bright Green (46, 204, 113)
-                r = Math.round(128 + (46 - 128) * norm);
-                g = Math.round(128 + (204 - 128) * norm);
-                b = Math.round(128 + (113 - 128) * norm);
-            }} else if (norm < 0) {{
-                // Gradate from Gray (128, 128, 128) to Bright Red (231, 76, 60)
-                const absNorm = Math.abs(norm);
-                r = Math.round(128 + (231 - 128) * absNorm);
-                g = Math.round(128 + (76 - 128) * absNorm);
-                b = Math.round(128 + (60 - 128) * absNorm);
-            }}
-            return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
-        }}
-
-        // Cumulative History Buffer (Lighter, transparent curve in background)
-        if (seg.cum_history && seg.cum_history.length > 0) {{
-            const numPts = seg.cum_history.length;
-            const maxCum = Math.max(...seg.cum_history) || 1.0;
-
-            sCtx.fillStyle = 'rgba(52, 152, 219, 0.08)';
-            sCtx.strokeStyle = 'rgba(52, 152, 219, 0.25)';
-            sCtx.lineWidth = 1.2;
-
-            sCtx.beginPath();
-            sCtx.moveTo(0, H);
-            for (let i = 0; i < numPts; i++) {{
-                const x = (i / (numPts - 1)) * W;
-                const cumVal = seg.cum_history[i];
-                const y = H - (cumVal / maxCum) * (H * 0.85);
-                if (i === 0) sCtx.moveTo(x, y);
-                else sCtx.lineTo(x, y);
-            }}
-            sCtx.stroke();
-
-            sCtx.lineTo(W, H);
-            sCtx.lineTo(0, H);
-            sCtx.closePath();
-            sCtx.fill();
-
-            // Demarcation midpoint line (faint dashed horizontal line across canvas)
-            const sumCum = seg.cum_history.reduce((a, b) => a + b, 0);
-            const avgCum = sumCum / numPts;
-            const midY = H - (avgCum / maxCum) * (H * 0.85);
-
-            sCtx.strokeStyle = 'rgba(52, 152, 219, 0.35)';
-            sCtx.lineWidth = 1.0;
-            sCtx.setLineDash([4, 4]);
-            sCtx.beginPath();
-            sCtx.moveTo(0, midY);
-            sCtx.lineTo(W, midY);
-            sCtx.stroke();
-            sCtx.setLineDash([]);
-        }}
 
         // Waveform
         if (seg.waveform_min && seg.waveform_min.length > 0) {{
@@ -623,9 +624,206 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         drawSegmentBox('canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);
     }}
 
+    function drawHistoryBuffer() {{
+        if (!bufCanvas || !bufCtx) return;
+        const W = bufCanvas.width;
+        const H = bufCanvas.height;
+        bufCtx.clearRect(0, 0, W, H);
+
+        // Dark charcoal background matching raylib_renderer / MP4
+        bufCtx.fillStyle = '#121216';
+        bufCtx.fillRect(0, 0, W, H);
+
+        const curTimeMs = (audio.currentTime || 0) * 1000.0;
+
+        const padLeft = 65;
+        const padRight = 35;
+        const padTop = 30;
+        const padBottom = 35;
+
+        const graphW = W - padLeft - padRight;
+        const graphH = H - padTop - padBottom;
+
+        // Find active peaks within window [curTimeMs - pass2WinMs, curTimeMs]
+        const windowStartMs = curTimeMs - pass2WinMs;
+        const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
+
+        // Reconstruct accumulated buffer by summing snapshots of active peaks
+        const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : 200;
+        const accumulatedBuffer = new Float64Array(numBufPts);
+
+        activePeaks.forEach(p => {{
+            if (p.snapshot && p.snapshot.length === numBufPts) {{
+                for (let i = 0; i < numBufPts; i++) {{
+                    accumulatedBuffer[i] += p.snapshot[i];
+                }}
+            }}
+        }});
+
+        // Compute max and min energy for Y-axis autoscaling
+        let cutoffIdx = numBufPts;
+        if (numBufPts > 10) {{
+            const fraction99ms = 99.0 / pass2WinMs;
+            cutoffIdx = Math.max(1, Math.floor(numBufPts * (1.0 - fraction99ms)));
+        }}
+
+        let curMax = 0;
+        let curMin = Infinity;
+        for (let i = 0; i < cutoffIdx; i++) {{
+            if (accumulatedBuffer[i] > curMax) curMax = accumulatedBuffer[i];
+            if (accumulatedBuffer[i] < curMin) curMin = accumulatedBuffer[i];
+        }}
+        if (curMax <= 0) curMax = 1.0;
+        if (curMin === Infinity) curMin = 0;
+
+        const yMax = curMax * 1.1;
+
+        // Draw Outer Border
+        bufCtx.strokeStyle = '#282830';
+        bufCtx.lineWidth = 1;
+        bufCtx.strokeRect(padLeft, padTop, graphW, graphH);
+
+        // Draw Vertical Grid Lines & X-Axis Time Ticks (-pass2WinMs to 0ms)
+        const numTicks = 5;
+        bufCtx.fillStyle = '#8c8c96';
+        bufCtx.font = '11px Segoe UI, sans-serif';
+        bufCtx.textAlign = 'center';
+
+        for (let i = 0; i <= numTicks; i++) {{
+            const frac = i / numTicks;
+            const x = padLeft + frac * graphW;
+            const msVal = -pass2WinMs + frac * pass2WinMs;
+
+            bufCtx.strokeStyle = 'rgba(40, 40, 48, 0.8)';
+            bufCtx.beginPath();
+            bufCtx.moveTo(x, padTop);
+            bufCtx.lineTo(x, padTop + graphH);
+            bufCtx.stroke();
+
+            const lbl = (Math.abs(msVal) < 1e-3) ? '0ms' : `${{Math.round(msVal)}}ms`;
+            bufCtx.fillText(lbl, x, padTop + graphH + 18);
+        }}
+
+        // Draw Horizontal Grid Lines & Y-Axis Energy Ticks
+        bufCtx.textAlign = 'right';
+        for (let ratio of [0.0, 0.25, 0.5, 0.75, 1.0]) {{
+            const y = padTop + graphH - ratio * graphH;
+            bufCtx.strokeStyle = 'rgba(40, 40, 48, 0.8)';
+            bufCtx.beginPath();
+            bufCtx.moveTo(padLeft, y);
+            bufCtx.lineTo(padLeft + graphW, y);
+            bufCtx.stroke();
+
+            const valStr = (yMax * ratio).toFixed(2);
+            bufCtx.fillText(valStr, padLeft - 8, y + 4);
+        }}
+
+        // Horizontal Mean Demarcation Line (Mean of all samples in accumulated history buffer)
+        let bufSum = 0;
+        for (let i = 0; i < numBufPts; i++) {{
+            bufSum += accumulatedBuffer[i];
+        }}
+        const meanVal = numBufPts > 0 ? (bufSum / numBufPts) : 0;
+        const meanY = padTop + graphH - (meanVal / yMax) * graphH;
+
+        bufCtx.strokeStyle = '#808080';
+        bufCtx.lineWidth = 1.2;
+        bufCtx.setLineDash([5, 5]);
+        bufCtx.beginPath();
+        bufCtx.moveTo(padLeft, meanY);
+        bufCtx.lineTo(padLeft + graphW, meanY);
+        bufCtx.stroke();
+        bufCtx.setLineDash([]);
+
+
+        // Draw Accumulated History Buffer Curve (Yellow line + area fill)
+        bufCtx.strokeStyle = '#f1c40f';
+        bufCtx.lineWidth = 2.0;
+        bufCtx.fillStyle = 'rgba(241, 196, 15, 0.12)';
+
+        bufCtx.beginPath();
+        bufCtx.moveTo(padLeft, padTop + graphH);
+        for (let i = 0; i < numBufPts; i++) {{
+            const frac = i / (numBufPts - 1);
+            const x = padLeft + frac * graphW;
+            const val = accumulatedBuffer[i];
+            const y = padTop + graphH - (val / yMax) * graphH;
+            if (i === 0) bufCtx.moveTo(x, y);
+            else bufCtx.lineTo(x, y);
+        }}
+        bufCtx.stroke();
+
+        bufCtx.lineTo(padLeft + graphW, padTop + graphH);
+        bufCtx.lineTo(padLeft, padTop + graphH);
+        bufCtx.closePath();
+        bufCtx.fill();
+
+        // Draw Qualifiers and Tolerance Bands for active peaks
+        if (activePeaks.length > 0) {{
+            const latestPeak = activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b));
+            if (latestPeak && latestPeak.qualifiers) {{
+                latestPeak.qualifiers.forEach(q => {{
+                    const qMs = q.ms;
+                    const qVal = q.val;
+                    const qOrigMs = (q.orig_ms !== undefined) ? q.orig_ms : qMs;
+
+                    const qx = padLeft + ((qMs + pass2WinMs) / pass2WinMs) * graphW;
+                    const qOrigX = padLeft + ((qOrigMs + pass2WinMs) / pass2WinMs) * graphW;
+                    const tolW = (toleranceMs / pass2WinMs) * graphW;
+
+                    const scoreColor = getQualifierColor(qVal, 0.85);
+                    const spanColor = getQualifierColor(qVal, 0.18);
+
+                    // Tolerance Shaded Bar
+                    const spanX1 = Math.max(padLeft, qOrigX - tolW);
+                    const spanX2 = Math.min(padLeft + graphW, qOrigX + tolW);
+                    if (spanX2 > spanX1) {{
+                        bufCtx.fillStyle = spanColor;
+                        bufCtx.fillRect(spanX1, padTop, spanX2 - spanX1, graphH);
+                    }}
+
+                    // Qualifier Vertical Line
+                    if (qx >= padLeft && qx <= padLeft + graphW) {{
+                        bufCtx.strokeStyle = scoreColor;
+                        bufCtx.lineWidth = 2.0;
+                        bufCtx.setLineDash([3, 3]);
+                        bufCtx.beginPath();
+                        bufCtx.moveTo(qx, padTop);
+                        bufCtx.lineTo(qx, padTop + graphH);
+                        bufCtx.stroke();
+                        bufCtx.setLineDash([]);
+
+                        // Score label height relative to mean demarcation line using fixed [-1.0, 1.0] range
+                        let scoreY = meanY;
+                        if (qVal > 0) {{
+                            const norm = Math.min(1.0, qVal / 1.0);
+                            scoreY = meanY - norm * (meanY - padTop);
+                        }} else if (qVal < 0) {{
+                            const norm = Math.min(1.0, Math.abs(qVal) / 1.0);
+                            scoreY = meanY + norm * (padTop + graphH - meanY);
+                        }}
+
+                        bufCtx.fillStyle = scoreColor;
+                        bufCtx.font = 'bold 11px Segoe UI, sans-serif';
+                        bufCtx.textAlign = (qx > padLeft + graphW - 50) ? 'right' : 'left';
+                        const labelX = (qx > padLeft + graphW - 50) ? qx - 5 : qx + 5;
+                        bufCtx.fillText(`${{qVal >= 0 ? '+' : ''}}${{qVal.toFixed(2)}}`, labelX, Math.max(padTop + 12, Math.min(padTop + graphH - 4, scoreY)));
+                    }}
+                }});
+            }}
+        }}
+
+        // Title
+        bufCtx.fillStyle = '#ffffff';
+        bufCtx.font = 'bold 13px Segoe UI, sans-serif';
+        bufCtx.textAlign = 'left';
+        bufCtx.fillText(`Accumulated ${{Math.round(pass2WinMs)}}ms Historical Buffer`, padLeft, padTop - 10);
+    }}
+
     function renderAll() {{
         drawWaveformMap();
         updateSegmentInspector();
+        drawHistoryBuffer();
     }}
 
     renderAll();
@@ -949,10 +1147,10 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
     best_bar_length = longest_hp_ms
 
-    # Second pass: Find actual peaks and score them using window_ms = segment length found in Pass 1
+    # Second pass: Find actual peaks and score them using window_ms = segment length * 2 found in Pass 1
     if ct is not None:
         try:
-            pass2_win_ms = int(round(best_bar_length))
+            pass2_win_ms = int(round(best_bar_length * 2))
             analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=pass2_win_ms)
         except Exception as e:
             print(f"Error running Pass 2 cumulative_transience analysis: {e}")
@@ -1013,10 +1211,12 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
                 best_bar_length=best_bar_length,
                 best_patterns=best_patterns,
                 segments_transience_data=segments_transience_data,
-                open_browser=gui_mode
+                open_browser=gui_mode,
+                pass2_res=analysis_res
             )
         except Exception as e:
             print(f"Could not generate interactive HTML report: {e}")
+            traceback.print_exc()
 
     if gui_mode and best_patterns:
         try:

@@ -350,6 +350,12 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
     cdef cnp.ndarray[int, ndim=1] p_count
     cdef PeakResult pr
 
+    cdef int win_len = window_ms + 1
+    cdef int target_pts = 200 if win_len > 200 else win_len
+    cdef double step_idx = <double>(win_len - 1) / <double>(target_pts - 1) if target_pts > 1 else 1.0
+    cdef int idx_s = 0
+    cdef int idx_pt = 0
+
     for i in range(4):
         env = np.zeros(num_frames, dtype=np.float32)
         memcpy(env.data, res.bands[i].envelope, num_frames * sizeof(float))
@@ -400,8 +406,15 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
         rolling_p_counts.append(p_count)
 
         band_peaks = []
+
         for k in range(res.bands[i].num_peaks):
             pr = res.bands[i].peaks[k]
+            snap_list = []
+            for idx_pt in range(target_pts):
+                idx_s = <int>round(idx_pt * step_idx)
+                if idx_s >= win_len: idx_s = win_len - 1
+                snap_list.append(pr.snapshot[idx_s])
+
             peak_data = {
                 'p_idx': pr.p_idx,
                 'band_idx': pr.band_idx,
@@ -413,7 +426,8 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
-                'qualifiers': []
+                'qualifiers': [],
+                'snapshot': snap_list
             }
             for j in range(pr.num_qualifiers):
                 peak_data['qualifiers'].append({
