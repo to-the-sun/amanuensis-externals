@@ -364,6 +364,23 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
     }}
 
+    function getQualifierColor(val, alpha = 1.0) {{
+        if (val === 0) return `rgba(128, 128, 128, ${{alpha}})`;
+        let r = 128, g = 128, b = 128;
+        if (val < 0) {{
+            let t = Math.max(0.0, Math.min(1.0, val / -1.0));
+            r = Math.round(128 + (255 - 128) * t);
+            g = Math.round(128 + (0 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }} else {{
+            let t = Math.max(0.0, Math.min(1.0, val / 1.0));
+            r = Math.round(128 + (0 - 128) * t);
+            g = Math.round(128 + (255 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }}
+        return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
+    }}
+
     function drawWaveformMap() {{
         const W = canvas.width;
         const H = canvas.height;
@@ -754,8 +771,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                     const qOrigX = padLeft + ((qOrigMs + pass2WinMs) / pass2WinMs) * graphW;
                     const tolW = (toleranceMs / pass2WinMs) * graphW;
 
-                    const scoreColor = getScoreColor(qVal, 0.85);
-                    const spanColor = getScoreColor(qVal, 0.18);
+                    const scoreColor = getQualifierColor(qVal, 0.85);
+                    const spanColor = getQualifierColor(qVal, 0.18);
 
                     // Tolerance Shaded Bar
                     const spanX1 = Math.max(padLeft, qOrigX - tolW);
@@ -776,13 +793,13 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                         bufCtx.stroke();
                         bufCtx.setLineDash([]);
 
-                        // Score label height relative to mean demarcation line
+                        // Score label height relative to mean demarcation line using fixed [-1.0, 1.0] range
                         let scoreY = meanY;
                         if (qVal > 0) {{
-                            const norm = Math.min(1.0, qVal / (globalMaxPosScore || 1.0));
+                            const norm = Math.min(1.0, qVal / 1.0);
                             scoreY = meanY - norm * (meanY - padTop);
                         }} else if (qVal < 0) {{
-                            const norm = Math.min(1.0, Math.abs(qVal) / Math.abs(globalMinNegScore || -1.0));
+                            const norm = Math.min(1.0, Math.abs(qVal) / 1.0);
                             scoreY = meanY + norm * (padTop + graphH - meanY);
                         }}
 
