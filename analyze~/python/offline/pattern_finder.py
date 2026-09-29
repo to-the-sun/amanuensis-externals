@@ -704,23 +704,28 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             bufCtx.fillText(valStr, padLeft - 8, y + 4);
         }}
 
-        // Horizontal Midpoint Demarcation Line
-        const midpoint = (curMin + curMax) / 2.0;
-        const midY = padTop + graphH - (midpoint / yMax) * graphH;
+        // Horizontal Mean Demarcation Line (Mean of all samples in accumulated history buffer)
+        let bufSum = 0;
+        for (let i = 0; i < numBufPts; i++) {{
+            bufSum += accumulatedBuffer[i];
+        }}
+        const meanVal = numBufPts > 0 ? (bufSum / numBufPts) : 0;
+        const meanY = padTop + graphH - (meanVal / yMax) * graphH;
+
         bufCtx.strokeStyle = '#808080';
         bufCtx.lineWidth = 1.2;
         bufCtx.setLineDash([5, 5]);
         bufCtx.beginPath();
-        bufCtx.moveTo(padLeft, midY);
-        bufCtx.lineTo(padLeft + graphW, midY);
+        bufCtx.moveTo(padLeft, meanY);
+        bufCtx.lineTo(padLeft + graphW, meanY);
         bufCtx.stroke();
         bufCtx.setLineDash([]);
 
-        // Label Midpoint Demarcation Line
+        // Label Mean Demarcation Line
         bufCtx.fillStyle = '#808080';
         bufCtx.font = '10px Segoe UI, sans-serif';
         bufCtx.textAlign = 'left';
-        bufCtx.fillText(`Midpoint: ${{midpoint.toFixed(2)}}`, padLeft + 8, midY - 4);
+        bufCtx.fillText(`Mean: ${{meanVal.toFixed(2)}}`, padLeft + 8, meanY - 4);
 
         // Draw Accumulated History Buffer Curve (Yellow line + area fill)
         bufCtx.strokeStyle = '#f1c40f';
@@ -779,11 +784,15 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                         bufCtx.stroke();
                         bufCtx.setLineDash([]);
 
-                        // Score label at score height
-                        let normScore = 0;
-                        if (qVal > 0) normScore = Math.min(1.0, qVal / (globalMaxPosScore || 1.0));
-                        else if (qVal < 0) normScore = -Math.min(1.0, Math.abs(qVal) / Math.abs(globalMinNegScore || -1.0));
-                        const scoreY = padTop + (graphH / 2) - normScore * (graphH / 2 * 0.8);
+                        // Score label height relative to mean demarcation line
+                        let scoreY = meanY;
+                        if (qVal > 0) {{
+                            const norm = Math.min(1.0, qVal / (globalMaxPosScore || 1.0));
+                            scoreY = meanY - norm * (meanY - padTop);
+                        }} else if (qVal < 0) {{
+                            const norm = Math.min(1.0, Math.abs(qVal) / Math.abs(globalMinNegScore || -1.0));
+                            scoreY = meanY + norm * (padTop + graphH - meanY);
+                        }}
 
                         bufCtx.fillStyle = scoreColor;
                         bufCtx.font = 'bold 11px Segoe UI, sans-serif';
