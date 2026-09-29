@@ -345,24 +345,21 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22'];
     const bandColors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f'];
 
-    function getScoreColor(score, alpha = 0.55) {{
-        let norm = 0;
-        if (score > 0) {{
-            norm = Math.min(1.0, score / (globalMaxPosScore || 1.0));
-        }} else if (score < 0) {{
-            norm = -Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0));
-        }}
-
+    function getScoreColor(score, alpha = 1.0) {{
+        if (score === 0) return `rgba(128, 128, 128, ${{alpha}})`;
         let r = 128, g = 128, b = 128;
-        if (norm > 0) {{
-            r = Math.round(128 + (46 - 128) * norm);
-            g = Math.round(128 + (204 - 128) * norm);
-            b = Math.round(128 + (113 - 128) * norm);
-        }} else if (norm < 0) {{
-            const absNorm = Math.abs(norm);
-            r = Math.round(128 + (231 - 128) * absNorm);
-            g = Math.round(128 + (76 - 128) * absNorm);
-            b = Math.round(128 + (60 - 128) * absNorm);
+        if (score < 0) {{
+            let t = globalMinNegScore < 0 ? score / globalMinNegScore : 0.0;
+            t = Math.max(0.0, Math.min(1.0, t));
+            r = Math.round(128 + (255 - 128) * t);
+            g = Math.round(128 + (0 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
+        }} else {{
+            let t = globalMaxPosScore > 0 ? score / globalMaxPosScore : 0.0;
+            t = Math.max(0.0, Math.min(1.0, t));
+            r = Math.round(128 + (0 - 128) * t);
+            g = Math.round(128 + (255 - 128) * t);
+            b = Math.round(128 + (0 - 128) * t);
         }}
         return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
     }}
@@ -721,11 +718,6 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.stroke();
         bufCtx.setLineDash([]);
 
-        // Label Mean Demarcation Line
-        bufCtx.fillStyle = '#808080';
-        bufCtx.font = '10px Segoe UI, sans-serif';
-        bufCtx.textAlign = 'left';
-        bufCtx.fillText(`Mean: ${{meanVal.toFixed(2)}}`, padLeft + 8, meanY - 4);
 
         // Draw Accumulated History Buffer Curve (Yellow line + area fill)
         bufCtx.strokeStyle = '#f1c40f';
