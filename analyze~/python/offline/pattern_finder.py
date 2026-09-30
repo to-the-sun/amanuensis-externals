@@ -545,15 +545,15 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         const segDurMs = seg.end_ms - seg.start_ms;
 
-        // 1. Peak Marker Lines rendered in the back behind everything else (fully opaque, no dots)
+        // 1. Peak Marker Lines rendered in the back behind everything else (partially transparent)
         if (seg.peaks && seg.peaks.length > 0) {{
             seg.peaks.forEach((p) => {{
                 const relMs = p.time_ms - seg.start_ms;
                 const x = (relMs / segDurMs) * W;
                 const score = p.total_score;
-                const scoreColor = getScoreColor(score, 1.0);
+                const lineColor = getScoreColor(score, 0.55);
 
-                sCtx.strokeStyle = scoreColor;
+                sCtx.strokeStyle = lineColor;
                 sCtx.lineWidth = 1.8;
                 sCtx.setLineDash([4, 4]);
                 sCtx.beginPath();
