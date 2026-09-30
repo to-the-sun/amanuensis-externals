@@ -1,7 +1,17 @@
 import numpy as np
 
 
-def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_length_ms, onset_envs=None, tolerance_ms=9.0):
+def get_default_tolerance():
+    try:
+        import ct_utils
+        ct_utils.ensure_extension_built()
+        import cumulative_transience as ct
+        return float(ct.TransientAnalyzer().tolerance)
+    except Exception:
+        return 9.0
+
+
+def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_length_ms, onset_envs=None, tolerance_ms=None):
     """
     Computes segment-based cumulative transience ratings for offline audio analysis.
 
@@ -20,6 +30,9 @@ def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_le
           'peaks': list of peak dicts with streaming 'total_score' and 'qualifiers'
           'cum_history': list of float (downsampled segment envelope slice for display)
     """
+    if tolerance_ms is None:
+        tolerance_ms = get_default_tolerance()
+
     if bar_length_ms <= 0:
         bar_length_ms = 1000.0
 

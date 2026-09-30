@@ -28,6 +28,16 @@ def ensure_ct_initialized():
         return None
 
 
+def get_default_tolerance():
+    try:
+        ct = ensure_ct_initialized()
+        if ct is not None:
+            return float(ct.TransientAnalyzer().tolerance)
+    except Exception:
+        pass
+    return 9.0
+
+
 def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True, pass2_res=None):
     """
     Exports an interactive HTML report containing:
@@ -91,7 +101,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         return obj
 
     pass2_win_ms = int(round(best_bar_length * 2))
-    tolerance_ms = float(pass2_res.get('tolerance', 19.0)) if (pass2_res and isinstance(pass2_res, dict)) else 19.0
+    tolerance_ms = float(pass2_res.get('tolerance', get_default_tolerance())) if (pass2_res and isinstance(pass2_res, dict)) else get_default_tolerance()
 
     pass2_peaks_flat = []
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
