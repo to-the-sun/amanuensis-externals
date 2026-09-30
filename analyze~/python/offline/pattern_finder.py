@@ -657,7 +657,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
         // Reconstruct accumulated buffer by summing snapshots of active peaks shifted by relative time offset
-        const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : 200;
+        const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : (Math.round(pass2WinMs) + 1);
         const accumulatedBuffer = new Float64Array(numBufPts);
 
         activePeaks.forEach(p => {{
