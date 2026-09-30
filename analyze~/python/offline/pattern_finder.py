@@ -316,10 +316,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     <div class="hint">💡 Click anywhere on any of the segment graphs above to jump to that exact point in the song and play audio.</div>
 
     <div class="section-title">3. Real-Time Accumulated History Buffer</div>
-    <div class="canvas-container" style="cursor: default; background: #ffffff;">
+    <div class="canvas-container" style="cursor: crosshair; background: #ffffff;">
         <canvas id="historyBufferCanvas" width="1150" height="220"></canvas>
     </div>
-    <div class="hint">💡 Graph updates in real time during audio playback, displaying accumulated energy, score heights, qualifiers, tolerance band, and midpoint demarcation line.</div>
+    <div class="hint">💡 Select a section to zoom in on. Right-click anywhere on the graph to zoom back out to the full duration. Graph updates in real time during audio playback.</div>
 </div>
 
 <script>
@@ -341,6 +341,12 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const audio = document.getElementById('audioPlayer');
     const bufCanvas = document.getElementById('historyBufferCanvas');
     const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;
+
+    let zoomStartMs = -pass2WinMs;
+    let zoomEndMs = 0.0;
+    let isDraggingBuf = false;
+    let dragStartX = 0;
+    let dragCurrentX = 0;
 
     const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)',
                     'rgba(241, 196, 15, 0.35)', 'rgba(26, 188, 156, 0.35)', 'rgba(230, 126, 34, 0.35)'];
@@ -650,30 +656,37 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Reconstruct accumulated buffer by summing snapshots of active peaks
+        // Reconstruct accumulated buffer by summing snapshots of active peaks shifted by relative time offset
         const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : 200;
         const accumulatedBuffer = new Float64Array(numBufPts);
 
         activePeaks.forEach(p => {{
             if (p.snapshot && p.snapshot.length === numBufPts) {{
+                const shift = Math.round(((p.time_ms - curTimeMs) / pass2WinMs) * (numBufPts - 1));
                 for (let i = 0; i < numBufPts; i++) {{
-                    accumulatedBuffer[i] += p.snapshot[i];
+                    const targetIdx = i + shift;
+                    if (targetIdx >= 0 && targetIdx < numBufPts) {{
+                        accumulatedBuffer[targetIdx] += p.snapshot[i];
+                    }}
                 }}
             }}
         }});
 
-        // Compute max and min energy for Y-axis autoscaling
-        let cutoffIdx = numBufPts;
-        if (numBufPts > 10) {{
-            const fraction99ms = 99.0 / pass2WinMs;
-            cutoffIdx = Math.max(1, Math.floor(numBufPts * (1.0 - fraction99ms)));
-        }}
-
+        // Compute max and min energy for Y-axis autoscaling within visible zoom window
         let curMax = 0;
         let curMin = Infinity;
-        for (let i = 0; i < cutoffIdx; i++) {{
-            if (accumulatedBuffer[i] > curMax) curMax = accumulatedBuffer[i];
-            if (accumulatedBuffer[i] < curMin) curMin = accumulatedBuffer[i];
+        let visibleSum = 0;
+        let visibleCount = 0;
+
+        for (let i = 0; i < numBufPts; i++) {{
+            const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
+            if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs) {{
+                const val = accumulatedBuffer[i];
+                if (val > curMax) curMax = val;
+                if (val < curMin) curMin = val;
+                visibleSum += val;
+                visibleCount++;
+            }}
         }}
         if (curMax <= 0) curMax = 1.0;
         if (curMin === Infinity) curMin = 0;
@@ -685,16 +698,18 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.lineWidth = 1;
         bufCtx.strokeRect(padLeft, padTop, graphW, graphH);
 
-        // Draw Vertical Grid Lines & X-Axis Time Ticks (-pass2WinMs to 0ms)
+        // Draw Vertical Grid Lines & X-Axis Time Ticks
         const numTicks = 5;
         bufCtx.fillStyle = '#7f8c8d';
         bufCtx.font = '11px Segoe UI, sans-serif';
         bufCtx.textAlign = 'center';
 
+        const zoomSpan = zoomEndMs - zoomStartMs;
+
         for (let i = 0; i <= numTicks; i++) {{
             const frac = i / numTicks;
             const x = padLeft + frac * graphW;
-            const msVal = -pass2WinMs + frac * pass2WinMs;
+            const msVal = zoomStartMs + frac * zoomSpan;
 
             bufCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)';
             bufCtx.beginPath();
@@ -720,12 +735,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             bufCtx.fillText(valStr, padLeft - 8, y + 4);
         }}
 
-        // Horizontal Mean Demarcation Line (Mean of all samples in accumulated history buffer)
-        let bufSum = 0;
-        for (let i = 0; i < numBufPts; i++) {{
-            bufSum += accumulatedBuffer[i];
-        }}
-        const meanVal = numBufPts > 0 ? (bufSum / numBufPts) : 0;
+        // Horizontal Mean Demarcation Line (Mean of samples in active buffer)
+        const meanVal = visibleCount > 0 ? (visibleSum / visibleCount) : 0;
         const meanY = padTop + graphH - (meanVal / yMax) * graphH;
 
         bufCtx.strokeStyle = '#7f8c8d';
@@ -737,6 +748,11 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.stroke();
         bufCtx.setLineDash([]);
 
+        // Clip plotting to inner graph rectangle
+        bufCtx.save();
+        bufCtx.beginPath();
+        bufCtx.rect(padLeft, padTop, graphW, graphH);
+        bufCtx.clip();
 
         // Draw Accumulated History Buffer Curve (Primary blue line + area fill)
         bufCtx.strokeStyle = '#3498db';
@@ -744,19 +760,29 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.fillStyle = 'rgba(52, 152, 219, 0.15)';
 
         bufCtx.beginPath();
-        bufCtx.moveTo(padLeft, padTop + graphH);
+        let firstPt = true;
         for (let i = 0; i < numBufPts; i++) {{
-            const frac = i / (numBufPts - 1);
-            const x = padLeft + frac * graphW;
+            const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
+            const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
             const y = padTop + graphH - (val / yMax) * graphH;
-            if (i === 0) bufCtx.moveTo(x, y);
-            else bufCtx.lineTo(x, y);
+            if (firstPt) {{
+                bufCtx.moveTo(x, y);
+                firstPt = false;
+            }} else {{
+                bufCtx.lineTo(x, y);
+            }}
         }}
         bufCtx.stroke();
 
-        bufCtx.lineTo(padLeft + graphW, padTop + graphH);
-        bufCtx.lineTo(padLeft, padTop + graphH);
+        // Fill area under curve
+        const lastSampleMs = -pass2WinMs + pass2WinMs;
+        const endX = padLeft + ((lastSampleMs - zoomStartMs) / zoomSpan) * graphW;
+        const firstSampleMs = -pass2WinMs;
+        const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
+
+        bufCtx.lineTo(endX, padTop + graphH);
+        bufCtx.lineTo(startX, padTop + graphH);
         bufCtx.closePath();
         bufCtx.fill();
 
@@ -764,14 +790,15 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         if (activePeaks.length > 0) {{
             const latestPeak = activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b));
             if (latestPeak && latestPeak.qualifiers) {{
+                const peakRelMs = latestPeak.time_ms - curTimeMs;
                 latestPeak.qualifiers.forEach(q => {{
-                    const qMs = q.ms;
+                    const qMs = peakRelMs + q.ms;
                     const qVal = q.val;
-                    const qOrigMs = (q.orig_ms !== undefined) ? q.orig_ms : qMs;
+                    const qOrigMs = peakRelMs + ((q.orig_ms !== undefined) ? q.orig_ms : q.ms);
 
-                    const qx = padLeft + ((qMs + pass2WinMs) / pass2WinMs) * graphW;
-                    const qOrigX = padLeft + ((qOrigMs + pass2WinMs) / pass2WinMs) * graphW;
-                    const tolW = (toleranceMs / pass2WinMs) * graphW;
+                    const qx = padLeft + ((qMs - zoomStartMs) / zoomSpan) * graphW;
+                    const qOrigX = padLeft + ((qOrigMs - zoomStartMs) / zoomSpan) * graphW;
+                    const tolW = (toleranceMs / zoomSpan) * graphW;
 
                     const scoreColor = getQualifierColor(qVal, 0.85);
                     const spanColor = getQualifierColor(qVal, 0.18);
@@ -815,11 +842,109 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             }}
         }}
 
+        bufCtx.restore(); // Remove graph clip rect
+
         // Title
         bufCtx.fillStyle = '#2c3e50';
         bufCtx.font = 'bold 13px Segoe UI, sans-serif';
         bufCtx.textAlign = 'left';
-        bufCtx.fillText(`Accumulated ${{Math.round(pass2WinMs)}}ms Historical Buffer`, padLeft, padTop - 10);
+        if (Math.abs(zoomStartMs - (-pass2WinMs)) > 1e-2 || Math.abs(zoomEndMs - 0.0) > 1e-2) {{
+            bufCtx.fillText(`Accumulated Historical Buffer [Zoomed: ${{Math.round(zoomStartMs)}}ms to ${{Math.round(zoomEndMs)}}ms]`, padLeft, padTop - 10);
+        }} else {{
+            bufCtx.fillText(`Accumulated ${{Math.round(pass2WinMs)}}ms Historical Buffer`, padLeft, padTop - 10);
+        }}
+
+        // Selection Box Overlay while dragging
+        if (isDraggingBuf) {{
+            const selX = Math.min(dragStartX, dragCurrentX);
+            const selW = Math.abs(dragCurrentX - dragStartX);
+
+            bufCtx.fillStyle = 'rgba(52, 152, 219, 0.25)';
+            bufCtx.fillRect(selX, padTop, selW, graphH);
+
+            bufCtx.strokeStyle = '#2980b9';
+            bufCtx.lineWidth = 1.5;
+            bufCtx.setLineDash([3, 3]);
+            bufCtx.strokeRect(selX, padTop, selW, graphH);
+            bufCtx.setLineDash([]);
+        }}
+    }}
+
+    if (bufCanvas) {{
+        function getCanvasMouseX(e) {{
+            const rect = bufCanvas.getBoundingClientRect();
+            if (!rect.width) return 0;
+            const scaleX = bufCanvas.width / rect.width;
+            return (e.clientX - rect.left) * scaleX;
+        }}
+
+        bufCanvas.addEventListener('contextmenu', (e) => {{
+            e.preventDefault();
+            zoomStartMs = -pass2WinMs;
+            zoomEndMs = 0.0;
+            isDraggingBuf = false;
+            drawHistoryBuffer();
+        }});
+
+        bufCanvas.addEventListener('mousedown', (e) => {{
+            if (e.button !== 0) return;
+            const clickX = getCanvasMouseX(e);
+            const padLeft = 65;
+            const padRight = 35;
+            const graphW = bufCanvas.width - padLeft - padRight;
+
+            if (clickX >= padLeft && clickX <= padLeft + graphW) {{
+                isDraggingBuf = true;
+                dragStartX = clickX;
+                dragCurrentX = clickX;
+            }}
+        }});
+
+        bufCanvas.addEventListener('mousemove', (e) => {{
+            if (!isDraggingBuf) return;
+            const mouseX = getCanvasMouseX(e);
+            const padLeft = 65;
+            const padRight = 35;
+            const graphW = bufCanvas.width - padLeft - padRight;
+
+            dragCurrentX = Math.max(padLeft, Math.min(padLeft + graphW, mouseX));
+            drawHistoryBuffer();
+        }});
+
+        bufCanvas.addEventListener('mouseup', (e) => {{
+            if (!isDraggingBuf || e.button !== 0) return;
+            isDraggingBuf = false;
+
+            const padLeft = 65;
+            const padRight = 35;
+            const graphW = bufCanvas.width - padLeft - padRight;
+
+            const dx = Math.abs(dragCurrentX - dragStartX);
+            if (dx > 5) {{
+                const x1 = Math.min(dragStartX, dragCurrentX);
+                const x2 = Math.max(dragStartX, dragCurrentX);
+
+                const frac1 = (x1 - padLeft) / graphW;
+                const frac2 = (x2 - padLeft) / graphW;
+
+                const currentSpan = zoomEndMs - zoomStartMs;
+                const newStartMs = zoomStartMs + frac1 * currentSpan;
+                const newEndMs = zoomStartMs + frac2 * currentSpan;
+
+                if (newEndMs - newStartMs >= 10.0) {{
+                    zoomStartMs = newStartMs;
+                    zoomEndMs = newEndMs;
+                }}
+            }}
+            drawHistoryBuffer();
+        }});
+
+        bufCanvas.addEventListener('mouseleave', () => {{
+            if (isDraggingBuf) {{
+                isDraggingBuf = false;
+                drawHistoryBuffer();
+            }}
+        }});
     }}
 
     function renderAll() {{
