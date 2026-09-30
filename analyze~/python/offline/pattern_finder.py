@@ -91,7 +91,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         return obj
 
     pass2_win_ms = int(round(best_bar_length * 2))
-    tolerance_ms = float(pass2_res.get('tolerance', 19.0)) if (pass2_res and isinstance(pass2_res, dict)) else 19.0
+    tolerance_ms = float(pass2_res.get('tolerance', 9.0)) if (pass2_res and isinstance(pass2_res, dict)) else 9.0
 
     pass2_peaks_flat = []
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
