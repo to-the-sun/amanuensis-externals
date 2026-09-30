@@ -315,7 +315,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     </div>
     <div class="hint">💡 Click anywhere on any of the segment graphs above to jump to that exact point in the song and play audio.</div>
 
-    <div class="section-title">3. Real-Time Accumulated History Buffer</div>
+    <div class="section-title">3. Accumulated History Buffer</div>
     <div class="canvas-container" style="cursor: crosshair; background: #ffffff;">
         <canvas id="historyBufferCanvas" width="1150" height="220"></canvas>
     </div>
@@ -387,6 +387,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             b = Math.round(128 + (0 - 128) * t);
         }}
         return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
+    }}
+
+    function getLatestActivePeak() {{
+        const curTimeMs = (audio.currentTime || 0) * 1000.0;
+        const windowStartMs = curTimeMs - pass2WinMs;
+        const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
+        if (activePeaks.length > 0) {{
+            return activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b));
+        }}
+        return null;
     }}
 
     function drawWaveformMap() {{
@@ -533,7 +543,28 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         sCtx.fillStyle = '#ffffff';
         sCtx.fillRect(0, 0, W, H);
 
-        // Center Axis
+        const segDurMs = seg.end_ms - seg.start_ms;
+
+        // 1. Peak Marker Lines rendered in the back behind everything else (partially transparent)
+        if (seg.peaks && seg.peaks.length > 0) {{
+            seg.peaks.forEach((p) => {{
+                const relMs = p.time_ms - seg.start_ms;
+                const x = (relMs / segDurMs) * W;
+                const score = p.total_score;
+                const lineColor = getScoreColor(score, 0.55);
+
+                sCtx.strokeStyle = lineColor;
+                sCtx.lineWidth = 1.8;
+                sCtx.setLineDash([4, 4]);
+                sCtx.beginPath();
+                sCtx.moveTo(x, 0);
+                sCtx.lineTo(x, H);
+                sCtx.stroke();
+                sCtx.setLineDash([]);
+            }});
+        }}
+
+        // 2. Center Axis
         const centerY = H / 2;
         sCtx.strokeStyle = 'rgba(189, 195, 199, 0.4)';
         sCtx.beginPath();
@@ -541,8 +572,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         sCtx.lineTo(W, centerY);
         sCtx.stroke();
 
-
-        // Waveform
+        // 3. Waveform
         if (seg.waveform_min && seg.waveform_min.length > 0) {{
             const numPts = seg.waveform_min.length;
             sCtx.lineWidth = 1.0;
@@ -558,25 +588,28 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             sCtx.stroke();
         }}
 
-        const segDurMs = seg.end_ms - seg.start_ms;
+        // 4. Playhead Cursor inside current playing segment
+        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {{
+            const relMs = currentAudioTimeMs - seg.start_ms;
+            const cursorX = (relMs / segDurMs) * W;
 
-        // Draw Peaks, Peak Marker Lines, Peak Dots, and Peak Scores
+            sCtx.strokeStyle = '#e67e22';
+            sCtx.lineWidth = 2.5;
+            sCtx.beginPath();
+            sCtx.moveTo(cursorX, 0);
+            sCtx.lineTo(cursorX, H);
+            sCtx.stroke();
+        }}
+
+        // 5. Peak Score Values rendered in front of everything else (no "Score" word, no dot, bold if currently active)
+        const latestPeak = getLatestActivePeak();
+
         if (seg.peaks && seg.peaks.length > 0) {{
-            seg.peaks.forEach((p, pIdx) => {{
+            seg.peaks.forEach((p) => {{
                 const relMs = p.time_ms - seg.start_ms;
                 const x = (relMs / segDurMs) * W;
                 const score = p.total_score;
-                const scoreColor = getScoreColor(score, 0.55);
-
-                // Peak line (dashed and semi-transparent)
-                sCtx.strokeStyle = scoreColor;
-                sCtx.lineWidth = 1.8;
-                sCtx.setLineDash([4, 4]);
-                sCtx.beginPath();
-                sCtx.moveTo(x, 0);
-                sCtx.lineTo(x, H);
-                sCtx.stroke();
-                sCtx.setLineDash([]);
+                const scoreColor = getScoreColor(score, 1.0);
 
                 // Compute Y height based on scaled score
                 let scoreY = centerY;
@@ -588,34 +621,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                     scoreY = centerY + ratio * ((H - centerY) * 0.85);
                 }}
 
-                // Peak Dot at Score Height
-                sCtx.fillStyle = scoreColor;
-                sCtx.beginPath();
-                sCtx.arc(x, scoreY, 4.5, 0, 2 * Math.PI);
-                sCtx.fill();
+                const isLatest = latestPeak && Math.abs(p.time_ms - latestPeak.time_ms) < 1e-3 && (p.band_idx === undefined || p.band_idx === latestPeak.band_idx);
 
-                // Peak Score Label at Score Height
-                const scoreStr = `Score: ${{score.toFixed(3)}}`;
-                sCtx.font = 'bold 10px Segoe UI, sans-serif';
+                const scoreStr = score.toFixed(3);
+                sCtx.font = isLatest ? 'bold 11px Segoe UI, sans-serif' : '10px Segoe UI, sans-serif';
                 sCtx.fillStyle = scoreColor;
                 sCtx.textAlign = (x > W - 70) ? 'right' : 'left';
                 const labelX = (x > W - 70) ? x - 6 : x + 6;
                 const labelY = Math.max(12, Math.min(H - 6, scoreY + 3));
                 sCtx.fillText(scoreStr, labelX, labelY);
             }});
-        }}
-
-        // Draw Playhead Cursor inside current playing segment
-        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {{
-            const relMs = currentAudioTimeMs - seg.start_ms;
-            const cursorX = (relMs / segDurMs) * W;
-
-            sCtx.strokeStyle = '#e67e22';
-            sCtx.lineWidth = 2.5;
-            sCtx.beginPath();
-            sCtx.moveTo(cursorX, 0);
-            sCtx.lineTo(cursorX, H);
-            sCtx.stroke();
         }}
     }}
 
@@ -849,6 +864,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             bufCtx.fillText(`Accumulated Historical Buffer [Zoomed: ${{Math.round(zoomStartMs)}}ms to ${{Math.round(zoomEndMs)}}ms]`, padLeft, padTop - 10);
         }} else {{
             bufCtx.fillText(`Accumulated ${{Math.round(pass2WinMs)}}ms Historical Buffer`, padLeft, padTop - 10);
+        }}
+
+        // Resulting score of all qualifiers (latest active peak score) in top right-hand corner
+        const latestActivePeak = getLatestActivePeak();
+        if (latestActivePeak) {{
+            const scoreVal = latestActivePeak.total_score;
+            bufCtx.fillStyle = getScoreColor(scoreVal, 1.0);
+            bufCtx.font = 'bold 13px Segoe UI, sans-serif';
+            bufCtx.textAlign = 'right';
+            bufCtx.fillText(scoreVal.toFixed(3), padLeft + graphW, padTop - 10);
         }}
 
         // Selection Box Overlay while dragging
