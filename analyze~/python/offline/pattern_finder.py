@@ -656,18 +656,14 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Reconstruct accumulated buffer by summing snapshots of active peaks shifted by relative time offset
+        // Reconstruct accumulated buffer by summing snapshots of active peaks
         const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : (Math.round(pass2WinMs) + 1);
         const accumulatedBuffer = new Float64Array(numBufPts);
 
         activePeaks.forEach(p => {{
             if (p.snapshot && p.snapshot.length === numBufPts) {{
-                const shift = Math.round(((p.time_ms - curTimeMs) / pass2WinMs) * (numBufPts - 1));
                 for (let i = 0; i < numBufPts; i++) {{
-                    const targetIdx = i + shift;
-                    if (targetIdx >= 0 && targetIdx < numBufPts) {{
-                        accumulatedBuffer[targetIdx] += p.snapshot[i];
-                    }}
+                    accumulatedBuffer[i] += p.snapshot[i];
                 }}
             }}
         }});
@@ -792,11 +788,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         if (activePeaks.length > 0) {{
             const latestPeak = activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b));
             if (latestPeak && latestPeak.qualifiers) {{
-                const peakRelMs = latestPeak.time_ms - curTimeMs;
                 latestPeak.qualifiers.forEach(q => {{
-                    const qMs = peakRelMs + q.ms;
+                    const qMs = q.ms;
                     const qVal = q.val;
-                    const qOrigMs = peakRelMs + ((q.orig_ms !== undefined) ? q.orig_ms : q.ms);
+                    const qOrigMs = (q.orig_ms !== undefined) ? q.orig_ms : q.ms;
 
                     const qx = padLeft + ((qMs - zoomStartMs) / zoomSpan) * graphW;
                     const qOrigX = padLeft + ((qOrigMs - zoomStartMs) / zoomSpan) * graphW;
