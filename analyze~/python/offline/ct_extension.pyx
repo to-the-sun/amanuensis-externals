@@ -351,10 +351,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
     cdef PeakResult pr
 
     cdef int win_len = window_ms + 1
-    cdef int target_pts = 200 if win_len > 200 else win_len
-    cdef double step_idx = <double>(win_len - 1) / <double>(target_pts - 1) if target_pts > 1 else 1.0
     cdef int idx_s = 0
-    cdef int idx_pt = 0
 
     for i in range(4):
         env = np.zeros(num_frames, dtype=np.float32)
@@ -410,9 +407,7 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
         for k in range(res.bands[i].num_peaks):
             pr = res.bands[i].peaks[k]
             snap_list = []
-            for idx_pt in range(target_pts):
-                idx_s = <int>round(idx_pt * step_idx)
-                if idx_s >= win_len: idx_s = win_len - 1
+            for idx_s in range(win_len):
                 snap_list.append(pr.snapshot[idx_s])
 
             peak_data = {
