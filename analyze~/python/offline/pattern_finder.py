@@ -672,7 +672,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             }}
         }});
 
-        // Compute max and min energy for Y-axis autoscaling within visible zoom window
+        // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
         let curMin = Infinity;
         let visibleSum = 0;
@@ -680,7 +680,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         for (let i = 0; i < numBufPts; i++) {{
             const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
-            if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs) {{
+            if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
                 if (val < curMin) curMin = val;
@@ -754,15 +754,17 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         bufCtx.rect(padLeft, padTop, graphW, graphH);
         bufCtx.clip();
 
-        // Draw Accumulated History Buffer Curve (Primary blue line + area fill)
+        // Draw Accumulated History Buffer Curve (Primary blue line + area fill, stopping at -99ms to exclude [-99ms, 0ms])
         bufCtx.strokeStyle = '#3498db';
         bufCtx.lineWidth = 2.0;
         bufCtx.fillStyle = 'rgba(52, 152, 219, 0.15)';
 
         bufCtx.beginPath();
         let firstPt = true;
+        let lastDrawnMs = -pass2WinMs;
         for (let i = 0; i < numBufPts; i++) {{
             const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
+            if (sampleMs > -99.0 + 1e-5) continue; // Exclude the 99ms region [-99ms, 0ms] from visual rendering
             const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
             const y = padTop + graphH - (val / yMax) * graphH;
@@ -772,12 +774,12 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             }} else {{
                 bufCtx.lineTo(x, y);
             }}
+            lastDrawnMs = sampleMs;
         }}
         bufCtx.stroke();
 
-        // Fill area under curve
-        const lastSampleMs = -pass2WinMs + pass2WinMs;
-        const endX = padLeft + ((lastSampleMs - zoomStartMs) / zoomSpan) * graphW;
+        // Fill area under curve up to -99ms
+        const endX = padLeft + ((lastDrawnMs - zoomStartMs) / zoomSpan) * graphW;
         const firstSampleMs = -pass2WinMs;
         const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
 
