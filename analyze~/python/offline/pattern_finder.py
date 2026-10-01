@@ -116,6 +116,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     patterns_js = json.dumps(clean_json(best_patterns))
     segments_js = json.dumps(clean_json(segments_transience_data))
     hp_changes_js = json.dumps(clean_json(hp_changes))
+    demarcation_lines_js = "[]"
+    if pass2_res and isinstance(pass2_res, dict) and 'demarcation_lines' in pass2_res:
+        demarcation_lines_js = json.dumps(clean_json(pass2_res['demarcation_lines']))
 
     # Compute global extreme positive and negative scores across all segments
     all_scores = [p['total_score'] for seg in segments_transience_data if 'peaks' in seg for p in seg['peaks']]
@@ -345,6 +348,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const pass2WinMs = {pass2_win_ms};
     const toleranceMs = {tolerance_ms};
     const pass2Peaks = {pass2_peaks_js};
+    const demarcationLines = {demarcation_lines_js};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -691,17 +695,19 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
         let curMin = Infinity;
-        let visibleSum = 0;
-        let visibleCount = 0;
+        let fullSum = 0;
+        let fullCount = 0;
 
         for (let i = 0; i < numBufPts; i++) {{
             const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
-            if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
+            if (sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
-                if (val > curMax) curMax = val;
-                if (val < curMin) curMin = val;
-                visibleSum += val;
-                visibleCount++;
+                fullSum += val;
+                fullCount++;
+                if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs) {{
+                    if (val > curMax) curMax = val;
+                    if (val < curMin) curMin = val;
+                }}
             }}
         }}
         if (curMax <= 0) curMax = 1.0;
@@ -751,8 +757,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             bufCtx.fillText(valStr, padLeft - 8, y + 4);
         }}
 
-        // Horizontal Mean Demarcation Line (Mean of samples in active buffer)
-        const meanVal = visibleCount > 0 ? (visibleSum / visibleCount) : 0;
+        // Horizontal Mean Demarcation Line (Directly from C core demarcation_lines or full accumulated buffer mean)
+        const curFrameIdx = Math.min(demarcationLines.length - 1, Math.max(0, Math.floor((audio.currentTime || 0) * 1000.0 / 1.0)));
+        let meanVal = (demarcationLines.length > 0 && curFrameIdx >= 0) ? demarcationLines[curFrameIdx] : (fullCount > 0 ? (fullSum / fullCount) : 0);
         const meanY = padTop + graphH - (meanVal / yMax) * graphH;
 
         bufCtx.strokeStyle = '#7f8c8d';
