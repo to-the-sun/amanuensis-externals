@@ -32,7 +32,6 @@ cdef extern from "cumulative_transience.h":
         double left_min
         double right_min
         double prominence
-        double demarcation_line
         int num_qualifiers
         Qualifier qualifiers[256]
         double snapshot[15001]
@@ -216,7 +215,6 @@ cdef class TransientAnalyzer:
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
-                'demarcation_line': pr.demarcation_line,
                 'qualifiers': []
             }
             for j in range(pr.num_qualifiers):
@@ -423,7 +421,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
                 'left_min': pr.left_min,
                 'right_min': pr.right_min,
                 'prominence': pr.prominence,
-                'demarcation_line': pr.demarcation_line,
                 'qualifiers': [],
                 'snapshot': snap_list
             }

@@ -287,7 +287,6 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         }
     }
     double midpoint = (m_len > 0) ? (sum / (double)m_len) : 0.0;
-    result_out->demarcation_line = midpoint;
     int tol_idx = (int)round(self->tolerance / self->frame_duration_ms);
     if (tol_idx < 0) tol_idx = 0;
 

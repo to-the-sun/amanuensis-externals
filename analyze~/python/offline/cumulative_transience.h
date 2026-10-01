@@ -25,7 +25,6 @@ typedef struct {
     double left_min;
     double right_min;
     double prominence;
-    double demarcation_line;
     int num_qualifiers;
     Qualifier qualifiers[MAX_QUALIFIERS];
     double snapshot[BUFFER_LEN];
