@@ -1054,10 +1054,20 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     print(f"Interactive HTML report generated successfully: {html_filepath}")
 
     if open_browser:
+        report_url = os.path.abspath(html_filepath)
+        opened = False
         try:
-            webbrowser.open(os.path.abspath(html_filepath))
-        except Exception as e:
-            print(f"Could not open browser automatically: {e}")
+            ff_browser = webbrowser.get("firefox")
+            ff_browser.open(report_url)
+            opened = True
+        except Exception:
+            pass
+
+        if not opened:
+            try:
+                webbrowser.open(report_url)
+            except Exception as e:
+                print(f"Could not open browser automatically: {e}")
 
     return html_filepath
 
