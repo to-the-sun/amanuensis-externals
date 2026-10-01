@@ -269,10 +269,6 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     if (self->lock_func) self->lock_func(self->lock_obj);
 
     double* acc_buf = self->shared_buffer ? self->shared_buffer->accumulated_buffer : self->private_accumulated_buffer;
-    double max_peak = self->shared_buffer ? self->shared_buffer->max_peak : self->private_max_peak;
-
-    double norm = (max_peak > 0) ? (result_out->peak_val / max_peak) : 1.0;
-    for (int i = 0; i < win_len; i++) peak_flux[i] *= norm;
     double q_sum = 0.0; bool found = false;
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = win_len - 99; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
