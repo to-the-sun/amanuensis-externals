@@ -102,6 +102,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     pass2_win_ms = int(round(best_bar_length * 2))
     tolerance_ms = float(pass2_res.get('tolerance', get_default_tolerance())) if (pass2_res and isinstance(pass2_res, dict)) else get_default_tolerance()
+    hop = int(sr * 0.001)
+    frame_duration_ms = 1000.0 * float(hop) / float(sr)
 
     pass2_peaks_flat = []
     dem_lines = pass2_res.get('demarcation_lines', []) if (pass2_res and isinstance(pass2_res, dict)) else []
@@ -350,6 +352,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const pass2WinMs = {pass2_win_ms};
     const toleranceMs = {tolerance_ms};
     const pass2Peaks = {pass2_peaks_js};
+    const frameDurationMs = {frame_duration_ms};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -698,7 +701,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         let curMin = Infinity;
 
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
+            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
             if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
@@ -778,9 +781,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         bufCtx.beginPath();
         let firstPt = true;
-        let lastDrawnMs = -pass2WinMs;
+        let lastDrawnMs = (0 - (numBufPts - 1)) * frameDurationMs;
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
+            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
             if (sampleMs > -99.0 + 1e-5) continue; // Exclude the 99ms region [-99ms, 0ms] from visual rendering
             const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
@@ -797,7 +800,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         // Fill area under curve up to -99ms
         const endX = padLeft + ((lastDrawnMs - zoomStartMs) / zoomSpan) * graphW;
-        const firstSampleMs = -pass2WinMs;
+        const firstSampleMs = (0 - (numBufPts - 1)) * frameDurationMs;
         const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
 
         bufCtx.lineTo(endX, padTop + graphH);
