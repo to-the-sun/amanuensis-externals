@@ -104,12 +104,17 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     tolerance_ms = float(pass2_res.get('tolerance', get_default_tolerance())) if (pass2_res and isinstance(pass2_res, dict)) else get_default_tolerance()
 
     pass2_peaks_flat = []
+    dem_lines = pass2_res.get('demarcation_lines', []) if (pass2_res and isinstance(pass2_res, dict)) else []
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
         for band_idx, band_peaks in enumerate(pass2_res['peaks']):
             for p in band_peaks:
                 p_copy = dict(p)
                 p_copy['band_idx'] = band_idx
-                p_copy['time_ms'] = float(p.get('time', 0.0) * 1000.0)
+                t_ms = float(p.get('time', 0.0) * 1000.0)
+                p_copy['time_ms'] = t_ms
+                if len(dem_lines) > 0:
+                    f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
+                    p_copy['demarcation_line'] = float(dem_lines[f_idx])
                 pass2_peaks_flat.append(p_copy)
 
     pass2_peaks_js = json.dumps(clean_json(pass2_peaks_flat))
@@ -681,23 +686,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Reconstruct accumulated buffer by summing snapshots of active peaks
-        const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : (Math.round(pass2WinMs) + 1);
-        const accumulatedBuffer = new Float64Array(numBufPts);
-
-        activePeaks.forEach(p => {{
-            if (p.snapshot && p.snapshot.length === numBufPts) {{
-                for (let i = 0; i < numBufPts; i++) {{
-                    accumulatedBuffer[i] += p.snapshot[i];
-                }}
-            }}
-        }});
+        // Get latest active peak to utilize direct accumulated buffer array from C core
+        const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
+        const numBufPts = (latestPeak && latestPeak.snapshot) ? latestPeak.snapshot.length : (Math.round(pass2WinMs) + 1);
+        const accumulatedBuffer = (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length === numBufPts)
+            ? latestPeak.snapshot
+            : new Float64Array(numBufPts);
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
         let curMin = Infinity;
-        let visibleSum = 0;
-        let visibleCount = 0;
 
         for (let i = 0; i < numBufPts; i++) {{
             const sampleMs = -pass2WinMs + (i / (numBufPts - 1)) * pass2WinMs;
@@ -705,8 +703,6 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
                 if (val < curMin) curMin = val;
-                visibleSum += val;
-                visibleCount++;
             }}
         }}
         if (curMax <= 0) curMax = 1.0;
@@ -756,8 +752,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             bufCtx.fillText(valStr, padLeft - 8, y + 4);
         }}
 
-        // Horizontal Mean Demarcation Line (Mean of samples in active buffer)
-        const meanVal = visibleCount > 0 ? (visibleSum / visibleCount) : 0;
+        // Horizontal Mean Demarcation Line (Directly from C core latestPeak.demarcation_line stored per peak)
+        const meanVal = (latestPeak && latestPeak.demarcation_line !== undefined) ? latestPeak.demarcation_line : 0;
         const meanY = padTop + graphH - (meanVal / yMax) * graphH;
 
         bufCtx.strokeStyle = '#7f8c8d';

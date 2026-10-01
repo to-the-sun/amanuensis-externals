@@ -260,9 +260,10 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
 
     int win_len = self->window_ms + 1;
     int start = p_idx - self->window_ms;
+    double peak_flux[BUFFER_LEN];
     for (int i = 0; i < win_len; i++) {
         int idx = start + i;
-        result_out->snapshot[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
+        peak_flux[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
     }
 
     if (self->lock_func) self->lock_func(self->lock_obj);
@@ -271,7 +272,7 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
     double max_peak = self->shared_buffer ? self->shared_buffer->max_peak : self->private_max_peak;
 
     double norm = (max_peak > 0) ? (result_out->peak_val / max_peak) : 1.0;
-    for (int i = 0; i < win_len; i++) result_out->snapshot[i] *= norm;
+    for (int i = 0; i < win_len; i++) peak_flux[i] *= norm;
     double q_sum = 0.0; bool found = false;
     // Exclude the last 99ms to avoid self-referential bias from the peak at zero.
     int m_len = win_len - 99; double sum = 0.0, max_v = -DBL_MAX, min_v = DBL_MAX;
@@ -343,16 +344,18 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         self->private_total_score_sum += result_out->total_score; self->private_score_count++;
     }
 
-    for (int i = 0; i < win_len; i++) acc_buf[i] += result_out->snapshot[i];
+    for (int i = 0; i < win_len; i++) acc_buf[i] += peak_flux[i];
 
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
     if (entry) {
         entry->p_idx = global_p_idx;
-        memcpy(entry->snapshot, result_out->snapshot, sizeof(double) * win_len);
+        memcpy(entry->snapshot, peak_flux, sizeof(double) * win_len);
         entry->next = NULL;
         if (self->snapshot_tails[band_idx]) { self->snapshot_tails[band_idx]->next = entry; self->snapshot_tails[band_idx] = entry; }
         else { self->snapshot_heads[band_idx] = entry; self->snapshot_tails[band_idx] = entry; }
     }
+
+    memcpy(result_out->snapshot, acc_buf, sizeof(double) * win_len);
 
     if (self->unlock_func) self->unlock_func(self->lock_obj);
 
