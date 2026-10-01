@@ -340,6 +340,8 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         self->private_total_score_sum += result_out->total_score; self->private_score_count++;
     }
 
+    memcpy(result_out->snapshot, acc_buf, sizeof(double) * win_len);
+
     for (int i = 0; i < win_len; i++) acc_buf[i] += peak_flux[i];
 
     SnapshotEntry* entry = (SnapshotEntry*)malloc(sizeof(SnapshotEntry));
@@ -350,8 +352,6 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
         if (self->snapshot_tails[band_idx]) { self->snapshot_tails[band_idx]->next = entry; self->snapshot_tails[band_idx] = entry; }
         else { self->snapshot_heads[band_idx] = entry; self->snapshot_tails[band_idx] = entry; }
     }
-
-    memcpy(result_out->snapshot, acc_buf, sizeof(double) * win_len);
 
     if (self->unlock_func) self->unlock_func(self->lock_obj);
 
