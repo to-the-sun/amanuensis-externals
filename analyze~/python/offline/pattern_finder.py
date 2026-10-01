@@ -681,17 +681,12 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Reconstruct accumulated buffer by summing snapshots of active peaks
-        const numBufPts = (activePeaks.length > 0 && activePeaks[0].snapshot) ? activePeaks[0].snapshot.length : (Math.round(pass2WinMs) + 1);
-        const accumulatedBuffer = new Float64Array(numBufPts);
-
-        activePeaks.forEach(p => {{
-            if (p.snapshot && p.snapshot.length === numBufPts) {{
-                for (let i = 0; i < numBufPts; i++) {{
-                    accumulatedBuffer[i] += p.snapshot[i];
-                }}
-            }}
-        }});
+        // Get latest active peak to utilize direct accumulated buffer array from C core
+        const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
+        const numBufPts = (latestPeak && latestPeak.snapshot) ? latestPeak.snapshot.length : (Math.round(pass2WinMs) + 1);
+        const accumulatedBuffer = (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length === numBufPts)
+            ? latestPeak.snapshot
+            : new Float64Array(numBufPts);
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
