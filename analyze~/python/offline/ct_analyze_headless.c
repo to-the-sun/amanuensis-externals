@@ -76,7 +76,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    drwav_uint64 total_samples = total_pcm_frames * channels;
     drwav_uint64 mono_frames = total_pcm_frames;
 
     float* mono_data = (float*)malloc(mono_frames * sizeof(float));
@@ -129,30 +128,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("Binary analysis stream exported successfully.\n");
-
-    // Generate python inspector launch command inside output directory
-    char launcher_script[8192];
-    snprintf(launcher_script, sizeof(launcher_script), "%s/open_inspector.py", output_dir);
-    FILE* lf = fopen(launcher_script, "w");
-    if (lf) {
-        fprintf(lf, "# Double-click this script to view interactive HTML Inspector report\n");
-        fprintf(lf, "import os\nimport sys\nimport webbrowser\n\n");
-        fprintf(lf, "stem = \"%s\"\n", stem_name);
-        fprintf(lf, "html_file = os.path.join(os.path.dirname(__file__), f\"{stem}_pattern_analysis.html\")\n");
-        fprintf(lf, "if os.path.exists(html_file):\n");
-        fprintf(lf, "    webbrowser.open(os.path.abspath(html_file))\n");
-        fprintf(lf, "else:\n");
-        fprintf(lf, "    print(f\"Inspector HTML report not found: {html_file}\")\n");
-        fprintf(lf, "    input(\"Press Enter to exit...\")\n");
-        fclose(lf);
-    }
-
     printf("\n============================================================\n");
     printf("ANALYSIS COMPLETE!\n");
     printf("Output Directory: %s/\n", output_dir);
     printf("Binary Artifact:  %s.ctbin\n", stem_name);
-    printf("Inspector Launcher: open_inspector.py (double-click to inspect)\n");
     printf("============================================================\n\n");
 
     printf("Press Enter to exit...");

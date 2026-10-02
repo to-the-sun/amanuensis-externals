@@ -216,7 +216,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             return [clean_json(i) for i in obj]
         return obj
 
-    pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
+    pass2_win_ms = min(15000, int(round(best_bar_length * 2))) if best_bar_length > 0 else 15000
     tolerance_ms = float(pass2_res.get('tolerance', get_default_tolerance())) if (pass2_res and isinstance(pass2_res, dict)) else get_default_tolerance()
     hop = int(sr * 0.001)
     frame_duration_ms = 1000.0 * float(hop) / float(sr)
@@ -1394,74 +1394,6 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
         print(f"  Duration: {longest_run['duration_s']:.2f} s (from {longest_run['start_time_s']:.2f} s to {longest_run['end_time_s']:.2f} s)")
         print(f"  Target snapshot time at steady span midpoint: {target_time_s:.2f} s (Frame {target_frame})")
 
-    if gui_mode and longest_run:
-        try:
-            import matplotlib.pyplot as plt
-
-            ct = ensure_ct_initialized()
-            if ct is not None:
-                a = ct.TransientAnalyzer(1.0, int(sr), window_ms=15000)
-                hop = int(sr * 0.001)
-                step = hop * 100
-                target_sample = int(round(target_time_s * sr)) + hop
-
-                for last_t in range(0, target_sample, step):
-                    act_s = last_t - int(sr * 0.2)
-                    win_s = act_s - int(sr * 15.0)
-                    if win_s < 0:
-                        win_s = 0
-                    rem = target_sample - last_t
-                    chunk_len = rem if rem < step else step
-                    push_y = y[last_t : last_t + chunk_len].astype(np.float32)
-                    if len(push_y) < step:
-                        push_y = np.pad(push_y, (0, step - len(push_y)))
-                    a.analyze_chunk(push_y, int(sr), win_s // hop, act_s // hop)
-
-                acc_buf = a.accumulated_buffer
-                frame_duration_ms = 1000.0 * hop / float(sr)
-                buffer_times = (np.arange(15001) - 15000) * frame_duration_ms
-
-                hp_idx = 15000 - int(round(longest_high_point_ms / frame_duration_ms))
-                if hp_idx < 0:
-                    hp_idx = 0
-                if hp_idx >= 15001:
-                    hp_idx = 15000
-                val_at_hp = acc_buf[hp_idx]
-
-                fig, ax = plt.subplots(figsize=(12, 6))
-                ax.axvline(-longest_high_point_ms, color='#e74c3c', linestyle='--', linewidth=2.0,
-                           label=f'High Point ({longest_high_point_ms:.2f} ms)', zorder=1)
-                ax.plot(-longest_high_point_ms, val_at_hp, marker='o', color='#e74c3c', markersize=8, zorder=1)
-
-                ax.plot(buffer_times, acc_buf, color='#3498db', linewidth=1.5, label='Cumulative History Buffer', zorder=2)
-                ax.fill_between(buffer_times, acc_buf, color='#3498db', alpha=0.2, zorder=2)
-
-                offset_x = -600 if -longest_high_point_ms > -7500 else 600
-                ha_align = 'right' if -longest_high_point_ms > -7500 else 'left'
-
-                ax.annotate(f'High Point: {longest_high_point_ms:.2f} ms\nEnergy: {val_at_hp:.2f}',
-                            xy=(-longest_high_point_ms, val_at_hp),
-                            xytext=(-longest_high_point_ms + offset_x, 0.92),
-                            textcoords=('data', 'axes fraction'),
-                            arrowprops=dict(facecolor='#e74c3c', shrink=0.08, width=1.5, headwidth=8),
-                            fontsize=10, fontweight='bold', color='#c0392b',
-                            bbox=dict(boxstyle='round,pad=0.3', facecolor='#fadbd8', edgecolor='#e74c3c', alpha=0.9),
-                            ha=ha_align, va='top')
-
-                ax.set_title(f'Cumulative History Buffer at Peak Stability Midpoint (t = {target_time_s:.2f}s)\n'
-                             f'Segment Length (High Point) = {longest_high_point_ms:.2f} ms | Longest Steady Span = {longest_run["duration_s"]:.2f}s',
-                             fontsize=12, fontweight='bold', pad=12)
-                ax.set_xlabel('Time Relative to Peak (ms)', fontsize=10)
-                ax.set_ylabel('Accumulated Energy', fontsize=10)
-                ax.set_xlim(-15000, 0)
-                ax.grid(True, alpha=0.3)
-                ax.legend(loc='upper left')
-
-                fig.tight_layout()
-                plt.show(block=False)
-                plt.pause(0.1)
-        except Exception as e:
-            print(f"Could not display cumulative history buffer popup window: {e}")
 
     return longest_high_point_ms, hp_changes, analysis_res
 
@@ -1654,7 +1586,7 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
             seg['waveform_min'] = []
             seg['waveform_max'] = []
 
-    # Export Interactive HTML Report & Graph Waveform with highlighted patterns
+    # Export Interactive HTML Report (Saved to disk for user to click and open whenever needed)
     if best_patterns:
         try:
             export_interactive_html_report(
@@ -1665,60 +1597,13 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
                 best_bar_length=best_bar_length,
                 best_patterns=best_patterns,
                 segments_transience_data=segments_transience_data,
-                open_browser=gui_mode,
+                open_browser=False,
                 pass2_res=analysis_res,
                 ctbin_manifest=ctbin_manifest
             )
         except Exception as e:
             print(f"Could not generate interactive HTML report: {e}")
             traceback.print_exc()
-
-    if gui_mode and best_patterns:
-        try:
-            import matplotlib.pyplot as plt
-
-            fig, ax = plt.subplots(figsize=(12, 6))
-            time_axis_s = np.linspace(0, total_duration_ms / 1000.0, len(y))
-            ax.plot(time_axis_s, y, color='#2c3e50', alpha=0.6, linewidth=0.8, label='Waveform')
-
-            colors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22', '#3498db']
-            y_max = float(np.max(y)) if len(y) > 0 else 1.0
-
-            for pat_idx, pat in enumerate(best_patterns, 1):
-                color = colors[(pat_idx - 1) % len(colors)]
-                pat_start_s = pat['start_ms'] / 1000.0
-                pat_end_s = pat['end_ms'] / 1000.0
-
-                # Highlight pattern span
-                ax.axvspan(pat_start_s, pat_end_s, color=color, alpha=0.35,
-                           label=f"Pattern {pat_idx} ({pat['duration_ms']:.0f} ms)")
-
-                # Mark constituent segments
-                for seg_i, seg_idx in enumerate(pat['segments']):
-                    s_start_ms = seg_idx * best_bar_length
-                    s_end_ms = (seg_idx + 1) * best_bar_length
-                    s_start_s = s_start_ms / 1000.0
-                    s_end_s = s_end_ms / 1000.0
-
-                    ax.axvline(s_start_s, color=color, linestyle='--', alpha=0.7, linewidth=1.2)
-                    if seg_i == len(pat['segments']) - 1:
-                        ax.axvline(s_end_s, color=color, linestyle='--', alpha=0.7, linewidth=1.2)
-
-                    mid_s = (s_start_s + s_end_s) / 2.0
-                    ax.text(mid_s, y_max * 0.85, f"Seg {seg_idx}", color=color, fontsize=9,
-                            fontweight='bold', ha='center', va='center',
-                            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.75, edgecolor=color))
-
-            ax.set_title(f"Audio Waveform & Detected Patterns (Bar Length: {best_bar_length:.2f} ms)",
-                         fontsize=12, fontweight='bold')
-            ax.set_xlabel("Time (seconds)", fontsize=10)
-            ax.set_ylabel("Amplitude", fontsize=10)
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc='upper right')
-            fig.tight_layout()
-            plt.show()
-        except Exception as e:
-            print(f"Could not display pattern waveform plot GUI: {e}")
 
     return best_bar_length, best_patterns
 
