@@ -1523,6 +1523,9 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     total_duration_ms = (len(y) / sr) * 1000.0
     print(f"Audio duration: {total_duration_ms:.2f} ms ({total_duration_ms/1000.0:.2f} s)")
 
+    output_dir = os.path.splitext(audio_path)[0]
+    os.makedirs(output_dir, exist_ok=True)
+
     ct = ensure_ct_initialized()
     if ct is not None:
         try:
@@ -1587,10 +1590,6 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Total pattern duration at bar length: {max_total_pattern_len_ms:.2f} ms")
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
-
-    # Output directory for HTML report and pattern WAV files
-    output_dir = os.path.splitext(audio_path)[0]
-    os.makedirs(output_dir, exist_ok=True)
 
     # Save each identified pattern as its own WAV file
     if best_patterns:
@@ -1735,6 +1734,6 @@ if __name__ == "__main__":
         print("="*60)
     finally:
         try:
-            input("\nPress Enter to exit...")
-        except EOFError:
+            input("\nProcess completed. Press Enter to exit...")
+        except (EOFError, KeyboardInterrupt, Exception):
             pass
