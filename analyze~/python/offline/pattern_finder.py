@@ -179,26 +179,12 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     total_dur_s = float(len(y)) / float(sr)
 
-    # 3. Read audio file to Base64 for embedded HTML playback
-    audio_b64 = ""
-    audio_mime = "audio/wav"
-    if audio_path.lower().endswith(".mp3"):
-        audio_mime = "audio/mp3"
-    elif audio_path.lower().endswith(".ogg"):
-        audio_mime = "audio/ogg"
-    elif audio_path.lower().endswith(".flac"):
-        audio_mime = "audio/flac"
-
-    try:
-        with open(audio_path, "rb") as af:
-            audio_b64 = base64.b64encode(af.read()).decode("utf-8")
-    except Exception as e:
-        print(f"Could not embed base64 audio in HTML: {e}")
-
     output_dir = os.path.splitext(audio_path)[0]
     os.makedirs(output_dir, exist_ok=True)
 
-    audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.relpath(audio_path, output_dir)
+    # 3. Use relative path to audio file on disk for lightweight HTML report (< 100 KB)
+    rel_audio_path = os.path.relpath(audio_path, output_dir).replace("\\", "/")
+    audio_src = rel_audio_path
 
     # Clean JSON serialization helper
     def clean_json(obj):
