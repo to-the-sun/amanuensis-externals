@@ -5,6 +5,8 @@ from libc.stdlib cimport malloc, free
 
 cnp.import_array()
 
+cdef extern int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms)
+
 cdef extern from "cumulative_transience.h":
     ctypedef void (*ct_lock_func)(void* lock_obj)
 
@@ -501,3 +503,6 @@ def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
         "highest_peaks_ms": highest_peaks_ms,
         "demarcation_lines": demarcation_lines
     }
+
+def export_binary_ctbin(const char* output_filepath, cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
+    return bool(export_ctbin(output_filepath, <float*>y.data, len(y), sr, window_ms))

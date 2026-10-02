@@ -1,5 +1,6 @@
 import os
 import sys
+import struct
 import argparse
 import traceback
 import numpy as np
@@ -28,6 +29,103 @@ def ensure_ct_initialized():
         return None
 
 
+def export_ctbin_assets(ctbin_path, output_dir):
+    """
+    Parses a .ctbin binary file exported by C core ct_exporter and extracts:
+    - manifest.json: Header metrics, global time-series arrays, and peak offset map
+    - peaks.bin: Compact binary representation of peak metadata and qualifiers
+    - snapshots.bin: Chunked binary blob containing 10x downsampled peak snapshot buffers
+    """
+    if not os.path.exists(ctbin_path):
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(ctbin_path, "rb") as f:
+        header_data = f.read(56)
+        if len(header_data) < 56:
+            return None
+
+        magic, version, sr, num_frames, win_ms, tolerance, max_peak, min_score, max_score, total_peaks = struct.unpack(
+            "<4sIIII4dI", header_data
+        )
+
+        if magic != b"CTBN":
+            return None
+
+        times = np.frombuffer(f.read(num_frames * 4), dtype=np.float32)
+        ratings = np.frombuffer(f.read(num_frames * 8), dtype=np.float64)
+        highest_peaks = np.frombuffer(f.read(num_frames * 8), dtype=np.float64)
+        demarcations = np.frombuffer(f.read(num_frames * 8), dtype=np.float64)
+        global_flux = np.frombuffer(f.read(num_frames * 4), dtype=np.float32)
+        global_smooth = np.frombuffer(f.read(num_frames * 4), dtype=np.float32)
+
+        snap_len = win_ms + 1
+        downsampled_snap_len = (snap_len + 9) // 10
+
+        peaks_meta = []
+        snapshots_bin_path = os.path.join(output_dir, "snapshots.bin")
+
+        with open(snapshots_bin_path, "wb") as snap_f:
+            snap_offset = 0
+            for _ in range(total_peaks):
+                p_idx, band_idx = struct.unpack("<ii", f.read(8))
+                time_s, peak_val, score, detected_val, thresh, left_min, right_min, prominence = struct.unpack(
+                    "<dddddddd", f.read(64)
+                )
+                num_qualifiers, = struct.unpack("<i", f.read(4))
+
+                qualifiers = []
+                for _ in range(num_qualifiers):
+                    q_ms, q_val, q_orig_ms = struct.unpack("<ddd", f.read(24))
+                    qualifiers.append({"ms": q_ms, "val": q_val, "orig_ms": q_orig_ms})
+
+                full_snapshot = np.frombuffer(f.read(snap_len * 8), dtype=np.float64)
+                downsampled_snapshot = full_snapshot[::10].astype(np.float32)
+
+                snap_bytes = downsampled_snapshot.tobytes()
+                snap_f.write(snap_bytes)
+
+                peaks_meta.append({
+                    "p_idx": int(p_idx),
+                    "band_idx": int(band_idx),
+                    "time_s": float(time_s),
+                    "time_ms": float(time_s * 1000.0),
+                    "peak_val": float(peak_val),
+                    "total_score": float(score),
+                    "detected_peak_val": float(detected_val),
+                    "thresh_val": float(thresh),
+                    "left_min": float(left_min),
+                    "right_min": float(right_min),
+                    "prominence": float(prominence),
+                    "qualifiers": qualifiers,
+                    "snap_offset": snap_offset,
+                    "snap_len": len(downsampled_snapshot)
+                })
+
+                snap_offset += len(snap_bytes)
+
+    manifest = {
+        "version": int(version),
+        "sample_rate": int(sr),
+        "num_frames": int(num_frames),
+        "window_ms": int(win_ms),
+        "tolerance": float(tolerance),
+        "max_peak_value": float(max_peak),
+        "min_score_seen": float(min_score),
+        "max_score_seen": float(max_score),
+        "total_peaks": int(total_peaks),
+        "peaks": peaks_meta,
+        "demarcation_lines": demarcations.tolist()
+    }
+
+    manifest_path = os.path.join(output_dir, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as mf:
+        mf.write(json.dumps(manifest))
+
+    return manifest
+
+
 def get_default_tolerance():
     try:
         ct = ensure_ct_initialized()
@@ -38,7 +136,7 @@ def get_default_tolerance():
     return 9.0
 
 
-def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True, pass2_res=None):
+def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_length, best_patterns, segments_transience_data, open_browser=True, pass2_res=None, ctbin_manifest=None):
     """
     Exports an interactive HTML report containing:
     1. Cumulative history graph high point analysis summary.
@@ -110,16 +208,30 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     pass2_peaks_flat = []
     dem_lines = pass2_res.get('demarcation_lines', []) if (pass2_res and isinstance(pass2_res, dict)) else []
+
+    ctbin_peaks_map = {}
+    if ctbin_manifest and isinstance(ctbin_manifest, dict) and 'peaks' in ctbin_manifest:
+        for p in ctbin_manifest['peaks']:
+            ctbin_peaks_map[(p.get('p_idx'), p.get('band_idx'))] = p
+
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
         for band_idx, band_peaks in enumerate(pass2_res['peaks']):
             for p in band_peaks:
                 p_copy = dict(p)
+                if 'snapshot' in p_copy and isinstance(p_copy['snapshot'], list) and len(p_copy['snapshot']) > 100:
+                    p_copy['snapshot'] = p_copy['snapshot'][::50]  # Downsample inline fallback 50x for file:// CORS safety
                 p_copy['band_idx'] = band_idx
                 t_ms = float(p.get('time', 0.0) * 1000.0)
                 p_copy['time_ms'] = t_ms
                 if len(dem_lines) > 0:
                     f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
                     p_copy['demarcation_line'] = float(dem_lines[f_idx])
+
+                key = (p_copy.get('p_idx'), band_idx)
+                if key in ctbin_peaks_map:
+                    p_copy['snap_offset'] = ctbin_peaks_map[key]['snap_offset']
+                    p_copy['snap_len'] = ctbin_peaks_map[key]['snap_len']
+
                 pass2_peaks_flat.append(p_copy)
 
     pass2_peaks_js = json.dumps(clean_json(pass2_peaks_flat))
@@ -751,19 +863,29 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Get latest active peak to utilize direct accumulated buffer array from C core
+        // Get latest active peak to utilize direct accumulated buffer array from C core or snapshots.bin
         const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
-        const numBufPts = (latestPeak && latestPeak.snapshot) ? latestPeak.snapshot.length : (Math.round(pass2WinMs) + 1);
-        const accumulatedBuffer = (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length === numBufPts)
-            ? latestPeak.snapshot
-            : new Float64Array(numBufPts);
+        let accumulatedBuffer = null;
+        if (latestPeak && window.snapshotsArrayBuffer && latestPeak.snap_offset !== undefined) {
+            const floatLen = latestPeak.snap_len || Math.round((pass2WinMs + 1) / 10);
+            accumulatedBuffer = new Float32Array(window.snapshotsArrayBuffer, latestPeak.snap_offset, floatLen);
+        } else if (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length > 0) {
+            accumulatedBuffer = latestPeak.snapshot;
+        }
+        const numBufPts = accumulatedBuffer ? accumulatedBuffer.length : (Math.round(pass2WinMs) + 1);
+        if (!accumulatedBuffer) {
+            accumulatedBuffer = new Float32Array(numBufPts);
+        }
+
+        // Compute exact time step in ms per sample point based on array length
+        const stepMs = (numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : frameDurationMs;
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
         let curMin = Infinity;
 
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
+            const sampleMs = (i - (numBufPts - 1)) * stepMs;
             if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
@@ -843,9 +965,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         bufCtx.beginPath();
         let firstPt = true;
-        let lastDrawnMs = (0 - (numBufPts - 1)) * frameDurationMs;
+        let lastDrawnMs = (0 - (numBufPts - 1)) * stepMs;
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
+            const sampleMs = (i - (numBufPts - 1)) * stepMs;
             if (sampleMs > -99.0 + 1e-5) continue; // Exclude the 99ms region [-99ms, 0ms] from visual rendering
             const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
@@ -862,7 +984,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         // Fill area under curve up to -99ms
         const endX = padLeft + ((lastDrawnMs - zoomStartMs) / zoomSpan) * graphW;
-        const firstSampleMs = (0 - (numBufPts - 1)) * frameDurationMs;
+        const firstSampleMs = (0 - (numBufPts - 1)) * stepMs;
         const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
 
         bufCtx.lineTo(endX, padTop + graphH);
@@ -1045,6 +1167,15 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         updateSegmentInspector();
         drawHistoryBuffer();
     }}
+
+    // Asynchronously fetch binary snapshot chunks if available
+    fetch('snapshots.bin')
+        .then(res => res.arrayBuffer())
+        .then(buf => {
+            window.snapshotsArrayBuffer = buf;
+            drawHistoryBuffer();
+        })
+        .catch(e => console.log('snapshots.bin lazy-load fetch notice:', e));
 
     renderAll();
 
@@ -1413,10 +1544,16 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
     best_bar_length = longest_hp_ms
 
+    ctbin_manifest = None
     # Second pass: Find actual peaks and score them using window_ms = segment length * 2 found in Pass 1
     if ct is not None:
         try:
             pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
+            ctbin_filepath = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(audio_path))[0]}.ctbin")
+            if hasattr(ct, "export_binary_ctbin"):
+                success = ct.export_binary_ctbin(ctbin_filepath.encode("utf-8"), y.astype(np.float32), int(sr), pass2_win_ms)
+                if success:
+                    ctbin_manifest = export_ctbin_assets(ctbin_filepath, output_dir)
             analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=pass2_win_ms)
         except Exception as e:
             print(f"Error running Pass 2 cumulative_transience analysis: {e}")
@@ -1497,7 +1634,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
                 best_patterns=best_patterns,
                 segments_transience_data=segments_transience_data,
                 open_browser=gui_mode,
-                pass2_res=analysis_res
+                pass2_res=analysis_res,
+                ctbin_manifest=ctbin_manifest
             )
         except Exception as e:
             print(f"Could not generate interactive HTML report: {e}")
