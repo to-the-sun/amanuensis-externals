@@ -1250,7 +1250,7 @@ def analyze_segment_length(segments_transience_data):
     contiguous patterns.
     Pattern rating = min(segment_ratings in pattern) * number_of_segments.
     A segment is included in a potential pattern if:
-      1. Its inclusion raises (or does not lower) the overall pattern rating.
+      1. Its inclusion strictly raises the overall pattern rating (rating_with > rating_without).
       2. Its standalone rating is not higher than the resulting pattern rating (not better off on its own).
     Returns (patterns, total_pattern_duration_ms)
     """
@@ -1273,8 +1273,8 @@ def analyze_segment_length(segments_transience_data):
 
         standalone_rating = seg['rating']
 
-        # Exclude segment if it lowers the overall pattern rating OR if it's better off on its own
-        if rating_with < rating_without or standalone_rating > rating_with:
+        # Exclude segment if it does not strictly raise the overall pattern rating OR if it's better off on its own
+        if rating_with <= rating_without or standalone_rating > rating_with:
             # End current pattern if it contains 2 or more segments
             if len(current_pattern) >= 2:
                 start_ms = current_pattern[0]['start_ms']
