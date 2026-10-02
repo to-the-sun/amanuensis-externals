@@ -74,6 +74,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     # Audio source uses relative path to avoid giant base64 data URIs
     audio_src = os.path.relpath(audio_path, output_dir)
 
+    # Helper to compress snapshot arrays on peak dictionaries
+    step_factor = 10
+    snap_step_dur = (1000.0 * float(int(sr * 0.001)) / float(sr)) * step_factor
+
     # Clean JSON serialization helper
     def clean_json(obj):
         if isinstance(obj, np.ndarray):
@@ -93,8 +97,19 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     hop = int(sr * 0.001)
     frame_duration_ms = 1000.0 * float(hop) / float(sr)
 
+    # Segment inspector peaks only need time and score metadata, remove heavy snapshot buffers
+    for seg in segments_transience_data:
+        if 'peaks' in seg and seg['peaks']:
+            for p in seg['peaks']:
+                if 'snapshot' in p:
+                    del p['snapshot']
+                if 'snapshot_b64' in p:
+                    del p['snapshot_b64']
+
     pass2_peaks_flat = []
     dem_lines = pass2_res.get('demarcation_lines', []) if (pass2_res and isinstance(pass2_res, dict)) else []
+
+    # Flatten and sort all peaks by time_ms across frequency bands before snapshot deduplication
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
         for band_idx, band_peaks in enumerate(pass2_res['peaks']):
             for p in band_peaks:
@@ -105,14 +120,23 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 if len(dem_lines) > 0:
                     f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
                     p_copy['demarcation_line'] = float(dem_lines[f_idx])
-
-                # Compress snapshot buffer to binary Float32 base64 to minimize report footprint
-                if 'snapshot' in p_copy and p_copy['snapshot'] is not None:
-                    snap_arr = np.array(p_copy['snapshot'], dtype=np.float32)
-                    p_copy['snapshot_b64'] = base64.b64encode(snap_arr.tobytes()).decode('ascii')
-                    del p_copy['snapshot']
-
                 pass2_peaks_flat.append(p_copy)
+
+        pass2_peaks_flat.sort(key=lambda p: p['time_ms'])
+
+        last_snap_time_ms = -999999.0
+        min_snap_interval_ms = 30.0  # Only store 1 snapshot buffer per 30ms time window
+
+        for p_copy in pass2_peaks_flat:
+            t_ms = p_copy['time_ms']
+            if 'snapshot' in p_copy and p_copy['snapshot'] is not None:
+                if (t_ms - last_snap_time_ms) >= min_snap_interval_ms:
+                    snap_full = np.array(p_copy['snapshot'], dtype=np.float32)
+                    snap_downsampled = snap_full[::step_factor]
+                    p_copy['snapshot_b64'] = base64.b64encode(snap_downsampled.tobytes()).decode('ascii')
+                    p_copy['snap_frame_dur_ms'] = snap_step_dur
+                    last_snap_time_ms = t_ms
+                del p_copy['snapshot']
 
     # Compute global extreme positive and negative scores across all segments
     all_scores = [p['total_score'] for seg in segments_transience_data if 'peaks' in seg for p in seg['peaks']]
@@ -371,22 +395,27 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const pass2Peaks = data.pass2Peaks || [];
     const frameDurationMs = data.frameDurationMs || {frame_duration_ms};
 
-    // Decode base64 binary Float32 snapshot buffers
-    pass2Peaks.forEach(p => {{
-        if (p.snapshot_b64) {{
+    // Lazy on-demand snapshot decoder helper
+    function getPeakSnapshot(peak) {{
+        if (!peak) return null;
+        if (peak.snapshot) return peak.snapshot;
+        if (peak.snapshot_b64) {{
             try {{
-                const binStr = atob(p.snapshot_b64);
+                const binStr = atob(peak.snapshot_b64);
                 const len = binStr.length;
                 const bytes = new Uint8Array(len);
                 for (let i = 0; i < len; i++) {{
                     bytes[i] = binStr.charCodeAt(i);
                 }}
-                p.snapshot = new Float32Array(bytes.buffer);
+                peak.snapshot = new Float32Array(bytes.buffer);
+                return peak.snapshot;
             }} catch (e) {{
-                p.snapshot = null;
+                peak.snapshot = null;
+                return null;
             }}
         }}
-    }});
+        return null;
+    }}
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -723,11 +752,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const windowStartMs = curTimeMs - pass2WinMs;
         const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);
 
-        // Get latest active peak to utilize direct accumulated buffer array from C core
-        const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
-        const numBufPts = (latestPeak && latestPeak.snapshot) ? latestPeak.snapshot.length : (Math.round(pass2WinMs) + 1);
-        const accumulatedBuffer = (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length === numBufPts)
-            ? latestPeak.snapshot
+        // Get latest active peak containing snapshot buffer to render accumulated buffer array from C core
+        const peaksWithSnap = activePeaks.filter(p => p && (p.snapshot || p.snapshot_b64));
+        const latestPeak = (peaksWithSnap.length > 0)
+            ? peaksWithSnap.reduce((a, b) => (a.time_ms > b.time_ms ? a : b))
+            : ((activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null);
+        const peakSnap = latestPeak ? getPeakSnapshot(latestPeak) : null;
+        const peakStepDurMs = (latestPeak && latestPeak.snap_frame_dur_ms) ? latestPeak.snap_frame_dur_ms : frameDurationMs;
+        const numBufPts = peakSnap ? peakSnap.length : (Math.round(pass2WinMs) + 1);
+        const accumulatedBuffer = (peakSnap && peakSnap.length === numBufPts)
+            ? peakSnap
             : new Float64Array(numBufPts);
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
@@ -735,7 +769,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         let curMin = Infinity;
 
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
+            const sampleMs = (i - (numBufPts - 1)) * peakStepDurMs;
             if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
@@ -815,9 +849,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         bufCtx.beginPath();
         let firstPt = true;
-        let lastDrawnMs = (0 - (numBufPts - 1)) * frameDurationMs;
+        let lastDrawnMs = (0 - (numBufPts - 1)) * peakStepDurMs;
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * frameDurationMs;
+            const sampleMs = (i - (numBufPts - 1)) * peakStepDurMs;
             if (sampleMs > -99.0 + 1e-5) continue; // Exclude the 99ms region [-99ms, 0ms] from visual rendering
             const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
@@ -834,7 +868,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         // Fill area under curve up to -99ms
         const endX = padLeft + ((lastDrawnMs - zoomStartMs) / zoomSpan) * graphW;
-        const firstSampleMs = (0 - (numBufPts - 1)) * frameDurationMs;
+        const firstSampleMs = (0 - (numBufPts - 1)) * peakStepDurMs;
         const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
 
         bufCtx.lineTo(endX, padTop + graphH);
