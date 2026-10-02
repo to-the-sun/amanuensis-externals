@@ -56,6 +56,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     print("\nGenerating interactive HTML report...")
 
+    output_dir = os.path.splitext(audio_path)[0]
+    os.makedirs(output_dir, exist_ok=True)
+
     # 2. Downsample Audio Waveform for Canvas Rendering (e.g. 1500 points)
     num_waveform_pts = 1500
     if len(y) > num_waveform_pts:
@@ -68,26 +71,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     total_dur_s = float(len(y)) / float(sr)
 
-    # 3. Read audio file to Base64 for embedded HTML playback
-    audio_b64 = ""
-    audio_mime = "audio/wav"
-    if audio_path.lower().endswith(".mp3"):
-        audio_mime = "audio/mp3"
-    elif audio_path.lower().endswith(".ogg"):
-        audio_mime = "audio/ogg"
-    elif audio_path.lower().endswith(".flac"):
-        audio_mime = "audio/flac"
-
-    try:
-        with open(audio_path, "rb") as af:
-            audio_b64 = base64.b64encode(af.read()).decode("utf-8")
-    except Exception as e:
-        print(f"Could not embed base64 audio in HTML: {e}")
-
-    output_dir = os.path.splitext(audio_path)[0]
-    os.makedirs(output_dir, exist_ok=True)
-
-    audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.relpath(audio_path, output_dir)
+    # Audio source uses relative path to avoid giant base64 data URIs
+    audio_src = os.path.relpath(audio_path, output_dir)
 
     # Clean JSON serialization helper
     def clean_json(obj):
@@ -120,12 +105,14 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 if len(dem_lines) > 0:
                     f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
                     p_copy['demarcation_line'] = float(dem_lines[f_idx])
-                pass2_peaks_flat.append(p_copy)
 
-    pass2_peaks_js = json.dumps(clean_json(pass2_peaks_flat))
-    patterns_js = json.dumps(clean_json(best_patterns))
-    segments_js = json.dumps(clean_json(segments_transience_data))
-    hp_changes_js = json.dumps(clean_json(hp_changes))
+                # Compress snapshot buffer to binary Float32 base64 to minimize report footprint
+                if 'snapshot' in p_copy and p_copy['snapshot'] is not None:
+                    snap_arr = np.array(p_copy['snapshot'], dtype=np.float32)
+                    p_copy['snapshot_b64'] = base64.b64encode(snap_arr.tobytes()).decode('ascii')
+                    del p_copy['snapshot']
+
+                pass2_peaks_flat.append(p_copy)
 
     # Compute global extreme positive and negative scores across all segments
     all_scores = [p['total_score'] for seg in segments_transience_data if 'peaks' in seg for p in seg['peaks']]
@@ -137,6 +124,30 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     audio_filename = os.path.basename(audio_path)
     audio_stem = os.path.splitext(audio_filename)[0]
+
+    # Export decoupled data JavaScript file
+    data_js_filename = f"{audio_stem}_data.js"
+    data_js_filepath = os.path.join(output_dir, data_js_filename)
+
+    report_data = {
+        "waveformMin": clean_json(waveform_min),
+        "waveformMax": clean_json(waveform_max),
+        "totalDurationS": total_dur_s,
+        "bestBarLengthMs": best_bar_length,
+        "patterns": clean_json(best_patterns),
+        "segmentsData": clean_json(segments_transience_data),
+        "hpChanges": clean_json(hp_changes),
+        "globalMaxPosScore": global_max_pos_score,
+        "globalMinNegScore": global_min_neg_score,
+        "pass2WinMs": pass2_win_ms,
+        "toleranceMs": tolerance_ms,
+        "pass2Peaks": clean_json(pass2_peaks_flat),
+        "frameDurationMs": frame_duration_ms
+    }
+
+    with open(data_js_filepath, "w", encoding="utf-8") as df:
+        df.write("window.REPORT_DATA = " + json.dumps(report_data) + ";\n")
+
     html_filepath = os.path.join(output_dir, f"{audio_stem}_pattern_analysis.html")
 
     html_content = f"""<!DOCTYPE html>
@@ -343,20 +354,39 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     <div class="hint">💡 Select a section to zoom in on. Right-click anywhere on the graph to zoom back out to the full duration. Graph updates in real time during audio playback.</div>
 </div>
 
+<script src="{data_js_filename}"></script>
 <script>
-    const waveformMin = {json.dumps(waveform_min)};
-    const waveformMax = {json.dumps(waveform_max)};
-    const totalDurationS = {total_dur_s};
-    const bestBarLengthMs = {best_bar_length};
-    const patterns = {patterns_js};
-    const segmentsData = {segments_js};
-    const hpChanges = {hp_changes_js};
-    const globalMaxPosScore = {global_max_pos_score};
-    const globalMinNegScore = {global_min_neg_score};
-    const pass2WinMs = {pass2_win_ms};
-    const toleranceMs = {tolerance_ms};
-    const pass2Peaks = {pass2_peaks_js};
-    const frameDurationMs = {frame_duration_ms};
+    const data = window.REPORT_DATA || {{}};
+    const waveformMin = data.waveformMin || [];
+    const waveformMax = data.waveformMax || [];
+    const totalDurationS = data.totalDurationS || {total_dur_s};
+    const bestBarLengthMs = data.bestBarLengthMs || {best_bar_length};
+    const patterns = data.patterns || [];
+    const segmentsData = data.segmentsData || [];
+    const hpChanges = data.hpChanges || [];
+    const globalMaxPosScore = data.globalMaxPosScore || 1.0;
+    const globalMinNegScore = data.globalMinNegScore || -1.0;
+    const pass2WinMs = data.pass2WinMs || {pass2_win_ms};
+    const toleranceMs = data.toleranceMs || {tolerance_ms};
+    const pass2Peaks = data.pass2Peaks || [];
+    const frameDurationMs = data.frameDurationMs || {frame_duration_ms};
+
+    // Decode base64 binary Float32 snapshot buffers
+    pass2Peaks.forEach(p => {{
+        if (p.snapshot_b64) {{
+            try {{
+                const binStr = atob(p.snapshot_b64);
+                const len = binStr.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {{
+                    bytes[i] = binStr.charCodeAt(i);
+                }}
+                p.snapshot = new Float32Array(bytes.buffer);
+            }} catch (e) {{
+                p.snapshot = null;
+            }}
+        }}
+    }});
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
