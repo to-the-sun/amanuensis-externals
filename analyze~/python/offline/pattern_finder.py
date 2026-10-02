@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import struct
 import argparse
 import traceback
@@ -881,7 +882,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
         let accumulatedBuffer = null;
         if (latestPeak && window.snapshotsArrayBuffer && latestPeak.snap_offset !== undefined) {{
-            const floatLen = latestPeak.snap_len || Math.round(({pass2WinMs} + 1) / 10);
+            const floatLen = latestPeak.snap_len || Math.round(({pass2_win_ms} + 1) / 10);
             accumulatedBuffer = new Float32Array(window.snapshotsArrayBuffer, latestPeak.snap_offset, floatLen);
         }} else if (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length > 0) {{
             accumulatedBuffer = latestPeak.snapshot;
