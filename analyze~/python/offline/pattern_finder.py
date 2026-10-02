@@ -76,8 +76,6 @@ def export_ctbin_assets(ctbin_path, output_dir):
         global_smooth = np.frombuffer(f.read(num_frames * 4), dtype=np.float32)
 
         snap_len = win_ms + 1
-        downsampled_snap_len = (snap_len + 9) // 10
-
         peaks_meta = []
         snapshots_bin_path = os.path.join(output_dir, "snapshots.bin")
 
@@ -469,6 +467,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 </div>
 
 <script>
+    const pass2WinMs = {pass2_win_ms};
+    const frameDurationMs = {frame_duration_ms};
     const waveformMin = {json.dumps(waveform_min)};
     const waveformMax = {json.dumps(waveform_max)};
     const totalDurationS = {total_dur_s};
@@ -478,10 +478,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     const hpChanges = {hp_changes_js};
     const globalMaxPosScore = {global_max_pos_score};
     const globalMinNegScore = {global_min_neg_score};
-    const pass2WinMs = {pass2_win_ms};
     const toleranceMs = {tolerance_ms};
     const pass2Peaks = {pass2_peaks_js};
-    const frameDurationMs = {frame_duration_ms};
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -890,15 +888,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             accumulatedBuffer = new Float32Array(numBufPts);
         }}
 
-        // Compute exact time step in ms per sample point based on array length
-        const stepMs = (numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : frameDurationMs;
+        // Exact frame duration step based on sample rate and hop size (e.g. 0.99773ms for 44.1kHz)
+        const hopSize = Math.floor({sr} * 0.001);
+        const snapBinMs = ({sr} > 0 && hopSize > 0) ? (1000.0 * hopSize / {sr}) : 1.0;
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
         let curMin = Infinity;
 
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * stepMs;
+            const sampleMs = (i - (numBufPts - 1)) * snapBinMs;
             if (sampleMs >= zoomStartMs && sampleMs <= zoomEndMs && sampleMs <= -99.0 + 1e-5) {{
                 const val = accumulatedBuffer[i];
                 if (val > curMax) curMax = val;
@@ -978,9 +977,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         bufCtx.beginPath();
         let firstPt = true;
-        let lastDrawnMs = (0 - (numBufPts - 1)) * stepMs;
+        let lastDrawnMs = (0 - (numBufPts - 1)) * snapBinMs;
         for (let i = 0; i < numBufPts; i++) {{
-            const sampleMs = (i - (numBufPts - 1)) * stepMs;
+            const sampleMs = (i - (numBufPts - 1)) * snapBinMs;
             if (sampleMs > -99.0 + 1e-5) continue; // Exclude the 99ms region [-99ms, 0ms] from visual rendering
             const x = padLeft + ((sampleMs - zoomStartMs) / zoomSpan) * graphW;
             const val = accumulatedBuffer[i];
@@ -997,7 +996,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
         // Fill area under curve up to -99ms
         const endX = padLeft + ((lastDrawnMs - zoomStartMs) / zoomSpan) * graphW;
-        const firstSampleMs = (0 - (numBufPts - 1)) * stepMs;
+        const firstSampleMs = (0 - (numBufPts - 1)) * snapBinMs;
         const startX = padLeft + ((firstSampleMs - zoomStartMs) / zoomSpan) * graphW;
 
         bufCtx.lineTo(endX, padTop + graphH);
