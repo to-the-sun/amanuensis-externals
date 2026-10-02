@@ -155,6 +155,8 @@ cdef class TransientAnalyzer:
     cdef object _processed_peaks
 
     def __cinit__(self, double max_peak_value=1.0, int sr=44100, int window_ms=15000):
+        if window_ms > 15000:
+            window_ms = 15000
         self._c_analyzer = analyzer_create(max_peak_value, NULL, NULL, dummy_lock, dummy_lock, window_ms)
         if self._c_analyzer == NULL:
             raise MemoryError()
@@ -312,6 +314,8 @@ cdef class TransientAnalyzer:
         }
 
 def analyze_audio(cnp.ndarray[float, ndim=1] y, int sr, int window_ms=15000):
+    if window_ms > 15000:
+        window_ms = 15000
     cdef FullAnalysisResult res
     cdef int ret = analyzer_batch_analyze(<float*>y.data, len(y), sr, window_ms, &res)
 

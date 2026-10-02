@@ -769,6 +769,8 @@ static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
 }
 
 int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out) {
+    if (window_ms > 15000) window_ms = 15000;
+    if (window_ms <= 0) window_ms = 15000;
     int hop = (int)(sr * 0.001), num_f = (len + hop - 1) / hop;
     result_out->num_frames = num_f; result_out->times = (float*)malloc(sizeof(float) * num_f); if(!result_out->times) return 0;
     for (int i = 0; i < num_f; i++) result_out->times[i] = (float)i * (float)hop / (float)sr;
