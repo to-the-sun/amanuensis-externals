@@ -1264,6 +1264,24 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     print(f"Interactive HTML report generated successfully: {html_filepath}")
 
+    launcher_path = os.path.join(output_dir, "open_inspector.py")
+    try:
+        with open(launcher_path, "w", encoding="utf-8") as lf:
+            lf.write(f"""# Double-click this script to view interactive HTML Inspector report
+import os
+import sys
+import webbrowser
+
+html_file = os.path.join(os.path.dirname(__file__), "{audio_stem}_pattern_analysis.html")
+if os.path.exists(html_file):
+    webbrowser.open(os.path.abspath(html_file))
+else:
+    print(f"Inspector HTML report not found: {{html_file}}")
+    input("Press Enter to exit...")
+""")
+    except Exception as e:
+        print(f"Could not create open_inspector.py launcher: {e}")
+
     if open_browser:
         try:
             webbrowser.open(os.path.abspath(html_filepath))
