@@ -96,9 +96,9 @@ def export_ctbin_assets(ctbin_path, output_dir):
                     qualifiers.append({"ms": q_ms, "val": q_val, "orig_ms": q_orig_ms})
 
                 full_snapshot = np.frombuffer(f.read(snap_len * 8), dtype=np.float64)
-                downsampled_snapshot = full_snapshot[::10].astype(np.float32)
+                float32_snapshot = full_snapshot.astype(np.float32)
 
-                snap_bytes = downsampled_snapshot.tobytes()
+                snap_bytes = float32_snapshot.tobytes()
                 snap_f.write(snap_bytes)
 
                 peaks_meta.append({
@@ -115,7 +115,7 @@ def export_ctbin_assets(ctbin_path, output_dir):
                     "prominence": float(prominence),
                     "qualifiers": qualifiers,
                     "snap_offset": snap_offset,
-                    "snap_len": len(downsampled_snapshot)
+                    "snap_len": len(float32_snapshot)
                 })
 
                 snap_offset += len(snap_bytes)
@@ -233,8 +233,6 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         for band_idx, band_peaks in enumerate(pass2_res['peaks']):
             for p in band_peaks:
                 p_copy = dict(p)
-                if 'snapshot' in p_copy and isinstance(p_copy['snapshot'], list) and len(p_copy['snapshot']) > 100:
-                    p_copy['snapshot'] = p_copy['snapshot'][::50]  # Downsample inline fallback 50x for file:// CORS safety
                 p_copy['band_idx'] = band_idx
                 t_ms = float(p.get('time', 0.0) * 1000.0)
                 p_copy['time_ms'] = t_ms
@@ -882,7 +880,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
         let accumulatedBuffer = null;
         if (latestPeak && window.snapshotsArrayBuffer && latestPeak.snap_offset !== undefined) {{
-            const floatLen = latestPeak.snap_len || Math.round(({pass2_win_ms} + 1) / 10);
+            const floatLen = latestPeak.snap_len || (pass2WinMs + 1);
             accumulatedBuffer = new Float32Array(window.snapshotsArrayBuffer, latestPeak.snap_offset, floatLen);
         }} else if (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length > 0) {{
             accumulatedBuffer = latestPeak.snapshot;
@@ -1264,23 +1262,6 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     print(f"Interactive HTML report generated successfully: {html_filepath}")
 
-    launcher_path = os.path.join(output_dir, "open_inspector.py")
-    try:
-        with open(launcher_path, "w", encoding="utf-8") as lf:
-            lf.write(f"""# Double-click this script to view interactive HTML Inspector report
-import os
-import sys
-import webbrowser
-
-html_file = os.path.join(os.path.dirname(__file__), "{audio_stem}_pattern_analysis.html")
-if os.path.exists(html_file):
-    webbrowser.open(os.path.abspath(html_file))
-else:
-    print(f"Inspector HTML report not found: {{html_file}}")
-    input("Press Enter to exit...")
-""")
-    except Exception as e:
-        print(f"Could not create open_inspector.py launcher: {e}")
 
     if open_browser:
         try:
