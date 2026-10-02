@@ -535,7 +535,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         }}
     }}
 
-    function drawSegmentBox(canvasId, titleId, ratingId, seg, labelPrefix, currentAudioTimeMs) {{
+    function drawSegmentBox(boxId, canvasId, titleId, ratingId, seg, labelPrefix, currentAudioTimeMs) {{
+        const boxElem = document.getElementById(boxId);
         const c = document.getElementById(canvasId);
         const t = document.getElementById(titleId);
         const r = document.getElementById(ratingId);
@@ -549,6 +550,18 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             t.textContent = `${{labelPrefix}} Segment (Out of Range)`;
             r.textContent = `Average Rating: N/A`;
 
+            if (boxElem) {{
+                boxElem.style.borderColor = '#dcdde1';
+                boxElem.style.borderWidth = '1px';
+                boxElem.style.backgroundColor = '#fdfdfd';
+            }}
+            if (t) t.style.color = '#2c3e50';
+            if (r) {{
+                r.style.color = '#7f8c8d';
+                r.style.borderColor = '#bdc3c7';
+                r.style.backgroundColor = '#ecf0f1';
+            }}
+
             sCtx.fillStyle = '#f8f9fa';
             sCtx.fillRect(0, 0, W, H);
             sCtx.fillStyle = '#bdc3c7';
@@ -558,7 +571,52 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             return;
         }}
 
-        t.textContent = `${{labelPrefix}} Segment (Seg ${{seg.segment_index}} : ${{Math.round(seg.start_ms)}} - ${{Math.round(seg.end_ms)}} ms)`;
+        const patIdx = (seg && seg.segment_index !== undefined)
+            ? patterns.findIndex(p => p.segments && p.segments.includes(seg.segment_index))
+            : -1;
+
+        if (patIdx !== -1) {{
+            const mainColor = borderColors[patIdx % borderColors.length];
+            const bgTint = colors[patIdx % colors.length].replace('0.35', '0.12');
+            const badgeBg = colors[patIdx % colors.length].replace('0.35', '0.2');
+
+            if (boxElem) {{
+                boxElem.style.borderColor = mainColor;
+                boxElem.style.borderWidth = '2px';
+                boxElem.style.backgroundColor = bgTint;
+            }}
+            if (t) t.style.color = mainColor;
+            if (r) {{
+                r.style.color = mainColor;
+                r.style.borderColor = mainColor;
+                r.style.backgroundColor = badgeBg;
+            }}
+
+            t.textContent = `${{labelPrefix}} Segment (Seg ${{seg.segment_index}} [Pattern ${{patIdx + 1}}] : ${{Math.round(seg.start_ms)}} - ${{Math.round(seg.end_ms)}} ms)`;
+        }} else {{
+            if (boxId === 'boxCurr') {{
+                if (boxElem) {{
+                    boxElem.style.borderColor = '#3498db';
+                    boxElem.style.borderWidth = '2px';
+                    boxElem.style.backgroundColor = '#f4f8fc';
+                }}
+            }} else {{
+                if (boxElem) {{
+                    boxElem.style.borderColor = '#dcdde1';
+                    boxElem.style.borderWidth = '1px';
+                    boxElem.style.backgroundColor = '#fdfdfd';
+                }}
+            }}
+            if (t) t.style.color = '#2c3e50';
+            if (r) {{
+                r.style.color = '#27ae60';
+                r.style.borderColor = '#2ecc71';
+                r.style.backgroundColor = '#e8f8f5';
+            }}
+
+            t.textContent = `${{labelPrefix}} Segment (Seg ${{seg.segment_index}} : ${{Math.round(seg.start_ms)}} - ${{Math.round(seg.end_ms)}} ms)`;
+        }}
+
         r.textContent = `Average Rating: ${{seg.rating.toFixed(4)}}`;
 
         // Background
@@ -664,9 +722,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         const currSeg = segmentsData.find(s => s.segment_index === curSegIdx);
         const nextSeg = segmentsData.find(s => s.segment_index === curSegIdx + 1);
 
-        drawSegmentBox('canvasPrev', 'titlePrev', 'ratingPrev', prevSeg, 'Previous', curTimeMs);
-        drawSegmentBox('canvasCurr', 'titleCurr', 'ratingCurr', currSeg, 'Current Playing', curTimeMs);
-        drawSegmentBox('canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);
+        drawSegmentBox('boxPrev', 'canvasPrev', 'titlePrev', 'ratingPrev', prevSeg, 'Previous', curTimeMs);
+        drawSegmentBox('boxCurr', 'canvasCurr', 'titleCurr', 'ratingCurr', currSeg, 'Current Playing', curTimeMs);
+        drawSegmentBox('boxNext', 'canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);
     }}
 
     function drawHistoryBuffer() {{
