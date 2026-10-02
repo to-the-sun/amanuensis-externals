@@ -84,7 +84,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     except Exception as e:
         print(f"Could not embed base64 audio in HTML: {e}")
 
-    audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.basename(audio_path)
+    output_dir = os.path.splitext(audio_path)[0]
+    os.makedirs(output_dir, exist_ok=True)
+
+    audio_src = f"data:{audio_mime};base64,{audio_b64}" if audio_b64 else os.path.relpath(audio_path, output_dir)
 
     # Clean JSON serialization helper
     def clean_json(obj):
@@ -133,7 +136,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     global_min_neg_score = float(min(neg_scores)) if neg_scores else -1.0
 
     audio_filename = os.path.basename(audio_path)
-    html_filepath = os.path.splitext(audio_path)[0] + "_pattern_analysis.html"
+    audio_stem = os.path.splitext(audio_filename)[0]
+    html_filepath = os.path.join(output_dir, f"{audio_stem}_pattern_analysis.html")
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1388,6 +1392,25 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     print(f"Total pattern duration at bar length: {max_total_pattern_len_ms:.2f} ms")
     print(f"Number of patterns identified: {len(best_patterns)}")
     print("="*60)
+
+    # Output directory for HTML report and pattern WAV files
+    output_dir = os.path.splitext(audio_path)[0]
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Save each identified pattern as its own WAV file
+    if best_patterns:
+        print(f"\nSaving {len(best_patterns)} identified pattern WAV file(s) to '{output_dir}'...")
+        for pat_idx, pat in enumerate(best_patterns, 1):
+            start_sample = max(0, int(round((pat['start_ms'] / 1000.0) * orig_sr)))
+            end_sample = min(len(raw_y), int(round((pat['end_ms'] / 1000.0) * orig_sr)))
+            pat_y = raw_y[start_sample:end_sample]
+            pat_wav_filename = f"pattern_{pat_idx}.wav"
+            pat_wav_path = os.path.join(output_dir, pat_wav_filename)
+            try:
+                sf.write(pat_wav_path, pat_y, orig_sr)
+                print(f"  Saved {pat_wav_filename} ({pat['duration_ms']:.2f} ms)")
+            except Exception as e:
+                print(f"  Error saving {pat_wav_filename}: {e}")
 
     # Downsample segment audio waveforms for zoomed-in rendering
     waveform_pts_per_seg = 300
