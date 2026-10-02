@@ -3,8 +3,22 @@ import sys
 import struct
 import argparse
 import traceback
-import numpy as np
-import soundfile as sf
+
+try:
+    import numpy as np
+except ImportError as e:
+    print(f"\nMissing required dependency 'numpy': {e}")
+    print("Please install required dependencies using: pip install numpy soundfile")
+    input("\nPress Enter to exit...")
+    sys.exit(1)
+
+try:
+    import soundfile as sf
+except ImportError as e:
+    print(f"\nMissing required dependency 'soundfile': {e}")
+    print("Please install required dependencies using: pip install soundfile")
+    input("\nPress Enter to exit...")
+    sys.exit(1)
 
 try:
     import ct_utils
@@ -866,16 +880,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         // Get latest active peak to utilize direct accumulated buffer array from C core or snapshots.bin
         const latestPeak = (activePeaks.length > 0) ? activePeaks.reduce((a, b) => (a.time_ms > b.time_ms ? a : b)) : null;
         let accumulatedBuffer = null;
-        if (latestPeak && window.snapshotsArrayBuffer && latestPeak.snap_offset !== undefined) {
-            const floatLen = latestPeak.snap_len || Math.round((pass2WinMs + 1) / 10);
+        if (latestPeak && window.snapshotsArrayBuffer && latestPeak.snap_offset !== undefined) {{
+            const floatLen = latestPeak.snap_len || Math.round(({pass2WinMs} + 1) / 10);
             accumulatedBuffer = new Float32Array(window.snapshotsArrayBuffer, latestPeak.snap_offset, floatLen);
-        } else if (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length > 0) {
+        }} else if (latestPeak && latestPeak.snapshot && latestPeak.snapshot.length > 0) {{
             accumulatedBuffer = latestPeak.snapshot;
-        }
+        }}
         const numBufPts = accumulatedBuffer ? accumulatedBuffer.length : (Math.round(pass2WinMs) + 1);
-        if (!accumulatedBuffer) {
+        if (!accumulatedBuffer) {{
             accumulatedBuffer = new Float32Array(numBufPts);
-        }
+        }}
 
         // Compute exact time step in ms per sample point based on array length
         const stepMs = (numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : frameDurationMs;
@@ -1171,10 +1185,10 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     // Asynchronously fetch binary snapshot chunks if available
     fetch('snapshots.bin')
         .then(res => res.arrayBuffer())
-        .then(buf => {
+        .then(buf => {{
             window.snapshotsArrayBuffer = buf;
             drawHistoryBuffer();
-        })
+        }})
         .catch(e => console.log('snapshots.bin lazy-load fetch notice:', e));
 
     renderAll();
@@ -1726,14 +1740,18 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except BaseException as e:
         print("\n" + "="*60)
         print("ERROR OCCURRED")
         print("="*60)
         traceback.print_exc()
         print("="*60)
-    finally:
         try:
-            input("\nProcess completed. Press Enter to exit...")
-        except (EOFError, KeyboardInterrupt, Exception):
+            input("\nAn error occurred. Press Enter to exit...")
+        except BaseException:
+            pass
+    else:
+        try:
+            input("\nProcess completed successfully. Press Enter to exit...")
+        except BaseException:
             pass
