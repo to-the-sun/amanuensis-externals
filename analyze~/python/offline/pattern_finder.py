@@ -100,7 +100,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             return [clean_json(i) for i in obj]
         return obj
 
-    pass2_win_ms = int(round(best_bar_length * 2))
+    pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
     tolerance_ms = float(pass2_res.get('tolerance', get_default_tolerance())) if (pass2_res and isinstance(pass2_res, dict)) else get_default_tolerance()
     hop = int(sr * 0.001)
     frame_duration_ms = 1000.0 * float(hop) / float(sr)
@@ -1354,7 +1354,7 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     # Second pass: Find actual peaks and score them using window_ms = segment length * 2 found in Pass 1
     if ct is not None:
         try:
-            pass2_win_ms = int(round(best_bar_length * 2))
+            pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
             analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=pass2_win_ms)
         except Exception as e:
             print(f"Error running Pass 2 cumulative_transience analysis: {e}")
