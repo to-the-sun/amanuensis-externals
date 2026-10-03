@@ -14,8 +14,7 @@
 #endif
 
 #include "cumulative_transience.h"
-
-int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms);
+#include "ct_exporter.h"
 
 static void get_directory_and_stem(const char* filepath, char* out_dir, char* out_stem) {
     const char* last_slash = strrchr(filepath, '/');
@@ -42,7 +41,7 @@ static void get_directory_and_stem(const char* filepath, char* out_dir, char* ou
 
 int main(int argc, char** argv) {
     printf("============================================================\n");
-    printf("  Headless Cumulative Transience Audio Analyzer (C Core)\n");
+    printf("  Standalone C Cumulative Transience Analyzer & Exporter\n");
     printf("============================================================\n\n");
 
     if (argc < 2) {
@@ -112,64 +111,33 @@ int main(int argc, char** argv) {
     snprintf(output_dir, sizeof(output_dir), "%s%s", dir_path, stem_name);
     mkdir_cross(output_dir);
 
-    char ctbin_path[8192];
-    snprintf(ctbin_path, sizeof(ctbin_path), "%s/%s.ctbin", output_dir, stem_name);
+    printf("\nRunning standalone transience analysis, pattern finding, & asset exports in pure C...\n");
 
-    printf("\nRunning headless transience analysis in C core...\n");
-    printf("Exporting binary transience stream to: %s\n", ctbin_path);
-
-    int success = export_ctbin(ctbin_path, mono_data, (int)mono_frames, (int)sample_rate, window_ms);
+    int success = export_all_assets_and_html(
+        audio_filepath,
+        output_dir,
+        stem_name,
+        mono_data,
+        (int)mono_frames,
+        (int)sample_rate,
+        window_ms
+    );
     free(mono_data);
 
     if (!success) {
-        printf("\nError: Headless analysis failed during export_ctbin.\n");
+        printf("\nError: Standalone analysis failed during asset export.\n");
         printf("Press Enter to exit...");
         getchar();
         return 1;
     }
 
     printf("\n============================================================\n");
-    printf("C CORE ANALYSIS COMPLETE!\n");
+    printf("ALL ASSETS & HTML REPORT GENERATED IN PURE C!\n");
     printf("Output Directory: %s/\n", output_dir);
-    printf("Binary Artifact:  %s.ctbin\n", stem_name);
+    printf("Assets Exported:  .ctbin, manifest.json, snapshots.bin, snapshots.js,\n");
+    printf("                  report_data.json, report_data.js, pattern WAVs,\n");
+    printf("                  %s_pattern_analysis.html\n", stem_name);
     printf("============================================================\n\n");
-
-    printf("Invoking Python post-processing on pattern_finder.py to generate assets & HTML report...\n");
-    char cmd_buf[16384];
-    int sys_res = -1;
-
-    char exe_dir[2048];
-    char dummy_stem[1024];
-    get_directory_and_stem(argv[0], exe_dir, dummy_stem);
-
-    char py_script_path[4096];
-    snprintf(py_script_path, sizeof(py_script_path), "%s/pattern_finder.py", exe_dir);
-
-#if defined(_WIN32) || defined(_WIN64)
-    snprintf(cmd_buf, sizeof(cmd_buf), "python \"%s\" \"%s\"", py_script_path, audio_filepath);
-    sys_res = system(cmd_buf);
-    if (sys_res != 0) {
-        snprintf(cmd_buf, sizeof(cmd_buf), "py \"%s\" \"%s\"", py_script_path, audio_filepath);
-        sys_res = system(cmd_buf);
-    }
-#else
-    snprintf(cmd_buf, sizeof(cmd_buf), "python3 \"%s\" \"%s\"", py_script_path, audio_filepath);
-    sys_res = system(cmd_buf);
-    if (sys_res != 0) {
-        snprintf(cmd_buf, sizeof(cmd_buf), "python \"%s\" \"%s\"", py_script_path, audio_filepath);
-        sys_res = system(cmd_buf);
-    }
-#endif
-
-    if (sys_res == 0) {
-        printf("\n============================================================\n");
-        printf("ALL ASSETS & HTML REPORT GENERATED SUCCESSFULLY!\n");
-        printf("HTML Report: %s/%s_pattern_analysis.html\n", output_dir, stem_name);
-        printf("============================================================\n\n");
-    } else {
-        printf("\nNotice: Python post-processing returned non-zero code (%d).\n", sys_res);
-        printf("Please ensure Python 3 is installed with 'numpy' and 'soundfile'.\n\n");
-    }
 
     printf("Press Enter to exit...");
     getchar();
