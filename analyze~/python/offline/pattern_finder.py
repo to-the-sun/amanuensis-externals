@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import struct
+import base64
 import argparse
 import traceback
 
@@ -136,6 +137,13 @@ def export_ctbin_assets(ctbin_path, output_dir):
     with open(manifest_path, "w", encoding="utf-8") as mf:
         mf.write(json.dumps(manifest))
 
+        snapshots_js_path = os.path.join(output_dir, "snapshots.js")
+        with open(snapshots_bin_path, "rb") as snap_f:
+            all_snap_bytes = snap_f.read()
+            b64_snap_data = base64.b64encode(all_snap_bytes).decode("ascii")
+            with open(snapshots_js_path, "w", encoding="utf-8") as js_f:
+                js_f.write(f"window.snapshotsBase64 = '{b64_snap_data}';\n")
+
     return manifest
 
 
@@ -215,7 +223,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 
     if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
         for band_idx, band_peaks in enumerate(pass2_res['peaks']):
-            for p in band_peaks:
+            for k, p in enumerate(band_peaks):
                 p_copy = dict(p)
                 p_copy['band_idx'] = band_idx
                 t_ms = float(p.get('time', 0.0) * 1000.0)
@@ -224,7 +232,9 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                     f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
                     p_copy['demarcation_line'] = float(dem_lines[f_idx])
 
-                key = (p_copy.get('p_idx'), band_idx)
+                p_idx = p_copy.get('p_idx', k)
+                p_copy['p_idx'] = p_idx
+                key = (p_idx, band_idx)
                 if key in ctbin_peaks_map:
                     p_copy['snap_offset'] = ctbin_peaks_map[key]['snap_offset']
                     p_copy['snap_len'] = ctbin_peaks_map[key]['snap_len']
@@ -266,6 +276,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 <head>
     <meta charset="UTF-8">
     <title>Pattern Analysis Report - {audio_filename}</title>
+    <script src="snapshots.js"></script>
     <style>
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -1178,14 +1189,28 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         drawHistoryBuffer();
     }}
 
-    // Asynchronously fetch binary snapshot chunks if available
-    fetch('snapshots.bin')
-        .then(res => res.arrayBuffer())
-        .then(buf => {{
-            window.snapshotsArrayBuffer = buf;
-            drawHistoryBuffer();
-        }})
-        .catch(e => console.log('snapshots.bin lazy-load fetch notice:', e));
+    // Load binary snapshot chunks from snapshots.js or fallback to snapshots.bin fetch
+    if (window.snapshotsBase64) {{
+        try {{
+            const binaryString = atob(window.snapshotsBase64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {{
+                bytes[i] = binaryString.charCodeAt(i);
+            }}
+            window.snapshotsArrayBuffer = bytes.buffer;
+        }} catch (e) {{
+            console.log('Error decoding snapshotsBase64:', e);
+        }}
+    }} else {{
+        fetch('snapshots.bin')
+            .then(res => res.arrayBuffer())
+            .then(buf => {{
+                window.snapshotsArrayBuffer = buf;
+                drawHistoryBuffer();
+            }})
+            .catch(e => console.log('snapshots.bin lazy-load fetch notice:', e));
+    }}
 
     renderAll();
 
