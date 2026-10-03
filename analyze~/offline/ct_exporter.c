@@ -1178,7 +1178,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCanvas.addEventListener('mousedown', (e) => {\n");
         fprintf(f_html, "            if (e.button !== 0) return;\n");
         fprintf(f_html, "            const clickX = getCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            if (clickX >= padLeft && clickX <= padLeft + graphW) {\n");
         fprintf(f_html, "                isDraggingBuf = true; dragStartX = clickX; dragCurrentX = clickX;\n");
         fprintf(f_html, "            }\n");
@@ -1186,14 +1186,14 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCanvas.addEventListener('mousemove', (e) => {\n");
         fprintf(f_html, "            if (!isDraggingBuf) return;\n");
         fprintf(f_html, "            const mouseX = getCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            dragCurrentX = Math.max(padLeft, Math.min(padLeft + graphW, mouseX));\n");
         fprintf(f_html, "            drawHistoryBuffer();\n");
         fprintf(f_html, "        });\n");
         fprintf(f_html, "        bufCanvas.addEventListener('mouseup', (e) => {\n");
         fprintf(f_html, "            if (!isDraggingBuf || e.button !== 0) return;\n");
         fprintf(f_html, "            isDraggingBuf = false;\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            const dx = Math.abs(dragCurrentX - dragStartX);\n");
         fprintf(f_html, "            if (dx > 5) {\n");
         fprintf(f_html, "                const x1 = Math.min(dragStartX, dragCurrentX), x2 = Math.max(dragStartX, dragCurrentX);\n");
@@ -1241,7 +1241,11 @@ int export_all_assets_and_html(
         fprintf(f_html, "            if (!seg) return;\n");
         fprintf(f_html, "            const rect = canvasElem.getBoundingClientRect();\n");
         fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
-        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));\n");
+        fprintf(f_html, "            const scaleX = canvasElem.width / rect.width;\n");
+        fprintf(f_html, "            const canvasX = clickX * scaleX;\n");
+        fprintf(f_html, "            const padL = 45, padR = 20;\n");
+        fprintf(f_html, "            const graphW = canvasElem.width - padL - padR;\n");
+        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, (canvasX - padL) / graphW));\n");
         fprintf(f_html, "            const segDurMs = seg.end_ms - seg.start_ms;\n");
         fprintf(f_html, "            const targetTimeS = (seg.start_ms + clickFraction * segDurMs) / 1000.0;\n");
         fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
