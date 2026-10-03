@@ -228,13 +228,25 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 if key in ctbin_peaks_map:
                     p_copy['snap_offset'] = ctbin_peaks_map[key]['snap_offset']
                     p_copy['snap_len'] = ctbin_peaks_map[key]['snap_len']
-                    p_copy.pop('snapshot', None)  # Strip inline 15001-element snapshot list for lightweight HTML file (< 100 KB)
 
+                p_copy.pop('snapshot', None)  # Strip inline 15001-element snapshot list for lightweight HTML file (< 150 KB)
                 pass2_peaks_flat.append(p_copy)
+
+    clean_segments_data = []
+    for seg in segments_transience_data:
+        seg_copy = dict(seg)
+        if 'peaks' in seg_copy and isinstance(seg_copy['peaks'], list):
+            clean_peaks = []
+            for p in seg_copy['peaks']:
+                pk = dict(p)
+                pk.pop('snapshot', None)  # Strip snapshot list from segment peak copies
+                clean_peaks.append(pk)
+            seg_copy['peaks'] = clean_peaks
+        clean_segments_data.append(seg_copy)
 
     pass2_peaks_js = json.dumps(clean_json(pass2_peaks_flat))
     patterns_js = json.dumps(clean_json(best_patterns))
-    segments_js = json.dumps(clean_json(segments_transience_data))
+    segments_js = json.dumps(clean_json(clean_segments_data))
     hp_changes_js = json.dumps(clean_json(hp_changes))
 
     # Compute global extreme positive and negative scores across all segments
@@ -875,9 +887,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             accumulatedBuffer = new Float32Array(numBufPts);
         }}
 
-        // Exact frame duration step based on sample rate and hop size (e.g. 0.99773ms for 44.1kHz)
-        const hopSize = Math.floor({sr} * 0.001);
-        const snapBinMs = ({sr} > 0 && hopSize > 0) ? (1000.0 * hopSize / {sr}) : 1.0;
+        // Bin step based on buffer length so full and downsampled buffers span pass2WinMs
+        const snapBinMs = (numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : 1.0;
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
