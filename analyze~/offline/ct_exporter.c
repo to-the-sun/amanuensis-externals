@@ -540,8 +540,9 @@ int export_all_assets_and_html(
             if (!fp) continue;
 
             fprintf(fp, "{\n");
+            fprintf(fp, "  \"sample_rate\": %d,\n", sr);
             fprintf(fp, "  \"pass2_win_ms\": %d,\n", pass2_win_ms);
-            fprintf(fp, "  \"frame_duration_ms\": %.6f,\n", 1000.0 * (double)(sr * 0.001) / (double)sr);
+            fprintf(fp, "  \"frame_duration_ms\": %.6f,\n", 1000.0 * (double)((int)(sr * 0.001)) / (double)sr);
             fprintf(fp, "  \"total_dur_s\": %.4f,\n", total_duration_ms / 1000.0);
             fprintf(fp, "  \"best_bar_length\": %.2f,\n", best_bar_length_ms);
             fprintf(fp, "  \"global_max_pos_score\": %.6f,\n", global_max_pos);
@@ -768,8 +769,9 @@ int export_all_assets_and_html(
         fprintf(f_html, "</div>\n");
 
         fprintf(f_html, "<script>\n");
+        fprintf(f_html, "    let sampleRate = %d;\n", sr);
         fprintf(f_html, "    let pass2WinMs = %d;\n", pass2_win_ms);
-        fprintf(f_html, "    let frameDurationMs = %.6f;\n", 1000.0 * (double)(sr * 0.001) / (double)sr);
+        fprintf(f_html, "    let frameDurationMs = 1000.0 * Math.floor(%d * 0.001) / %d;\n", sr, sr);
         fprintf(f_html, "    let waveformMin = [];\n");
         fprintf(f_html, "    let waveformMax = [];\n");
         fprintf(f_html, "    let totalDurationS = %.4f;\n", total_duration_ms / 1000.0);
@@ -798,6 +800,7 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "    function applyReportData(data) {\n");
         fprintf(f_html, "        if (!data) return;\n");
+        fprintf(f_html, "        if (data.sample_rate !== undefined) { sampleRate = data.sample_rate; frameDurationMs = 1000.0 * Math.floor(sampleRate * 0.001) / sampleRate; }\n");
         fprintf(f_html, "        if (data.pass2_win_ms !== undefined) { pass2WinMs = data.pass2_win_ms; zoomStartMs = -pass2WinMs; }\n");
         fprintf(f_html, "        if (data.frame_duration_ms !== undefined) frameDurationMs = data.frame_duration_ms;\n");
         fprintf(f_html, "        if (data.waveform_min) waveformMin = data.waveform_min;\n");
@@ -875,7 +878,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "                pat.segments.forEach(segIdx => {\n");
         fprintf(f_html, "                    const segStartX = (segIdx * bestBarLengthMs / 1000.0 / totalDurationS) * W;\n");
         fprintf(f_html, "                    ctx.strokeStyle = borderColor; ctx.setLineDash([4, 4]);\n");
-        fprintf(f_html, "                    ctx.beginPath(); ctx.moveTo(segStartX, 25); ctx.lineTo(segStartX, H); ctx.stroke(); ctx.setLineDash([]);\n");
+        fprintf(f_html, "                    ctx.beginPath(); ctx.moveTo(segStartX, 0); ctx.lineTo(segStartX, H - 25); ctx.stroke(); ctx.setLineDash([]);\n");
         fprintf(f_html, "                    ctx.fillStyle = borderColor; ctx.font = '10px Segoe UI, sans-serif';\n");
         fprintf(f_html, "                    ctx.fillText(`Seg ${segIdx}`, segStartX + 3, 38);\n");
         fprintf(f_html, "                });\n");
@@ -895,11 +898,26 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "        hpChanges.forEach((ch, idx) => {\n");
         fprintf(f_html, "            const x = (ch.time_s / totalDurationS) * W;\n");
-        fprintf(f_html, "            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);\n");
-        fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]);\n");
-        fprintf(f_html, "            ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 9px Segoe UI, sans-serif';\n");
-        fprintf(f_html, "            ctx.fillText(`HP: ${ch.new_value_ms.toFixed(0)}ms`, Math.min(x + 2, W - 60), 45 + (idx %% 4) * 14);\n");
+        fprintf(f_html, "            const tickTop = H - 38;\n");
+        fprintf(f_html, "            const tickBottom = H - 25;\n");
+        fprintf(f_html, "            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2.0;\n");
+        fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, tickTop); ctx.lineTo(x, tickBottom); ctx.stroke();\n");
+        fprintf(f_html, "            ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 9px Segoe UI, sans-serif'; ctx.textAlign = 'center';\n");
+        fprintf(f_html, "            ctx.fillText(`${ch.new_value_ms.toFixed(0)}ms`, Math.max(15, Math.min(W - 15, x)), tickTop - 3);\n");
         fprintf(f_html, "        });\n");
+
+        fprintf(f_html, "        ctx.strokeStyle = '#7f8c8d'; ctx.lineWidth = 1;\n");
+        fprintf(f_html, "        ctx.beginPath(); ctx.moveTo(0, H - 25); ctx.lineTo(W, H - 25); ctx.stroke();\n");
+        fprintf(f_html, "        ctx.fillStyle = '#7f8c8d'; ctx.font = '11px Segoe UI, sans-serif'; ctx.textAlign = 'center';\n");
+        fprintf(f_html, "        const numWfTicks = 10;\n");
+        fprintf(f_html, "        for (let i = 0; i <= numWfTicks; i++) {\n");
+        fprintf(f_html, "            const frac = i / numWfTicks;\n");
+        fprintf(f_html, "            const x = frac * W;\n");
+        fprintf(f_html, "            const secVal = frac * totalDurationS;\n");
+        fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, H - 25); ctx.lineTo(x, H - 20); ctx.stroke();\n");
+        fprintf(f_html, "            ctx.fillText(`${secVal.toFixed(1)}s`, x, H - 8);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        ctx.fillText('Time (seconds)', W / 2, H - 8);\n");
 
         fprintf(f_html, "        if (audio.duration) {\n");
         fprintf(f_html, "            const progress = audio.currentTime / audio.duration;\n");
@@ -957,6 +975,8 @@ int export_all_assets_and_html(
         fprintf(f_html, "            }\n");
         fprintf(f_html, "            sCtx.stroke();\n");
         fprintf(f_html, "        }\n");
+        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '10px Segoe UI, sans-serif'; sCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        sCtx.fillText('Relative Segment Time (ms)', W / 2, H - 4);\n");
         fprintf(f_html, "        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {\n");
         fprintf(f_html, "            const cursorX = ((currentAudioTimeMs - seg.start_ms) / segDurMs) * W;\n");
         fprintf(f_html, "            sCtx.strokeStyle = '#e67e22'; sCtx.lineWidth = 2.5; sCtx.beginPath(); sCtx.moveTo(cursorX, 0); sCtx.lineTo(cursorX, H); sCtx.stroke();\n");
@@ -1091,6 +1111,12 @@ int export_all_assets_and_html(
         fprintf(f_html, "            }\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        bufCtx.restore();\n");
+
+        fprintf(f_html, "        bufCtx.save(); bufCtx.translate(15, padTop + graphH / 2); bufCtx.rotate(-Math.PI / 2);\n");
+        fprintf(f_html, "        bufCtx.fillStyle = '#7f8c8d'; bufCtx.font = '11px Segoe UI, sans-serif'; bufCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        bufCtx.fillText('Transience Flux / Energy', 0, 0); bufCtx.restore();\n");
+        fprintf(f_html, "        bufCtx.fillStyle = '#7f8c8d'; bufCtx.font = '11px Segoe UI, sans-serif'; bufCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        bufCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 32);\n");
 
         fprintf(f_html, "        bufCtx.fillStyle = '#2c3e50'; bufCtx.font = 'bold 13px Segoe UI, sans-serif'; bufCtx.textAlign = 'left';\n");
         fprintf(f_html, "        if (Math.abs(zoomStartMs - (-pass2WinMs)) > 1e-2 || Math.abs(zoomEndMs - 0.0) > 1e-2) {\n");
