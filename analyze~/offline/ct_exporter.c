@@ -692,7 +692,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        .canvas-container { position: relative; margin-top: 15px; border: 1px solid #dcdde1; border-radius: 8px; overflow: hidden; background: #ffffff; cursor: pointer; }\n");
         fprintf(f_html, "        canvas { display: block; width: 100%%; }\n");
         fprintf(f_html, "        #waveformCanvas { height: 250px; }\n");
-        fprintf(f_html, "        #historyBufferCanvas { height: 220px; background-color: #ffffff; }\n");
+        fprintf(f_html, "        #historyBufferCanvas { height: 250px; background-color: #ffffff; }\n");
         fprintf(f_html, "        .hint { font-size: 12px; color: #7f8c8d; text-align: center; margin-top: 6px; }\n");
         fprintf(f_html, "        .segment-inspector-container { display: flex; flex-direction: column; gap: 15px; margin-top: 15px; }\n");
         fprintf(f_html, "        .segment-box { border: 1px solid #dcdde1; border-radius: 8px; padding: 12px; background: #fdfdfd; box-shadow: 0 2px 6px rgba(0,0,0,0.04); position: relative; }\n");
@@ -763,7 +763,7 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "    <div class=\"section-title\">3. Accumulated History Buffer</div>\n");
         fprintf(f_html, "    <div class=\"canvas-container\" style=\"cursor: crosshair; background: #ffffff;\">\n");
-        fprintf(f_html, "        <canvas id=\"historyBufferCanvas\" width=\"1150\" height=\"220\"></canvas>\n");
+        fprintf(f_html, "        <canvas id=\"historyBufferCanvas\" width=\"1150\" height=\"250\"></canvas>\n");
         fprintf(f_html, "    </div>\n");
         fprintf(f_html, "    <div class=\"hint\">💡 Select a section to zoom in on. Right-click anywhere on the graph to zoom back out to the full duration. Graph updates in real time during audio playback.</div>\n");
         fprintf(f_html, "</div>\n");
@@ -797,6 +797,13 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)', 'rgba(241, 196, 15, 0.35)'];\n");
         fprintf(f_html, "    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f'];\n\n");
+
+        fprintf(f_html, "    function formatMSS(sec) {\n");
+        fprintf(f_html, "        if (isNaN(sec) || sec < 0) sec = 0;\n");
+        fprintf(f_html, "        const m = Math.floor(sec / 60);\n");
+        fprintf(f_html, "        const s = Math.floor(sec %% 60);\n");
+        fprintf(f_html, "        return `${m}:${s < 10 ? '0' : ''}${s}`;\n");
+        fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function applyReportData(data) {\n");
         fprintf(f_html, "        if (!data) return;\n");
@@ -903,7 +910,8 @@ int export_all_assets_and_html(
         fprintf(f_html, "            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2.0;\n");
         fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, tickTop); ctx.lineTo(x, tickBottom); ctx.stroke();\n");
         fprintf(f_html, "            ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 9px Segoe UI, sans-serif'; ctx.textAlign = 'center';\n");
-        fprintf(f_html, "            ctx.fillText(`${ch.new_value_ms.toFixed(0)}ms`, Math.max(15, Math.min(W - 15, x)), tickTop - 3);\n");
+        fprintf(f_html, "            const yOffset = (idx %% 3) * 11;\n");
+        fprintf(f_html, "            ctx.fillText(`${ch.new_value_ms.toFixed(0)}ms`, Math.max(15, Math.min(W - 15, x)), tickTop - 3 - yOffset);\n");
         fprintf(f_html, "        });\n");
 
         fprintf(f_html, "        ctx.strokeStyle = '#7f8c8d'; ctx.lineWidth = 1;\n");
@@ -915,9 +923,9 @@ int export_all_assets_and_html(
         fprintf(f_html, "            const x = frac * W;\n");
         fprintf(f_html, "            const secVal = frac * totalDurationS;\n");
         fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, H - 25); ctx.lineTo(x, H - 20); ctx.stroke();\n");
-        fprintf(f_html, "            ctx.fillText(`${secVal.toFixed(1)}s`, x, H - 8);\n");
+        fprintf(f_html, "            ctx.fillText(formatMSS(secVal), x, H - 8);\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        ctx.fillText('Time (seconds)', W / 2, H - 8);\n");
+        fprintf(f_html, "        ctx.fillText('Song Time (m:ss)', W / 2, H - 8);\n");
 
         fprintf(f_html, "        if (audio.duration) {\n");
         fprintf(f_html, "            const progress = audio.currentTime / audio.duration;\n");
@@ -952,51 +960,71 @@ int export_all_assets_and_html(
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (r) r.textContent = `Average Rating: ${seg.rating.toFixed(4)}`;\n");
         fprintf(f_html, "        sCtx.fillStyle = '#ffffff'; sCtx.fillRect(0, 0, W, H);\n");
+        fprintf(f_html, "        const padL = 45, padR = 20, padT = 10, padB = 22;\n");
+        fprintf(f_html, "        const graphW = W - padL - padR, graphH = H - padT - padB;\n");
         fprintf(f_html, "        const segDurMs = seg.end_ms - seg.start_ms;\n");
+
+        fprintf(f_html, "        sCtx.strokeStyle = '#dcdde1'; sCtx.lineWidth = 1; sCtx.strokeRect(padL, padT, graphW, graphH);\n");
+        fprintf(f_html, "        const centerY = padT + graphH / 2;\n");
+
+        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '9px Segoe UI, sans-serif'; sCtx.textAlign = 'right';\n");
+        fprintf(f_html, "        sCtx.fillText('+1.0', padL - 5, padT + 10);\n");
+        fprintf(f_html, "        sCtx.fillText('0.0', padL - 5, centerY + 3);\n");
+        fprintf(f_html, "        sCtx.fillText('-1.0', padL - 5, padT + graphH - 2);\n");
+
         fprintf(f_html, "        if (seg.peaks && seg.peaks.length > 0) {\n");
         fprintf(f_html, "            seg.peaks.forEach(p => {\n");
         fprintf(f_html, "                const relMs = p.time_ms - seg.start_ms;\n");
-        fprintf(f_html, "                const x = (relMs / segDurMs) * W;\n");
+        fprintf(f_html, "                const x = padL + (relMs / segDurMs) * graphW;\n");
         fprintf(f_html, "                sCtx.strokeStyle = getScoreColor(p.total_score, 0.55);\n");
         fprintf(f_html, "                sCtx.lineWidth = 1.8; sCtx.setLineDash([4, 4]);\n");
-        fprintf(f_html, "                sCtx.beginPath(); sCtx.moveTo(x, 0); sCtx.lineTo(x, H); sCtx.stroke(); sCtx.setLineDash([]);\n");
+        fprintf(f_html, "                sCtx.beginPath(); sCtx.moveTo(x, padT); sCtx.lineTo(x, padT + graphH); sCtx.stroke(); sCtx.setLineDash([]);\n");
         fprintf(f_html, "            });\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const centerY = H / 2;\n");
-        fprintf(f_html, "        sCtx.strokeStyle = 'rgba(189, 195, 199, 0.4)'; sCtx.beginPath(); sCtx.moveTo(0, centerY); sCtx.lineTo(W, centerY); sCtx.stroke();\n");
+
+        fprintf(f_html, "        sCtx.strokeStyle = 'rgba(189, 195, 199, 0.4)'; sCtx.beginPath(); sCtx.moveTo(padL, centerY); sCtx.lineTo(padL + graphW, centerY); sCtx.stroke();\n");
+
         fprintf(f_html, "        if (seg.waveform_min && seg.waveform_min.length > 0) {\n");
         fprintf(f_html, "            const numPts = seg.waveform_min.length;\n");
         fprintf(f_html, "            sCtx.lineWidth = 1.0; sCtx.strokeStyle = '#34495e'; sCtx.beginPath();\n");
         fprintf(f_html, "            for (let i = 0; i < numPts; i++) {\n");
-        fprintf(f_html, "                const x = (i / numPts) * W;\n");
-        fprintf(f_html, "                const minY = centerY - (seg.waveform_min[i] * (H * 0.38));\n");
-        fprintf(f_html, "                const maxY = centerY - (seg.waveform_max[i] * (H * 0.38));\n");
+        fprintf(f_html, "                const x = padL + (i / numPts) * graphW;\n");
+        fprintf(f_html, "                const minY = centerY - (seg.waveform_min[i] * (graphH * 0.42));\n");
+        fprintf(f_html, "                const maxY = centerY - (seg.waveform_max[i] * (graphH * 0.42));\n");
         fprintf(f_html, "                sCtx.moveTo(x, minY); sCtx.lineTo(x, maxY);\n");
         fprintf(f_html, "            }\n");
         fprintf(f_html, "            sCtx.stroke();\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '10px Segoe UI, sans-serif'; sCtx.textAlign = 'center';\n");
-        fprintf(f_html, "        sCtx.fillText('Relative Segment Time (ms)', W / 2, H - 4);\n");
+
+        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '9px Segoe UI, sans-serif'; sCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        const numSegTicks = 5;\n");
+        fprintf(f_html, "        for (let i = 0; i <= numSegTicks; i++) {\n");
+        fprintf(f_html, "            const frac = i / numSegTicks;\n");
+        fprintf(f_html, "            const x = padL + frac * graphW;\n");
+        fprintf(f_html, "            const timeS = (seg.start_ms + frac * segDurMs) / 1000.0;\n");
+        fprintf(f_html, "            sCtx.beginPath(); sCtx.moveTo(x, padT + graphH); sCtx.lineTo(x, padT + graphH + 3); sCtx.stroke();\n");
+        fprintf(f_html, "            sCtx.fillText(formatMSS(timeS), x, H - 2);\n");
+        fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {\n");
-        fprintf(f_html, "            const cursorX = ((currentAudioTimeMs - seg.start_ms) / segDurMs) * W;\n");
-        fprintf(f_html, "            sCtx.strokeStyle = '#e67e22'; sCtx.lineWidth = 2.5; sCtx.beginPath(); sCtx.moveTo(cursorX, 0); sCtx.lineTo(cursorX, H); sCtx.stroke();\n");
+        fprintf(f_html, "            const cursorX = padL + ((currentAudioTimeMs - seg.start_ms) / segDurMs) * graphW;\n");
+        fprintf(f_html, "            sCtx.strokeStyle = '#e67e22'; sCtx.lineWidth = 2.5; sCtx.beginPath(); sCtx.moveTo(cursorX, padT); sCtx.lineTo(cursorX, padT + graphH); sCtx.stroke();\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        const latestPeak = getLatestActivePeak();\n");
         fprintf(f_html, "        if (seg.peaks && seg.peaks.length > 0) {\n");
         fprintf(f_html, "            seg.peaks.forEach(p => {\n");
         fprintf(f_html, "                const relMs = p.time_ms - seg.start_ms;\n");
-        fprintf(f_html, "                const x = (relMs / segDurMs) * W;\n");
+        fprintf(f_html, "                const x = padL + (relMs / segDurMs) * graphW;\n");
         fprintf(f_html, "                const score = p.total_score;\n");
         fprintf(f_html, "                const scoreColor = getScoreColor(score, 1.0);\n");
         fprintf(f_html, "                let scoreY = centerY;\n");
-        fprintf(f_html, "                if (score > 0) scoreY = centerY - (Math.min(1.0, score / (globalMaxPosScore || 1.0))) * (centerY * 0.85);\n");
-        fprintf(f_html, "                else if (score < 0) scoreY = centerY + (Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0))) * ((H - centerY) * 0.85);\n");
+        fprintf(f_html, "                if (score > 0) scoreY = centerY - (Math.min(1.0, score / (globalMaxPosScore || 1.0))) * ((centerY - padT) * 0.85);\n");
+        fprintf(f_html, "                else if (score < 0) scoreY = centerY + (Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0))) * ((padT + graphH - centerY) * 0.85);\n");
         fprintf(f_html, "                const isLatest = latestPeak && Math.abs(p.time_ms - latestPeak.time_ms) < 1e-3 && (p.band_idx === undefined || p.band_idx === latestPeak.band_idx);\n");
         fprintf(f_html, "                sCtx.font = isLatest ? 'bold 11px Segoe UI, sans-serif' : '10px Segoe UI, sans-serif';\n");
         fprintf(f_html, "                sCtx.fillStyle = scoreColor;\n");
-        fprintf(f_html, "                sCtx.textAlign = (x > W - 70) ? 'right' : 'left';\n");
-        fprintf(f_html, "                const labelX = (x > W - 70) ? x - 6 : x + 6;\n");
-        fprintf(f_html, "                const labelY = Math.max(12, Math.min(H - 6, scoreY + 3));\n");
+        fprintf(f_html, "                sCtx.textAlign = (x > padL + graphW - 70) ? 'right' : 'left';\n");
+        fprintf(f_html, "                const labelX = (x > padL + graphW - 70) ? x - 6 : x + 6;\n");
+        fprintf(f_html, "                const labelY = Math.max(padT + 12, Math.min(padT + graphH - 6, scoreY + 3));\n");
         fprintf(f_html, "                sCtx.fillText(score.toFixed(3), labelX, labelY);\n");
         fprintf(f_html, "            });\n");
         fprintf(f_html, "        }\n");
@@ -1019,7 +1047,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCtx.clearRect(0, 0, W, H);\n");
         fprintf(f_html, "        bufCtx.fillStyle = '#ffffff'; bufCtx.fillRect(0, 0, W, H);\n");
         fprintf(f_html, "        const curTimeMs = (audio.currentTime || 0) * 1000.0;\n");
-        fprintf(f_html, "        const padLeft = 65, padRight = 35, padTop = 30, padBottom = 35;\n");
+        fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
         fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
         fprintf(f_html, "        const windowStartMs = curTimeMs - pass2WinMs;\n");
         fprintf(f_html, "        const activePeaks = pass2Peaks.filter(p => p.time_ms > windowStartMs && p.time_ms <= curTimeMs);\n");
@@ -1112,11 +1140,11 @@ int export_all_assets_and_html(
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        bufCtx.restore();\n");
 
-        fprintf(f_html, "        bufCtx.save(); bufCtx.translate(15, padTop + graphH / 2); bufCtx.rotate(-Math.PI / 2);\n");
+        fprintf(f_html, "        bufCtx.save(); bufCtx.translate(20, padTop + graphH / 2); bufCtx.rotate(-Math.PI / 2);\n");
         fprintf(f_html, "        bufCtx.fillStyle = '#7f8c8d'; bufCtx.font = '11px Segoe UI, sans-serif'; bufCtx.textAlign = 'center';\n");
         fprintf(f_html, "        bufCtx.fillText('Transience Flux / Energy', 0, 0); bufCtx.restore();\n");
         fprintf(f_html, "        bufCtx.fillStyle = '#7f8c8d'; bufCtx.font = '11px Segoe UI, sans-serif'; bufCtx.textAlign = 'center';\n");
-        fprintf(f_html, "        bufCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 32);\n");
+        fprintf(f_html, "        bufCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 34);\n");
 
         fprintf(f_html, "        bufCtx.fillStyle = '#2c3e50'; bufCtx.font = 'bold 13px Segoe UI, sans-serif'; bufCtx.textAlign = 'left';\n");
         fprintf(f_html, "        if (Math.abs(zoomStartMs - (-pass2WinMs)) > 1e-2 || Math.abs(zoomEndMs - 0.0) > 1e-2) {\n");
