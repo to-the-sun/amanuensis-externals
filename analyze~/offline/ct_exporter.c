@@ -925,7 +925,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, H - 25); ctx.lineTo(x, H - 20); ctx.stroke();\n");
         fprintf(f_html, "            ctx.fillText(formatMSS(secVal), x, H - 8);\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        ctx.fillText('Song Time (m:ss)', W / 2, H - 8);\n");
 
         fprintf(f_html, "        if (audio.duration) {\n");
         fprintf(f_html, "            const progress = audio.currentTime / audio.duration;\n");
@@ -1073,7 +1072,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "        const yMax = curMax * 1.1;\n");
         fprintf(f_html, "        bufCtx.strokeStyle = '#dcdde1'; bufCtx.lineWidth = 1; bufCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
         fprintf(f_html, "        const zoomSpan = zoomEndMs - zoomStartMs;\n");
-        fprintf(f_html, "        bufCtx.save(); bufCtx.beginPath(); bufCtx.rect(padLeft, padTop, graphW, graphH); bufCtx.clip();\n");
         fprintf(f_html, "        const numTicks = 5;\n");
         fprintf(f_html, "        bufCtx.fillStyle = '#7f8c8d'; bufCtx.font = '11px Segoe UI, sans-serif'; bufCtx.textAlign = 'center';\n");
         fprintf(f_html, "        for (let i = 0; i <= numTicks; i++) {\n");
