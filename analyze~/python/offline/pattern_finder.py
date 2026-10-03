@@ -202,25 +202,16 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         for p in ctbin_manifest['peaks']:
             ctbin_peaks_map[(p.get('p_idx'), p.get('band_idx'))] = p
 
-    if pass2_res and isinstance(pass2_res, dict) and 'peaks' in pass2_res:
-        for band_idx, band_peaks in enumerate(pass2_res['peaks']):
-            for k, p in enumerate(band_peaks):
+    if ctbin_manifest and isinstance(ctbin_manifest, dict) and 'peaks' in ctbin_manifest:
+        for p in ctbin_manifest['peaks']:
+            if isinstance(p, dict):
                 p_copy = dict(p)
-                p_copy['band_idx'] = band_idx
-                t_ms = float(p.get('time', 0.0) * 1000.0)
+                t_ms = float(p.get('time_ms', p.get('time', 0.0) * 1000.0))
                 p_copy['time_ms'] = t_ms
                 if len(dem_lines) > 0:
                     f_idx = min(len(dem_lines) - 1, max(0, int(round(t_ms))))
                     p_copy['demarcation_line'] = float(dem_lines[f_idx])
-
-                p_idx = p_copy.get('p_idx', k)
-                p_copy['p_idx'] = p_idx
-                key = (p_idx, band_idx)
-                if key in ctbin_peaks_map:
-                    p_copy['snap_offset'] = ctbin_peaks_map[key]['snap_offset']
-                    p_copy['snap_len'] = ctbin_peaks_map[key]['snap_len']
-
-                p_copy.pop('snapshot', None)  # Strip inline 15001-element snapshot list for lightweight HTML file (< 150 KB)
+                p_copy.pop('snapshot', None)
                 pass2_peaks_flat.append(p_copy)
 
     clean_segments_data = []
@@ -498,7 +489,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     let toleranceMs = 9.0;
     let pass2Peaks = [];
 
-    function applyReportData(data) {
+    function applyReportData(data) {{
         if (!data) return;
         if (data.pass2_win_ms !== undefined) pass2WinMs = data.pass2_win_ms;
         if (data.frame_duration_ms !== undefined) frameDurationMs = data.frame_duration_ms;
@@ -514,28 +505,28 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
         if (data.tolerance_ms !== undefined) toleranceMs = data.tolerance_ms;
         if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;
         renderAll();
-    }
+    }}
 
     // Load report data from window.reportData (loaded via report_data.js) or fetch report_data.json
-    if (window.reportData) {
+    if (window.reportData) {{
         applyReportData(window.reportData);
-    } else {
+    }} else {{
         fetch('report_data.json')
             .then(res => res.json())
             .then(data => applyReportData(data))
             .catch(e => console.log('report_data.json fetch notice:', e));
-    }
+    }}
 
     fetch('manifest.json')
         .then(res => res.json())
-        .then(m => {
-            if (m) {
+        .then(m => {{
+            if (m) {{
                 if (m.window_ms) pass2WinMs = m.window_ms;
                 if (m.tolerance) toleranceMs = m.tolerance;
                 if (m.peaks && m.peaks.length > 0) pass2Peaks = m.peaks;
                 renderAll();
-            }
-        })
+            }}
+        }})
         .catch(e => console.log('manifest.json fetch notice:', e));
 
     const canvas = document.getElementById('waveformCanvas');
@@ -1558,8 +1549,8 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     stem_name = os.path.splitext(os.path.basename(audio_path))[0]
     ctbin_path = os.path.join(output_dir, f"{stem_name}.ctbin")
 
-    # Execute standalone C headless analyzer executable
-    if os.path.exists(ct_exec):
+    # Execute standalone C headless analyzer executable if .ctbin does not already exist
+    if not os.path.exists(ctbin_path) and os.path.exists(ct_exec):
         try:
             print(f"Running C headless analyzer: {ct_exec} {audio_path} 15000")
             subprocess.run([ct_exec, audio_path, "15000"], check=True)
@@ -1592,8 +1583,12 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     all_peaks_flat = []
     if ctbin_manifest and 'peaks' in ctbin_manifest:
         for p in ctbin_manifest['peaks']:
-            p_copy = dict(p)
-            all_peaks_flat.append(p_copy)
+            if isinstance(p, dict):
+                p_copy = dict(p)
+                p_copy.pop('snapshot', None)
+                all_peaks_flat.append(p_copy)
+            else:
+                all_peaks_flat.append(p)
 
     print(f"\nAnalyzing segment length determined from cumulative history high point: {best_bar_length:.2f} ms...")
 
@@ -1706,12 +1701,14 @@ if __name__ == "__main__":
         print("="*60)
         traceback.print_exc()
         print("="*60)
-        try:
-            input("\nAn error occurred. Press Enter to exit...")
-        except BaseException:
-            pass
+        if sys.stdin.isatty():
+            try:
+                input("\nAn error occurred. Press Enter to exit...")
+            except BaseException:
+                pass
     else:
-        try:
-            input("\nProcess completed successfully. Press Enter to exit...")
-        except BaseException:
-            pass
+        if sys.stdin.isatty():
+            try:
+                input("\nProcess completed successfully. Press Enter to exit...")
+            except BaseException:
+                pass

@@ -129,10 +129,47 @@ int main(int argc, char** argv) {
     }
 
     printf("\n============================================================\n");
-    printf("ANALYSIS COMPLETE!\n");
+    printf("C CORE ANALYSIS COMPLETE!\n");
     printf("Output Directory: %s/\n", output_dir);
     printf("Binary Artifact:  %s.ctbin\n", stem_name);
     printf("============================================================\n\n");
+
+    printf("Invoking Python post-processing on pattern_finder.py to generate assets & HTML report...\n");
+    char cmd_buf[16384];
+    int sys_res = -1;
+
+    char exe_dir[2048];
+    char dummy_stem[1024];
+    get_directory_and_stem(argv[0], exe_dir, dummy_stem);
+
+    char py_script_path[4096];
+    snprintf(py_script_path, sizeof(py_script_path), "%s/pattern_finder.py", exe_dir);
+
+#if defined(_WIN32) || defined(_WIN64)
+    snprintf(cmd_buf, sizeof(cmd_buf), "python \"%s\" \"%s\"", py_script_path, audio_filepath);
+    sys_res = system(cmd_buf);
+    if (sys_res != 0) {
+        snprintf(cmd_buf, sizeof(cmd_buf), "py \"%s\" \"%s\"", py_script_path, audio_filepath);
+        sys_res = system(cmd_buf);
+    }
+#else
+    snprintf(cmd_buf, sizeof(cmd_buf), "python3 \"%s\" \"%s\"", py_script_path, audio_filepath);
+    sys_res = system(cmd_buf);
+    if (sys_res != 0) {
+        snprintf(cmd_buf, sizeof(cmd_buf), "python \"%s\" \"%s\"", py_script_path, audio_filepath);
+        sys_res = system(cmd_buf);
+    }
+#endif
+
+    if (sys_res == 0) {
+        printf("\n============================================================\n");
+        printf("ALL ASSETS & HTML REPORT GENERATED SUCCESSFULLY!\n");
+        printf("HTML Report: %s/%s_pattern_analysis.html\n", output_dir, stem_name);
+        printf("============================================================\n\n");
+    } else {
+        printf("\nNotice: Python post-processing returned non-zero code (%d).\n", sys_res);
+        printf("Please ensure Python 3 is installed with 'numpy' and 'soundfile'.\n\n");
+    }
 
     printf("Press Enter to exit...");
     getchar();
