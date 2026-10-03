@@ -228,6 +228,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
                 if key in ctbin_peaks_map:
                     p_copy['snap_offset'] = ctbin_peaks_map[key]['snap_offset']
                     p_copy['snap_len'] = ctbin_peaks_map[key]['snap_len']
+                    p_copy.pop('snapshot', None)  # Strip inline 15001-element snapshot list for lightweight HTML file (< 100 KB)
 
                 pass2_peaks_flat.append(p_copy)
 
