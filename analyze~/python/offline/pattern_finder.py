@@ -898,8 +898,8 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
             accumulatedBuffer = new Float32Array(numBufPts);
         }}
 
-        // Bin step based on buffer length so full and downsampled buffers span pass2WinMs
-        const snapBinMs = (numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : 1.0;
+        // Bin step based on exact sample rate hop frame duration matching C core buffer_times
+        const snapBinMs = frameDurationMs || ((numBufPts > 1) ? (pass2WinMs / (numBufPts - 1)) : 1.0);
 
         // Compute max and min energy for Y-axis autoscaling within visible zoom window, excluding the last 99ms region [-99ms, 0ms]
         let curMax = 0;
