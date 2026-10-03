@@ -782,9 +782,23 @@ int export_all_assets_and_html(
         fprintf(f_html, "    let toleranceMs = %.4f;\n", res2.tolerance);
         fprintf(f_html, "    let pass2Peaks = [];\n\n");
 
+        fprintf(f_html, "    const canvas = document.getElementById('waveformCanvas');\n");
+        fprintf(f_html, "    const ctx = canvas ? canvas.getContext('2d') : null;\n");
+        fprintf(f_html, "    const audio = document.getElementById('audioPlayer');\n");
+        fprintf(f_html, "    const bufCanvas = document.getElementById('historyBufferCanvas');\n");
+        fprintf(f_html, "    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;\n\n");
+
+        fprintf(f_html, "    let zoomStartMs = -pass2WinMs;\n");
+        fprintf(f_html, "    let zoomEndMs = 0.0;\n");
+        fprintf(f_html, "    let isDraggingBuf = false;\n");
+        fprintf(f_html, "    let dragStartX = 0, dragCurrentX = 0;\n\n");
+
+        fprintf(f_html, "    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)', 'rgba(241, 196, 15, 0.35)'];\n");
+        fprintf(f_html, "    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f'];\n\n");
+
         fprintf(f_html, "    function applyReportData(data) {\n");
         fprintf(f_html, "        if (!data) return;\n");
-        fprintf(f_html, "        if (data.pass2_win_ms !== undefined) pass2WinMs = data.pass2_win_ms;\n");
+        fprintf(f_html, "        if (data.pass2_win_ms !== undefined) { pass2WinMs = data.pass2_win_ms; zoomStartMs = -pass2WinMs; }\n");
         fprintf(f_html, "        if (data.frame_duration_ms !== undefined) frameDurationMs = data.frame_duration_ms;\n");
         fprintf(f_html, "        if (data.waveform_min) waveformMin = data.waveform_min;\n");
         fprintf(f_html, "        if (data.waveform_max) waveformMax = data.waveform_max;\n");
@@ -799,29 +813,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "        if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;\n");
         fprintf(f_html, "        renderAll();\n");
         fprintf(f_html, "    }\n\n");
-
-        fprintf(f_html, "    if (window.reportData) {\n");
-        fprintf(f_html, "        applyReportData(window.reportData);\n");
-        fprintf(f_html, "    } else {\n");
-        fprintf(f_html, "        fetch('report_data.json')\n");
-        fprintf(f_html, "            .then(res => res.json())\n");
-        fprintf(f_html, "            .then(data => applyReportData(data))\n");
-        fprintf(f_html, "            .catch(e => console.log('report_data.json fetch notice:', e));\n");
-        fprintf(f_html, "    }\n\n");
-
-        fprintf(f_html, "    const canvas = document.getElementById('waveformCanvas');\n");
-        fprintf(f_html, "    const ctx = canvas.getContext('2d');\n");
-        fprintf(f_html, "    const audio = document.getElementById('audioPlayer');\n");
-        fprintf(f_html, "    const bufCanvas = document.getElementById('historyBufferCanvas');\n");
-        fprintf(f_html, "    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;\n\n");
-
-        fprintf(f_html, "    let zoomStartMs = -pass2WinMs;\n");
-        fprintf(f_html, "    let zoomEndMs = 0.0;\n");
-        fprintf(f_html, "    let isDraggingBuf = false;\n");
-        fprintf(f_html, "    let dragStartX = 0, dragCurrentX = 0;\n\n");
-
-        fprintf(f_html, "    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)', 'rgba(241, 196, 15, 0.35)'];\n");
-        fprintf(f_html, "    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f'];\n\n");
 
         fprintf(f_html, "    function getScoreColor(score, alpha = 1.0) {\n");
         fprintf(f_html, "        if (score === 0) return `rgba(128, 128, 128, ${alpha})`;\n");
@@ -1019,11 +1010,99 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCtx.stroke(); bufCtx.restore();\n");
         fprintf(f_html, "    }\n\n");
 
+        fprintf(f_html, "    if (bufCanvas && bufCtx) {\n");
+        fprintf(f_html, "        function getCanvasMouseX(e) {\n");
+        fprintf(f_html, "            const rect = bufCanvas.getBoundingClientRect();\n");
+        fprintf(f_html, "            if (!rect.width) return 0;\n");
+        fprintf(f_html, "            const scaleX = bufCanvas.width / rect.width;\n");
+        fprintf(f_html, "            return (e.clientX - rect.left) * scaleX;\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        bufCanvas.addEventListener('contextmenu', (e) => {\n");
+        fprintf(f_html, "            e.preventDefault(); zoomStartMs = -pass2WinMs; zoomEndMs = 0.0;\n");
+        fprintf(f_html, "            isDraggingBuf = false; drawHistoryBuffer();\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "        bufCanvas.addEventListener('mousedown', (e) => {\n");
+        fprintf(f_html, "            if (e.button !== 0) return;\n");
+        fprintf(f_html, "            const clickX = getCanvasMouseX(e);\n");
+        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            if (clickX >= padLeft && clickX <= padLeft + graphW) {\n");
+        fprintf(f_html, "                isDraggingBuf = true; dragStartX = clickX; dragCurrentX = clickX;\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "        bufCanvas.addEventListener('mousemove', (e) => {\n");
+        fprintf(f_html, "            if (!isDraggingBuf) return;\n");
+        fprintf(f_html, "            const mouseX = getCanvasMouseX(e);\n");
+        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            dragCurrentX = Math.max(padLeft, Math.min(padLeft + graphW, mouseX));\n");
+        fprintf(f_html, "            drawHistoryBuffer();\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "        bufCanvas.addEventListener('mouseup', (e) => {\n");
+        fprintf(f_html, "            if (!isDraggingBuf || e.button !== 0) return;\n");
+        fprintf(f_html, "            isDraggingBuf = false;\n");
+        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const dx = Math.abs(dragCurrentX - dragStartX);\n");
+        fprintf(f_html, "            if (dx > 5) {\n");
+        fprintf(f_html, "                const x1 = Math.min(dragStartX, dragCurrentX), x2 = Math.max(dragStartX, dragCurrentX);\n");
+        fprintf(f_html, "                const frac1 = (x1 - padLeft) / graphW, frac2 = (x2 - padLeft) / graphW;\n");
+        fprintf(f_html, "                const currentSpan = zoomEndMs - zoomStartMs;\n");
+        fprintf(f_html, "                const newStartMs = zoomStartMs + frac1 * currentSpan, newEndMs = zoomStartMs + frac2 * currentSpan;\n");
+        fprintf(f_html, "                if (newEndMs - newStartMs >= 10.0) { zoomStartMs = newStartMs; zoomEndMs = newEndMs; }\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "            drawHistoryBuffer();\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "        bufCanvas.addEventListener('mouseleave', () => {\n");
+        fprintf(f_html, "            if (isDraggingBuf) { isDraggingBuf = false; drawHistoryBuffer(); }\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "    }\n\n");
+
         fprintf(f_html, "    function renderAll() {\n");
         fprintf(f_html, "        drawWaveformMap();\n");
         fprintf(f_html, "        updateSegmentInspector();\n");
         fprintf(f_html, "        drawHistoryBuffer();\n");
         fprintf(f_html, "    }\n\n");
+
+        fprintf(f_html, "    if (canvas) {\n");
+        fprintf(f_html, "        canvas.addEventListener('click', (e) => {\n");
+        fprintf(f_html, "            const rect = canvas.getBoundingClientRect();\n");
+        fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
+        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));\n");
+        fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
+        fprintf(f_html, "            if (dur > 0) {\n");
+        fprintf(f_html, "                const wasPaused = audio.paused;\n");
+        fprintf(f_html, "                audio.currentTime = clickFraction * dur;\n");
+        fprintf(f_html, "                if (!wasPaused) audio.play().catch(e => console.log(e));\n");
+        fprintf(f_html, "                renderAll();\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "    }\n\n");
+
+        fprintf(f_html, "    function setupSegmentClickListener(canvasId, segOffset) {\n");
+        fprintf(f_html, "        const canvasElem = document.getElementById(canvasId);\n");
+        fprintf(f_html, "        if (!canvasElem) return;\n");
+        fprintf(f_html, "        canvasElem.addEventListener('click', (e) => {\n");
+        fprintf(f_html, "            const curTimeMs = (audio.currentTime || 0) * 1000.0;\n");
+        fprintf(f_html, "            const curSegIdx = Math.floor(curTimeMs / bestBarLengthMs);\n");
+        fprintf(f_html, "            const targetSegIdx = curSegIdx + segOffset;\n");
+        fprintf(f_html, "            const seg = segmentsData.find(s => s.segment_index === targetSegIdx);\n");
+        fprintf(f_html, "            if (!seg) return;\n");
+        fprintf(f_html, "            const rect = canvasElem.getBoundingClientRect();\n");
+        fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
+        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));\n");
+        fprintf(f_html, "            const segDurMs = seg.end_ms - seg.start_ms;\n");
+        fprintf(f_html, "            const targetTimeS = (seg.start_ms + clickFraction * segDurMs) / 1000.0;\n");
+        fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
+        fprintf(f_html, "            if (targetTimeS >= 0 && targetTimeS <= dur) {\n");
+        fprintf(f_html, "                const wasPaused = audio.paused;\n");
+        fprintf(f_html, "                audio.currentTime = targetTimeS;\n");
+        fprintf(f_html, "                if (!wasPaused) audio.play().catch(e => console.log(e));\n");
+        fprintf(f_html, "                renderAll();\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        });\n");
+        fprintf(f_html, "    }\n\n");
+
+        fprintf(f_html, "    setupSegmentClickListener('canvasPrev', -1);\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasCurr', 0);\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasNext', 1);\n\n");
 
         fprintf(f_html, "    if (window.snapshotsBase64) {\n");
         fprintf(f_html, "        try {\n");
@@ -1034,10 +1113,20 @@ int export_all_assets_and_html(
         fprintf(f_html, "        } catch (e) { console.log('Base64 decode error:', e); }\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    renderAll();\n");
-        fprintf(f_html, "    audio.addEventListener('timeupdate', renderAll);\n");
-        fprintf(f_html, "    audio.addEventListener('play', renderAll);\n");
-        fprintf(f_html, "    audio.addEventListener('pause', renderAll);\n");
+        fprintf(f_html, "    if (window.reportData) {\n");
+        fprintf(f_html, "        applyReportData(window.reportData);\n");
+        fprintf(f_html, "    } else {\n");
+        fprintf(f_html, "        fetch('report_data.json')\n");
+        fprintf(f_html, "            .then(res => res.json())\n");
+        fprintf(f_html, "            .then(data => applyReportData(data))\n");
+        fprintf(f_html, "            .catch(e => console.log('report_data.json fetch notice:', e));\n");
+        fprintf(f_html, "    }\n\n");
+
+        fprintf(f_html, "    if (audio) {\n");
+        fprintf(f_html, "        audio.addEventListener('timeupdate', renderAll);\n");
+        fprintf(f_html, "        audio.addEventListener('play', renderAll);\n");
+        fprintf(f_html, "        audio.addEventListener('pause', renderAll);\n");
+        fprintf(f_html, "    }\n");
         fprintf(f_html, "</script>\n");
         fprintf(f_html, "</body>\n");
         fprintf(f_html, "</html>\n");
