@@ -959,17 +959,12 @@ int export_all_assets_and_html(
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (r) r.textContent = `Average Rating: ${seg.rating.toFixed(4)}`;\n");
         fprintf(f_html, "        sCtx.fillStyle = '#ffffff'; sCtx.fillRect(0, 0, W, H);\n");
-        fprintf(f_html, "        const padL = 45, padR = 20, padT = 10, padB = 22;\n");
+        fprintf(f_html, "        const padL = 0, padR = 0, padT = 10, padB = 22;\n");
         fprintf(f_html, "        const graphW = W - padL - padR, graphH = H - padT - padB;\n");
         fprintf(f_html, "        const segDurMs = seg.end_ms - seg.start_ms;\n");
 
         fprintf(f_html, "        sCtx.strokeStyle = '#dcdde1'; sCtx.lineWidth = 1; sCtx.strokeRect(padL, padT, graphW, graphH);\n");
         fprintf(f_html, "        const centerY = padT + graphH / 2;\n");
-
-        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '9px Segoe UI, sans-serif'; sCtx.textAlign = 'right';\n");
-        fprintf(f_html, "        sCtx.fillText('+1.0', padL - 5, padT + 10);\n");
-        fprintf(f_html, "        sCtx.fillText('0.0', padL - 5, centerY + 3);\n");
-        fprintf(f_html, "        sCtx.fillText('-1.0', padL - 5, padT + graphH - 2);\n");
 
         fprintf(f_html, "        if (seg.peaks && seg.peaks.length > 0) {\n");
         fprintf(f_html, "            seg.peaks.forEach(p => {\n");
@@ -995,37 +990,22 @@ int export_all_assets_and_html(
         fprintf(f_html, "            sCtx.stroke();\n");
         fprintf(f_html, "        }\n");
 
-        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '9px Segoe UI, sans-serif'; sCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        sCtx.fillStyle = '#7f8c8d'; sCtx.font = '9px Segoe UI, sans-serif';\n");
         fprintf(f_html, "        const numSegTicks = 5;\n");
         fprintf(f_html, "        for (let i = 0; i <= numSegTicks; i++) {\n");
         fprintf(f_html, "            const frac = i / numSegTicks;\n");
         fprintf(f_html, "            const x = padL + frac * graphW;\n");
         fprintf(f_html, "            const timeS = (seg.start_ms + frac * segDurMs) / 1000.0;\n");
         fprintf(f_html, "            sCtx.beginPath(); sCtx.moveTo(x, padT + graphH); sCtx.lineTo(x, padT + graphH + 3); sCtx.stroke();\n");
-        fprintf(f_html, "            sCtx.fillText(formatMSS(timeS), x, H - 2);\n");
+        fprintf(f_html, "            if (i === 0) sCtx.textAlign = 'left';\n");
+        fprintf(f_html, "            else if (i === numSegTicks) sCtx.textAlign = 'right';\n");
+        fprintf(f_html, "            else sCtx.textAlign = 'center';\n");
+        fprintf(f_html, "            const textX = (i === 0) ? x + 2 : (i === numSegTicks ? x - 2 : x);\n");
+        fprintf(f_html, "            sCtx.fillText(formatMSS(timeS), textX, H - 2);\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (currentAudioTimeMs >= seg.start_ms && currentAudioTimeMs <= seg.end_ms) {\n");
         fprintf(f_html, "            const cursorX = padL + ((currentAudioTimeMs - seg.start_ms) / segDurMs) * graphW;\n");
         fprintf(f_html, "            sCtx.strokeStyle = '#e67e22'; sCtx.lineWidth = 2.5; sCtx.beginPath(); sCtx.moveTo(cursorX, padT); sCtx.lineTo(cursorX, padT + graphH); sCtx.stroke();\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const latestPeak = getLatestActivePeak();\n");
-        fprintf(f_html, "        if (seg.peaks && seg.peaks.length > 0) {\n");
-        fprintf(f_html, "            seg.peaks.forEach(p => {\n");
-        fprintf(f_html, "                const relMs = p.time_ms - seg.start_ms;\n");
-        fprintf(f_html, "                const x = padL + (relMs / segDurMs) * graphW;\n");
-        fprintf(f_html, "                const score = p.total_score;\n");
-        fprintf(f_html, "                const scoreColor = getScoreColor(score, 1.0);\n");
-        fprintf(f_html, "                let scoreY = centerY;\n");
-        fprintf(f_html, "                if (score > 0) scoreY = centerY - (Math.min(1.0, score / (globalMaxPosScore || 1.0))) * ((centerY - padT) * 0.85);\n");
-        fprintf(f_html, "                else if (score < 0) scoreY = centerY + (Math.min(1.0, Math.abs(score) / Math.abs(globalMinNegScore || -1.0))) * ((padT + graphH - centerY) * 0.85);\n");
-        fprintf(f_html, "                const isLatest = latestPeak && Math.abs(p.time_ms - latestPeak.time_ms) < 1e-3 && (p.band_idx === undefined || p.band_idx === latestPeak.band_idx);\n");
-        fprintf(f_html, "                sCtx.font = isLatest ? 'bold 11px Segoe UI, sans-serif' : '10px Segoe UI, sans-serif';\n");
-        fprintf(f_html, "                sCtx.fillStyle = scoreColor;\n");
-        fprintf(f_html, "                sCtx.textAlign = (x > padL + graphW - 70) ? 'right' : 'left';\n");
-        fprintf(f_html, "                const labelX = (x > padL + graphW - 70) ? x - 6 : x + 6;\n");
-        fprintf(f_html, "                const labelY = Math.max(padT + 12, Math.min(padT + graphH - 6, scoreY + 3));\n");
-        fprintf(f_html, "                sCtx.fillText(score.toFixed(3), labelX, labelY);\n");
-        fprintf(f_html, "            });\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "    }\n\n");
 
@@ -1178,7 +1158,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCanvas.addEventListener('mousedown', (e) => {\n");
         fprintf(f_html, "            if (e.button !== 0) return;\n");
         fprintf(f_html, "            const clickX = getCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            if (clickX >= padLeft && clickX <= padLeft + graphW) {\n");
         fprintf(f_html, "                isDraggingBuf = true; dragStartX = clickX; dragCurrentX = clickX;\n");
         fprintf(f_html, "            }\n");
@@ -1186,14 +1166,14 @@ int export_all_assets_and_html(
         fprintf(f_html, "        bufCanvas.addEventListener('mousemove', (e) => {\n");
         fprintf(f_html, "            if (!isDraggingBuf) return;\n");
         fprintf(f_html, "            const mouseX = getCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            dragCurrentX = Math.max(padLeft, Math.min(padLeft + graphW, mouseX));\n");
         fprintf(f_html, "            drawHistoryBuffer();\n");
         fprintf(f_html, "        });\n");
         fprintf(f_html, "        bufCanvas.addEventListener('mouseup', (e) => {\n");
         fprintf(f_html, "            if (!isDraggingBuf || e.button !== 0) return;\n");
         fprintf(f_html, "            isDraggingBuf = false;\n");
-        fprintf(f_html, "            const padLeft = 65, graphW = bufCanvas.width - 100;\n");
+        fprintf(f_html, "            const padLeft = 70, graphW = bufCanvas.width - 70 - 35;\n");
         fprintf(f_html, "            const dx = Math.abs(dragCurrentX - dragStartX);\n");
         fprintf(f_html, "            if (dx > 5) {\n");
         fprintf(f_html, "                const x1 = Math.min(dragStartX, dragCurrentX), x2 = Math.max(dragStartX, dragCurrentX);\n");
@@ -1241,7 +1221,9 @@ int export_all_assets_and_html(
         fprintf(f_html, "            if (!seg) return;\n");
         fprintf(f_html, "            const rect = canvasElem.getBoundingClientRect();\n");
         fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
-        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, clickX / rect.width));\n");
+        fprintf(f_html, "            const scaleX = canvasElem.width / rect.width;\n");
+        fprintf(f_html, "            const canvasX = clickX * scaleX;\n");
+        fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, canvasX / canvasElem.width));\n");
         fprintf(f_html, "            const segDurMs = seg.end_ms - seg.start_ms;\n");
         fprintf(f_html, "            const targetTimeS = (seg.start_ms + clickFraction * segDurMs) / 1000.0;\n");
         fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
