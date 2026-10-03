@@ -1540,15 +1540,11 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
 
     print(f"\nAnalyzing segment length determined from cumulative history high point: {best_bar_length:.2f} ms...")
 
-    # Extract onset_envs from analysis_res if present
-    onset_envs = analysis_res.get('onset_envs', None) if analysis_res else None
-
     # Compute offline segment transience scoring & ratings
     segments_transience_data = compute_offline_segment_transience(
         all_peaks_flat=all_peaks_flat,
         total_duration_ms=total_duration_ms,
-        bar_length_ms=best_bar_length,
-        onset_envs=onset_envs
+        bar_length_ms=best_bar_length
     )
 
     best_patterns, max_total_pattern_len_ms = analyze_segment_length(segments_transience_data)
