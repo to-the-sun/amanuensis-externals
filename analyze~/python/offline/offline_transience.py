@@ -2,13 +2,7 @@ import numpy as np
 
 
 def get_default_tolerance():
-    try:
-        import ct_utils
-        ct_utils.ensure_extension_built()
-        import cumulative_transience as ct
-        return float(ct.TransientAnalyzer().tolerance)
-    except Exception:
-        return 9.0
+    return 9.0
 
 
 def compute_offline_segment_transience(all_peaks_flat, total_duration_ms, bar_length_ms, tolerance_ms=None):

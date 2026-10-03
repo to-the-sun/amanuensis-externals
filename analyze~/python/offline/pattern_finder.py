@@ -22,27 +22,13 @@ except ImportError as e:
     input("\nPress Enter to exit...")
     sys.exit(1)
 
-try:
-    import ct_utils
-except ImportError:
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-    import ct_utils
+import subprocess
 
 from offline_transience import compute_offline_segment_transience
 
 # Global defaults
 MIN_SEGMENT_LEN_MS = 100
 ATOM_ITERATION_MS = 50
-
-
-def ensure_ct_initialized():
-    try:
-        ct_utils.ensure_extension_built()
-        import cumulative_transience as ct
-        return ct
-    except Exception as e:
-        print(f"Warning: Could not initialize cumulative_transience: {e}")
-        return None
 
 
 def export_ctbin_assets(ctbin_path, output_dir):
@@ -129,6 +115,7 @@ def export_ctbin_assets(ctbin_path, output_dir):
         "min_score_seen": float(min_score),
         "max_score_seen": float(max_score),
         "total_peaks": int(total_peaks),
+        "highest_peaks_ms": highest_peaks.tolist(),
         "peaks": peaks_meta,
         "demarcation_lines": demarcations.tolist()
     }
@@ -148,12 +135,6 @@ def export_ctbin_assets(ctbin_path, output_dir):
 
 
 def get_default_tolerance():
-    try:
-        ct = ensure_ct_initialized()
-        if ct is not None:
-            return float(ct.TransientAnalyzer().tolerance)
-    except Exception:
-        pass
     return 9.0
 
 
@@ -267,6 +248,31 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     global_max_pos_score = float(max(pos_scores)) if pos_scores else 1.0
     global_min_neg_score = float(min(neg_scores)) if neg_scores else -1.0
 
+    # Write report_data.json and report_data.js to disk so HTML report reads strictly from disk assets
+    report_data = {
+        "pass2_win_ms": pass2_win_ms,
+        "frame_duration_ms": frame_duration_ms,
+        "waveform_min": waveform_min,
+        "waveform_max": waveform_max,
+        "total_dur_s": total_dur_s,
+        "best_bar_length": best_bar_length,
+        "patterns": clean_json(best_patterns),
+        "segments_data": clean_json(clean_segments_data),
+        "hp_changes": clean_json(hp_changes),
+        "global_max_pos_score": global_max_pos_score,
+        "global_min_neg_score": global_min_neg_score,
+        "tolerance_ms": tolerance_ms,
+        "pass2_peaks": clean_json(pass2_peaks_flat)
+    }
+    report_data_path = os.path.join(output_dir, "report_data.json")
+    report_data_json_str = json.dumps(report_data)
+    with open(report_data_path, "w", encoding="utf-8") as rdf:
+        rdf.write(report_data_json_str)
+
+    report_data_js_path = os.path.join(output_dir, "report_data.js")
+    with open(report_data_js_path, "w", encoding="utf-8") as jsf:
+        jsf.write(f"window.reportData = {report_data_json_str};\n")
+
     audio_filename = os.path.basename(audio_path)
     audio_stem = os.path.splitext(audio_filename)[0]
     html_filepath = os.path.join(output_dir, f"{audio_stem}_pattern_analysis.html")
@@ -276,6 +282,7 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 <head>
     <meta charset="UTF-8">
     <title>Pattern Analysis Report - {audio_filename}</title>
+    <script src="report_data.js"></script>
     <script src="snapshots.js"></script>
     <style>
         body {{
@@ -477,19 +484,59 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
 </div>
 
 <script>
-    const pass2WinMs = {pass2_win_ms};
-    const frameDurationMs = {frame_duration_ms};
-    const waveformMin = {json.dumps(waveform_min)};
-    const waveformMax = {json.dumps(waveform_max)};
-    const totalDurationS = {total_dur_s};
-    const bestBarLengthMs = {best_bar_length};
-    const patterns = {patterns_js};
-    const segmentsData = {segments_js};
-    const hpChanges = {hp_changes_js};
-    const globalMaxPosScore = {global_max_pos_score};
-    const globalMinNegScore = {global_min_neg_score};
-    const toleranceMs = {tolerance_ms};
-    const pass2Peaks = {pass2_peaks_js};
+    let pass2WinMs = 15000;
+    let frameDurationMs = 1.0;
+    let waveformMin = [];
+    let waveformMax = [];
+    let totalDurationS = 0;
+    let bestBarLengthMs = 1000;
+    let patterns = [];
+    let segmentsData = [];
+    let hpChanges = [];
+    let globalMaxPosScore = 1.0;
+    let globalMinNegScore = -1.0;
+    let toleranceMs = 9.0;
+    let pass2Peaks = [];
+
+    function applyReportData(data) {
+        if (!data) return;
+        if (data.pass2_win_ms !== undefined) pass2WinMs = data.pass2_win_ms;
+        if (data.frame_duration_ms !== undefined) frameDurationMs = data.frame_duration_ms;
+        if (data.waveform_min) waveformMin = data.waveform_min;
+        if (data.waveform_max) waveformMax = data.waveform_max;
+        if (data.total_dur_s !== undefined) totalDurationS = data.total_dur_s;
+        if (data.best_bar_length !== undefined) bestBarLengthMs = data.best_bar_length;
+        if (data.patterns) patterns = data.patterns;
+        if (data.segments_data) segmentsData = data.segments_data;
+        if (data.hp_changes) hpChanges = data.hp_changes;
+        if (data.global_max_pos_score !== undefined) globalMaxPosScore = data.global_max_pos_score;
+        if (data.global_min_neg_score !== undefined) globalMinNegScore = data.global_min_neg_score;
+        if (data.tolerance_ms !== undefined) toleranceMs = data.tolerance_ms;
+        if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;
+        renderAll();
+    }
+
+    // Load report data from window.reportData (loaded via report_data.js) or fetch report_data.json
+    if (window.reportData) {
+        applyReportData(window.reportData);
+    } else {
+        fetch('report_data.json')
+            .then(res => res.json())
+            .then(data => applyReportData(data))
+            .catch(e => console.log('report_data.json fetch notice:', e));
+    }
+
+    fetch('manifest.json')
+        .then(res => res.json())
+        .then(m => {
+            if (m) {
+                if (m.window_ms) pass2WinMs = m.window_ms;
+                if (m.tolerance) toleranceMs = m.tolerance;
+                if (m.peaks && m.peaks.length > 0) pass2Peaks = m.peaks;
+                renderAll();
+            }
+        })
+        .catch(e => console.log('manifest.json fetch notice:', e));
 
     const canvas = document.getElementById('waveformCanvas');
     const ctx = canvas.getContext('2d');
@@ -1294,39 +1341,42 @@ def export_interactive_html_report(audio_path, y, sr, hp_changes, best_bar_lengt
     return html_filepath
 
 
-def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode=True):
+def analyze_cumulative_transience_high_points(ctbin_manifest, gui_mode=True):
     """
-    Performs first-pass cumulative transience analysis on the entire audio file to accumulate
-    waveforms into the 15-second cumulative transience history graph.
+    Performs first-pass cumulative transience analysis using the ctbin manifest loaded from disk.
     Tracks the x-axis value (ms) of the high point in the cumulative history graph across frames,
     determines the high point value that persisted for the longest total duration over the course
     of the audio file, and records change events where the high point value transitioned.
 
-    When gui_mode is enabled, it identifies the longest steady span for the selected high point value
-    and pops up a window displaying the cumulative history buffer at the moment just before it
-    changed away to something else.
-
     Returns:
       longest_high_point_ms: float (the x-axis value of the high point active for the longest duration)
       hp_changes: list of dicts [{'time_s': float, 'new_value_ms': float}] recording change events
-      analysis_res: dict (the result from ct.analyze_audio)
     """
-    if analysis_res is None:
-        ct = ensure_ct_initialized()
-        if ct is not None:
-            try:
-                # Pass 1: 15-second (15000 ms) rolling window and cumulative history buffer
-                analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=15000)
-            except Exception as e:
-                print(f"Error running cumulative_transience analysis: {e}")
-                analysis_res = None
-
-    if not analysis_res or 'highest_peaks_ms' not in analysis_res or 'times' not in analysis_res:
+    if not ctbin_manifest:
         print("Warning: Cumulative transience analysis yielded no high point history data.")
-        return float(MIN_SEGMENT_LEN_MS), [], analysis_res
+        return float(MIN_SEGMENT_LEN_MS), []
 
-    times = analysis_res['times']
-    highest_peaks = analysis_res['highest_peaks_ms']
+    sample_rate = ctbin_manifest.get('sample_rate', 44100)
+    num_frames = ctbin_manifest.get('num_frames', 0)
+    frame_dt_s = 0.001
+
+    peaks = ctbin_manifest.get('peaks', [])
+    highest_peaks_ms = []
+    times_s = [i * frame_dt_s for i in range(num_frames)]
+
+    # Extract high points time-series from peaks or fallback
+    if 'highest_peaks_ms' in ctbin_manifest:
+        highest_peaks = ctbin_manifest['highest_peaks_ms']
+    else:
+        # Reconstruct highest peaks time series per frame from peak time_ms if available
+        highest_peaks = [-999.0] * num_frames
+        for p in peaks:
+            t_ms = p.get('time_ms', 0.0)
+            f_idx = int(round(t_ms))
+            if 0 <= f_idx < num_frames:
+                highest_peaks[f_idx] = t_ms
+
+    times = times_s
 
     hp_durations = {}
     hp_changes = []
@@ -1378,7 +1428,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
 
     if not hp_durations:
         print("Warning: No valid cumulative history high points found across frames.")
-        return float(MIN_SEGMENT_LEN_MS), [], analysis_res
+        return float(MIN_SEGMENT_LEN_MS), []
 
     # Select the x-axis high point value active for the longest total duration
     longest_high_point_ms = max(hp_durations.items(), key=lambda item: item[1])[0]
@@ -1397,8 +1447,7 @@ def analyze_cumulative_transience_high_points(y, sr, analysis_res=None, gui_mode
         print(f"  Duration: {longest_run['duration_s']:.2f} s (from {longest_run['start_time_s']:.2f} s to {longest_run['end_time_s']:.2f} s)")
         print(f"  Target snapshot time at steady span midpoint: {target_time_s:.2f} s (Frame {target_frame})")
 
-
-    return longest_high_point_ms, hp_changes, analysis_res
+    return longest_high_point_ms, hp_changes
 
 
 def analyze_segment_length(segments_transience_data):
@@ -1494,49 +1543,57 @@ def find_patterns(audio_path, min_segment_ms=MIN_SEGMENT_LEN_MS, atom_iteration_
     output_dir = os.path.splitext(audio_path)[0]
     os.makedirs(output_dir, exist_ok=True)
 
-    ct = ensure_ct_initialized()
-    if ct is not None:
-        try:
-            # First pass: 15-second (15000 ms) window for determining segment length
-            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=15000)
-        except Exception as e:
-            print(f"Error running cumulative_transience peak detection: {e}")
-            analysis_res = None
-    else:
-        analysis_res = None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    ct_exec = os.path.join(script_dir, "ct_analyze_headless")
+    if os.name == "nt" or sys.platform.startswith("win"):
+        ct_exec += ".exe"
 
-    # First pass: Cumulative transience high point analysis over entire audio
-    longest_hp_ms, hp_changes, analysis_res = analyze_cumulative_transience_high_points(
-        y=y,
-        sr=sr,
-        analysis_res=analysis_res,
+    if not os.path.exists(ct_exec):
+        print(f"Headless executable not found at '{ct_exec}'. Attempting to compile via make...")
+        try:
+            subprocess.run(["make", "-C", script_dir], check=True)
+        except Exception as e:
+            print(f"Error compiling headless executable: {e}")
+
+    stem_name = os.path.splitext(os.path.basename(audio_path))[0]
+    ctbin_path = os.path.join(output_dir, f"{stem_name}.ctbin")
+
+    # Execute standalone C headless analyzer executable
+    if os.path.exists(ct_exec):
+        try:
+            print(f"Running C headless analyzer: {ct_exec} {audio_path} 15000")
+            subprocess.run([ct_exec, audio_path, "15000"], check=True)
+        except Exception as e:
+            print(f"Error executing C headless analyzer: {e}")
+
+    ctbin_manifest = export_ctbin_assets(ctbin_path, output_dir)
+
+    # First pass: Cumulative transience high point analysis using C export manifest
+    longest_hp_ms, hp_changes = analyze_cumulative_transience_high_points(
+        ctbin_manifest=ctbin_manifest,
         gui_mode=gui_mode
     )
 
     best_bar_length = longest_hp_ms
 
-    ctbin_manifest = None
-    # Second pass: Find actual peaks and score them using window_ms = segment length * 2 found in Pass 1
-    if ct is not None:
+    # Pass 2: Re-run headless analysis with window_ms = segment length * 2 if bar length differs significantly
+    pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
+    if os.path.exists(ct_exec) and pass2_win_ms != 15000:
         try:
-            pass2_win_ms = min(15000, int(round(best_bar_length * 2)))
-            ctbin_filepath = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(audio_path))[0]}.ctbin")
-            if hasattr(ct, "export_binary_ctbin"):
-                success = ct.export_binary_ctbin(ctbin_filepath.encode("utf-8"), y.astype(np.float32), int(sr), pass2_win_ms)
-                if success:
-                    ctbin_manifest = export_ctbin_assets(ctbin_filepath, output_dir)
-            analysis_res = ct.analyze_audio(y.astype(np.float32), int(sr), window_ms=pass2_win_ms)
+            print(f"Running Pass 2 C headless analyzer: {ct_exec} {audio_path} {pass2_win_ms}")
+            subprocess.run([ct_exec, audio_path, str(pass2_win_ms)], check=True)
+            ctbin_manifest = export_ctbin_assets(ctbin_path, output_dir)
         except Exception as e:
-            print(f"Error running Pass 2 cumulative_transience analysis: {e}")
+            print(f"Error running Pass 2 C headless analyzer: {e}")
+
+    analysis_res = ctbin_manifest or {}
 
     # Extract all peaks across bands for segment-based transience scoring
     all_peaks_flat = []
-    if analysis_res and 'peaks' in analysis_res:
-        for band_idx, band_peaks in enumerate(analysis_res['peaks']):
-            for p in band_peaks:
-                p_copy = dict(p)
-                p_copy['band_idx'] = band_idx
-                all_peaks_flat.append(p_copy)
+    if ctbin_manifest and 'peaks' in ctbin_manifest:
+        for p in ctbin_manifest['peaks']:
+            p_copy = dict(p)
+            all_peaks_flat.append(p_copy)
 
     print(f"\nAnalyzing segment length determined from cumulative history high point: {best_bar_length:.2f} ms...")
 
