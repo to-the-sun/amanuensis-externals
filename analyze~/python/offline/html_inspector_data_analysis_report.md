@@ -1,79 +1,55 @@
-# HTML Inspector Data Loading and Memory Analysis Report
+# HTML Inspector Data Loading and Size Analysis Report
 
-## Overview
-This report provides a detailed breakdown of the data architecture for the **Cumulative Transience HTML Pattern Analysis Report** (`<audio_stem>_pattern_analysis.html`). It analyzes what data is embedded and loaded directly upon opening the HTML file, what data is streamed on demand from disk, and what factors contribute to file size and memory footprint.
+## Executive Summary
+Analysis of `04 transient treble [2026-06-24 181817].wav` revealed why the generated HTML report file reached **139.3 MB** and took several seconds to load:
 
----
+The root cause was **dual redundant JSON serialization of 15,001-element float arrays** inside the HTML `<script>` tags.
 
-## 1. Immediate Load Payload (Embedded Directly in HTML)
+While audio is correctly referenced via relative path on disk (`.wav`) and binary snapshots are saved to `snapshots.bin`, Python's `ct.analyze_audio()` attaches a 15,001-element `snapshot` list of Python floats to every peak in `pass2_res['peaks']`. These full 15,001-element snapshot lists were being serialized into JSON text in **two separate places**:
+1. Inside the global `pass2_peaks_js` array.
+2. Inside `segments_js` (where every segment dictionary contains a `peaks` list with full snapshot arrays).
 
-When opening `<audio_stem>_pattern_analysis.html` in a web browser, only essential rendering logic and lightweight metadata are loaded immediately.
-
-### **File Size: ~120 KB to 250 KB total**
-
-### **Components Included in the Immediate Payload**:
-1. **HTML Shell, CSS Layout, and Canvas Graphics Engine (~40 KB)**:
-   - DOM container structure, metrics card layout, stacked segment inspector panels.
-   - Canvas 2D graphic rendering functions for audio waveforms, playhead cursors, pattern banners, score labels, and history buffer curves.
-2. **Audio Waveform Map Envelope (`waveformMin` & `waveformMax`) (~20 KB - 30 KB)**:
-   - A downsampled 1,500-point min/max envelope array used to draw the full song waveform canvas in Section 1.
-3. **Peak Metadata List (`pass2Peaks`) (~50 KB - 100 KB)**:
-   - Metadata for all transient peaks detected across all 4 frequency bands.
-   - Per-peak properties: `time_ms`, `total_score`, `detected_peak_val`, `thresh_val`, `prominence`, `qualifiers` list, `demarcation_line`, `snap_offset`, and `snap_len`.
-4. **Pattern & Segment Summary Metadata (`patterns`, `segmentsData`, `hpChanges`) (~20 KB - 50 KB)**:
-   - Identified pattern boundary timestamps, constituent segment indices, segment ratings, and cumulative history high point change markers.
+For a 60-second audio track with 253 detected peaks:
+* `253 peaks * 15,001 floats * 2 serializations` = **7,590,506 floating-point numbers** formatted as ASCII text strings inside the HTML file.
+* Converting 7.5 million floats to JSON string text produces **~139.3 MB of text**.
 
 ---
 
-## 2. On-Demand / Asynchronous Data Loading
+## Breakdown of Files and Data Loading Behavior
 
-To prevent browser memory bloat and eliminate slow load times, heavy binary assets and audio streams are decoupled from the HTML file and loaded on demand.
+### 1. Data Embedded Directly in the HTML File (Loaded Immediately upon opening)
 
-### **A. Audio Playback Stream (`<audio_path>.wav`)**
-* **File Location**: Audio file on disk referenced via relative path (e.g. `../my_song.wav` or `my_song.wav`).
-* **Data Size**: Full audio file size (typically 30 MB to 60 MB for uncompressed WAV audio).
-* **Loading Mechanism**:
-  - The HTML5 `<audio src="...">` element streams audio from disk on demand using HTTP byte-range buffering or standard OS file streaming.
-  - The browser loads audio chunks into memory only as playback progresses or when the user seeks to a new timestamp.
+When opening `<audio_stem>_pattern_analysis.html`, the browser parses all text between `<script>` tags at load time:
 
-### **B. Binary Peak Snapshots (`snapshots.bin`)**
-* **File Location**: `<output_dir>/snapshots.bin`
-* **Contents**: Raw 32-bit floating point (`float32`) binary array containing full 1-ms resolution 15,000-point accumulated history buffer curves captured at each detected peak.
-* **Data Size**:
-  - Each peak snapshot contains 15,001 float32 samples = 60,004 bytes (~60 KB) per peak.
-  - For a typical song with 200 detected peaks: `200 * 60 KB = ~12 MB` total binary asset size on disk.
-* **Loading Mechanism**:
-  - JavaScript executes an asynchronous `fetch('snapshots.bin')` request in the background after the HTML page has rendered.
-  - The binary array is loaded into a single contiguous `window.snapshotsArrayBuffer`.
-  - When the playhead reaches an active peak, JavaScript creates a zero-copy typed view (`new Float32Array(buffer, snap_offset, floatLen)`) to instantly render the accumulated history curve on the canvas without copying memory.
-
----
-
-## 3. Comparison: Previous Architecture vs. Current Architecture
-
-| Component | Previous Monolithic Architecture | Current Decoupled Architecture |
+| Data Payload Component | Immediate Size Impact | Purpose |
 | :--- | :--- | :--- |
-| **HTML File Size** | **120 MB – 220 MB** | **~150 KB** |
-| **Audio Storage** | Embedded Base64 string in HTML (+70 MB) | Relative file reference on disk |
-| **Snapshot Storage** | Full 15,001-point arrays in JSON strings | Separate Float32 binary file (`snapshots.bin`) |
-| **Page Load Speed** | 5 – 15 seconds (browser string parsing) | Instantaneous (< 50 milliseconds) |
-| **Browser RAM Footprint** | 500 MB – 1.5 GB | 30 MB – 50 MB |
+| **HTML DOM & CSS Styling** | ~15 KB | Layout containers, metrics cards, segment inspector boxes |
+| **JavaScript Graphics Engine** | ~25 KB | Canvas 2D renderers for waveforms, playhead tracking, cursor badges |
+| **Waveform Map Envelope** | ~20 KB | 1,500-point min/max envelope array for the top overview canvas |
+| **Peak Metadata (`pass2Peaks`)** | **~69.6 MB** *(before fix)* | JSON array of 253 peaks (timestamps, scores, qualifiers, **plus 15,001-element snapshot lists**) |
+| **Segment Data (`segmentsData`)** | **~69.6 MB** *(before fix)* | JSON array of segment ratings and constituent peaks (**with duplicate snapshot lists**) |
+| **Total HTML File Size** | **~139.3 MB** | **Browser must parse 139 MB of text before rendering!** |
 
 ---
 
-## 4. Key Factors Contributing to HTML File Size
+## 2. Files Loaded On-Demand or Asynchronously
 
-If an HTML report file ever grows larger than expected, the primary contributors would be:
-
-1. **Number of Detected Peaks**: Each peak adds a small metadata entry (timestamp, score, qualifiers) to `pass2Peaks`. A song with 1,000+ peaks adds ~200 KB of JSON text.
-2. **Segment Count**: Long songs with hundreds of short bars add additional segment waveform slices (~100 KB).
-3. **Waveform Downsampling Resolution**: Set to 1,500 points for the main waveform map (~25 KB).
+| Asset File | Size on Disk | When and How It Is Loaded |
+| :--- | :--- | :--- |
+| **Audio File (`.wav`)** | ~4.6 MB | **On Demand**: HTML5 `<audio src="04 transient treble.wav">` streams audio chunks from disk as playback progresses or when seeking. It is **never** loaded entirely into HTML memory. |
+| **Binary Snapshots (`snapshots.bin`)** | ~15.1 MB | **Asynchronous Background Fetch**: Loaded after page renders via `fetch('snapshots.bin')` into `window.snapshotsArrayBuffer`. |
+| **Binary Manifest (`manifest.json`)** | ~2.6 MB | Exported on disk for headless C/Python tools. |
+| **Binary Stream (`.ctbin`)** | ~32.9 MB | Pure C binary stream for low-level headless processing. |
 
 ---
 
-## Conclusion
+## Why the HTML File Bloated to 139 MB and How to Fix It
 
-The current architecture is highly optimized:
-- The **HTML report file is ultra-lightweight (~150 KB)** and loads instantly.
-- **Audio is streamed directly from disk** without Base64 encoding bloat.
-- **Peak snapshots are stored in a compact binary asset (`snapshots.bin`)** and read asynchronously on demand.
+### **Root Cause**:
+In `pattern_finder.py`, `export_ctbin_assets` successfully exported all full-resolution snapshots into `snapshots.bin` (15.1 MB) and created byte-offset references (`snap_offset`, `snap_len`). However, when building `pass2_peaks_js` and `segments_js` for the HTML template, the 15,001-element `snapshot` list in Python was **not stripped** from `p_copy` or from `segmentsData['peaks']`.
+
+### **Exact Solution**:
+Stripping `snapshot` from peak dictionaries prior to `json.dumps()` in both `pass2_peaks_flat` and `segments_transience_data`:
+* **`pass2_peaks_js` size**: Drops from 69.6 MB down to **~80 KB** (metadata only: time, score, qualifiers, `snap_offset`, `snap_len`).
+* **`segments_js` size**: Drops from 69.6 MB down to **~30 KB** (segment indices, ratings, peak metadata without snapshots).
+* **Final HTML File Size**: Drops from **139.3 MB down to ~150 KB** (a 1,000x reduction).
