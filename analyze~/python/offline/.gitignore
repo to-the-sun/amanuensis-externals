@@ -4,6 +4,5 @@ build/
 *.pyc
 __pycache__/
 *_pattern_analysis.html
-ct_analyze_headless
-ct_analyze_headless.exe
 *.o
+ct_analyze_headless
