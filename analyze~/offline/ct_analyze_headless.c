@@ -110,16 +110,7 @@ static int copy_file(const char* src_path, const char* dst_path) {
     return success;
 }
 
-static void copy_matching_passes_text_files(const char* dir_path, const char* stem_name, const char* output_dir) {
-    if (!istarts_with(stem_name, "palette")) {
-        return;
-    }
-
-    const char* rest_of_stem = stem_name + 7;
-    char target_passes_stem[1024];
-    snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", rest_of_stem);
-    size_t target_len = strlen(target_passes_stem);
-
+static void scan_and_copy_passes_files_from_dir(const char* dir_path, const char* target_passes_stem, size_t target_len, const char* output_dir) {
     char scan_dir[2048];
     if (dir_path && dir_path[0] != '\0') {
         strncpy(scan_dir, dir_path, sizeof(scan_dir) - 1);
@@ -177,6 +168,22 @@ static void copy_matching_passes_text_files(const char* dir_path, const char* st
     closedir(dir);
 }
 
+static void copy_matching_passes_text_files(const char* dir_path, const char* exe_dir, const char* stem_name, const char* output_dir) {
+    if (!istarts_with(stem_name, "palette")) {
+        return;
+    }
+
+    const char* rest_of_stem = stem_name + 7;
+    char target_passes_stem[1024];
+    snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", rest_of_stem);
+    size_t target_len = strlen(target_passes_stem);
+
+    scan_and_copy_passes_files_from_dir(dir_path, target_passes_stem, target_len, output_dir);
+    if (exe_dir && dir_path && strcmp(exe_dir, dir_path) != 0) {
+        scan_and_copy_passes_files_from_dir(exe_dir, target_passes_stem, target_len, output_dir);
+    }
+}
+
 static int has_wav_extension(const char* filename) {
     size_t len = strlen(filename);
     if (len < 4) return 0;
@@ -226,7 +233,7 @@ static int compare_strings(const void* a, const void* b) {
     return strcmp(*(const char**)a, *(const char**)b);
 }
 
-static int process_single_file(const char* audio_filepath, int window_ms) {
+static int process_single_file(const char* audio_filepath, const char* exe_dir, int window_ms) {
     printf("\n------------------------------------------------------------\n");
     printf("Loading WAV audio file: %s\n", audio_filepath);
 
@@ -290,7 +297,7 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
         printf("Copied audio file to destination: %s -> %s\n", audio_filepath, dst_audio_path);
     }
 
-    copy_matching_passes_text_files(dir_path, stem_name, output_dir);
+    copy_matching_passes_text_files(dir_path, exe_dir, stem_name, output_dir);
 
     printf("\nRunning standalone transience analysis, pattern finding, & asset exports in pure C...\n");
 
@@ -334,7 +341,11 @@ int main(int argc, char** argv) {
             window_ms = 15000;
         }
 
-        int success = process_single_file(audio_filepath, window_ms);
+        char exe_dir[2048];
+        char exe_stem[1024];
+        get_directory_and_stem(argv[0], exe_dir, exe_stem);
+
+        int success = process_single_file(audio_filepath, exe_dir, window_ms);
 
         printf("\nPress Enter to exit...");
         getchar();
@@ -411,7 +422,7 @@ int main(int argc, char** argv) {
         printf(" Processing [%d/%d]: %s\n", i + 1, wav_files.count, wav_files.items[i]);
         printf("============================================================\n");
 
-        if (process_single_file(full_path, window_ms)) {
+        if (process_single_file(full_path, exe_dir, window_ms)) {
             success_count++;
         } else {
             fail_count++;
