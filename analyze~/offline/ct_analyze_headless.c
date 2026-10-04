@@ -56,6 +56,127 @@ static int iequals(const char* a, const char* b) {
     return *a == *b;
 }
 
+static int istarts_with(const char* str, const char* prefix) {
+    while (*prefix) {
+        if (!*str || tolower((unsigned char)*str) != tolower((unsigned char)*prefix)) {
+            return 0;
+        }
+        str++;
+        prefix++;
+    }
+    return 1;
+}
+
+static int is_text_file(const char* filename) {
+    const char* dot = strrchr(filename, '.');
+    if (!dot) return 0;
+    if (iequals(dot, ".txt") || iequals(dot, ".json") || iequals(dot, ".csv") ||
+        iequals(dot, ".log") || iequals(dot, ".xml")  || iequals(dot, ".text")) {
+        return 1;
+    }
+    return 0;
+}
+
+static int copy_file(const char* src_path, const char* dst_path) {
+    if (!src_path || !dst_path) return 0;
+    if (strcmp(src_path, dst_path) == 0) return 1;
+
+    FILE* src = fopen(src_path, "rb");
+    if (!src) {
+        printf("Error: Could not open source file for copying: %s\n", src_path);
+        return 0;
+    }
+
+    FILE* dst = fopen(dst_path, "wb");
+    if (!dst) {
+        printf("Error: Could not open destination file for writing: %s\n", dst_path);
+        fclose(src);
+        return 0;
+    }
+
+    char buffer[65536];
+    size_t bytes_read;
+    int success = 1;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), src)) > 0) {
+        if (fwrite(buffer, 1, bytes_read, dst) != bytes_read) {
+            printf("Error: Failed writing data when copying to %s\n", dst_path);
+            success = 0;
+            break;
+        }
+    }
+
+    fclose(src);
+    fclose(dst);
+    return success;
+}
+
+static void copy_matching_passes_text_files(const char* dir_path, const char* stem_name, const char* output_dir) {
+    if (!istarts_with(stem_name, "palette")) {
+        return;
+    }
+
+    const char* rest_of_stem = stem_name + 7;
+    char target_passes_stem[1024];
+    snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", rest_of_stem);
+    size_t target_len = strlen(target_passes_stem);
+
+    char scan_dir[2048];
+    if (dir_path && dir_path[0] != '\0') {
+        strncpy(scan_dir, dir_path, sizeof(scan_dir) - 1);
+        scan_dir[sizeof(scan_dir) - 1] = '\0';
+    } else {
+        strcpy(scan_dir, ".");
+    }
+
+    size_t scan_len = strlen(scan_dir);
+    while (scan_len > 1 && (scan_dir[scan_len - 1] == '/' || scan_dir[scan_len - 1] == '\\')) {
+        scan_dir[scan_len - 1] = '\0';
+        scan_len--;
+    }
+
+    DIR* dir = opendir(scan_dir);
+    if (!dir) {
+        strcpy(scan_dir, ".");
+        dir = opendir(scan_dir);
+    }
+
+    if (!dir) return;
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char* name = entry->d_name;
+
+        char full_entry_path[4096];
+        snprintf(full_entry_path, sizeof(full_entry_path), "%s/%s", scan_dir, name);
+        struct stat st;
+        if (stat(full_entry_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+            continue;
+        }
+
+        if (!is_text_file(name)) {
+            continue;
+        }
+
+        const char* dot = strrchr(name, '.');
+        size_t entry_stem_len = dot ? (size_t)(dot - name) : strlen(name);
+        char entry_stem[1024];
+        if (entry_stem_len >= sizeof(entry_stem)) entry_stem_len = sizeof(entry_stem) - 1;
+        strncpy(entry_stem, name, entry_stem_len);
+        entry_stem[entry_stem_len] = '\0';
+
+        if (istarts_with(entry_stem, target_passes_stem)) {
+            if (entry_stem_len == target_len || !isalnum((unsigned char)entry_stem[target_len])) {
+                char dst_file_path[4096];
+                snprintf(dst_file_path, sizeof(dst_file_path), "%s/%s", output_dir, name);
+                if (copy_file(full_entry_path, dst_file_path)) {
+                    printf("Copied matching text file: %s -> %s\n", full_entry_path, dst_file_path);
+                }
+            }
+        }
+    }
+    closedir(dir);
+}
+
 static int has_wav_extension(const char* filename) {
     size_t len = strlen(filename);
     if (len < 4) return 0;
@@ -155,6 +276,21 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     char output_dir[4096];
     snprintf(output_dir, sizeof(output_dir), "%s%s", dir_path, stem_name);
     mkdir_cross(output_dir);
+
+    const char* last_slash = strrchr(audio_filepath, '/');
+    const char* last_backslash = strrchr(audio_filepath, '\\');
+    const char* audio_filename = audio_filepath;
+    if (last_slash && last_slash >= audio_filename) audio_filename = last_slash + 1;
+    if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
+
+    char dst_audio_path[4096];
+    snprintf(dst_audio_path, sizeof(dst_audio_path), "%s/%s", output_dir, audio_filename);
+
+    if (copy_file(audio_filepath, dst_audio_path)) {
+        printf("Copied audio file to destination: %s -> %s\n", audio_filepath, dst_audio_path);
+    }
+
+    copy_matching_passes_text_files(dir_path, stem_name, output_dir);
 
     printf("\nRunning standalone transience analysis, pattern finding, & asset exports in pure C...\n");
 
