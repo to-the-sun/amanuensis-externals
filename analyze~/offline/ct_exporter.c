@@ -232,6 +232,93 @@ int export_all_assets_and_html(
     }
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
 
+    // Find the longest contiguous run of best_bar_length_ms in Pass 1
+    double longest_hp_start_s = 0.0;
+    double longest_hp_end_s = 0.0;
+    double max_run_dur = 0.0;
+
+    double cur_run_start_s = -1.0;
+    double cur_run_end_s = -1.0;
+
+    for (int i = 0; i < num_frames; i++) {
+        double raw_hp = res1.highest_peaks_ms[i];
+        if (raw_hp != -999.0 && fabs(fabs(raw_hp) - best_bar_length_ms) < 1e-3) {
+            if (cur_run_start_s < 0.0) {
+                cur_run_start_s = res1.times[i];
+            }
+            cur_run_end_s = res1.times[i] + frame_dt_s;
+        } else {
+            if (cur_run_start_s >= 0.0) {
+                double run_dur = cur_run_end_s - cur_run_start_s;
+                if (run_dur > max_run_dur) {
+                    max_run_dur = run_dur;
+                    longest_hp_start_s = cur_run_start_s;
+                    longest_hp_end_s = cur_run_end_s;
+                }
+                cur_run_start_s = -1.0;
+                cur_run_end_s = -1.0;
+            }
+        }
+    }
+    if (cur_run_start_s >= 0.0) {
+        double run_dur = cur_run_end_s - cur_run_start_s;
+        if (run_dur > max_run_dur) {
+            max_run_dur = run_dur;
+            longest_hp_start_s = cur_run_start_s;
+            longest_hp_end_s = cur_run_end_s;
+        }
+    }
+
+    if (max_run_dur <= 0.0) {
+        longest_hp_start_s = 0.0;
+        longest_hp_end_s = (num_frames > 0) ? res1.times[num_frames - 1] : 0.0;
+    }
+
+    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
+    int hop = (int)(sr * 0.001);
+    int midpoint_frame = (hop > 0) ? (int)round(midpoint_s * (double)sr / (double)hop) : 0;
+    if (midpoint_frame < 0) midpoint_frame = 0;
+    if (midpoint_frame >= num_frames) midpoint_frame = (num_frames > 0) ? (num_frames - 1) : 0;
+
+    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
+    double midpoint_demarcation_line = 0.0;
+
+    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms);
+    if (mid_analyzer) {
+        analyzer_set_sample_rate(mid_analyzer, sr);
+        int target_sample = (int)round(midpoint_s * (double)sr);
+        if (target_sample > len) target_sample = len;
+        int step = hop * 100;
+
+        for (int last_t = 0; last_t < target_sample; last_t += step) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+            if (res_chunk) {
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                int chunk_len = step;
+                if (last_t + step > target_sample) chunk_len = target_sample - last_t;
+                if (chunk_len > 0) {
+                    memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
+                }
+                analyzer_analyze_chunk(mid_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+                free(push_ptr);
+                free(res_chunk);
+            }
+        }
+
+        double* cur_buf = analyzer_get_buffer(mid_analyzer);
+        if (cur_buf && midpoint_buffer) {
+            memcpy(midpoint_buffer, cur_buf, sizeof(double) * (pass1_window_ms + 1));
+        }
+        if (res1.demarcation_lines && midpoint_frame < num_frames) {
+            midpoint_demarcation_line = res1.demarcation_lines[midpoint_frame];
+        }
+        analyzer_destroy(mid_analyzer);
+    }
+
     analyzer_free_analysis(&res1);
 
     // Pass 2: Re-analyze with window_ms = min(15000, best_bar_length * 2)
@@ -617,6 +704,23 @@ int export_all_assets_and_html(
             }
             fprintf(fp, "  ],\n");
 
+            // Midpoint Snapshot Data
+            fprintf(fp, "  \"midpoint_snapshot\": {\n");
+            fprintf(fp, "    \"midpoint_time_s\": %.4f,\n", midpoint_s);
+            fprintf(fp, "    \"midpoint_time_ms\": %.2f,\n", midpoint_s * 1000.0);
+            fprintf(fp, "    \"longest_hp_val_ms\": %.2f,\n", best_bar_length_ms);
+            fprintf(fp, "    \"longest_hp_start_s\": %.4f,\n", longest_hp_start_s);
+            fprintf(fp, "    \"longest_hp_end_s\": %.4f,\n", longest_hp_end_s);
+            fprintf(fp, "    \"demarcation_line\": %.6f,\n", midpoint_demarcation_line);
+            fprintf(fp, "    \"buffer_len\": %d,\n", pass1_window_ms + 1);
+            fprintf(fp, "    \"buffer\": [");
+            int mid_buf_len = pass1_window_ms + 1;
+            for (int b_i = 0; b_i < mid_buf_len; b_i++) {
+                fprintf(fp, "%.4f%s", midpoint_buffer ? midpoint_buffer[b_i] : 0.0, (b_i < mid_buf_len - 1) ? "," : "");
+            }
+            fprintf(fp, "]\n");
+            fprintf(fp, "  },\n");
+
             // Flat peaks
             fprintf(fp, "  \"pass2_peaks\": [\n");
             int peak_iter = 0;
@@ -662,6 +766,10 @@ int export_all_assets_and_html(
         if (f_rd_js) fclose(f_rd_js);
         free(wf_min);
         free(wf_max);
+    }
+    if (midpoint_buffer) {
+        free(midpoint_buffer);
+        midpoint_buffer = NULL;
     }
 
     free(segments);
@@ -725,6 +833,12 @@ int export_all_assets_and_html(
         fprintf(f_html, "        </div>\n");
         fprintf(f_html, "    </div>\n");
 
+        fprintf(f_html, "    <div class=\"section-title\">Cumulative History Buffer at Longest High Point Midpoint</div>\n");
+        fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
+        fprintf(f_html, "        <canvas id=\"midpointBufferCanvas\" width=\"1150\" height=\"250\"></canvas>\n");
+        fprintf(f_html, "    </div>\n");
+        fprintf(f_html, "    <div class=\"hint\">💡 State of the 15,000ms cumulative history buffer captured at the midpoint during the duration of the longest stable high point (determined on Pass 1). The red dashed line denotes the high point bar duration.</div>\n");
+
         fprintf(f_html, "    <div class=\"section-title\">1. Interactive Audio Waveform, Pattern Map & Cumulative History High Point Changes</div>\n");
         fprintf(f_html, "    <div class=\"audio-controls\">\n");
         fprintf(f_html, "        <audio id=\"audioPlayer\" controls src=\"../%s.wav\"></audio>\n", stem_name);
@@ -782,18 +896,22 @@ int export_all_assets_and_html(
         fprintf(f_html, "    let globalMaxPosScore = 1.0;\n");
         fprintf(f_html, "    let globalMinNegScore = -1.0;\n");
         fprintf(f_html, "    let toleranceMs = %.4f;\n", res2.tolerance);
-        fprintf(f_html, "    let pass2Peaks = [];\n\n");
+        fprintf(f_html, "    let pass2Peaks = [];\n");
+        fprintf(f_html, "    let midpointSnapshot = null;\n\n");
 
         fprintf(f_html, "    const canvas = document.getElementById('waveformCanvas');\n");
         fprintf(f_html, "    const ctx = canvas ? canvas.getContext('2d') : null;\n");
         fprintf(f_html, "    const audio = document.getElementById('audioPlayer');\n");
         fprintf(f_html, "    const bufCanvas = document.getElementById('historyBufferCanvas');\n");
-        fprintf(f_html, "    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;\n\n");
+        fprintf(f_html, "    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;\n");
+        fprintf(f_html, "    const midCanvas = document.getElementById('midpointBufferCanvas');\n");
+        fprintf(f_html, "    const midCtx = midCanvas ? midCanvas.getContext('2d') : null;\n\n");
 
         fprintf(f_html, "    let zoomStartMs = -pass2WinMs;\n");
         fprintf(f_html, "    let zoomEndMs = 0.0;\n");
         fprintf(f_html, "    let isDraggingBuf = false;\n");
         fprintf(f_html, "    let dragStartX = 0, dragCurrentX = 0;\n\n");
+
 
         fprintf(f_html, "    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)', 'rgba(241, 196, 15, 0.35)'];\n");
         fprintf(f_html, "    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f'];\n\n");
@@ -821,6 +939,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        if (data.global_min_neg_score !== undefined) globalMinNegScore = data.global_min_neg_score;\n");
         fprintf(f_html, "        if (data.tolerance_ms !== undefined) toleranceMs = data.tolerance_ms;\n");
         fprintf(f_html, "        if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;\n");
+        fprintf(f_html, "        if (data.midpoint_snapshot) midpointSnapshot = data.midpoint_snapshot;\n");
         fprintf(f_html, "        renderAll();\n");
         fprintf(f_html, "    }\n\n");
 
@@ -946,8 +1065,13 @@ int export_all_assets_and_html(
         fprintf(f_html, "        if (!seg) {\n");
         fprintf(f_html, "            if (t) t.textContent = `${labelPrefix} Segment (Out of Range)`;\n");
         fprintf(f_html, "            if (r) r.textContent = `Average Rating: N/A`;\n");
+        fprintf(f_html, "            if (c) { delete c.dataset.startMs; delete c.dataset.endMs; }\n");
         fprintf(f_html, "            sCtx.fillStyle = '#f8f9fa'; sCtx.fillRect(0, 0, W, H);\n");
         fprintf(f_html, "            return;\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (c) {\n");
+        fprintf(f_html, "            c.dataset.startMs = seg.start_ms;\n");
+        fprintf(f_html, "            c.dataset.endMs = seg.end_ms;\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        const patIdx = patterns.findIndex(p => p.segments && p.segments.includes(seg.segment_index));\n");
         fprintf(f_html, "        if (patIdx !== -1) {\n");
@@ -955,6 +1079,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "            if (boxElem) { boxElem.style.borderColor = mainColor; boxElem.style.borderWidth = '2px'; }\n");
         fprintf(f_html, "            if (t) t.textContent = `${labelPrefix} Segment (Seg ${seg.segment_index} [Pattern ${patIdx + 1}] : ${Math.round(seg.start_ms)} - ${Math.round(seg.end_ms)} ms)`;\n");
         fprintf(f_html, "        } else {\n");
+        fprintf(f_html, "            if (boxElem) { boxElem.style.borderColor = ''; boxElem.style.borderWidth = ''; }\n");
         fprintf(f_html, "            if (t) t.textContent = `${labelPrefix} Segment (Seg ${seg.segment_index} : ${Math.round(seg.start_ms)} - ${Math.round(seg.end_ms)} ms)`;\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (r) r.textContent = `Average Rating: ${seg.rating.toFixed(4)}`;\n");
@@ -1034,6 +1159,90 @@ int export_all_assets_and_html(
         fprintf(f_html, "        drawSegmentBox('boxPrev', 'canvasPrev', 'titlePrev', 'ratingPrev', prevSeg, 'Previous', curTimeMs);\n");
         fprintf(f_html, "        drawSegmentBox('boxCurr', 'canvasCurr', 'titleCurr', 'ratingCurr', currSeg, 'Current Playing', curTimeMs);\n");
         fprintf(f_html, "        drawSegmentBox('boxNext', 'canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);\n");
+        fprintf(f_html, "    }\n\n");
+
+        fprintf(f_html, "    function drawMidpointBuffer() {\n");
+        fprintf(f_html, "        if (!midCanvas || !midCtx) return;\n");
+        fprintf(f_html, "        const W = midCanvas.width, H = midCanvas.height;\n");
+        fprintf(f_html, "        midCtx.clearRect(0, 0, W, H);\n");
+        fprintf(f_html, "        midCtx.fillStyle = '#ffffff'; midCtx.fillRect(0, 0, W, H);\n");
+        fprintf(f_html, "        if (!midpointSnapshot || !midpointSnapshot.buffer) {\n");
+        fprintf(f_html, "            midCtx.fillStyle = '#7f8c8d'; midCtx.font = '13px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
+        fprintf(f_html, "            midCtx.fillText('No midpoint history buffer data available.', W / 2, H / 2);\n");
+        fprintf(f_html, "            return;\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        const buf = midpointSnapshot.buffer;\n");
+        fprintf(f_html, "        const numPts = buf.length;\n");
+        fprintf(f_html, "        const pass1WinMs = 15000.0;\n");
+        fprintf(f_html, "        const snapBinMs = pass1WinMs / (numPts - 1 || 1);\n");
+        fprintf(f_html, "        const winStartMs = -pass1WinMs, winEndMs = 0.0;\n");
+        fprintf(f_html, "        let curMax = 0;\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
+        fprintf(f_html, "            if (sampleMs <= -99.0 + 1e-5 && buf[i] > curMax) curMax = buf[i];\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (curMax <= 0) curMax = 1.0;\n");
+        fprintf(f_html, "        const yMax = curMax * 1.1;\n");
+        fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
+        fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
+        fprintf(f_html, "        midCtx.strokeStyle = '#dcdde1'; midCtx.lineWidth = 1; midCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
+        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
+        fprintf(f_html, "            const frac = i / 5;\n");
+        fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
+        fprintf(f_html, "            const msVal = winStartMs + frac * pass1WinMs;\n");
+        fprintf(f_html, "            midCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; midCtx.beginPath(); midCtx.moveTo(x, padTop); midCtx.lineTo(x, padTop + graphH); midCtx.stroke();\n");
+        fprintf(f_html, "            midCtx.fillText((Math.abs(msVal) < 1e-3) ? '0ms' : `${Math.round(msVal)}ms`, x, padTop + graphH + 18);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        midCtx.textAlign = 'right';\n");
+        fprintf(f_html, "        for (let ratio of [0.0, 0.25, 0.5, 0.75, 1.0]) {\n");
+        fprintf(f_html, "            const y = padTop + graphH - ratio * graphH;\n");
+        fprintf(f_html, "            midCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; midCtx.beginPath(); midCtx.moveTo(padLeft, y); midCtx.lineTo(padLeft + graphW, y); midCtx.stroke();\n");
+        fprintf(f_html, "            midCtx.fillText((yMax * ratio).toFixed(2), padLeft - 8, y + 4);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        const meanVal = midpointSnapshot.demarcation_line || 0;\n");
+        fprintf(f_html, "        const meanY = padTop + graphH - (meanVal / yMax) * graphH;\n");
+        fprintf(f_html, "        midCtx.strokeStyle = '#7f8c8d'; midCtx.lineWidth = 1.2; midCtx.setLineDash([5, 5]);\n");
+        fprintf(f_html, "        midCtx.beginPath(); midCtx.moveTo(padLeft, meanY); midCtx.lineTo(padLeft + graphW, meanY); midCtx.stroke(); midCtx.setLineDash([]);\n");
+        fprintf(f_html, "        midCtx.save(); midCtx.beginPath(); midCtx.rect(padLeft, padTop, graphW, graphH); midCtx.clip();\n");
+        fprintf(f_html, "        midCtx.strokeStyle = '#3498db'; midCtx.lineWidth = 2.0; midCtx.fillStyle = 'rgba(52, 152, 219, 0.15)';\n");
+        fprintf(f_html, "        midCtx.beginPath(); let firstPt = true; let lastDrawnMs = (0 - (numPts - 1)) * snapBinMs;\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
+        fprintf(f_html, "            if (sampleMs > -99.0 + 1e-5) continue;\n");
+        fprintf(f_html, "            const x = padLeft + ((sampleMs - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "            const y = padTop + graphH - (buf[i] / yMax) * graphH;\n");
+        fprintf(f_html, "            if (firstPt) { midCtx.moveTo(x, y); firstPt = false; } else { midCtx.lineTo(x, y); }\n");
+        fprintf(f_html, "            lastDrawnMs = sampleMs;\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        midCtx.stroke();\n");
+        fprintf(f_html, "        const endX = padLeft + ((lastDrawnMs - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "        const startX = padLeft + (((0 - (numPts - 1)) * snapBinMs - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "        midCtx.lineTo(endX, padTop + graphH); midCtx.lineTo(startX, padTop + graphH); midCtx.closePath(); midCtx.fill();\n");
+
+        fprintf(f_html, "        const hpVal = midpointSnapshot.longest_hp_val_ms || bestBarLengthMs;\n");
+        fprintf(f_html, "        if (hpVal > 0) {\n");
+        fprintf(f_html, "            const hpX = padLeft + (((-hpVal) - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "            if (hpX >= padLeft && hpX <= padLeft + graphW) {\n");
+        fprintf(f_html, "                midCtx.strokeStyle = '#e74c3c'; midCtx.lineWidth = 2.0; midCtx.setLineDash([4, 4]);\n");
+        fprintf(f_html, "                midCtx.beginPath(); midCtx.moveTo(hpX, padTop); midCtx.lineTo(hpX, padTop + graphH); midCtx.stroke(); midCtx.setLineDash([]);\n");
+        fprintf(f_html, "                midCtx.fillStyle = '#e74c3c'; midCtx.font = 'bold 11px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "                midCtx.textAlign = (hpX > padLeft + graphW - 90) ? 'right' : 'left';\n");
+        fprintf(f_html, "                const textX = (hpX > padLeft + graphW - 90) ? hpX - 5 : hpX + 5;\n");
+        fprintf(f_html, "                midCtx.fillText(`High Point: ${Math.round(hpVal)}ms`, textX, padTop + 15);\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        }\n");
+
+        fprintf(f_html, "        midCtx.restore();\n");
+        fprintf(f_html, "        midCtx.save(); midCtx.translate(20, padTop + graphH / 2); midCtx.rotate(-Math.PI / 2);\n");
+        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        midCtx.fillText('Transience Flux / Energy', 0, 0); midCtx.restore();\n");
+        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        midCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 34);\n");
+        fprintf(f_html, "        const midTimeMs = midpointSnapshot.midpoint_time_ms || (midpointSnapshot.midpoint_time_s * 1000.0) || 0;\n");
+        fprintf(f_html, "        const midTimeStr = formatMSS(midTimeMs / 1000.0);\n");
+        fprintf(f_html, "        midCtx.fillStyle = '#2c3e50'; midCtx.font = 'bold 13px Segoe UI, sans-serif'; midCtx.textAlign = 'left';\n");
+        fprintf(f_html, "        midCtx.fillText(`15000ms Cumulative Buffer at Longest High Point Midpoint (${midTimeStr} / ${Math.round(midTimeMs)}ms - Bar: ${Math.round(hpVal)}ms)`, padLeft, padTop - 10);\n");
         fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function drawHistoryBuffer() {\n");
@@ -1160,6 +1369,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        }\n");
         fprintf(f_html, "    }\n\n");
 
+
         fprintf(f_html, "    if (bufCanvas && bufCtx) {\n");
         fprintf(f_html, "        function getCanvasMouseX(e) {\n");
         fprintf(f_html, "            const rect = bufCanvas.getBoundingClientRect();\n");
@@ -1206,6 +1416,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function renderAll() {\n");
+        fprintf(f_html, "        drawMidpointBuffer();\n");
         fprintf(f_html, "        drawWaveformMap();\n");
         fprintf(f_html, "        updateSegmentInspector();\n");
         fprintf(f_html, "        drawHistoryBuffer();\n");
@@ -1226,22 +1437,21 @@ int export_all_assets_and_html(
         fprintf(f_html, "        });\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    function setupSegmentClickListener(canvasId, segOffset) {\n");
+        fprintf(f_html, "    function setupSegmentClickListener(canvasId) {\n");
         fprintf(f_html, "        const canvasElem = document.getElementById(canvasId);\n");
         fprintf(f_html, "        if (!canvasElem) return;\n");
         fprintf(f_html, "        canvasElem.addEventListener('click', (e) => {\n");
-        fprintf(f_html, "            const curTimeMs = (audio.currentTime || 0) * 1000.0;\n");
-        fprintf(f_html, "            const curSegIdx = Math.floor(curTimeMs / bestBarLengthMs);\n");
-        fprintf(f_html, "            const targetSegIdx = curSegIdx + segOffset;\n");
-        fprintf(f_html, "            const seg = segmentsData.find(s => s.segment_index === targetSegIdx);\n");
-        fprintf(f_html, "            if (!seg) return;\n");
+        fprintf(f_html, "            if (!canvasElem.dataset.startMs || !canvasElem.dataset.endMs) return;\n");
+        fprintf(f_html, "            const startMs = parseFloat(canvasElem.dataset.startMs);\n");
+        fprintf(f_html, "            const endMs = parseFloat(canvasElem.dataset.endMs);\n");
+        fprintf(f_html, "            const segDurMs = endMs - startMs;\n");
+        fprintf(f_html, "            if (segDurMs <= 0) return;\n");
         fprintf(f_html, "            const rect = canvasElem.getBoundingClientRect();\n");
         fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
         fprintf(f_html, "            const scaleX = canvasElem.width / rect.width;\n");
         fprintf(f_html, "            const canvasX = clickX * scaleX;\n");
         fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, canvasX / canvasElem.width));\n");
-        fprintf(f_html, "            const segDurMs = seg.end_ms - seg.start_ms;\n");
-        fprintf(f_html, "            const targetTimeS = (seg.start_ms + clickFraction * segDurMs) / 1000.0;\n");
+        fprintf(f_html, "            const targetTimeS = (startMs + clickFraction * segDurMs) / 1000.0;\n");
         fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
         fprintf(f_html, "            if (targetTimeS >= 0 && targetTimeS <= dur) {\n");
         fprintf(f_html, "                const wasPaused = audio.paused;\n");
@@ -1252,9 +1462,9 @@ int export_all_assets_and_html(
         fprintf(f_html, "        });\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    setupSegmentClickListener('canvasPrev', -1);\n");
-        fprintf(f_html, "    setupSegmentClickListener('canvasCurr', 0);\n");
-        fprintf(f_html, "    setupSegmentClickListener('canvasNext', 1);\n\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasPrev');\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasCurr');\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasNext');\n\n");
 
         fprintf(f_html, "    if (window.snapshotsBase64) {\n");
         fprintf(f_html, "        try {\n");
