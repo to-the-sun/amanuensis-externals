@@ -16,7 +16,7 @@ The C pipeline operates in two passes without Python dependencies:
 2. **Pass 2 (Adaptive Window = `min(15000, best_bar_length * 2)`)**:
    - Re-analyzes the audio with the optimized window size for peak detection, pattern identification, and segment scoring.
    - Copies the target audio file into the destination folder so the interactive HTML report plays the local copied instance.
-   - Scans for and copies any matching text files (located in the audio file folder or executable folder) whose names match the audio file except starting with "passes" instead of "palette" into the destination folder.
+   - Scans for and copies any matching text files (located in the audio file folder) whose names match the audio file except starting with "passes" instead of "palette" into the destination folder.
    - Exports binary assets (`.ctbin`, `snapshots.bin`), Base64 snapshot fallbacks (`snapshots.js`), structured JSON data (`manifest.json`, `report_data.json`, `report_data.js`), pattern WAV slices, and an interactive HTML report (`<stem>_pattern_analysis.html`).
 
 ## Generated HTML Report Layout
