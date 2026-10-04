@@ -131,15 +131,7 @@ def longest_audio_duration(directory: Path) -> float:
 
 
 def format_timestamp_token(moment: datetime) -> str:
-    parts = [
-        str(moment.year),
-        str(moment.month),
-        str(moment.day),
-        str(moment.hour),
-        str(moment.minute),
-        str(moment.second),
-    ]
-    return "-".join(parts)
+    return moment.strftime("%Y-%m-%d %H%M%S")
 
 
 def create_blank_wav(output_path: Path, duration_seconds: float) -> None:
