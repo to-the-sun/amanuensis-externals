@@ -965,14 +965,30 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "        sCtx.strokeStyle = '#dcdde1'; sCtx.lineWidth = 1; sCtx.strokeRect(padL, padT, graphW, graphH);\n");
         fprintf(f_html, "        const centerY = padT + graphH / 2;\n");
+        fprintf(f_html, "        const latestActivePeak = getLatestActivePeak();\n");
 
         fprintf(f_html, "        if (seg.peaks && seg.peaks.length > 0) {\n");
         fprintf(f_html, "            seg.peaks.forEach(p => {\n");
         fprintf(f_html, "                const relMs = p.time_ms - seg.start_ms;\n");
         fprintf(f_html, "                const x = padL + (relMs / segDurMs) * graphW;\n");
-        fprintf(f_html, "                sCtx.strokeStyle = getScoreColor(p.total_score, 0.55);\n");
-        fprintf(f_html, "                sCtx.lineWidth = 1.8; sCtx.setLineDash([4, 4]);\n");
+        fprintf(f_html, "                const isLatest = latestActivePeak && (latestActivePeak.p_idx === p.p_idx);\n");
+        fprintf(f_html, "                sCtx.strokeStyle = getScoreColor(p.total_score, isLatest ? 0.9 : 0.55);\n");
+        fprintf(f_html, "                sCtx.lineWidth = isLatest ? 2.5 : 1.8; sCtx.setLineDash([4, 4]);\n");
         fprintf(f_html, "                sCtx.beginPath(); sCtx.moveTo(x, padT); sCtx.lineTo(x, padT + graphH); sCtx.stroke(); sCtx.setLineDash([]);\n");
+        fprintf(f_html, "                let scoreY = centerY;\n");
+        fprintf(f_html, "                if (p.total_score > 0) {\n");
+        fprintf(f_html, "                    const frac = globalMaxPosScore > 0 ? Math.min(1.0, Math.max(0.0, p.total_score / globalMaxPosScore)) : 0.0;\n");
+        fprintf(f_html, "                    scoreY = centerY - frac * (centerY - padT);\n");
+        fprintf(f_html, "                } else if (p.total_score < 0) {\n");
+        fprintf(f_html, "                    const frac = globalMinNegScore < 0 ? Math.min(1.0, Math.max(0.0, p.total_score / globalMinNegScore)) : 0.0;\n");
+        fprintf(f_html, "                    scoreY = centerY + frac * (padT + graphH - centerY);\n");
+        fprintf(f_html, "                }\n");
+        fprintf(f_html, "                scoreY = Math.max(padT + 10, Math.min(padT + graphH - 4, scoreY));\n");
+        fprintf(f_html, "                sCtx.fillStyle = getScoreColor(p.total_score, 1.0);\n");
+        fprintf(f_html, "                sCtx.font = isLatest ? 'bold 11px Segoe UI, sans-serif' : '10px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "                sCtx.textAlign = (x > padL + graphW - 40) ? 'right' : 'left';\n");
+        fprintf(f_html, "                const textX = (x > padL + graphW - 40) ? x - 4 : x + 4;\n");
+        fprintf(f_html, "                sCtx.fillText(`${p.total_score >= 0 ? '+' : ''}${p.total_score.toFixed(2)}`, textX, scoreY);\n");
         fprintf(f_html, "            });\n");
         fprintf(f_html, "        }\n");
 
