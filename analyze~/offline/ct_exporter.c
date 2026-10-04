@@ -834,10 +834,10 @@ int export_all_assets_and_html(
         fprintf(f_html, "    </div>\n");
 
         fprintf(f_html, "    <div class=\"section-title\">Cumulative History Buffer at Longest High Point Midpoint</div>\n");
-        fprintf(f_html, "    <div class=\"canvas-container\" style=\"cursor: crosshair; background: #ffffff;\">\n");
+        fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
         fprintf(f_html, "        <canvas id=\"midpointBufferCanvas\" width=\"1150\" height=\"250\"></canvas>\n");
         fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "    <div class=\"hint\">💡 State of the 15,000ms cumulative history buffer captured at the midpoint during the duration of the longest stable high point (determined on Pass 1). Select a section to zoom in, right-click to reset.</div>\n");
+        fprintf(f_html, "    <div class=\"hint\">💡 State of the 15,000ms cumulative history buffer captured at the midpoint during the duration of the longest stable high point (determined on Pass 1). The red dashed line denotes the high point bar duration.</div>\n");
 
         fprintf(f_html, "    <div class=\"section-title\">1. Interactive Audio Waveform, Pattern Map & Cumulative History High Point Changes</div>\n");
         fprintf(f_html, "    <div class=\"audio-controls\">\n");
@@ -912,10 +912,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "    let isDraggingBuf = false;\n");
         fprintf(f_html, "    let dragStartX = 0, dragCurrentX = 0;\n\n");
 
-        fprintf(f_html, "    let midZoomStartMs = -15000.0;\n");
-        fprintf(f_html, "    let midZoomEndMs = 0.0;\n");
-        fprintf(f_html, "    let isDraggingMidBuf = false;\n");
-        fprintf(f_html, "    let midDragStartX = 0, midDragCurrentX = 0;\n\n");
 
         fprintf(f_html, "    const colors = ['rgba(46, 204, 113, 0.35)', 'rgba(231, 76, 60, 0.35)', 'rgba(155, 89, 182, 0.35)', 'rgba(241, 196, 15, 0.35)'];\n");
         fprintf(f_html, "    const borderColors = ['#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f'];\n\n");
@@ -1069,8 +1065,13 @@ int export_all_assets_and_html(
         fprintf(f_html, "        if (!seg) {\n");
         fprintf(f_html, "            if (t) t.textContent = `${labelPrefix} Segment (Out of Range)`;\n");
         fprintf(f_html, "            if (r) r.textContent = `Average Rating: N/A`;\n");
+        fprintf(f_html, "            if (c) { delete c.dataset.startMs; delete c.dataset.endMs; }\n");
         fprintf(f_html, "            sCtx.fillStyle = '#f8f9fa'; sCtx.fillRect(0, 0, W, H);\n");
         fprintf(f_html, "            return;\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (c) {\n");
+        fprintf(f_html, "            c.dataset.startMs = seg.start_ms;\n");
+        fprintf(f_html, "            c.dataset.endMs = seg.end_ms;\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        const patIdx = patterns.findIndex(p => p.segments && p.segments.includes(seg.segment_index));\n");
         fprintf(f_html, "        if (patIdx !== -1) {\n");
@@ -1174,24 +1175,22 @@ int export_all_assets_and_html(
         fprintf(f_html, "        const numPts = buf.length;\n");
         fprintf(f_html, "        const pass1WinMs = 15000.0;\n");
         fprintf(f_html, "        const snapBinMs = pass1WinMs / (numPts - 1 || 1);\n");
+        fprintf(f_html, "        const winStartMs = -pass1WinMs, winEndMs = 0.0;\n");
         fprintf(f_html, "        let curMax = 0;\n");
         fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
         fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
-        fprintf(f_html, "            if (sampleMs >= midZoomStartMs && sampleMs <= midZoomEndMs && sampleMs <= -99.0 + 1e-5) {\n");
-        fprintf(f_html, "                if (buf[i] > curMax) curMax = buf[i];\n");
-        fprintf(f_html, "            }\n");
+        fprintf(f_html, "            if (sampleMs <= -99.0 + 1e-5 && buf[i] > curMax) curMax = buf[i];\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (curMax <= 0) curMax = 1.0;\n");
         fprintf(f_html, "        const yMax = curMax * 1.1;\n");
         fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
         fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
         fprintf(f_html, "        midCtx.strokeStyle = '#dcdde1'; midCtx.lineWidth = 1; midCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
-        fprintf(f_html, "        const zoomSpan = midZoomEndMs - midZoomStartMs;\n");
         fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
         fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
         fprintf(f_html, "            const frac = i / 5;\n");
         fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
-        fprintf(f_html, "            const msVal = midZoomStartMs + frac * zoomSpan;\n");
+        fprintf(f_html, "            const msVal = winStartMs + frac * pass1WinMs;\n");
         fprintf(f_html, "            midCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; midCtx.beginPath(); midCtx.moveTo(x, padTop); midCtx.lineTo(x, padTop + graphH); midCtx.stroke();\n");
         fprintf(f_html, "            midCtx.fillText((Math.abs(msVal) < 1e-3) ? '0ms' : `${Math.round(msVal)}ms`, x, padTop + graphH + 18);\n");
         fprintf(f_html, "        }\n");
@@ -1211,15 +1210,29 @@ int export_all_assets_and_html(
         fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
         fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
         fprintf(f_html, "            if (sampleMs > -99.0 + 1e-5) continue;\n");
-        fprintf(f_html, "            const x = padLeft + ((sampleMs - midZoomStartMs) / zoomSpan) * graphW;\n");
+        fprintf(f_html, "            const x = padLeft + ((sampleMs - winStartMs) / pass1WinMs) * graphW;\n");
         fprintf(f_html, "            const y = padTop + graphH - (buf[i] / yMax) * graphH;\n");
         fprintf(f_html, "            if (firstPt) { midCtx.moveTo(x, y); firstPt = false; } else { midCtx.lineTo(x, y); }\n");
         fprintf(f_html, "            lastDrawnMs = sampleMs;\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        midCtx.stroke();\n");
-        fprintf(f_html, "        const endX = padLeft + ((lastDrawnMs - midZoomStartMs) / zoomSpan) * graphW;\n");
-        fprintf(f_html, "        const startX = padLeft + (((0 - (numPts - 1)) * snapBinMs - midZoomStartMs) / zoomSpan) * graphW;\n");
+        fprintf(f_html, "        const endX = padLeft + ((lastDrawnMs - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "        const startX = padLeft + (((0 - (numPts - 1)) * snapBinMs - winStartMs) / pass1WinMs) * graphW;\n");
         fprintf(f_html, "        midCtx.lineTo(endX, padTop + graphH); midCtx.lineTo(startX, padTop + graphH); midCtx.closePath(); midCtx.fill();\n");
+
+        fprintf(f_html, "        const hpVal = midpointSnapshot.longest_hp_val_ms || bestBarLengthMs;\n");
+        fprintf(f_html, "        if (hpVal > 0) {\n");
+        fprintf(f_html, "            const hpX = padLeft + (((-hpVal) - winStartMs) / pass1WinMs) * graphW;\n");
+        fprintf(f_html, "            if (hpX >= padLeft && hpX <= padLeft + graphW) {\n");
+        fprintf(f_html, "                midCtx.strokeStyle = '#e74c3c'; midCtx.lineWidth = 2.0; midCtx.setLineDash([4, 4]);\n");
+        fprintf(f_html, "                midCtx.beginPath(); midCtx.moveTo(hpX, padTop); midCtx.lineTo(hpX, padTop + graphH); midCtx.stroke(); midCtx.setLineDash([]);\n");
+        fprintf(f_html, "                midCtx.fillStyle = '#e74c3c'; midCtx.font = 'bold 11px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "                midCtx.textAlign = (hpX > padLeft + graphW - 90) ? 'right' : 'left';\n");
+        fprintf(f_html, "                const textX = (hpX > padLeft + graphW - 90) ? hpX - 5 : hpX + 5;\n");
+        fprintf(f_html, "                midCtx.fillText(`High Point: ${Math.round(hpVal)}ms`, textX, padTop + 15);\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        }\n");
+
         fprintf(f_html, "        midCtx.restore();\n");
         fprintf(f_html, "        midCtx.save(); midCtx.translate(20, padTop + graphH / 2); midCtx.rotate(-Math.PI / 2);\n");
         fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
@@ -1228,19 +1241,8 @@ int export_all_assets_and_html(
         fprintf(f_html, "        midCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 34);\n");
         fprintf(f_html, "        const midTimeMs = midpointSnapshot.midpoint_time_ms || (midpointSnapshot.midpoint_time_s * 1000.0) || 0;\n");
         fprintf(f_html, "        const midTimeStr = formatMSS(midTimeMs / 1000.0);\n");
-        fprintf(f_html, "        const hpVal = midpointSnapshot.longest_hp_val_ms || bestBarLengthMs;\n");
         fprintf(f_html, "        midCtx.fillStyle = '#2c3e50'; midCtx.font = 'bold 13px Segoe UI, sans-serif'; midCtx.textAlign = 'left';\n");
-        fprintf(f_html, "        if (Math.abs(midZoomStartMs - (-15000.0)) > 1e-2 || Math.abs(midZoomEndMs - 0.0) > 1e-2) {\n");
-        fprintf(f_html, "            midCtx.fillText(`15000ms Cumulative Buffer at Midpoint (${midTimeStr} / ${Math.round(midTimeMs)}ms) [Zoomed: ${Math.round(midZoomStartMs)}ms to ${Math.round(midZoomEndMs)}ms]`, padLeft, padTop - 10);\n");
-        fprintf(f_html, "        } else {\n");
-        fprintf(f_html, "            midCtx.fillText(`15000ms Cumulative Buffer at Longest High Point Midpoint (${midTimeStr} / ${Math.round(midTimeMs)}ms - Bar: ${Math.round(hpVal)}ms)`, padLeft, padTop - 10);\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        if (isDraggingMidBuf) {\n");
-        fprintf(f_html, "            const selX = Math.min(midDragStartX, midDragCurrentX), selW = Math.abs(midDragCurrentX - midDragStartX);\n");
-        fprintf(f_html, "            midCtx.fillStyle = 'rgba(52, 152, 219, 0.25)'; midCtx.fillRect(selX, padTop, selW, graphH);\n");
-        fprintf(f_html, "            midCtx.strokeStyle = '#2980b9'; midCtx.lineWidth = 1.5; midCtx.setLineDash([3, 3]);\n");
-        fprintf(f_html, "            midCtx.strokeRect(selX, padTop, selW, graphH); midCtx.setLineDash([]);\n");
-        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        midCtx.fillText(`15000ms Cumulative Buffer at Longest High Point Midpoint (${midTimeStr} / ${Math.round(midTimeMs)}ms - Bar: ${Math.round(hpVal)}ms)`, padLeft, padTop - 10);\n");
         fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function drawHistoryBuffer() {\n");
@@ -1367,50 +1369,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "        }\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    if (midCanvas && midCtx) {\n");
-        fprintf(f_html, "        function getMidCanvasMouseX(e) {\n");
-        fprintf(f_html, "            const rect = midCanvas.getBoundingClientRect();\n");
-        fprintf(f_html, "            if (!rect.width) return 0;\n");
-        fprintf(f_html, "            const scaleX = midCanvas.width / rect.width;\n");
-        fprintf(f_html, "            return (e.clientX - rect.left) * scaleX;\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        midCanvas.addEventListener('contextmenu', (e) => {\n");
-        fprintf(f_html, "            e.preventDefault(); midZoomStartMs = -15000.0; midZoomEndMs = 0.0;\n");
-        fprintf(f_html, "            isDraggingMidBuf = false; drawMidpointBuffer();\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "        midCanvas.addEventListener('mousedown', (e) => {\n");
-        fprintf(f_html, "            if (e.button !== 0) return;\n");
-        fprintf(f_html, "            const clickX = getMidCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 70, graphW = midCanvas.width - 70 - 35;\n");
-        fprintf(f_html, "            if (clickX >= padLeft && clickX <= padLeft + graphW) {\n");
-        fprintf(f_html, "                isDraggingMidBuf = true; midDragStartX = clickX; midDragCurrentX = clickX;\n");
-        fprintf(f_html, "            }\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "        midCanvas.addEventListener('mousemove', (e) => {\n");
-        fprintf(f_html, "            if (!isDraggingMidBuf) return;\n");
-        fprintf(f_html, "            const mouseX = getMidCanvasMouseX(e);\n");
-        fprintf(f_html, "            const padLeft = 70, graphW = midCanvas.width - 70 - 35;\n");
-        fprintf(f_html, "            midDragCurrentX = Math.max(padLeft, Math.min(padLeft + graphW, mouseX));\n");
-        fprintf(f_html, "            drawMidpointBuffer();\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "        midCanvas.addEventListener('mouseup', (e) => {\n");
-        fprintf(f_html, "            if (!isDraggingMidBuf || e.button !== 0) return;\n");
-        fprintf(f_html, "            isDraggingMidBuf = false;\n");
-        fprintf(f_html, "            const padLeft = 70, graphW = midCanvas.width - 70 - 35;\n");
-        fprintf(f_html, "            const dx = Math.abs(midDragCurrentX - midDragStartX);\n");
-        fprintf(f_html, "            if (dx > 5) {\n");
-        fprintf(f_html, "                const x1 = Math.min(midDragStartX, midDragCurrentX), x2 = Math.max(midDragStartX, midDragCurrentX);\n");
-        fprintf(f_html, "                const frac1 = (x1 - padLeft) / graphW, frac2 = (x2 - padLeft) / graphW;\n");
-        fprintf(f_html, "                const currentSpan = midZoomEndMs - midZoomStartMs;\n");
-        fprintf(f_html, "                const newStartMs = midZoomStartMs + frac1 * currentSpan, newEndMs = midZoomStartMs + frac2 * currentSpan;\n");
-        fprintf(f_html, "                if (newEndMs - newStartMs >= 10.0) { midZoomStartMs = newStartMs; midZoomEndMs = newEndMs; }\n");
-        fprintf(f_html, "            }\n");
-        fprintf(f_html, "            drawMidpointBuffer();\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "        midCanvas.addEventListener('mouseleave', () => {\n");
-        fprintf(f_html, "            if (isDraggingMidBuf) { isDraggingMidBuf = false; drawMidpointBuffer(); }\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    if (bufCanvas && bufCtx) {\n");
         fprintf(f_html, "        function getCanvasMouseX(e) {\n");
@@ -1479,22 +1437,21 @@ int export_all_assets_and_html(
         fprintf(f_html, "        });\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    function setupSegmentClickListener(canvasId, segOffset) {\n");
+        fprintf(f_html, "    function setupSegmentClickListener(canvasId) {\n");
         fprintf(f_html, "        const canvasElem = document.getElementById(canvasId);\n");
         fprintf(f_html, "        if (!canvasElem) return;\n");
         fprintf(f_html, "        canvasElem.addEventListener('click', (e) => {\n");
-        fprintf(f_html, "            const curTimeMs = (audio.currentTime || 0) * 1000.0;\n");
-        fprintf(f_html, "            const curSegIdx = Math.floor(curTimeMs / bestBarLengthMs);\n");
-        fprintf(f_html, "            const targetSegIdx = curSegIdx + segOffset;\n");
-        fprintf(f_html, "            const seg = segmentsData.find(s => s.segment_index === targetSegIdx);\n");
-        fprintf(f_html, "            if (!seg) return;\n");
+        fprintf(f_html, "            if (!canvasElem.dataset.startMs || !canvasElem.dataset.endMs) return;\n");
+        fprintf(f_html, "            const startMs = parseFloat(canvasElem.dataset.startMs);\n");
+        fprintf(f_html, "            const endMs = parseFloat(canvasElem.dataset.endMs);\n");
+        fprintf(f_html, "            const segDurMs = endMs - startMs;\n");
+        fprintf(f_html, "            if (segDurMs <= 0) return;\n");
         fprintf(f_html, "            const rect = canvasElem.getBoundingClientRect();\n");
         fprintf(f_html, "            const clickX = e.clientX - rect.left;\n");
         fprintf(f_html, "            const scaleX = canvasElem.width / rect.width;\n");
         fprintf(f_html, "            const canvasX = clickX * scaleX;\n");
         fprintf(f_html, "            const clickFraction = Math.max(0, Math.min(1, canvasX / canvasElem.width));\n");
-        fprintf(f_html, "            const segDurMs = seg.end_ms - seg.start_ms;\n");
-        fprintf(f_html, "            const targetTimeS = (seg.start_ms + clickFraction * segDurMs) / 1000.0;\n");
+        fprintf(f_html, "            const targetTimeS = (startMs + clickFraction * segDurMs) / 1000.0;\n");
         fprintf(f_html, "            const dur = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
         fprintf(f_html, "            if (targetTimeS >= 0 && targetTimeS <= dur) {\n");
         fprintf(f_html, "                const wasPaused = audio.paused;\n");
@@ -1505,9 +1462,9 @@ int export_all_assets_and_html(
         fprintf(f_html, "        });\n");
         fprintf(f_html, "    }\n\n");
 
-        fprintf(f_html, "    setupSegmentClickListener('canvasPrev', -1);\n");
-        fprintf(f_html, "    setupSegmentClickListener('canvasCurr', 0);\n");
-        fprintf(f_html, "    setupSegmentClickListener('canvasNext', 1);\n\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasPrev');\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasCurr');\n");
+        fprintf(f_html, "    setupSegmentClickListener('canvasNext');\n\n");
 
         fprintf(f_html, "    if (window.snapshotsBase64) {\n");
         fprintf(f_html, "        try {\n");
