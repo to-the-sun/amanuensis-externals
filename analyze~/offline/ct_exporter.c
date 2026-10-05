@@ -580,10 +580,10 @@ int export_all_assets_and_html(
         }
     }
 
-    // Ensure [loopable] and [stems] subdirectories exist inside output_dir
-    char loopable_dir[4096];
-    snprintf(loopable_dir, sizeof(loopable_dir), "%s" PATH_SEP_STR "[loopable]", output_dir);
-    mkdir_p(loopable_dir);
+    // Ensure [loops] and [stems] subdirectories exist inside output_dir
+    char loops_dir[4096];
+    snprintf(loops_dir, sizeof(loops_dir), "%s" PATH_SEP_STR "[loops]", output_dir);
+    mkdir_p(loops_dir);
 
     char stems_dir[4096];
     snprintf(stems_dir, sizeof(stems_dir), "%s" PATH_SEP_STR "[stems]", output_dir);
@@ -596,9 +596,9 @@ int export_all_assets_and_html(
 
     // Cut & Save identified pattern WAV files directly using dr_wav
     for (int p = 0; p < num_patterns; p++) {
-        // 1. Loopable WAV file
+        // 1. Loopable WAV file in [loops]
         char pat_wav_path[4096];
-        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s" PATH_SEP_STR "[loopable]" PATH_SEP_STR "pattern_%d.wav", output_dir, p + 1);
+        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s" PATH_SEP_STR "[loops]" PATH_SEP_STR "pattern_%d.wav", output_dir, p + 1);
 
         uint64_t start_smp = (uint64_t)round((patterns[p].start_ms / 1000.0) * sr);
         uint64_t end_smp = (uint64_t)round((patterns[p].end_ms / 1000.0) * sr);

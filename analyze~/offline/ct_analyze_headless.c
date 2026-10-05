@@ -319,7 +319,7 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     printf("Output Directory: %s" PATH_SEP_STR "\n", output_dir);
     printf("Assets Exported:  .ctbin, manifest.json, snapshots.bin, snapshots.js,\n");
     printf("                  report_data.json, report_data.js,\n");
-    printf("                  [loopable]" PATH_SEP_STR " pattern WAVs,\n");
+    printf("                  [loops]" PATH_SEP_STR " pattern WAVs,\n");
     printf("                  [stems]" PATH_SEP_STR " aligned pattern WAVs,\n");
     printf("                  %s_pattern_analysis.html\n", stem_name);
     printf("============================================================\n");
