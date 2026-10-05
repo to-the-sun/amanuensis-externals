@@ -278,8 +278,8 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     get_directory_and_stem(audio_filepath, dir_path, stem_name);
 
     char output_dir[4096];
-    snprintf(output_dir, sizeof(output_dir), "%s%s", dir_path, stem_name);
-    mkdir_cross(output_dir);
+    snprintf(output_dir, sizeof(output_dir), "%s../[palettes]/%s", dir_path, stem_name);
+    mkdir_p(output_dir);
 
     const char* last_slash = strrchr(audio_filepath, '/');
     const char* last_backslash = strrchr(audio_filepath, '\\');
@@ -318,7 +318,9 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     printf("ASSETS & HTML REPORT GENERATED IN PURE C FOR: %s\n", stem_name);
     printf("Output Directory: %s/\n", output_dir);
     printf("Assets Exported:  .ctbin, manifest.json, snapshots.bin, snapshots.js,\n");
-    printf("                  report_data.json, report_data.js, pattern WAVs,\n");
+    printf("                  report_data.json, report_data.js,\n");
+    printf("                  [loopable]/ pattern WAVs,\n");
+    printf("                  [stems]/ aligned pattern WAVs,\n");
     printf("                  %s_pattern_analysis.html\n", stem_name);
     printf("============================================================\n");
 

@@ -6,6 +6,143 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <dirent.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#include <direct.h>
+#define mkdir_cross(dir) _mkdir(dir)
+#else
+#include <sys/stat.h>
+#define mkdir_cross(dir) mkdir(dir, 0755)
+#endif
+
+int mkdir_p(const char* path) {
+    if (!path || !*path) return 0;
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    while (len > 1 && (tmp[len - 1] == '/' || tmp[len - 1] == '\\')) {
+        tmp[len - 1] = '\0';
+        len--;
+    }
+
+    char* p = NULL;
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/' || *p == '\\') {
+            *p = '\0';
+            if (strlen(tmp) > 0) {
+                mkdir_cross(tmp);
+            }
+            *p = '/';
+        }
+    }
+    return mkdir_cross(tmp);
+}
+
+typedef struct {
+    int index;
+    double loop_point_ms;
+    double arbitrary_pad_ms;
+} PassInfo;
+
+static int compare_passes(const void* a, const void* b) {
+    const PassInfo* pa = (const PassInfo*)a;
+    const PassInfo* pb = (const PassInfo*)b;
+    if (pa->index != pb->index) {
+        return pa->index - pb->index;
+    }
+    if (pa->loop_point_ms < pb->loop_point_ms) return -1;
+    if (pa->loop_point_ms > pb->loop_point_ms) return 1;
+    return 0;
+}
+
+static int iequals_ext(const char* a, const char* b) {
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+        a++; b++;
+    }
+    return *a == *b;
+}
+
+static int is_text_file_ext(const char* filename) {
+    const char* dot = strrchr(filename, '.');
+    if (!dot) return 0;
+    if (iequals_ext(dot, ".txt") || iequals_ext(dot, ".json") || iequals_ext(dot, ".csv") ||
+        iequals_ext(dot, ".log") || iequals_ext(dot, ".xml")  || iequals_ext(dot, ".text")) {
+        return 1;
+    }
+    return 0;
+}
+
+static void parse_passes_in_dir(const char* output_dir, PassInfo* out_passes, int* out_total_passes) {
+    out_passes[0].index = 0;
+    out_passes[0].loop_point_ms = 0.0;
+    out_passes[0].arbitrary_pad_ms = 0.0;
+    *out_total_passes = 1;
+
+    DIR* dir = opendir(output_dir);
+    if (!dir) return;
+
+    char passes_filepath[4096] = "";
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char* name = entry->d_name;
+        char lower_name[256];
+        size_t n_len = strlen(name);
+        if (n_len >= sizeof(lower_name)) n_len = sizeof(lower_name) - 1;
+        for (size_t i = 0; i < n_len; i++) lower_name[i] = (char)tolower((unsigned char)name[i]);
+        lower_name[n_len] = '\0';
+
+        if (strstr(lower_name, "passes") != NULL && is_text_file_ext(name)) {
+            snprintf(passes_filepath, sizeof(passes_filepath), "%s/%s", output_dir, name);
+            break;
+        }
+    }
+    closedir(dir);
+
+    if (passes_filepath[0] == '\0') return;
+
+    FILE* fp = fopen(passes_filepath, "r");
+    if (!fp) return;
+
+    PassInfo raw_passes[256];
+    int raw_count = 0;
+    char line[1024];
+
+    while (fgets(line, sizeof(line), fp)) {
+        char* ptr = line;
+        while (*ptr && isspace((unsigned char)*ptr)) ptr++;
+        if (*ptr == '\0' || *ptr == '#' || *ptr == '/') continue;
+
+        int idx = 0;
+        double lp_ms = 0.0;
+        double pad_ms = 0.0;
+
+        int count = sscanf(ptr, "%d , %lf , %lf", &idx, &lp_ms, &pad_ms);
+        if (count < 2) {
+            count = sscanf(ptr, "%d %lf %lf", &idx, &lp_ms, &pad_ms);
+        }
+
+        if (count >= 2) {
+            if (raw_count < 256) {
+                raw_passes[raw_count].index = idx;
+                raw_passes[raw_count].loop_point_ms = lp_ms;
+                raw_passes[raw_count].arbitrary_pad_ms = (count >= 3) ? pad_ms : 0.0;
+                raw_count++;
+            }
+        }
+    }
+    fclose(fp);
+
+    if (raw_count > 0) {
+        qsort(raw_passes, raw_count, sizeof(PassInfo), compare_passes);
+        for (int i = 0; i < raw_count; i++) {
+            out_passes[*out_total_passes] = raw_passes[i];
+            (*out_total_passes)++;
+        }
+    }
+}
 
 #pragma pack(push, 1)
 typedef struct {
@@ -443,10 +580,25 @@ int export_all_assets_and_html(
         }
     }
 
+    // Ensure [loopable] and [stems] subdirectories exist inside output_dir
+    char loopable_dir[4096];
+    snprintf(loopable_dir, sizeof(loopable_dir), "%s/[loopable]", output_dir);
+    mkdir_p(loopable_dir);
+
+    char stems_dir[4096];
+    snprintf(stems_dir, sizeof(stems_dir), "%s/[stems]", output_dir);
+    mkdir_p(stems_dir);
+
+    // Parse passes text file if present
+    PassInfo passes[257];
+    int total_passes = 0;
+    parse_passes_in_dir(output_dir, passes, &total_passes);
+
     // Cut & Save identified pattern WAV files directly using dr_wav
     for (int p = 0; p < num_patterns; p++) {
+        // 1. Loopable WAV file
         char pat_wav_path[4096];
-        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s/pattern_%d.wav", output_dir, p + 1);
+        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s/[loopable]/pattern_%d.wav", output_dir, p + 1);
 
         uint64_t start_smp = (uint64_t)round((patterns[p].start_ms / 1000.0) * sr);
         uint64_t end_smp = (uint64_t)round((patterns[p].end_ms / 1000.0) * sr);
@@ -475,6 +627,56 @@ int export_all_assets_and_html(
                 free(pcm16);
             }
             drwav_uninit(&wav_out);
+        }
+
+        // 2. Stems WAV file (aligned with pass loop point and arbitrary pad)
+        int assigned_pass_idx = 0;
+        for (int i = total_passes - 1; i >= 0; i--) {
+            if (patterns[p].start_ms >= passes[i].loop_point_ms) {
+                assigned_pass_idx = i;
+                break;
+            }
+        }
+
+        double pass_lp_ms = passes[assigned_pass_idx].loop_point_ms;
+        double pass_pad_ms = passes[assigned_pass_idx].arbitrary_pad_ms;
+        double blank_space_ms = (patterns[p].start_ms - pass_lp_ms) + pass_pad_ms;
+        if (blank_space_ms < 0.0) blank_space_ms = 0.0;
+
+        uint64_t blank_frames = (uint64_t)round((blank_space_ms / 1000.0) * sr);
+
+        char stem_wav_path[4096];
+        snprintf(stem_wav_path, sizeof(stem_wav_path), "%s/[stems]/pattern_%d.wav", output_dir, p + 1);
+
+        drwav wav_stem_out;
+        if (drwav_init_file_write(&wav_stem_out, stem_wav_path, &format, NULL)) {
+            int16_t chunk[8192];
+            memset(chunk, 0, sizeof(chunk));
+
+            // Write blank frames (silence)
+            uint64_t remaining_blank = blank_frames;
+            while (remaining_blank > 0) {
+                uint64_t write_cnt = (remaining_blank < 8192) ? remaining_blank : 8192;
+                drwav_write_pcm_frames(&wav_stem_out, write_cnt, chunk);
+                remaining_blank -= write_cnt;
+            }
+
+            // Write pattern audio frames
+            uint64_t remaining_audio = frame_count;
+            uint64_t curr_smp = start_smp;
+            while (remaining_audio > 0) {
+                uint64_t write_cnt = (remaining_audio < 8192) ? remaining_audio : 8192;
+                for (uint64_t i = 0; i < write_cnt; i++) {
+                    float smp = y[curr_smp + i];
+                    if (smp > 1.0f) smp = 1.0f;
+                    if (smp < -1.0f) smp = -1.0f;
+                    chunk[i] = (int16_t)(smp * 32767.0f);
+                }
+                drwav_write_pcm_frames(&wav_stem_out, write_cnt, chunk);
+                curr_smp += write_cnt;
+                remaining_audio -= write_cnt;
+            }
+            drwav_uninit(&wav_stem_out);
         }
     }
 
