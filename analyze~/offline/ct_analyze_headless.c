@@ -278,7 +278,7 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     get_directory_and_stem(audio_filepath, dir_path, stem_name);
 
     char output_dir[4096];
-    snprintf(output_dir, sizeof(output_dir), "%s.." PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", dir_path, stem_name);
+    snprintf(output_dir, sizeof(output_dir), "%s[palettes]" PATH_SEP_STR "%s", dir_path, stem_name);
     mkdir_p(output_dir);
 
     const char* last_slash = strrchr(audio_filepath, '/');
