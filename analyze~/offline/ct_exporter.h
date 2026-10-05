@@ -5,6 +5,14 @@
 extern "C" {
 #endif
 
+#if defined(_WIN32) || defined(_WIN64)
+#define PATH_SEP '\\'
+#define PATH_SEP_STR "\\"
+#else
+#define PATH_SEP '/'
+#define PATH_SEP_STR "/"
+#endif
+
 #include "cumulative_transience.h"
 
 int mkdir_p(const char* path);

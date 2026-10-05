@@ -95,7 +95,7 @@ static void parse_passes_in_dir(const char* output_dir, PassInfo* out_passes, in
         lower_name[n_len] = '\0';
 
         if (strstr(lower_name, "passes") != NULL && is_text_file_ext(name)) {
-            snprintf(passes_filepath, sizeof(passes_filepath), "%s/%s", output_dir, name);
+            snprintf(passes_filepath, sizeof(passes_filepath), "%s" PATH_SEP_STR "%s", output_dir, name);
             break;
         }
     }
@@ -468,7 +468,7 @@ int export_all_assets_and_html(
 
     // Export .ctbin binary file for Pass 2
     char ctbin_path[4096];
-    snprintf(ctbin_path, sizeof(ctbin_path), "%s/%s.ctbin", output_dir, stem_name);
+    snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", output_dir, stem_name);
     export_ctbin(ctbin_path, y, len, sr, pass2_win_ms);
 
     // Segment transience grouping & scoring
@@ -582,11 +582,11 @@ int export_all_assets_and_html(
 
     // Ensure [loopable] and [stems] subdirectories exist inside output_dir
     char loopable_dir[4096];
-    snprintf(loopable_dir, sizeof(loopable_dir), "%s/[loopable]", output_dir);
+    snprintf(loopable_dir, sizeof(loopable_dir), "%s" PATH_SEP_STR "[loopable]", output_dir);
     mkdir_p(loopable_dir);
 
     char stems_dir[4096];
-    snprintf(stems_dir, sizeof(stems_dir), "%s/[stems]", output_dir);
+    snprintf(stems_dir, sizeof(stems_dir), "%s" PATH_SEP_STR "[stems]", output_dir);
     mkdir_p(stems_dir);
 
     // Parse passes text file if present
@@ -598,7 +598,7 @@ int export_all_assets_and_html(
     for (int p = 0; p < num_patterns; p++) {
         // 1. Loopable WAV file
         char pat_wav_path[4096];
-        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s/[loopable]/pattern_%d.wav", output_dir, p + 1);
+        snprintf(pat_wav_path, sizeof(pat_wav_path), "%s" PATH_SEP_STR "[loopable]" PATH_SEP_STR "pattern_%d.wav", output_dir, p + 1);
 
         uint64_t start_smp = (uint64_t)round((patterns[p].start_ms / 1000.0) * sr);
         uint64_t end_smp = (uint64_t)round((patterns[p].end_ms / 1000.0) * sr);
@@ -646,7 +646,7 @@ int export_all_assets_and_html(
         uint64_t blank_frames = (uint64_t)round((blank_space_ms / 1000.0) * sr);
 
         char stem_wav_path[4096];
-        snprintf(stem_wav_path, sizeof(stem_wav_path), "%s/[stems]/pattern_%d.wav", output_dir, p + 1);
+        snprintf(stem_wav_path, sizeof(stem_wav_path), "%s" PATH_SEP_STR "[stems]" PATH_SEP_STR "pattern_%d.wav", output_dir, p + 1);
 
         drwav wav_stem_out;
         if (drwav_init_file_write(&wav_stem_out, stem_wav_path, &format, NULL)) {
@@ -685,7 +685,7 @@ int export_all_assets_and_html(
     for (int b = 0; b < MAX_BANDS; b++) total_peaks += res2.bands[b].num_peaks;
 
     char snap_bin_path[4096];
-    snprintf(snap_bin_path, sizeof(snap_bin_path), "%s/snapshots.bin", output_dir);
+    snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", output_dir);
     FILE* f_snap = fopen(snap_bin_path, "wb");
 
     int snap_len = pass2_win_ms + 1;
@@ -710,7 +710,7 @@ int export_all_assets_and_html(
     if (f_snap) fclose(f_snap);
 
     char snap_js_path[4096];
-    snprintf(snap_js_path, sizeof(snap_js_path), "%s/snapshots.js", output_dir);
+    snprintf(snap_js_path, sizeof(snap_js_path), "%s" PATH_SEP_STR "snapshots.js", output_dir);
     FILE* f_snap_js = fopen(snap_js_path, "w");
     if (f_snap_js && all_snap_buf) {
         size_t b64_len = 4 * ((total_snap_bytes + 2) / 3);
@@ -726,7 +726,7 @@ int export_all_assets_and_html(
 
     // Export manifest.json
     char manifest_path[4096];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.json", output_dir);
+    snprintf(manifest_path, sizeof(manifest_path), "%s" PATH_SEP_STR "manifest.json", output_dir);
     FILE* f_mf = fopen(manifest_path, "w");
     if (f_mf) {
         fprintf(f_mf, "{\n");
@@ -781,11 +781,11 @@ int export_all_assets_and_html(
 
     // Export report_data.json and report_data.js using direct streaming writes
     char r_data_json_path[4096];
-    snprintf(r_data_json_path, sizeof(r_data_json_path), "%s/report_data.json", output_dir);
+    snprintf(r_data_json_path, sizeof(r_data_json_path), "%s" PATH_SEP_STR "report_data.json", output_dir);
     FILE* f_rd = fopen(r_data_json_path, "w");
 
     char r_data_js_path[4096];
-    snprintf(r_data_js_path, sizeof(r_data_js_path), "%s/report_data.js", output_dir);
+    snprintf(r_data_js_path, sizeof(r_data_js_path), "%s" PATH_SEP_STR "report_data.js", output_dir);
     FILE* f_rd_js = fopen(r_data_js_path, "w");
 
     if (f_rd || f_rd_js) {
@@ -978,7 +978,7 @@ int export_all_assets_and_html(
 
     // Export HTML Report File with full JS renderer functions
     char html_filepath[4096];
-    snprintf(html_filepath, sizeof(html_filepath), "%s/%s_pattern_analysis.html", output_dir, stem_name);
+    snprintf(html_filepath, sizeof(html_filepath), "%s" PATH_SEP_STR "%s_pattern_analysis.html", output_dir, stem_name);
     FILE* f_html = fopen(html_filepath, "w");
     if (f_html) {
         fprintf(f_html, "<!DOCTYPE html>\n");

@@ -41,7 +41,7 @@ static void get_directory_and_stem(const char* filepath, char* out_dir, char* ou
         strncpy(out_dir, filepath, dir_len);
         out_dir[dir_len] = '\0';
     } else {
-        strcpy(out_dir, "./");
+        strcpy(out_dir, "." PATH_SEP_STR);
     }
 }
 
@@ -138,7 +138,7 @@ static void scan_and_copy_passes_files_from_dir(const char* dir_path, const char
         const char* name = entry->d_name;
 
         char full_entry_path[4096];
-        snprintf(full_entry_path, sizeof(full_entry_path), "%s/%s", scan_dir, name);
+        snprintf(full_entry_path, sizeof(full_entry_path), "%s" PATH_SEP_STR "%s", scan_dir, name);
         struct stat st;
         if (stat(full_entry_path, &st) != 0 || S_ISDIR(st.st_mode)) {
             continue;
@@ -158,7 +158,7 @@ static void scan_and_copy_passes_files_from_dir(const char* dir_path, const char
         if (istarts_with(entry_stem, target_passes_stem)) {
             if (entry_stem_len == target_len || !isalnum((unsigned char)entry_stem[target_len])) {
                 char dst_file_path[4096];
-                snprintf(dst_file_path, sizeof(dst_file_path), "%s/%s", output_dir, name);
+                snprintf(dst_file_path, sizeof(dst_file_path), "%s" PATH_SEP_STR "%s", output_dir, name);
                 if (copy_file(full_entry_path, dst_file_path)) {
                     printf("Copied matching text file: %s -> %s\n", full_entry_path, dst_file_path);
                 }
@@ -278,7 +278,7 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     get_directory_and_stem(audio_filepath, dir_path, stem_name);
 
     char output_dir[4096];
-    snprintf(output_dir, sizeof(output_dir), "%s../[palettes]/%s", dir_path, stem_name);
+    snprintf(output_dir, sizeof(output_dir), "%s.." PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", dir_path, stem_name);
     mkdir_p(output_dir);
 
     const char* last_slash = strrchr(audio_filepath, '/');
@@ -288,7 +288,7 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
 
     char dst_audio_path[4096];
-    snprintf(dst_audio_path, sizeof(dst_audio_path), "%s/%s", output_dir, audio_filename);
+    snprintf(dst_audio_path, sizeof(dst_audio_path), "%s" PATH_SEP_STR "%s", output_dir, audio_filename);
 
     if (copy_file(audio_filepath, dst_audio_path)) {
         printf("Copied audio file to destination: %s -> %s\n", audio_filepath, dst_audio_path);
@@ -316,11 +316,11 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
 
     printf("\n============================================================\n");
     printf("ASSETS & HTML REPORT GENERATED IN PURE C FOR: %s\n", stem_name);
-    printf("Output Directory: %s/\n", output_dir);
+    printf("Output Directory: %s" PATH_SEP_STR "\n", output_dir);
     printf("Assets Exported:  .ctbin, manifest.json, snapshots.bin, snapshots.js,\n");
     printf("                  report_data.json, report_data.js,\n");
-    printf("                  [loopable]/ pattern WAVs,\n");
-    printf("                  [stems]/ aligned pattern WAVs,\n");
+    printf("                  [loopable]" PATH_SEP_STR " pattern WAVs,\n");
+    printf("                  [stems]" PATH_SEP_STR " aligned pattern WAVs,\n");
     printf("                  %s_pattern_analysis.html\n", stem_name);
     printf("============================================================\n");
 
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
     DIR* dir = opendir(scan_dir);
     if (!dir) {
         dir = opendir(".");
-        strcpy(exe_dir, "./");
+        strcpy(exe_dir, "." PATH_SEP_STR);
     }
 
     FileList wav_files;
