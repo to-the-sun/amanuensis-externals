@@ -107,9 +107,7 @@ TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer*
     self->lock_func = lock_func;
     self->unlock_func = unlock_func;
 
-    if (window_ms > 15000) window_ms = 15000;
-    if (window_ms < 5000) window_ms = 5000;
-    self->window_ms = window_ms;
+    self->window_ms = (window_ms > 0 && window_ms <= 15000) ? window_ms : 15000;
 
     if (!self->shared_buffer) {
         self->private_max_peak = max_peak_value;
@@ -772,7 +770,7 @@ static double* create_mel_filterbank(int sr, int n_fft, int n_mels) {
 
 int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out) {
     if (window_ms > 15000) window_ms = 15000;
-    if (window_ms < 5000) window_ms = 5000;
+    if (window_ms <= 0) window_ms = 15000;
     int hop = (int)(sr * 0.001), num_f = (len + hop - 1) / hop;
     result_out->num_frames = num_f; result_out->times = (float*)malloc(sizeof(float) * num_f); if(!result_out->times) return 0;
     for (int i = 0; i < num_f; i++) result_out->times[i] = (float)i * (float)hop / (float)sr;
