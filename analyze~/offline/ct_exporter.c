@@ -210,7 +210,8 @@ static void base64_encode(const unsigned char* in, size_t in_len, char* out) {
 
 int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms) {
     if (!output_filepath || !y || len <= 0 || sr <= 0) return 0;
-    if (window_ms > 15000 || window_ms <= 0) window_ms = 15000;
+    if (window_ms > 15000) window_ms = 15000;
+    if (window_ms < 5000) window_ms = 5000;
 
     FullAnalysisResult res;
     int success = analyzer_batch_analyze(y, len, sr, window_ms, &res);
@@ -543,10 +544,10 @@ int export_all_assets_and_html(
 
     analyzer_free_analysis(&res1);
 
-    // Pass 2: Re-analyze with window_ms = min(15000, best_bar_length * 2)
+    // Pass 2: Re-analyze with window_ms = clamp(best_bar_length * 2, 5000, 15000)
     int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
     if (pass2_win_ms > 15000) pass2_win_ms = 15000;
-    if (pass2_win_ms <= 0) pass2_win_ms = 1000;
+    if (pass2_win_ms < 5000) pass2_win_ms = 5000;
 
     FullAnalysisResult res2;
     if (!analyzer_batch_analyze(y, len, sr, pass2_win_ms, &res2)) return 0;
