@@ -336,9 +336,8 @@ int main(int argc, char** argv) {
         // Drag and drop or command line single-file argument provided
         const char* audio_filepath = argv[1];
         int window_ms = (argc >= 3) ? atoi(argv[2]) : 15000;
-        if (window_ms <= 0 || window_ms > 15000) {
-            window_ms = 15000;
-        }
+        if (window_ms > 15000) window_ms = 15000;
+        if (window_ms < 5000) window_ms = 5000;
 
         int success = process_single_file(audio_filepath, window_ms);
 

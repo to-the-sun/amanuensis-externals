@@ -210,7 +210,8 @@ static void base64_encode(const unsigned char* in, size_t in_len, char* out) {
 
 int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms) {
     if (!output_filepath || !y || len <= 0 || sr <= 0) return 0;
-    if (window_ms > 15000 || window_ms <= 0) window_ms = 15000;
+    if (window_ms > 15000) window_ms = 15000;
+    if (window_ms < 5000) window_ms = 5000;
 
     FullAnalysisResult res;
     int success = analyzer_batch_analyze(y, len, sr, window_ms, &res);
