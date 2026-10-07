@@ -223,4 +223,9 @@ typedef struct {
 int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
 
+// OpenCL GPU Compute Shader Acceleration Interface
+int gpu_stft_init(void);
+void gpu_stft_cleanup(void);
+int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out, int num_frames);
+
 #endif
