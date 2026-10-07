@@ -413,20 +413,22 @@ int export_all_assets_and_html(
     }
 
     // Determine segment length as the high point (global maximum) of accumulated_contour
+    // Index 0 represents -15,000 ms (oldest sample in rolling window), and index (contour_len - 1) represents 0 ms (current peak).
+    // The lag time before the current peak corresponds to: (contour_len - 1 - k) ms.
     int m_len = contour_len - 99; // Exclude last 99ms self-referential peak region
     double max_contour_val = -1e9;
-    int best_lag_idx = 1000;
+    int best_lag_ms = 1000;
 
     if (m_len > 0 && accumulated_contour) {
         for (int k = 0; k < m_len; k++) {
             if (accumulated_contour[k] > max_contour_val) {
                 max_contour_val = accumulated_contour[k];
-                best_lag_idx = k;
+                best_lag_ms = (contour_len - 1) - k;
             }
         }
     }
 
-    double best_bar_length_ms = (double)best_lag_idx;
+    double best_bar_length_ms = (double)best_lag_ms;
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
 
     double dom_start_ms = best_bar_length_ms - 50.0;
@@ -1283,13 +1285,24 @@ int export_all_assets_and_html(
         fprintf(f_html, "        ctx.clearRect(0, 0, W, H);\n");
         fprintf(f_html, "        ctx.fillStyle = '#f8f9fa'; ctx.fillRect(0, 0, W, H);\n");
 
+        fprintf(f_html, "        const centerY = (H - 25) / 2;\n");
+        fprintf(f_html, "        const numPts = waveformMin.length;\n");
+        fprintf(f_html, "        ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(44, 62, 80, 0.45)'; ctx.beginPath();\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const x = (i / numPts) * W;\n");
+        fprintf(f_html, "            const minY = centerY - (waveformMin[i] * ((H - 25) * 0.42));\n");
+        fprintf(f_html, "            const maxY = centerY - (waveformMax[i] * ((H - 25) * 0.42));\n");
+        fprintf(f_html, "            ctx.moveTo(x, minY); ctx.lineTo(x, maxY);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        ctx.stroke();\n");
+
         fprintf(f_html, "        patterns.forEach((pat, idx) => {\n");
         fprintf(f_html, "            const color = colors[idx %% colors.length];\n");
         fprintf(f_html, "            const borderColor = borderColors[idx %% borderColors.length];\n");
         fprintf(f_html, "            const startX = (pat.start_ms / 1000.0 / totalDurationS) * W;\n");
         fprintf(f_html, "            const endX = (pat.end_ms / 1000.0 / totalDurationS) * W;\n");
-        fprintf(f_html, "            ctx.fillStyle = color; ctx.fillRect(startX, 0, endX - startX, H);\n");
-        fprintf(f_html, "            ctx.fillStyle = borderColor; ctx.font = 'bold 12px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "            ctx.fillStyle = color; ctx.fillRect(startX, 0, endX - startX, H - 25);\n");
+        fprintf(f_html, "            ctx.fillStyle = borderColor; ctx.font = 'bold 12px Segoe UI, sans-serif'; ctx.textAlign = 'left';\n");
         fprintf(f_html, "            ctx.fillText(`Pattern ${idx + 1} (${Math.round(pat.duration_ms)}ms)`, startX + 5, 20);\n");
         fprintf(f_html, "            if (pat.segments) {\n");
         fprintf(f_html, "                pat.segments.forEach(segIdx => {\n");
@@ -1300,28 +1313,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "                    ctx.fillText(`Seg ${segIdx}`, segStartX + 3, 38);\n");
         fprintf(f_html, "                });\n");
         fprintf(f_html, "            }\n");
-        fprintf(f_html, "        });\n");
-
-        fprintf(f_html, "        const centerY = H / 2;\n");
-        fprintf(f_html, "        const numPts = waveformMin.length;\n");
-        fprintf(f_html, "        ctx.lineWidth = 1.2; ctx.strokeStyle = '#2c3e50'; ctx.beginPath();\n");
-        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
-        fprintf(f_html, "            const x = (i / numPts) * W;\n");
-        fprintf(f_html, "            const minY = centerY - (waveformMin[i] * (H * 0.4));\n");
-        fprintf(f_html, "            const maxY = centerY - (waveformMax[i] * (H * 0.4));\n");
-        fprintf(f_html, "            ctx.moveTo(x, minY); ctx.lineTo(x, maxY);\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        ctx.stroke();\n");
-
-        fprintf(f_html, "        hpChanges.forEach((ch, idx) => {\n");
-        fprintf(f_html, "            const x = (ch.time_s / totalDurationS) * W;\n");
-        fprintf(f_html, "            const tickTop = H - 38;\n");
-        fprintf(f_html, "            const tickBottom = H - 25;\n");
-        fprintf(f_html, "            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2.0;\n");
-        fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, tickTop); ctx.lineTo(x, tickBottom); ctx.stroke();\n");
-        fprintf(f_html, "            ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 9px Segoe UI, sans-serif'; ctx.textAlign = 'center';\n");
-        fprintf(f_html, "            const yOffset = (idx %% 3) * 11;\n");
-        fprintf(f_html, "            ctx.fillText(`${ch.new_value_ms.toFixed(0)}ms`, Math.max(15, Math.min(W - 15, x)), tickTop - 3 - yOffset);\n");
         fprintf(f_html, "        });\n");
 
         fprintf(f_html, "        ctx.strokeStyle = '#7f8c8d'; ctx.lineWidth = 1;\n");
@@ -1486,23 +1477,24 @@ int export_all_assets_and_html(
         fprintf(f_html, "        histCtx.stroke();\n");
 
         fprintf(f_html, "        const centroidMs = contourHistogram.high_point_ms || bestBarLengthMs;\n");
-        fprintf(f_html, "        const cx = padLeft + (centroidMs / maxX) * graphW;\n");
+        fprintf(f_html, "        const lineIdx = maxX - centroidMs;\n");
+        fprintf(f_html, "        const cx = padLeft + (lineIdx / maxX) * graphW;\n");
         fprintf(f_html, "        if (cx >= padLeft && cx <= padLeft + graphW) {\n");
         fprintf(f_html, "            histCtx.strokeStyle = '#f39c12'; histCtx.lineWidth = 2.5; histCtx.setLineDash([4, 4]);\n");
         fprintf(f_html, "            histCtx.beginPath(); histCtx.moveTo(cx, padTop); histCtx.lineTo(cx, padTop + graphH); histCtx.stroke(); histCtx.setLineDash([]);\n");
         fprintf(f_html, "            histCtx.fillStyle = '#d35400'; histCtx.font = 'bold 12px Segoe UI, sans-serif';\n");
         fprintf(f_html, "            histCtx.textAlign = (cx > padLeft + graphW - 160) ? 'right' : 'left';\n");
         fprintf(f_html, "            const tx = (cx > padLeft + graphW - 160) ? cx - 6 : cx + 6;\n");
-        fprintf(f_html, "            histCtx.fillText(`Segment Length High Point: ${centroidMs.toFixed(2)} ms`, tx, padTop + 18);\n");
+        fprintf(f_html, "            histCtx.fillText(`Segment Length High Point: -${centroidMs.toFixed(2)} ms (${centroidMs.toFixed(2)} ms)`, tx, padTop + 18);\n");
         fprintf(f_html, "        }\n");
 
         fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
         fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
         fprintf(f_html, "            const frac = i / 5;\n");
         fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
-        fprintf(f_html, "            const msVal = frac * maxX;\n");
+        fprintf(f_html, "            const msVal = (frac - 1.0) * maxX;\n");
         fprintf(f_html, "            histCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; histCtx.beginPath(); histCtx.moveTo(x, padTop); histCtx.lineTo(x, padTop + graphH); histCtx.stroke();\n");
-        fprintf(f_html, "            histCtx.fillText(`${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
+        fprintf(f_html, "            histCtx.fillText((Math.abs(msVal) < 1e-3) ? '0 ms' : `${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        histCtx.fillStyle = '#2c3e50'; histCtx.font = 'bold 13px Segoe UI, sans-serif'; histCtx.textAlign = 'left';\n");
         fprintf(f_html, "        histCtx.fillText(`Accumulated Buffer Contour Histogram (Segment Length: ${bestBarLengthMs.toFixed(2)} ms)`, padLeft, padTop - 10);\n");
