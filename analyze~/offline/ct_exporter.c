@@ -360,102 +360,72 @@ int export_all_assets_and_html(
         }
     }
 
-    // 1D Gaussian Kernel Density Estimation (KDE) clustering weighted by duration
-    double min_hp_ms = 1e9, max_hp_ms = 0.0;
-    for (int u = 0; u < num_unique_hps; u++) {
-        if (unique_hp_vals[u] < min_hp_ms) min_hp_ms = unique_hp_vals[u];
-        if (unique_hp_vals[u] > max_hp_ms) max_hp_ms = unique_hp_vals[u];
-    }
-    if (num_unique_hps == 0) {
-        min_hp_ms = 1000.0;
-        max_hp_ms = 1000.0;
-    }
+    // Record and sum normalized cumulative transience buffer contours every 10ms (10 frames)
+    #define MAX_CONTOUR_LEN 15001
+    int contour_len = pass1_window_ms + 1;
+    if (contour_len > MAX_CONTOUR_LEN) contour_len = MAX_CONTOUR_LEN;
 
-    double bandwidth_ms = 20.0; // KDE smoothing bandwidth in milliseconds
-    double kde_start_ms = (min_hp_ms - 3.0 * bandwidth_ms > 0.0) ? (min_hp_ms - 3.0 * bandwidth_ms) : 0.0;
-    double kde_end_ms = max_hp_ms + 3.0 * bandwidth_ms;
-    if (kde_end_ms <= kde_start_ms) kde_end_ms = kde_start_ms + 100.0;
+    double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
+    int contour_sample_count = 0;
 
-    #define KDE_SAMPLES 300
-    double kde_x[KDE_SAMPLES];
-    double kde_y[KDE_SAMPLES];
-    double max_kde_density = 0.0;
+    TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms);
+    if (contour_analyzer) {
+        analyzer_set_sample_rate(contour_analyzer, sr);
+        int hop = (int)(sr * 0.001);
+        int step = hop * 10; // Record buffer contour every 10 ms (10 frames)
 
-    for (int s = 0; s < KDE_SAMPLES; s++) {
-        double x_val = kde_start_ms + s * (kde_end_ms - kde_start_ms) / (KDE_SAMPLES - 1);
-        kde_x[s] = x_val;
-        double density = 0.0;
-        for (int u = 0; u < num_unique_hps; u++) {
-            double diff = (x_val - unique_hp_vals[u]) / bandwidth_ms;
-            density += unique_hp_durs[u] * exp(-0.5 * diff * diff);
-        }
-        kde_y[s] = density;
-        if (density > max_kde_density) max_kde_density = density;
-    }
+        for (int last_t = 0; last_t < len; last_t += step) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
 
-    // Identify clusters where density >= 5% of peak density
-    double thresh_density = 0.05 * max_kde_density;
-    typedef struct {
-        double start_ms;
-        double end_ms;
-        double centroid_ms;
-        double total_duration_s;
-        int is_dominant;
-    } HPCluster;
-
-    HPCluster clusters[64];
-    int num_clusters = 0;
-    int in_cluster = 0;
-    double c_start = 0.0;
-
-    for (int s = 0; s < KDE_SAMPLES; s++) {
-        if (!in_cluster && kde_y[s] >= thresh_density) {
-            in_cluster = 1;
-            c_start = kde_x[s];
-        } else if (in_cluster && (kde_y[s] < thresh_density || s == KDE_SAMPLES - 1)) {
-            in_cluster = 0;
-            if (num_clusters < 64) {
-                clusters[num_clusters].start_ms = c_start;
-                clusters[num_clusters].end_ms = kde_x[s];
-
-                // Calculate duration-weighted centroid for this cluster
-                double w_sum = 0.0;
-                double wx_sum = 0.0;
-                for (int u = 0; u < num_unique_hps; u++) {
-                    if (unique_hp_vals[u] >= clusters[num_clusters].start_ms &&
-                        unique_hp_vals[u] <= clusters[num_clusters].end_ms) {
-                        w_sum += unique_hp_durs[u];
-                        wx_sum += unique_hp_durs[u] * unique_hp_vals[u];
-                    }
+            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+            if (res_chunk) {
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                int chunk_len = step;
+                if (last_t + step > len) chunk_len = len - last_t;
+                if (chunk_len > 0) {
+                    memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
                 }
-                clusters[num_clusters].total_duration_s = w_sum;
-                clusters[num_clusters].centroid_ms = (w_sum > 0.0) ? (wx_sum / w_sum) : ((c_start + kde_x[s]) / 2.0);
-                clusters[num_clusters].is_dominant = 0;
-                num_clusters++;
+                analyzer_analyze_chunk(contour_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+                free(push_ptr);
+                free(res_chunk);
+            }
+
+            double* cur_buf = analyzer_get_buffer(contour_analyzer);
+            if (cur_buf && accumulated_contour) {
+                for (int k = 0; k < contour_len; k++) {
+                    accumulated_contour[k] += cur_buf[k];
+                }
+                contour_sample_count++;
+            }
+        }
+        analyzer_destroy(contour_analyzer);
+    }
+
+    // Determine segment length as the high point (global maximum) of accumulated_contour
+    // Index 0 represents -15,000 ms (oldest sample in rolling window), and index (contour_len - 1) represents 0 ms (current peak).
+    // The lag time before the current peak corresponds to: (contour_len - 1 - k) ms.
+    int m_len = contour_len - 99; // Exclude last 99ms self-referential peak region
+    double max_contour_val = -1e9;
+    int best_lag_ms = 1000;
+
+    if (m_len > 0 && accumulated_contour) {
+        for (int k = 0; k < m_len; k++) {
+            if (accumulated_contour[k] > max_contour_val) {
+                max_contour_val = accumulated_contour[k];
+                best_lag_ms = (contour_len - 1) - k;
             }
         }
     }
 
-    // Select dominant cluster (highest total duration)
-    int dominant_idx = 0;
-    double max_cluster_dur = -1.0;
-    for (int c = 0; c < num_clusters; c++) {
-        if (clusters[c].total_duration_s > max_cluster_dur) {
-            max_cluster_dur = clusters[c].total_duration_s;
-            dominant_idx = c;
-        }
-    }
-    if (num_clusters > 0) {
-        clusters[dominant_idx].is_dominant = 1;
-    }
-
-    double best_bar_length_ms = (num_clusters > 0) ? clusters[dominant_idx].centroid_ms : 1000.0;
+    double best_bar_length_ms = (double)best_lag_ms;
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
 
-    double dom_start_ms = (num_clusters > 0) ? clusters[dominant_idx].start_ms : (best_bar_length_ms - 50.0);
-    double dom_end_ms = (num_clusters > 0) ? clusters[dominant_idx].end_ms : (best_bar_length_ms + 50.0);
+    double dom_start_ms = best_bar_length_ms - 50.0;
+    double dom_end_ms = best_bar_length_ms + 50.0;
 
-    // Find the longest contiguous run of high points falling within the dominant cluster range in Pass 1
+    // Find the longest contiguous run of high points falling within range in Pass 1
     double longest_hp_start_s = 0.0;
     double longest_hp_end_s = 0.0;
     double max_run_dur = 0.0;
@@ -941,28 +911,16 @@ int export_all_assets_and_html(
             }
             fprintf(fp, "  ],\n");
 
-            // High Point Duration Cluster Histogram Data
-            fprintf(fp, "  \"hp_cluster_histogram\": {\n");
-            fprintf(fp, "    \"num_unique_hps\": %d,\n", num_unique_hps);
-            fprintf(fp, "    \"raw_hp_stems\": [\n");
-            for (int u = 0; u < num_unique_hps; u++) {
-                fprintf(fp, "      {\"val_ms\": %.3f, \"duration_s\": %.4f}%s\n",
-                        unique_hp_vals[u], unique_hp_durs[u], (u < num_unique_hps - 1) ? "," : "");
+            // Accumulated Contour Histogram Data
+            fprintf(fp, "  \"contour_histogram\": {\n");
+            fprintf(fp, "    \"contour_len\": %d,\n", contour_len);
+            fprintf(fp, "    \"sample_count\": %d,\n", contour_sample_count);
+            fprintf(fp, "    \"high_point_ms\": %.2f,\n", best_bar_length_ms);
+            fprintf(fp, "    \"contour\": [");
+            for (int k = 0; k < contour_len; k++) {
+                fprintf(fp, "%.4f%s", accumulated_contour ? accumulated_contour[k] : 0.0, (k < contour_len - 1) ? "," : "");
             }
-            fprintf(fp, "    ],\n");
-            fprintf(fp, "    \"kde_samples\": [\n");
-            for (int s = 0; s < KDE_SAMPLES; s++) {
-                fprintf(fp, "      {\"x_ms\": %.3f, \"density\": %.6f}%s\n",
-                        kde_x[s], kde_y[s], (s < KDE_SAMPLES - 1) ? "," : "");
-            }
-            fprintf(fp, "    ],\n");
-            fprintf(fp, "    \"clusters\": [\n");
-            for (int c = 0; c < num_clusters; c++) {
-                fprintf(fp, "      {\"start_ms\": %.3f, \"end_ms\": %.3f, \"centroid_ms\": %.3f, \"total_duration_s\": %.4f, \"is_dominant\": %d}%s\n",
-                        clusters[c].start_ms, clusters[c].end_ms, clusters[c].centroid_ms, clusters[c].total_duration_s, clusters[c].is_dominant,
-                        (c < num_clusters - 1) ? "," : "");
-            }
-            fprintf(fp, "    ]\n");
+            fprintf(fp, "]\n");
             fprintf(fp, "  },\n");
 
             // Patterns
@@ -1083,6 +1041,10 @@ int export_all_assets_and_html(
         free(midpoint_buffer);
         midpoint_buffer = NULL;
     }
+    if (accumulated_contour) {
+        free(accumulated_contour);
+        accumulated_contour = NULL;
+    }
 
     free(segments);
 
@@ -1145,11 +1107,11 @@ int export_all_assets_and_html(
         fprintf(f_html, "        </div>\n");
         fprintf(f_html, "    </div>\n");
 
-        fprintf(f_html, "    <div class=\"section-title\">High Point Duration Cluster Distribution (KDE Histogram)</div>\n");
+        fprintf(f_html, "    <div class=\"section-title\">Accumulated Buffer Contour Histogram</div>\n");
         fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
         fprintf(f_html, "        <canvas id=\"clusterHistogramCanvas\" width=\"1150\" height=\"220\"></canvas>\n");
         fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "    <div class=\"hint\">💡 Distribution of total song duration accumulated on floating-point cumulative history high points. Curves show 1D Gaussian Kernel Density Estimation (KDE), vertical stems mark exact high point values, shaded regions highlight clusters, and the gold dashed line marks the centroid segment length.</div>\n");
+        fprintf(f_html, "    <div class=\"hint\">💡 Accumulated 15,000ms cumulative transience buffer contour recorded across the song (sampled every 10ms). The gold dashed line marks the segment length high point.</div>\n");
 
         fprintf(f_html, "    <div class=\"section-title\">Cumulative History Buffer at Longest High Point Midpoint</div>\n");
         fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
@@ -1216,7 +1178,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "    let toleranceMs = %.4f;\n", res2.tolerance);
         fprintf(f_html, "    let pass2Peaks = [];\n");
         fprintf(f_html, "    let midpointSnapshot = null;\n");
-        fprintf(f_html, "    let hpClusterHistogram = null;\n\n");
+        fprintf(f_html, "    let contourHistogram = null;\n\n");
 
         fprintf(f_html, "    const canvas = document.getElementById('waveformCanvas');\n");
         fprintf(f_html, "    const ctx = canvas ? canvas.getContext('2d') : null;\n");
@@ -1261,7 +1223,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "        if (data.tolerance_ms !== undefined) toleranceMs = data.tolerance_ms;\n");
         fprintf(f_html, "        if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;\n");
         fprintf(f_html, "        if (data.midpoint_snapshot) midpointSnapshot = data.midpoint_snapshot;\n");
-        fprintf(f_html, "        if (data.hp_cluster_histogram) hpClusterHistogram = data.hp_cluster_histogram;\n");
+        fprintf(f_html, "        if (data.contour_histogram) contourHistogram = data.contour_histogram;\n");
         fprintf(f_html, "        renderAll();\n");
         fprintf(f_html, "    }\n\n");
 
@@ -1314,13 +1276,24 @@ int export_all_assets_and_html(
         fprintf(f_html, "        ctx.clearRect(0, 0, W, H);\n");
         fprintf(f_html, "        ctx.fillStyle = '#f8f9fa'; ctx.fillRect(0, 0, W, H);\n");
 
+        fprintf(f_html, "        const centerY = (H - 25) / 2;\n");
+        fprintf(f_html, "        const numPts = waveformMin.length;\n");
+        fprintf(f_html, "        ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(44, 62, 80, 0.45)'; ctx.beginPath();\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const x = (i / numPts) * W;\n");
+        fprintf(f_html, "            const minY = centerY - (waveformMin[i] * ((H - 25) * 0.42));\n");
+        fprintf(f_html, "            const maxY = centerY - (waveformMax[i] * ((H - 25) * 0.42));\n");
+        fprintf(f_html, "            ctx.moveTo(x, minY); ctx.lineTo(x, maxY);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        ctx.stroke();\n");
+
         fprintf(f_html, "        patterns.forEach((pat, idx) => {\n");
         fprintf(f_html, "            const color = colors[idx %% colors.length];\n");
         fprintf(f_html, "            const borderColor = borderColors[idx %% borderColors.length];\n");
         fprintf(f_html, "            const startX = (pat.start_ms / 1000.0 / totalDurationS) * W;\n");
         fprintf(f_html, "            const endX = (pat.end_ms / 1000.0 / totalDurationS) * W;\n");
-        fprintf(f_html, "            ctx.fillStyle = color; ctx.fillRect(startX, 0, endX - startX, H);\n");
-        fprintf(f_html, "            ctx.fillStyle = borderColor; ctx.font = 'bold 12px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "            ctx.fillStyle = color; ctx.fillRect(startX, 0, endX - startX, H - 25);\n");
+        fprintf(f_html, "            ctx.fillStyle = borderColor; ctx.font = 'bold 12px Segoe UI, sans-serif'; ctx.textAlign = 'left';\n");
         fprintf(f_html, "            ctx.fillText(`Pattern ${idx + 1} (${Math.round(pat.duration_ms)}ms)`, startX + 5, 20);\n");
         fprintf(f_html, "            if (pat.segments) {\n");
         fprintf(f_html, "                pat.segments.forEach(segIdx => {\n");
@@ -1331,28 +1304,6 @@ int export_all_assets_and_html(
         fprintf(f_html, "                    ctx.fillText(`Seg ${segIdx}`, segStartX + 3, 38);\n");
         fprintf(f_html, "                });\n");
         fprintf(f_html, "            }\n");
-        fprintf(f_html, "        });\n");
-
-        fprintf(f_html, "        const centerY = H / 2;\n");
-        fprintf(f_html, "        const numPts = waveformMin.length;\n");
-        fprintf(f_html, "        ctx.lineWidth = 1.2; ctx.strokeStyle = '#2c3e50'; ctx.beginPath();\n");
-        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
-        fprintf(f_html, "            const x = (i / numPts) * W;\n");
-        fprintf(f_html, "            const minY = centerY - (waveformMin[i] * (H * 0.4));\n");
-        fprintf(f_html, "            const maxY = centerY - (waveformMax[i] * (H * 0.4));\n");
-        fprintf(f_html, "            ctx.moveTo(x, minY); ctx.lineTo(x, maxY);\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        ctx.stroke();\n");
-
-        fprintf(f_html, "        hpChanges.forEach((ch, idx) => {\n");
-        fprintf(f_html, "            const x = (ch.time_s / totalDurationS) * W;\n");
-        fprintf(f_html, "            const tickTop = H - 38;\n");
-        fprintf(f_html, "            const tickBottom = H - 25;\n");
-        fprintf(f_html, "            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2.0;\n");
-        fprintf(f_html, "            ctx.beginPath(); ctx.moveTo(x, tickTop); ctx.lineTo(x, tickBottom); ctx.stroke();\n");
-        fprintf(f_html, "            ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 9px Segoe UI, sans-serif'; ctx.textAlign = 'center';\n");
-        fprintf(f_html, "            const yOffset = (idx %% 3) * 11;\n");
-        fprintf(f_html, "            ctx.fillText(`${ch.new_value_ms.toFixed(0)}ms`, Math.max(15, Math.min(W - 15, x)), tickTop - 3 - yOffset);\n");
         fprintf(f_html, "        });\n");
 
         fprintf(f_html, "        ctx.strokeStyle = '#7f8c8d'; ctx.lineWidth = 1;\n");
@@ -1477,70 +1428,67 @@ int export_all_assets_and_html(
         fprintf(f_html, "        const W = histCanvas.width, H = histCanvas.height;\n");
         fprintf(f_html, "        histCtx.clearRect(0, 0, W, H);\n");
         fprintf(f_html, "        histCtx.fillStyle = '#ffffff'; histCtx.fillRect(0, 0, W, H);\n");
-        fprintf(f_html, "        if (!hpClusterHistogram || !hpClusterHistogram.kde_samples || hpClusterHistogram.kde_samples.length === 0) {\n");
+        fprintf(f_html, "        if (!contourHistogram || !contourHistogram.contour || contourHistogram.contour.length === 0) {\n");
         fprintf(f_html, "            histCtx.fillStyle = '#7f8c8d'; histCtx.font = '13px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
-        fprintf(f_html, "            histCtx.fillText('No high point cluster histogram data available.', W / 2, H / 2);\n");
+        fprintf(f_html, "            histCtx.fillText('No accumulated buffer contour histogram data available.', W / 2, H / 2);\n");
         fprintf(f_html, "            return;\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const kde = hpClusterHistogram.kde_samples;\n");
-        fprintf(f_html, "        const rawStems = hpClusterHistogram.raw_hp_stems || [];\n");
-        fprintf(f_html, "        const clusters = hpClusterHistogram.clusters || [];\n");
-        fprintf(f_html, "        const minX = kde[0].x_ms;\n");
-        fprintf(f_html, "        const maxX = kde[kde.length - 1].x_ms;\n");
-        fprintf(f_html, "        const spanX = maxX - minX || 1.0;\n");
-        fprintf(f_html, "        let maxDensity = 0.0;\n");
-        fprintf(f_html, "        kde.forEach(pt => { if (pt.density > maxDensity) maxDensity = pt.density; });\n");
-        fprintf(f_html, "        if (maxDensity <= 0) maxDensity = 1.0;\n");
-        fprintf(f_html, "        let maxStemDur = 0.0;\n");
-        fprintf(f_html, "        rawStems.forEach(st => { if (st.duration_s > maxStemDur) maxStemDur = st.duration_s; });\n");
+        fprintf(f_html, "        const contour = contourHistogram.contour;\n");
+        fprintf(f_html, "        const numPts = contour.length;\n");
+        fprintf(f_html, "        const maxX = numPts - 1;\n");
         fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
         fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
         fprintf(f_html, "        histCtx.strokeStyle = '#dcdde1'; histCtx.lineWidth = 1; histCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
-        fprintf(f_html, "        clusters.forEach(cl => {\n");
-        fprintf(f_html, "            const x1 = padLeft + ((cl.start_ms - minX) / spanX) * graphW;\n");
-        fprintf(f_html, "            const x2 = padLeft + ((cl.end_ms - minX) / spanX) * graphW;\n");
-        fprintf(f_html, "            histCtx.fillStyle = cl.is_dominant ? 'rgba(46, 204, 113, 0.20)' : 'rgba(189, 195, 199, 0.20)';\n");
-        fprintf(f_html, "            histCtx.fillRect(x1, padTop, Math.max(2, x2 - x1), graphH);\n");
-        fprintf(f_html, "            histCtx.strokeStyle = cl.is_dominant ? '#2ecc71' : '#bdc3c7'; histCtx.lineWidth = 1.0; histCtx.setLineDash([2, 2]);\n");
-        fprintf(f_html, "            histCtx.strokeRect(x1, padTop, Math.max(2, x2 - x1), graphH); histCtx.setLineDash([]);\n");
-        fprintf(f_html, "        });\n");
-        fprintf(f_html, "        if (maxStemDur > 0) {\n");
-        fprintf(f_html, "            rawStems.forEach(st => {\n");
-        fprintf(f_html, "                const sx = padLeft + ((st.val_ms - minX) / spanX) * graphW;\n");
-        fprintf(f_html, "                const stemH = (st.duration_s / maxStemDur) * (graphH * 0.75);\n");
-        fprintf(f_html, "                histCtx.strokeStyle = 'rgba(52, 152, 219, 0.65)'; histCtx.lineWidth = 2.0;\n");
-        fprintf(f_html, "                histCtx.beginPath(); histCtx.moveTo(sx, padTop + graphH); histCtx.lineTo(sx, padTop + graphH - stemH); histCtx.stroke();\n");
-        fprintf(f_html, "                histCtx.fillStyle = '#2980b9'; histCtx.beginPath(); histCtx.arc(sx, padTop + graphH - stemH, 3, 0, 2 * Math.PI); histCtx.fill();\n");
-        fprintf(f_html, "            });\n");
+
+        fprintf(f_html, "        const mLen = numPts - 99;\n");
+        fprintf(f_html, "        let maxVal = 0.0;\n");
+        fprintf(f_html, "        for (let i = 0; i < (mLen > 0 ? mLen : numPts); i++) {\n");
+        fprintf(f_html, "            if (contour[i] > maxVal) maxVal = contour[i];\n");
         fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (maxVal <= 0) maxVal = 1.0;\n");
+
+        fprintf(f_html, "        histCtx.fillStyle = 'rgba(46, 204, 113, 0.15)';\n");
+        fprintf(f_html, "        histCtx.beginPath();\n");
+        fprintf(f_html, "        histCtx.moveTo(padLeft, padTop + graphH);\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const x = padLeft + (i / maxX) * graphW;\n");
+        fprintf(f_html, "            const y = padTop + graphH - (contour[i] / maxVal) * (graphH * 0.88);\n");
+        fprintf(f_html, "            histCtx.lineTo(x, y);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        histCtx.lineTo(padLeft + graphW, padTop + graphH);\n");
+        fprintf(f_html, "        histCtx.closePath();\n");
+        fprintf(f_html, "        histCtx.fill();\n");
+
         fprintf(f_html, "        histCtx.strokeStyle = '#27ae60'; histCtx.lineWidth = 2.5; histCtx.beginPath();\n");
-        fprintf(f_html, "        kde.forEach((pt, i) => {\n");
-        fprintf(f_html, "            const x = padLeft + ((pt.x_ms - minX) / spanX) * graphW;\n");
-        fprintf(f_html, "            const y = padTop + graphH - (pt.density / maxDensity) * (graphH * 0.88);\n");
+        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
+        fprintf(f_html, "            const x = padLeft + (i / maxX) * graphW;\n");
+        fprintf(f_html, "            const y = padTop + graphH - (contour[i] / maxVal) * (graphH * 0.88);\n");
         fprintf(f_html, "            if (i === 0) histCtx.moveTo(x, y); else histCtx.lineTo(x, y);\n");
-        fprintf(f_html, "        });\n");
+        fprintf(f_html, "        }\n");
         fprintf(f_html, "        histCtx.stroke();\n");
-        fprintf(f_html, "        const domCl = clusters.find(c => c.is_dominant);\n");
-        fprintf(f_html, "        const centroidMs = domCl ? domCl.centroid_ms : bestBarLengthMs;\n");
-        fprintf(f_html, "        const cx = padLeft + ((centroidMs - minX) / spanX) * graphW;\n");
+
+        fprintf(f_html, "        const centroidMs = contourHistogram.high_point_ms || bestBarLengthMs;\n");
+        fprintf(f_html, "        const lineIdx = maxX - centroidMs;\n");
+        fprintf(f_html, "        const cx = padLeft + (lineIdx / maxX) * graphW;\n");
         fprintf(f_html, "        if (cx >= padLeft && cx <= padLeft + graphW) {\n");
         fprintf(f_html, "            histCtx.strokeStyle = '#f39c12'; histCtx.lineWidth = 2.5; histCtx.setLineDash([4, 4]);\n");
         fprintf(f_html, "            histCtx.beginPath(); histCtx.moveTo(cx, padTop); histCtx.lineTo(cx, padTop + graphH); histCtx.stroke(); histCtx.setLineDash([]);\n");
         fprintf(f_html, "            histCtx.fillStyle = '#d35400'; histCtx.font = 'bold 12px Segoe UI, sans-serif';\n");
-        fprintf(f_html, "            histCtx.textAlign = (cx > padLeft + graphW - 140) ? 'right' : 'left';\n");
-        fprintf(f_html, "            const tx = (cx > padLeft + graphW - 140) ? cx - 6 : cx + 6;\n");
-        fprintf(f_html, "            histCtx.fillText(`Cluster Centroid: ${centroidMs.toFixed(2)} ms`, tx, padTop + 18);\n");
+        fprintf(f_html, "            histCtx.textAlign = (cx > padLeft + graphW - 160) ? 'right' : 'left';\n");
+        fprintf(f_html, "            const tx = (cx > padLeft + graphW - 160) ? cx - 6 : cx + 6;\n");
+        fprintf(f_html, "            histCtx.fillText(`Segment Length High Point: -${centroidMs.toFixed(2)} ms (${centroidMs.toFixed(2)} ms)`, tx, padTop + 18);\n");
         fprintf(f_html, "        }\n");
+
         fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
         fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
         fprintf(f_html, "            const frac = i / 5;\n");
         fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
-        fprintf(f_html, "            const msVal = minX + frac * spanX;\n");
+        fprintf(f_html, "            const msVal = (frac - 1.0) * maxX;\n");
         fprintf(f_html, "            histCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; histCtx.beginPath(); histCtx.moveTo(x, padTop); histCtx.lineTo(x, padTop + graphH); histCtx.stroke();\n");
-        fprintf(f_html, "            histCtx.fillText(`${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
+        fprintf(f_html, "            histCtx.fillText((Math.abs(msVal) < 1e-3) ? '0 ms' : `${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        histCtx.fillStyle = '#2c3e50'; histCtx.font = 'bold 13px Segoe UI, sans-serif'; histCtx.textAlign = 'left';\n");
-        fprintf(f_html, "        histCtx.fillText(`High Point Duration Density Distribution & Cluster Analysis (Dominant Cluster Centroid: ${bestBarLengthMs.toFixed(2)} ms)`, padLeft, padTop - 10);\n");
+        fprintf(f_html, "        histCtx.fillText(`Accumulated Buffer Contour Histogram (Segment Length: ${bestBarLengthMs.toFixed(2)} ms)`, padLeft, padTop - 10);\n");
         fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function updateSegmentInspector() {\n");
