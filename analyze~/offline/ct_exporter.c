@@ -394,19 +394,10 @@ int export_all_assets_and_html(
 
             double* cur_buf = analyzer_get_buffer(contour_analyzer);
             if (cur_buf && accumulated_contour) {
-                int m_len = contour_len - 99; // Exclude last 99ms self-referential peak region
-                double max_v = -1e9;
-                if (m_len > 0) {
-                    for (int k = 0; k < m_len; k++) {
-                        if (cur_buf[k] > max_v) max_v = cur_buf[k];
-                    }
+                for (int k = 0; k < contour_len; k++) {
+                    accumulated_contour[k] += cur_buf[k];
                 }
-                if (max_v > 0.000001) {
-                    for (int k = 0; k < contour_len; k++) {
-                        accumulated_contour[k] += (cur_buf[k] / max_v);
-                    }
-                    contour_sample_count++;
-                }
+                contour_sample_count++;
             }
         }
         analyzer_destroy(contour_analyzer);
@@ -1120,7 +1111,7 @@ int export_all_assets_and_html(
         fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
         fprintf(f_html, "        <canvas id=\"clusterHistogramCanvas\" width=\"1150\" height=\"220\"></canvas>\n");
         fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "    <div class=\"hint\">💡 Accumulated 15,000ms cumulative transience buffer contour recorded across the song (sampled every 10ms and normalized per window). The gold dashed line marks the segment length high point.</div>\n");
+        fprintf(f_html, "    <div class=\"hint\">💡 Accumulated 15,000ms cumulative transience buffer contour recorded across the song (sampled every 10ms). The gold dashed line marks the segment length high point.</div>\n");
 
         fprintf(f_html, "    <div class=\"section-title\">Cumulative History Buffer at Longest High Point Midpoint</div>\n");
         fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
