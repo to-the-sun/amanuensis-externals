@@ -2210,10 +2210,11 @@ int export_group_assets_and_html(
     TransientAnalyzer** pass2_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
     float** pass2_gpu_flux = (float**)calloc(num_stems, sizeof(float*));
     int* pass2_gpu_ok = (int*)calloc(num_stems, sizeof(int));
-    PeakResult** pband[256];
-    int pcap[256][MAX_BANDS];
+    PeakResult*** pband = (PeakResult***)calloc(num_stems, sizeof(PeakResult**));
+    int** pcap = (int**)calloc(num_stems, sizeof(int*));
 
     for (int i = 0; i < num_stems; i++) {
+        pcap[i] = (int*)calloc(MAX_BANDS, sizeof(int));
         res2_stems[i].num_bands = 1;
         int hop = (int)(stems[i].sr * 0.001);
         int num_f = (stems[i].len + hop - 1) / hop;
@@ -2352,8 +2353,11 @@ int export_group_assets_and_html(
         }
         for (int b = 1; b < MAX_BANDS; b++) free(pband[i][b]);
         free(pband[i]);
+        free(pcap[i]);
         analyzer_destroy(pass2_analyzers[i]);
     }
+    free(pband);
+    free(pcap);
     free(pass2_analyzers);
     free(pass2_gpu_flux);
     free(pass2_gpu_ok);

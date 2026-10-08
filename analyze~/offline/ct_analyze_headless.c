@@ -37,8 +37,10 @@ static void get_directory_and_stem(const char* filepath, char* out_dir, char* ou
     const char* dot = strrchr(filename, '.');
     size_t stem_len = dot ? (size_t)(dot - filename) : strlen(filename);
 
-    strncpy(out_stem, filename, stem_len);
-    out_stem[stem_len] = '\0';
+    if (out_stem) {
+        strncpy(out_stem, filename, stem_len);
+        out_stem[stem_len] = '\0';
+    }
 
     size_t dir_len = (size_t)(filename - filepath);
     if (dir_len > 0) {
@@ -483,7 +485,8 @@ int main(int argc, char** argv) {
             get_directory_and_stem(target_dir, exe_dir, NULL);
         }
     } else {
-        get_directory_and_stem(argv[0], exe_dir, NULL);
+        // Fallback to current working directory if double clicked / run without explicit path argument
+        strcpy(exe_dir, "." PATH_SEP_STR);
     }
 
     char scan_dir[2048];
