@@ -994,10 +994,7 @@ int gpu_stft_init(void) {
     cl_uint num_devices = 0;
     err = clGetDeviceIDs(g_cl_platform, CL_DEVICE_TYPE_GPU, 1, &g_cl_device, &num_devices);
     if (err != CL_SUCCESS || num_devices == 0) {
-        err = clGetDeviceIDs(g_cl_platform, CL_DEVICE_TYPE_ALL, 1, &g_cl_device, &num_devices);
-    }
-    if (err != CL_SUCCESS || num_devices == 0) {
-        printf("[GPU Compute] Note: No OpenCL device found. Falling back to CPU FFT pipeline.\n");
+        printf("[GPU Compute] Note: No GPU OpenCL device found. Falling back to CPU FFT pipeline.\n");
         g_cl_available = 0;
         gpu_unlock();
         return 0;
