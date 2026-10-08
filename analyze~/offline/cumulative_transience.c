@@ -799,7 +799,13 @@ int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullA
         result_out->bands[b].peaks = NULL;
         result_out->bands[b].num_peaks = 0;
     }
-    TransientAnalyzer* a = analyzer_create(1.0, NULL, NULL, NULL, NULL, window_ms); if(!a) return 0;
+    float* gpu_flux = (float*)malloc(sizeof(float) * 4 * num_f);
+    int gpu_ok = 0;
+    if (gpu_flux) {
+        gpu_ok = gpu_stft_process(y, len, sr, gpu_flux, num_f);
+    }
+
+    TransientAnalyzer* a = analyzer_create(1.0, NULL, NULL, NULL, NULL, window_ms); if(!a) { free(gpu_flux); return 0; }
     analyzer_set_sample_rate(a, sr); int step = hop * 100;
     PeakResult* pband[MAX_BANDS]; int pcap[MAX_BANDS];
     for(int b=0; b<MAX_BANDS; b++) { pcap[b] = 1024; pband[b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[b]); }
@@ -807,7 +813,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullA
     for (int last_t = 0; last_t < len + flush_samples; last_t += step) {
         int act_s = last_t - (int)(sr * 0.2), win_s = act_s - (int)(sr * (window_ms / 1000.0)); if (win_s < 0) win_s = 0;
         ChunkAnalysisResult* res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-        if (!res) { analyzer_destroy(a); return 0; }
+        if (!res) { analyzer_destroy(a); free(gpu_flux); return 0; }
         float* push_ptr = (float*)calloc(step, sizeof(float));
         if (last_t < len) {
             int rem = len - last_t;
@@ -819,7 +825,11 @@ int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullA
             for (int i = 0; i < 100; i++) {
                 int f = act_s / hop + i;
                 if (f >= 0 && f < num_f) {
-                    result_out->bands[b].envelope[f] = res->last_flux[b][i];
+                    if (gpu_ok) {
+                        result_out->bands[b].envelope[f] = gpu_flux[b * num_f + f];
+                    } else {
+                        result_out->bands[b].envelope[f] = res->last_flux[b][i];
+                    }
                     result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
                     result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
                     result_out->bands[b].rolling_prominence_avg[f] = (float)res->metrics.band_prominence_avgs[b];
@@ -842,6 +852,7 @@ int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullA
         }
         free(res);
     }
+    if (gpu_flux) free(gpu_flux);
     result_out->max_peak_value = (float)analyzer_get_max_peak(a);
     result_out->min_score_seen = a->private_min_score_seen;
     result_out->max_score_seen = a->private_max_score_seen;
@@ -883,3 +894,268 @@ void analyzer_free_analysis(FullAnalysisResult* result) {
     free(result->highest_peaks_ms);
     free(result->demarcation_lines);
 }
+
+/* ============================================================================
+ * OpenCL GPU Compute Shader Acceleration Implementation & Host Dispatch
+ * ============================================================================ */
+
+#if __has_include(<CL/cl.h>)
+#define CL_TARGET_OPENCL_VERSION 300
+#include <CL/cl.h>
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+static CRITICAL_SECTION g_gpu_mutex;
+static int g_mutex_inited = 0;
+static inline void gpu_lock_init(void) { if (!g_mutex_inited) { InitializeCriticalSection(&g_gpu_mutex); g_mutex_inited = 1; } }
+static inline void gpu_lock(void) { gpu_lock_init(); EnterCriticalSection(&g_gpu_mutex); }
+static inline void gpu_unlock(void) { LeaveCriticalSection(&g_gpu_mutex); }
+#else
+#include <pthread.h>
+static pthread_mutex_t g_gpu_mutex = PTHREAD_MUTEX_INITIALIZER;
+static inline void gpu_lock(void) { pthread_mutex_lock(&g_gpu_mutex); }
+static inline void gpu_unlock(void) { pthread_mutex_unlock(&g_gpu_mutex); }
+#endif
+
+static cl_platform_id g_cl_platform = NULL;
+static cl_device_id g_cl_device = NULL;
+static cl_context g_cl_context = NULL;
+static cl_command_queue g_cl_queue = NULL;
+static cl_program g_cl_program = NULL;
+static cl_kernel g_cl_kernel = NULL;
+static char g_cl_device_name[256] = "GPU";
+static int g_cl_available = -1; // -1: uninitialized, 0: failed/unavailable, 1: ready
+
+static const char* opencl_stft_kernel_source =
+"__kernel void compute_spectral_flux(\n"
+"    __global const float* pcm,\n"
+"    const int total_samples,\n"
+"    const int hop_size,\n"
+"    const int n_fft,\n"
+"    const int sr,\n"
+"    __global float* flux_out,\n"
+"    const int total_frames)\n"
+"{\n"
+"    int f = get_global_id(0);\n"
+"    if (f >= total_frames) return;\n"
+"    int center = f * hop_size;\n"
+"    int start_idx = center - n_fft / 2;\n"
+"    float real_part[2048];\n"
+"    for (int i = 0; i < 2048; i++) {\n"
+"        int s = start_idx + i;\n"
+"        float val = (s >= 0 && s < total_samples) ? pcm[s] : 0.0f;\n"
+"        float w = 0.5f * (1.0f - cos(2.0f * 3.1415926535f * (float)i / 2048.0f));\n"
+"        real_part[i] = val * w;\n"
+"    }\n"
+"    float mels[128];\n"
+"    for (int m = 0; m < 128; m++) {\n"
+"        float sum_p = 0.0f;\n"
+"        int bin_start = m * 8;\n"
+"        int bin_end = bin_start + 8;\n"
+"        for (int k = bin_start; k < bin_end; k++) {\n"
+"            float angle = -2.0f * 3.1415926535f * (float)k / 2048.0f;\n"
+"            float c = cos(angle);\n"
+"            float s = sin(angle);\n"
+"            float r = 0.0f, im = 0.0f;\n"
+"            for (int i = 0; i < 2048; i++) {\n"
+"                r += real_part[i] * c;\n"
+"                im += real_part[i] * s;\n"
+"            }\n"
+"            sum_p += (r*r + im*im) / (2048.0f * 2048.0f);\n"
+"        }\n"
+"        if (sum_p < 1e-10f) sum_p = 1e-10f;\n"
+"        mels[m] = 10.0f * log10(sum_p);\n"
+"    }\n"
+"    for (int b = 0; b < 4; b++) {\n"
+"        float bsum = 0.0f;\n"
+"        for (int m = b * 32; m < (b + 1) * 32; m++) {\n"
+"            bsum += mels[m];\n"
+"        }\n"
+"        flux_out[b * total_frames + f] = bsum / 32.0f;\n"
+"    }\n"
+"}\n";
+
+int gpu_stft_init(void) {
+    gpu_lock();
+    if (g_cl_available != -1) {
+        int avail = g_cl_available;
+        gpu_unlock();
+        return avail;
+    }
+
+    cl_int err;
+    cl_uint num_platforms = 0;
+    err = clGetPlatformIDs(1, &g_cl_platform, &num_platforms);
+    if (err != CL_SUCCESS || num_platforms == 0) {
+        printf("[GPU Compute] Note: No OpenCL platform found. Falling back to CPU FFT pipeline.\n");
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    cl_uint num_devices = 0;
+    err = clGetDeviceIDs(g_cl_platform, CL_DEVICE_TYPE_GPU, 1, &g_cl_device, &num_devices);
+    if (err != CL_SUCCESS || num_devices == 0) {
+        printf("[GPU Compute] Note: No GPU OpenCL device found. Falling back to CPU FFT pipeline.\n");
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    g_cl_context = clCreateContext(NULL, 1, &g_cl_device, NULL, NULL, &err);
+    if (err != CL_SUCCESS || !g_cl_context) {
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+#if defined(CL_VERSION_2_0)
+    g_cl_queue = clCreateCommandQueueWithProperties(g_cl_context, g_cl_device, NULL, &err);
+#else
+    g_cl_queue = clCreateCommandQueue(g_cl_context, g_cl_device, 0, &err);
+#endif
+    if (err != CL_SUCCESS || !g_cl_queue) {
+        clReleaseContext(g_cl_context);
+        g_cl_context = NULL;
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    g_cl_program = clCreateProgramWithSource(g_cl_context, 1, &opencl_stft_kernel_source, NULL, &err);
+    if (err != CL_SUCCESS || !g_cl_program) {
+        clReleaseCommandQueue(g_cl_queue);
+        clReleaseContext(g_cl_context);
+        g_cl_queue = NULL;
+        g_cl_context = NULL;
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    err = clBuildProgram(g_cl_program, 1, &g_cl_device, NULL, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        clReleaseProgram(g_cl_program);
+        clReleaseCommandQueue(g_cl_queue);
+        clReleaseContext(g_cl_context);
+        g_cl_program = NULL;
+        g_cl_queue = NULL;
+        g_cl_context = NULL;
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    g_cl_kernel = clCreateKernel(g_cl_program, "compute_spectral_flux", &err);
+    if (err != CL_SUCCESS || !g_cl_kernel) {
+        clReleaseProgram(g_cl_program);
+        clReleaseCommandQueue(g_cl_queue);
+        clReleaseContext(g_cl_context);
+        g_cl_program = NULL;
+        g_cl_queue = NULL;
+        g_cl_context = NULL;
+        g_cl_available = 0;
+        gpu_unlock();
+        return 0;
+    }
+
+    clGetDeviceInfo(g_cl_device, CL_DEVICE_NAME, sizeof(g_cl_device_name), g_cl_device_name, NULL);
+    printf("[GPU Compute] Initialized OpenCL Compute Shader Engine on device: %s\n", g_cl_device_name);
+
+    g_cl_available = 1;
+    gpu_unlock();
+    return 1;
+}
+
+void gpu_stft_cleanup(void) {
+    gpu_lock();
+    if (g_cl_kernel) clReleaseKernel(g_cl_kernel);
+    if (g_cl_program) clReleaseProgram(g_cl_program);
+    if (g_cl_queue) clReleaseCommandQueue(g_cl_queue);
+    if (g_cl_context) clReleaseContext(g_cl_context);
+    g_cl_kernel = NULL;
+    g_cl_program = NULL;
+    g_cl_queue = NULL;
+    g_cl_context = NULL;
+    g_cl_available = -1;
+    gpu_unlock();
+}
+
+int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out, int num_frames) {
+    if (!gpu_stft_init()) return 0;
+    if (!pcm || num_samples <= 0 || num_frames <= 0 || !flux_out) return 0;
+
+    cl_int err;
+    int hop_size = (int)(sr * 0.001);
+    int n_fft = 2048;
+
+    cl_mem d_pcm = clCreateBuffer(g_cl_context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * num_samples, (void*)pcm, &err);
+    if (err != CL_SUCCESS) return 0;
+
+    cl_mem d_flux = clCreateBuffer(g_cl_context, CL_MEM_WRITE_ONLY, sizeof(float) * 4 * num_frames, NULL, &err);
+    if (err != CL_SUCCESS) {
+        clReleaseMemObject(d_pcm);
+        return 0;
+    }
+
+    // Create a per-thread command queue for lock-free parallel execution
+    cl_command_queue queue = clCreateCommandQueue(g_cl_context, g_cl_device, 0, &err);
+    if (err != CL_SUCCESS || !queue) {
+        clReleaseMemObject(d_flux);
+        clReleaseMemObject(d_pcm);
+        return 0;
+    }
+
+    cl_kernel kernel = clCreateKernel(g_cl_program, "compute_spectral_flux", &err);
+    if (err != CL_SUCCESS || !kernel) {
+        clReleaseCommandQueue(queue);
+        clReleaseMemObject(d_flux);
+        clReleaseMemObject(d_pcm);
+        return 0;
+    }
+
+    err  = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_pcm);
+    err |= clSetKernelArg(kernel, 1, sizeof(int), &num_samples);
+    err |= clSetKernelArg(kernel, 2, sizeof(int), &hop_size);
+    err |= clSetKernelArg(kernel, 3, sizeof(int), &n_fft);
+    err |= clSetKernelArg(kernel, 4, sizeof(int), &sr);
+    err |= clSetKernelArg(kernel, 5, sizeof(cl_mem), &d_flux);
+    err |= clSetKernelArg(kernel, 6, sizeof(int), &num_frames);
+
+    if (err != CL_SUCCESS) {
+        clReleaseKernel(kernel);
+        clReleaseCommandQueue(queue);
+        clReleaseMemObject(d_flux);
+        clReleaseMemObject(d_pcm);
+        return 0;
+    }
+
+    size_t global_work_size = (size_t)num_frames;
+    printf("[GPU Compute] Executing STFT & Spectral Flux compute shader on GPU (%s)...\n", g_cl_device_name);
+    err = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
+    if (err == CL_SUCCESS) {
+        err = clEnqueueReadBuffer(queue, d_flux, CL_TRUE, 0, sizeof(float) * 4 * num_frames, flux_out, 0, NULL, NULL);
+    }
+
+    clReleaseKernel(kernel);
+    clReleaseCommandQueue(queue);
+    clReleaseMemObject(d_flux);
+    clReleaseMemObject(d_pcm);
+
+    return (err == CL_SUCCESS) ? 1 : 0;
+}
+
+#else
+
+int gpu_stft_init(void) {
+    return 0;
+}
+
+void gpu_stft_cleanup(void) {
+}
+
+int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out, int num_frames) {
+    (void)pcm; (void)num_samples; (void)sr; (void)flux_out; (void)num_frames;
+    return 0;
+}
+
+#endif

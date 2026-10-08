@@ -10,8 +10,12 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <direct.h>
+#include <windows.h>
+#include <process.h>
 #define mkdir_cross(dir) _mkdir(dir)
 #else
+#include <pthread.h>
+#include <unistd.h>
 #define mkdir_cross(dir) mkdir(dir, 0755)
 #endif
 
@@ -327,6 +331,31 @@ static int process_single_file(const char* audio_filepath, int window_ms) {
     return 1;
 }
 
+typedef struct {
+    char full_path[4096];
+    char filename[1024];
+    int file_index;
+    int total_files;
+    int window_ms;
+    int success;
+} ThreadTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall worker_thread_win(void* arg) {
+    ThreadTask* t = (ThreadTask*)arg;
+    printf("\n[Thread %d/%d] Starting parallel processing: %s\n", t->file_index, t->total_files, t->filename);
+    t->success = process_single_file(t->full_path, t->window_ms);
+    return 0;
+}
+#else
+static void* worker_thread_posix(void* arg) {
+    ThreadTask* t = (ThreadTask*)arg;
+    printf("\n[Thread %d/%d] Starting parallel processing: %s\n", t->file_index, t->total_files, t->filename);
+    t->success = process_single_file(t->full_path, t->window_ms);
+    return NULL;
+}
+#endif
+
 int main(int argc, char** argv) {
     printf("============================================================\n");
     printf("  Standalone C Cumulative Transience Analyzer & Exporter\n");
@@ -409,19 +438,72 @@ int main(int argc, char** argv) {
     int fail_count = 0;
     int window_ms = 15000;
 
-    for (int i = 0; i < wav_files.count; i++) {
-        char full_path[4096];
-        snprintf(full_path, sizeof(full_path), "%s%s", exe_dir, wav_files.items[i]);
-        printf("\n============================================================\n");
-        printf(" Processing [%d/%d]: %s\n", i + 1, wav_files.count, wav_files.items[i]);
-        printf("============================================================\n");
+    int num_files = wav_files.count;
+    ThreadTask* tasks = (ThreadTask*)calloc(num_files, sizeof(ThreadTask));
 
-        if (process_single_file(full_path, window_ms)) {
-            success_count++;
-        } else {
-            fail_count++;
+    for (int i = 0; i < num_files; i++) {
+        snprintf(tasks[i].full_path, sizeof(tasks[i].full_path), "%s%s", exe_dir, wav_files.items[i]);
+        strncpy(tasks[i].filename, wav_files.items[i], sizeof(tasks[i].filename) - 1);
+        tasks[i].file_index = i + 1;
+        tasks[i].total_files = num_files;
+        tasks[i].window_ms = window_ms;
+        tasks[i].success = 0;
+    }
+
+    printf("\nStarting Multi-Threaded Batch Analysis across %d file(s)...\n", num_files);
+
+    int max_threads = 4;
+#if defined(_WIN32) || defined(_WIN64)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    if (sysinfo.dwNumberOfProcessors > 0) max_threads = (int)sysinfo.dwNumberOfProcessors;
+#else
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nprocs > 0) max_threads = (int)nprocs;
+#endif
+    if (max_threads > 16) max_threads = 16;
+    if (max_threads < 1) max_threads = 1;
+
+    printf("Executing with max %d concurrent CPU worker thread(s)...\n", max_threads);
+
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_files; batch_start += max_threads) {
+        int batch_count = num_files - batch_start;
+        if (batch_count > max_threads) batch_count = max_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, worker_thread_win, &tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) {
+                CloseHandle(threads[i]);
+            }
+            free(threads);
         }
     }
+#else
+    for (int batch_start = 0; batch_start < num_files; batch_start += max_threads) {
+        int batch_count = num_files - batch_start;
+        if (batch_count > max_threads) batch_count = max_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, worker_thread_posix, &tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            free(threads);
+        }
+    }
+#endif
+
+    for (int i = 0; i < num_files; i++) {
+        if (tasks[i].success) success_count++;
+        else fail_count++;
+    }
+    free(tasks);
 
     file_list_free(&wav_files);
 
