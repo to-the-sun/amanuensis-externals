@@ -922,6 +922,7 @@ static cl_context g_cl_context = NULL;
 static cl_command_queue g_cl_queue = NULL;
 static cl_program g_cl_program = NULL;
 static cl_kernel g_cl_kernel = NULL;
+static char g_cl_device_name[256] = "GPU";
 static int g_cl_available = -1; // -1: uninitialized, 0: failed/unavailable, 1: ready
 
 static const char* opencl_stft_kernel_source =
@@ -1057,9 +1058,8 @@ int gpu_stft_init(void) {
         return 0;
     }
 
-    char device_name[256];
-    clGetDeviceInfo(g_cl_device, CL_DEVICE_NAME, sizeof(device_name), device_name, NULL);
-    printf("[GPU Compute] Initialized OpenCL Compute Shader Engine on device: %s\n", device_name);
+    clGetDeviceInfo(g_cl_device, CL_DEVICE_NAME, sizeof(g_cl_device_name), g_cl_device_name, NULL);
+    printf("[GPU Compute] Initialized OpenCL Compute Shader Engine on device: %s\n", g_cl_device_name);
 
     g_cl_available = 1;
     gpu_unlock();
@@ -1130,6 +1130,7 @@ int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out,
     }
 
     size_t global_work_size = (size_t)num_frames;
+    printf("[GPU Compute] Executing STFT & Spectral Flux compute shader on GPU (%s)...\n", g_cl_device_name);
     err = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
     if (err == CL_SUCCESS) {
         err = clEnqueueReadBuffer(queue, d_flux, CL_TRUE, 0, sizeof(float) * 4 * num_frames, flux_out, 0, NULL, NULL);
