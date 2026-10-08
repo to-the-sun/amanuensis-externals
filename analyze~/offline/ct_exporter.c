@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <float.h>
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <direct.h>
@@ -323,21 +324,133 @@ int export_ctbin(const char* output_filepath, const float* y, int len, int sr, i
     return 1;
 }
 
-int export_all_assets_and_html(
+static int analyzer_batch_analyze_shared(
+    const float* y,
+    int len,
+    int sr,
+    int window_ms,
+    int num_bands,
+    SharedTransientBuffer* shared_buffer,
+    FullAnalysisResult* result_out
+) {
+    if (window_ms > 15000) window_ms = 15000;
+    if (window_ms <= 0) window_ms = 15000;
+    if (num_bands <= 0 || num_bands > MAX_BANDS) num_bands = MAX_BANDS;
+    result_out->num_bands = num_bands;
+    int hop = (int)(sr * 0.001), num_f = (len + hop - 1) / hop;
+    result_out->num_frames = num_f; result_out->times = (float*)malloc(sizeof(float) * num_f); if(!result_out->times) return 0;
+    for (int i = 0; i < num_f; i++) result_out->times[i] = (float)i * (float)hop / (float)sr;
+    result_out->ratings = (double*)malloc(sizeof(double) * num_f);
+    result_out->std_devs = (double*)malloc(sizeof(double) * num_f);
+    result_out->means = (double*)malloc(sizeof(double) * num_f);
+    result_out->contrasts = (double*)malloc(sizeof(double) * num_f);
+    result_out->stability_scores = (double*)malloc(sizeof(double) * num_f);
+    result_out->highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
+    result_out->demarcation_lines = (double*)malloc(sizeof(double) * num_f);
+    result_out->rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
+    result_out->rolling_global_smoothing_avg = (float*)calloc(num_f, sizeof(float));
+    for (int b = 0; b < num_bands; b++) {
+        result_out->bands[b].envelope = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence_avg = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_prominence_half_max = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_smoothing_avg = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_flux_avg = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_lookback = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_avg_delta = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_total_delta = (float*)calloc(num_f, sizeof(float));
+        result_out->bands[b].rolling_p_count = (int*)calloc(num_f, sizeof(int));
+        result_out->bands[b].peaks = NULL;
+        result_out->bands[b].num_peaks = 0;
+    }
+    float* gpu_flux = (float*)malloc(sizeof(float) * num_bands * num_f);
+    int gpu_ok = 0;
+    if (gpu_flux) {
+        gpu_ok = gpu_stft_process(y, len, sr, gpu_flux, num_f, num_bands);
+    }
+
+    TransientAnalyzer* a = analyzer_create(1.0, shared_buffer, NULL, NULL, NULL, window_ms, num_bands);
+    if (!a) { free(gpu_flux); return 0; }
+    analyzer_set_sample_rate(a, sr); int step = hop * 100;
+    PeakResult* pband[MAX_BANDS]; int pcap[MAX_BANDS];
+    for(int b=0; b<num_bands; b++) { pcap[b] = 1024; pband[b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[b]); }
+    int flush_samples = (int)(sr * 0.3);
+
+    ChunkAnalysisResult* res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    if (!res) { analyzer_destroy(a); free(gpu_flux); return 0; }
+
+    for (int last_t = 0; last_t < len + flush_samples; last_t += step) {
+        int act_s = last_t - (int)(sr * 0.2), win_s = act_s - (int)(sr * (window_ms / 1000.0)); if (win_s < 0) win_s = 0;
+        memset(res, 0, sizeof(ChunkAnalysisResult));
+        float* push_ptr = (float*)calloc(step, sizeof(float));
+        if (last_t < len) {
+            int rem = len - last_t;
+            memcpy(push_ptr, y + last_t, sizeof(float) * (rem < step ? rem : step));
+        }
+        analyzer_analyze_chunk(a, push_ptr, step, sr, win_s / hop, act_s / hop, res);
+        free(push_ptr);
+        for (int b = 0; b < num_bands; b++) {
+            for (int i = 0; i < 100; i++) {
+                int f = act_s / hop + i;
+                if (f >= 0 && f < num_f) {
+                    if (gpu_ok) {
+                        result_out->bands[b].envelope[f] = gpu_flux[b * num_f + f];
+                    } else {
+                        result_out->bands[b].envelope[f] = res->last_flux[b][i];
+                    }
+                    result_out->bands[b].rolling_dynamic_smoothing[f] = res->last_dynamic_smoothing[b][i];
+                    result_out->bands[b].rolling_prominence[f] = res->last_prominence[b][i];
+                    result_out->bands[b].rolling_prominence_avg[f] = (float)res->metrics.band_prominence_avgs[b];
+                    result_out->bands[b].rolling_prominence_half_max[f] = (float)res->metrics.band_prominence_half_maxes[b];
+                    result_out->bands[b].rolling_smoothing_avg[f] = (float)res->metrics.band_smoothing_avgs[b];
+                    result_out->bands[b].rolling_flux_avg[f] = (float)res->metrics.band_flux_avgs[b];
+                    result_out->bands[b].rolling_threshold[f] = (float)res->metrics.band_midpoints[b];
+                    result_out->bands[b].rolling_lookback[f] = (float)res->metrics.band_lookbacks[b];
+                    result_out->bands[b].rolling_avg_delta[f] = (float)res->metrics.band_avg_deltas[b];
+                    result_out->bands[b].rolling_total_delta[f] = (float)res->metrics.band_total_deltas[b];
+                    result_out->bands[b].rolling_p_count[f] = res->metrics.band_p_counts[b];
+                }
+            }
+        }
+        for (int i = 0; i < 100; i++) { int f = act_s / hop + i; if (f >= 0 && f < num_f) { result_out->ratings[f] = res->metrics.rating; result_out->std_devs[f] = res->metrics.std_dev; result_out->means[f] = res->metrics.mean; result_out->contrasts[f] = res->metrics.contrast; result_out->stability_scores[f] = res->metrics.stability_score; result_out->highest_peaks_ms[f] = res->metrics.highest_peak_valid ? res->metrics.highest_peak_ms : -999.0; result_out->demarcation_lines[f] = res->metrics.demarcation_line; result_out->rolling_global_flux_avg[f] = (float)res->metrics.global_flux_avg; result_out->rolling_global_smoothing_avg[f] = (float)res->metrics.global_smoothing_avg; } }
+        for (int i = 0; i < res->peak_list.num_peaks; i++) {
+            PeakResult* pr = &res->peak_list.peaks[i]; int b = pr->band_idx;
+            if (result_out->bands[b].num_peaks >= pcap[b]) { pcap[b] *= 2; PeakResult* np = realloc(pband[b], sizeof(PeakResult) * pcap[b]); if(np) pband[b] = np; }
+            memcpy(&pband[b][result_out->bands[b].num_peaks++], pr, sizeof(PeakResult));
+        }
+    }
+    free(res);
+    if (gpu_flux) free(gpu_flux);
+    result_out->max_peak_value = (float)analyzer_get_max_peak(a);
+    result_out->min_score_seen = shared_buffer ? shared_buffer->min_score_seen : a->private_min_score_seen;
+    result_out->max_score_seen = shared_buffer ? shared_buffer->max_score_seen : a->private_max_score_seen;
+    result_out->tolerance = a->tolerance;
+    for(int b=0; b<num_bands; b++) {
+        int n = result_out->bands[b].num_peaks; result_out->bands[b].peaks = (PeakResult*)malloc(sizeof(PeakResult) * n);
+        if(result_out->bands[b].peaks) memcpy(result_out->bands[b].peaks, pband[b], sizeof(PeakResult) * n);
+        free(pband[b]);
+    }
+    analyzer_destroy(a); return 1;
+}
+
+static int export_all_assets_and_html_internal(
     const char* audio_filepath,
     const char* output_dir,
     const char* stem_name,
     const float* y,
     int len,
     int sr,
-    int pass1_window_ms
+    int pass1_window_ms,
+    SharedTransientBuffer* shared_buffer
 ) {
     (void)audio_filepath;
     if (!output_dir || !stem_name || !y || len <= 0 || sr <= 0) return 0;
 
     // Pass 1: Headless Analysis with 15000ms window to determine high points
     FullAnalysisResult res1;
-    if (!analyzer_batch_analyze(y, len, sr, pass1_window_ms, 1, &res1)) return 0;
+    if (!analyzer_batch_analyze_shared(y, len, sr, pass1_window_ms, 1, shared_buffer, &res1)) return 0;
 
     // Track high point durations and changes across frames
     int num_frames = res1.num_frames;
@@ -544,7 +657,7 @@ int export_all_assets_and_html(
     if (pass2_win_ms < 5000) pass2_win_ms = 5000;
 
     FullAnalysisResult res2;
-    if (!analyzer_batch_analyze(y, len, sr, pass2_win_ms, 1, &res2)) return 0;
+    if (!analyzer_batch_analyze_shared(y, len, sr, pass2_win_ms, 1, shared_buffer, &res2)) return 0;
 
     // Export .ctbin binary file for Pass 2
     char ctbin_path[4096];
@@ -1865,5 +1978,439 @@ int export_all_assets_and_html(
     }
 
     analyzer_free_analysis(&res2);
+    return 1;
+}
+
+int export_all_assets_and_html(
+    const char* audio_filepath,
+    const char* output_dir,
+    const char* stem_name,
+    const float* y,
+    int len,
+    int sr,
+    int pass1_window_ms
+) {
+    return export_all_assets_and_html_internal(audio_filepath, output_dir, stem_name, y, len, sr, pass1_window_ms, NULL);
+}
+
+int export_group_assets_and_html(
+    const GroupStemInput* stems,
+    int num_stems,
+    const char* parent_dir,
+    const char* group_name,
+    int pass1_window_ms
+) {
+    if (!stems || num_stems <= 0 || !parent_dir || !group_name) return 0;
+    if (pass1_window_ms > 15000) pass1_window_ms = 15000;
+    if (pass1_window_ms < 5000) pass1_window_ms = 5000;
+
+    // 1. Setup Group Output Directory: parent_dir/[palettes] directly
+    char group_output_dir[4096];
+    snprintf(group_output_dir, sizeof(group_output_dir), "%s" PATH_SEP_STR "[palettes]", parent_dir);
+    mkdir_p(group_output_dir);
+
+    // 2. Shared Transient Buffer Allocation for Group Analysis
+    SharedTransientBuffer group_shared;
+    memset(&group_shared, 0, sizeof(SharedTransientBuffer));
+    group_shared.max_peak = 1.0;
+    group_shared.min_score_seen = DBL_MAX;
+    group_shared.max_score_seen = -DBL_MAX;
+
+    TransientAnalyzer** pass1_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
+    int max_len = 0;
+    int common_sr = stems[0].sr;
+
+    for (int i = 0; i < num_stems; i++) {
+        pass1_analyzers[i] = analyzer_create(1.0, &group_shared, NULL, NULL, NULL, pass1_window_ms, 1);
+        if (pass1_analyzers[i]) {
+            analyzer_set_sample_rate(pass1_analyzers[i], stems[i].sr);
+        }
+        if (stems[i].len > max_len) max_len = stems[i].len;
+    }
+
+    int contour_len = pass1_window_ms + 1;
+    if (contour_len > MAX_CONTOUR_LEN) contour_len = MAX_CONTOUR_LEN;
+    double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
+    int contour_sample_count = 0;
+
+    int hop = (int)(common_sr * 0.001);
+    int step = hop * 19; // Sample contour every 19 ms
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    if (res_chunk) {
+        for (int last_t = 0; last_t < max_len; last_t += step) {
+            for (int i = 0; i < num_stems; i++) {
+                if (!pass1_analyzers[i]) continue;
+                int act_s = last_t - (int)(stems[i].sr * 0.2);
+                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
+                if (win_s < 0) win_s = 0;
+
+                memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                if (last_t < stems[i].len) {
+                    int chunk_len = step;
+                    if (last_t + step > stems[i].len) chunk_len = stems[i].len - last_t;
+                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
+                }
+                analyzer_analyze_chunk(pass1_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, res_chunk);
+                free(push_ptr);
+            }
+
+            // Record current state of shared accumulated buffer
+            for (int k = 0; k < contour_len; k++) {
+                accumulated_contour[k] += group_shared.accumulated_buffer[k];
+            }
+            contour_sample_count++;
+        }
+        free(res_chunk);
+    }
+
+    for (int i = 0; i < num_stems; i++) {
+        if (pass1_analyzers[i]) analyzer_destroy(pass1_analyzers[i]);
+    }
+    free(pass1_analyzers);
+
+    // Determine segment length high point from accumulated_contour
+    int m_len = contour_len - 99;
+    double max_contour_val = -1e9;
+    int best_lag_ms = 1000;
+    if (m_len > 0 && accumulated_contour) {
+        for (int k = 0; k < m_len; k++) {
+            if (accumulated_contour[k] > max_contour_val) {
+                max_contour_val = accumulated_contour[k];
+                best_lag_ms = (contour_len - 1) - k;
+            }
+        }
+    }
+    double best_bar_length_ms = (double)best_lag_ms;
+    if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
+
+    int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
+    if (pass2_win_ms > 15000) pass2_win_ms = 15000;
+    if (pass2_win_ms < 5000) pass2_win_ms = 5000;
+
+    // Reset shared transient buffer for Pass 2 lockstep analysis
+    memset(&group_shared, 0, sizeof(SharedTransientBuffer));
+    group_shared.max_peak = 1.0;
+    group_shared.min_score_seen = DBL_MAX;
+    group_shared.max_score_seen = -DBL_MAX;
+
+    // 3. Pass 2 Lockstep Analysis across all stems using group_shared
+    FullAnalysisResult* res2_stems = (FullAnalysisResult*)calloc(num_stems, sizeof(FullAnalysisResult));
+    TransientAnalyzer** pass2_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
+    float** pass2_gpu_flux = (float**)calloc(num_stems, sizeof(float*));
+    int* pass2_gpu_ok = (int*)calloc(num_stems, sizeof(int));
+    PeakResult** pband[256];
+    int pcap[256][MAX_BANDS];
+
+    for (int i = 0; i < num_stems; i++) {
+        res2_stems[i].num_bands = 1;
+        int hop = (int)(stems[i].sr * 0.001);
+        int num_f = (stems[i].len + hop - 1) / hop;
+        res2_stems[i].num_frames = num_f;
+        res2_stems[i].times = (float*)malloc(sizeof(float) * num_f);
+        for (int f = 0; f < num_f; f++) res2_stems[i].times[f] = (float)f * (float)hop / (float)stems[i].sr;
+
+        res2_stems[i].ratings = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].std_devs = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].means = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].contrasts = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].stability_scores = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].highest_peaks_ms = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].demarcation_lines = (double*)malloc(sizeof(double) * num_f);
+        res2_stems[i].rolling_global_flux_avg = (float*)calloc(num_f, sizeof(float));
+        res2_stems[i].rolling_global_smoothing_avg = (float*)calloc(num_f, sizeof(float));
+
+        for (int b = 0; b < 1; b++) {
+            res2_stems[i].bands[b].envelope = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_dynamic_smoothing = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_prominence = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_prominence_avg = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_prominence_half_max = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_smoothing_avg = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_flux_avg = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_threshold = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_lookback = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_avg_delta = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_total_delta = (float*)calloc(num_f, sizeof(float));
+            res2_stems[i].bands[b].rolling_p_count = (int*)calloc(num_f, sizeof(int));
+            res2_stems[i].bands[b].peaks = NULL;
+            res2_stems[i].bands[b].num_peaks = 0;
+        }
+
+        pass2_gpu_flux[i] = (float*)malloc(sizeof(float) * 1 * num_f);
+        if (pass2_gpu_flux[i]) {
+            pass2_gpu_ok[i] = gpu_stft_process(stems[i].mono_data, stems[i].len, stems[i].sr, pass2_gpu_flux[i], num_f, 1);
+        }
+
+        pass2_analyzers[i] = analyzer_create(1.0, &group_shared, NULL, NULL, NULL, pass2_win_ms, 1);
+        if (pass2_analyzers[i]) analyzer_set_sample_rate(pass2_analyzers[i], stems[i].sr);
+
+        pband[i] = (PeakResult**)malloc(sizeof(PeakResult*) * MAX_BANDS);
+        for (int b = 0; b < MAX_BANDS; b++) {
+            pcap[i][b] = 1024;
+            pband[i][b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[i][b]);
+        }
+    }
+
+    int flush_samples = (int)(common_sr * 0.3);
+    step = hop * 100;
+
+    ChunkAnalysisResult* pass2_chunk_res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    if (pass2_chunk_res) {
+        for (int last_t = 0; last_t < max_len + flush_samples; last_t += step) {
+            for (int i = 0; i < num_stems; i++) {
+                if (!pass2_analyzers[i]) continue;
+                int act_s = last_t - (int)(stems[i].sr * 0.2);
+                int win_s = act_s - (int)(stems[i].sr * (pass2_win_ms / 1000.0));
+                if (win_s < 0) win_s = 0;
+
+                memset(pass2_chunk_res, 0, sizeof(ChunkAnalysisResult));
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                if (last_t < stems[i].len) {
+                    int rem = stems[i].len - last_t;
+                    memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * (rem < step ? rem : step));
+                }
+                analyzer_analyze_chunk(pass2_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, pass2_chunk_res);
+                free(push_ptr);
+
+                int num_f = res2_stems[i].num_frames;
+                for (int b = 0; b < 1; b++) {
+                    for (int k = 0; k < 100; k++) {
+                        int f = act_s / hop + k;
+                        if (f >= 0 && f < num_f) {
+                            if (pass2_gpu_ok[i]) {
+                                res2_stems[i].bands[b].envelope[f] = pass2_gpu_flux[i][b * num_f + f];
+                            } else {
+                                res2_stems[i].bands[b].envelope[f] = pass2_chunk_res->last_flux[b][k];
+                            }
+                            res2_stems[i].bands[b].rolling_dynamic_smoothing[f] = pass2_chunk_res->last_dynamic_smoothing[b][k];
+                            res2_stems[i].bands[b].rolling_prominence[f] = pass2_chunk_res->last_prominence[b][k];
+                            res2_stems[i].bands[b].rolling_prominence_avg[f] = (float)pass2_chunk_res->metrics.band_prominence_avgs[b];
+                            res2_stems[i].bands[b].rolling_prominence_half_max[f] = (float)pass2_chunk_res->metrics.band_prominence_half_maxes[b];
+                            res2_stems[i].bands[b].rolling_smoothing_avg[f] = (float)pass2_chunk_res->metrics.band_smoothing_avgs[b];
+                            res2_stems[i].bands[b].rolling_flux_avg[f] = (float)pass2_chunk_res->metrics.band_flux_avgs[b];
+                            res2_stems[i].bands[b].rolling_threshold[f] = (float)pass2_chunk_res->metrics.band_midpoints[b];
+                            res2_stems[i].bands[b].rolling_lookback[f] = (float)pass2_chunk_res->metrics.band_lookbacks[b];
+                            res2_stems[i].bands[b].rolling_avg_delta[f] = (float)pass2_chunk_res->metrics.band_avg_deltas[b];
+                            res2_stems[i].bands[b].rolling_total_delta[f] = (float)pass2_chunk_res->metrics.band_total_deltas[b];
+                            res2_stems[i].bands[b].rolling_p_count[f] = pass2_chunk_res->metrics.band_p_counts[b];
+                        }
+                    }
+                }
+                for (int k = 0; k < 100; k++) {
+                    int f = act_s / hop + k;
+                    if (f >= 0 && f < num_f) {
+                        res2_stems[i].ratings[f] = pass2_chunk_res->metrics.rating;
+                        res2_stems[i].std_devs[f] = pass2_chunk_res->metrics.std_dev;
+                        res2_stems[i].means[f] = pass2_chunk_res->metrics.mean;
+                        res2_stems[i].contrasts[f] = pass2_chunk_res->metrics.contrast;
+                        res2_stems[i].stability_scores[f] = pass2_chunk_res->metrics.stability_score;
+                        res2_stems[i].highest_peaks_ms[f] = pass2_chunk_res->metrics.highest_peak_valid ? pass2_chunk_res->metrics.highest_peak_ms : -999.0;
+                        res2_stems[i].demarcation_lines[f] = pass2_chunk_res->metrics.demarcation_line;
+                        res2_stems[i].rolling_global_flux_avg[f] = (float)pass2_chunk_res->metrics.global_flux_avg;
+                        res2_stems[i].rolling_global_smoothing_avg[f] = (float)pass2_chunk_res->metrics.global_smoothing_avg;
+                    }
+                }
+                for (int k = 0; k < pass2_chunk_res->peak_list.num_peaks; k++) {
+                    PeakResult* pr = &pass2_chunk_res->peak_list.peaks[k];
+                    int b = pr->band_idx;
+                    if (res2_stems[i].bands[b].num_peaks >= pcap[i][b]) {
+                        pcap[i][b] *= 2;
+                        PeakResult* np = realloc(pband[i][b], sizeof(PeakResult) * pcap[i][b]);
+                        if (np) pband[i][b] = np;
+                    }
+                    memcpy(&pband[i][b][res2_stems[i].bands[b].num_peaks++], pr, sizeof(PeakResult));
+                }
+            }
+        }
+        free(pass2_chunk_res);
+    }
+
+    for (int i = 0; i < num_stems; i++) {
+        if (pass2_gpu_flux[i]) free(pass2_gpu_flux[i]);
+        res2_stems[i].max_peak_value = (float)analyzer_get_max_peak(pass2_analyzers[i]);
+        res2_stems[i].min_score_seen = group_shared.min_score_seen;
+        res2_stems[i].max_score_seen = group_shared.max_score_seen;
+        res2_stems[i].tolerance = pass2_analyzers[i]->tolerance;
+
+        for (int b = 0; b < 1; b++) {
+            int n = res2_stems[i].bands[b].num_peaks;
+            res2_stems[i].bands[b].peaks = (PeakResult*)malloc(sizeof(PeakResult) * n);
+            if (res2_stems[i].bands[b].peaks) memcpy(res2_stems[i].bands[b].peaks, pband[i][b], sizeof(PeakResult) * n);
+            free(pband[i][b]);
+        }
+        for (int b = 1; b < MAX_BANDS; b++) free(pband[i][b]);
+        free(pband[i]);
+        analyzer_destroy(pass2_analyzers[i]);
+    }
+    free(pass2_analyzers);
+    free(pass2_gpu_flux);
+    free(pass2_gpu_ok);
+
+    // 4. Export individual stem assets & HTML using res2_stems results
+    for (int i = 0; i < num_stems; i++) {
+        char stem_output_dir[4096];
+        snprintf(stem_output_dir, sizeof(stem_output_dir), "%s" PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", parent_dir, stems[i].stem_name);
+        mkdir_p(stem_output_dir);
+
+        // Export .ctbin
+        char ctbin_path[4096];
+        snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", stem_output_dir, stems[i].stem_name);
+        export_ctbin(ctbin_path, stems[i].mono_data, stems[i].len, stems[i].sr, pass2_win_ms);
+
+        // Export snapshots.bin and snapshots.js
+        int total_peaks = res2_stems[i].bands[0].num_peaks;
+        char snap_bin_path[4096];
+        snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", stem_output_dir);
+        FILE* f_snap = fopen(snap_bin_path, "wb");
+
+        int snap_len = pass2_win_ms + 1;
+        size_t float32_bytes_per_snap = snap_len * sizeof(float);
+        size_t total_snap_bytes = total_peaks * float32_bytes_per_snap;
+        uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
+
+        size_t snap_offset = 0;
+        for (int k = 0; k < total_peaks; k++) {
+            PeakResult* pr = &res2_stems[i].bands[0].peaks[k];
+            float* float32_snap = (float*)malloc(snap_len * sizeof(float));
+            for (int s = 0; s < snap_len; s++) float32_snap[s] = (float)pr->snapshot[s];
+
+            if (f_snap) fwrite(float32_snap, sizeof(float), snap_len, f_snap);
+            if (all_snap_buf) memcpy(all_snap_buf + snap_offset, float32_snap, float32_bytes_per_snap);
+
+            snap_offset += float32_bytes_per_snap;
+            free(float32_snap);
+        }
+        if (f_snap) fclose(f_snap);
+
+        char snap_js_path[4096];
+        snprintf(snap_js_path, sizeof(snap_js_path), "%s" PATH_SEP_STR "snapshots.js", stem_output_dir);
+        FILE* f_snap_js = fopen(snap_js_path, "w");
+        if (f_snap_js && all_snap_buf) {
+            size_t b64_len = 4 * ((total_snap_bytes + 2) / 3);
+            char* b64_str = (char*)malloc(b64_len + 1);
+            if (b64_str) {
+                base64_encode(all_snap_buf, total_snap_bytes, b64_str);
+                fprintf(f_snap_js, "window.snapshotsBase64 = '%s';\n", b64_str);
+                free(b64_str);
+            }
+            fclose(f_snap_js);
+        }
+        free(all_snap_buf);
+
+        // Export manifest.json
+        char manifest_path[4096];
+        snprintf(manifest_path, sizeof(manifest_path), "%s" PATH_SEP_STR "manifest.json", stem_output_dir);
+        FILE* f_mf = fopen(manifest_path, "w");
+        if (f_mf) {
+            fprintf(f_mf, "{\n");
+            fprintf(f_mf, "  \"version\": 1,\n");
+            fprintf(f_mf, "  \"sample_rate\": %d,\n", stems[i].sr);
+            fprintf(f_mf, "  \"num_frames\": %d,\n", res2_stems[i].num_frames);
+            fprintf(f_mf, "  \"window_ms\": %d,\n", pass2_win_ms);
+            fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2_stems[i].tolerance);
+            fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2_stems[i].max_peak_value);
+            fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2_stems[i].min_score_seen);
+            fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2_stems[i].max_score_seen);
+            fprintf(f_mf, "  \"total_peaks\": %d,\n", total_peaks);
+            fprintf(f_mf, "  \"peaks\": [\n");
+
+            size_t curr_snap_offset = 0;
+            for (int k = 0; k < total_peaks; k++) {
+                PeakResult* pr = &res2_stems[i].bands[0].peaks[k];
+                fprintf(f_mf, "    {\n");
+                fprintf(f_mf, "      \"p_idx\": %d,\n", pr->p_idx);
+                fprintf(f_mf, "      \"band_idx\": %d,\n", pr->band_idx);
+                fprintf(f_mf, "      \"time_s\": %.6f,\n", pr->time);
+                fprintf(f_mf, "      \"time_ms\": %.3f,\n", pr->time * 1000.0);
+                fprintf(f_mf, "      \"peak_val\": %.6f,\n", pr->peak_val);
+                fprintf(f_mf, "      \"total_score\": %.6f,\n", pr->total_score);
+                fprintf(f_mf, "      \"detected_peak_val\": %.6f,\n", pr->detected_peak_val);
+                fprintf(f_mf, "      \"thresh_val\": %.6f,\n", pr->thresh_val);
+                fprintf(f_mf, "      \"left_min\": %.6f,\n", pr->left_min);
+                fprintf(f_mf, "      \"right_min\": %.6f,\n", pr->right_min);
+                fprintf(f_mf, "      \"prominence\": %.6f,\n", pr->prominence);
+                fprintf(f_mf, "      \"snap_offset\": %llu,\n", (unsigned long long)curr_snap_offset);
+                fprintf(f_mf, "      \"snap_len\": %d,\n", snap_len);
+                fprintf(f_mf, "      \"qualifiers\": [\n");
+                for (int q = 0; q < pr->num_qualifiers; q++) {
+                    fprintf(f_mf, "        {\"ms\": %.3f, \"val\": %.6f, \"orig_ms\": %.3f}%s\n",
+                            pr->qualifiers[q].ms, pr->qualifiers[q].val, pr->qualifiers[q].orig_ms,
+                            (q < pr->num_qualifiers - 1) ? "," : "");
+                }
+                fprintf(f_mf, "      ]\n");
+                fprintf(f_mf, "    }%s\n", (k < total_peaks - 1) ? "," : "");
+                curr_snap_offset += float32_bytes_per_snap;
+            }
+            fprintf(f_mf, "  ]\n");
+            fprintf(f_mf, "}\n");
+            fclose(f_mf);
+        }
+
+        // Export HTML report
+        export_all_assets_and_html_internal(
+            stems[i].audio_filepath,
+            stem_output_dir,
+            stems[i].stem_name,
+            stems[i].mono_data,
+            stems[i].len,
+            stems[i].sr,
+            pass1_window_ms,
+            &group_shared
+        );
+
+        analyzer_free_analysis(&res2_stems[i]);
+    }
+    free(res2_stems);
+
+    // 4. Export Combined Group HTML Report
+    char group_html_path[4096];
+    snprintf(group_html_path, sizeof(group_html_path), "%s" PATH_SEP_STR "group_%s_pattern_analysis.html", group_output_dir, group_name);
+    FILE* f_html = fopen(group_html_path, "w");
+    if (f_html) {
+        fprintf(f_html, "<!DOCTYPE html>\n");
+        fprintf(f_html, "<html lang=\"en\">\n");
+        fprintf(f_html, "<head>\n");
+        fprintf(f_html, "    <meta charset=\"UTF-8\">\n");
+        fprintf(f_html, "    <title>Group Pattern Analysis Report - %s</title>\n", group_name);
+        fprintf(f_html, "    <style>\n");
+        fprintf(f_html, "        body { font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; color: #2c3e50; margin: 0; padding: 20px; }\n");
+        fprintf(f_html, "        .container { max-width: 1200px; margin: 0 auto; background: #ffffff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }\n");
+        fprintf(f_html, "        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; margin-top: 0; }\n");
+        fprintf(f_html, "        .metrics-card { display: flex; gap: 20px; margin-bottom: 25px; }\n");
+        fprintf(f_html, "        .metric-box { flex: 1; background: #eef2f7; padding: 15px; border-radius: 8px; text-align: center; border-left: 4px solid #3498db; }\n");
+        fprintf(f_html, "        .metric-value { font-size: 22px; font-weight: bold; color: #2980b9; }\n");
+        fprintf(f_html, "        .metric-label { font-size: 13px; color: #7f8c8d; text-transform: uppercase; }\n");
+        fprintf(f_html, "        .stem-list { background: #fdfdfd; border: 1px solid #dcdde1; border-radius: 8px; padding: 15px; margin-bottom: 20px; }\n");
+        fprintf(f_html, "        .stem-item { display: inline-block; background: #e8f4f8; color: #2980b9; padding: 6px 12px; border-radius: 15px; font-weight: bold; font-size: 13px; margin: 4px; }\n");
+        fprintf(f_html, "    </style>\n");
+        fprintf(f_html, "</head>\n");
+        fprintf(f_html, "<body>\n");
+        fprintf(f_html, "<div class=\"container\">\n");
+        fprintf(f_html, "    <h1>Group Audio Pattern Analysis Report: %s</h1>\n", group_name);
+        fprintf(f_html, "    <div class=\"metrics-card\">\n");
+        fprintf(f_html, "        <div class=\"metric-box\">\n");
+        fprintf(f_html, "            <div class=\"metric-value\">%d</div>\n", num_stems);
+        fprintf(f_html, "            <div class=\"metric-label\">Grouped Stems Analyzed</div>\n");
+        fprintf(f_html, "        </div>\n");
+        fprintf(f_html, "        <div class=\"metric-box\">\n");
+        fprintf(f_html, "            <div class=\"metric-value\">%.2f ms</div>\n", best_bar_length_ms);
+        fprintf(f_html, "            <div class=\"metric-label\">Shared Segment Length</div>\n");
+        fprintf(f_html, "        </div>\n");
+        fprintf(f_html, "    </div>\n");
+        fprintf(f_html, "    <div class=\"stem-list\">\n");
+        fprintf(f_html, "        <strong>Grouped Stems:</strong><br>\n");
+        for (int i = 0; i < num_stems; i++) {
+            fprintf(f_html, "        <a class=\"stem-item\" href=\"./%s/%s_pattern_analysis.html\">%s</a>\n", stems[i].stem_name, stems[i].stem_name, stems[i].stem_name);
+        }
+        fprintf(f_html, "    </div>\n");
+        fprintf(f_html, "</div>\n");
+        fprintf(f_html, "</body>\n");
+        fprintf(f_html, "</html>\n");
+        fclose(f_html);
+    }
+
+    if (accumulated_contour) free(accumulated_contour);
     return 1;
 }

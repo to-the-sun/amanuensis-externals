@@ -29,6 +29,22 @@ int export_all_assets_and_html(
     int pass1_window_ms
 );
 
+typedef struct {
+    const char* audio_filepath;
+    const char* stem_name;
+    const float* mono_data;
+    int len;
+    int sr;
+} GroupStemInput;
+
+int export_group_assets_and_html(
+    const GroupStemInput* stems,
+    int num_stems,
+    const char* parent_dir,
+    const char* group_name,
+    int pass1_window_ms
+);
+
 #ifdef __cplusplus
 }
 #endif
