@@ -455,25 +455,36 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (argc >= 2 && !is_group_mode) {
-        // Drag and drop or command line single-file argument provided
-        const char* audio_filepath = argv[1];
-        int window_ms = (argc >= 3) ? atoi(argv[2]) : 15000;
-        if (window_ms > 15000) window_ms = 15000;
-        if (window_ms < 5000) window_ms = 5000;
+    char target_dir[2048] = "";
+    int window_ms = 15000;
 
-        int success = process_single_file(audio_filepath, window_ms);
+    for (int i = 1; i < argc; i++) {
+        if (!iequals(argv[i], "--group") && !iequals(argv[i], "-g")) {
+            if (target_dir[0] == '\0') {
+                strncpy(target_dir, argv[i], sizeof(target_dir) - 1);
+                target_dir[sizeof(target_dir) - 1] = '\0';
+            }
+        }
+    }
 
-        printf("\nPress Enter to exit...");
-        getchar();
+    if (target_dir[0] != '\0' && !is_group_mode) {
+        // Single file drag-and-drop or command line invocation
+        int success = process_single_file(target_dir, window_ms);
         return success ? 0 : 1;
     }
 
-    // No file arguments passed (e.g. double-clicked executable)
-    // Scan executable directory for all .wav files (excluding preview.wav and glued.wav)
+    // Determine directory to scan for WAV files
     char exe_dir[2048];
-    char exe_stem[1024];
-    get_directory_and_stem(argv[0], exe_dir, exe_stem);
+    if (target_dir[0] != '\0') {
+        struct stat st;
+        if (stat(target_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(exe_dir, sizeof(exe_dir), "%s" PATH_SEP_STR, target_dir);
+        } else {
+            get_directory_and_stem(target_dir, exe_dir, NULL);
+        }
+    } else {
+        get_directory_and_stem(argv[0], exe_dir, NULL);
+    }
 
     char scan_dir[2048];
     strncpy(scan_dir, exe_dir, sizeof(scan_dir) - 1);
@@ -527,8 +538,6 @@ int main(int argc, char** argv) {
     for (int i = 0; i < wav_files.count; i++) {
         printf("  [%d/%d] %s\n", i + 1, wav_files.count, wav_files.items[i]);
     }
-
-    int window_ms = 15000;
 
     if (is_group_mode) {
         int grp_success = process_group_files(&wav_files, exe_dir, window_ms);

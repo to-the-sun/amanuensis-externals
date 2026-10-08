@@ -169,6 +169,8 @@ static void parse_passes_in_dir(const char* output_dir, PassInfo* out_passes, in
     }
 }
 
+#define MAX_CONTOUR_LEN 15001
+
 #pragma pack(push, 1)
 typedef struct {
     char magic[4];          // "CTBN"
@@ -435,229 +437,27 @@ static int analyzer_batch_analyze_shared(
     analyzer_destroy(a); return 1;
 }
 
-static int export_all_assets_and_html_internal(
-    const char* audio_filepath,
+static int export_single_stem_assets_from_res(
     const char* output_dir,
     const char* stem_name,
     const float* y,
     int len,
     int sr,
     int pass1_window_ms,
-    SharedTransientBuffer* shared_buffer
+    int pass2_win_ms,
+    double best_bar_length_ms,
+    const HPChangeEvent* hp_changes,
+    int num_hp_changes,
+    const double* accumulated_contour,
+    int contour_len,
+    int contour_sample_count,
+    double midpoint_s,
+    double longest_hp_start_s,
+    double longest_hp_end_s,
+    double midpoint_demarcation_line,
+    const double* midpoint_buffer,
+    const FullAnalysisResult* res2
 ) {
-    (void)audio_filepath;
-    if (!output_dir || !stem_name || !y || len <= 0 || sr <= 0) return 0;
-
-    // Pass 1: Headless Analysis with 15000ms window to determine high points
-    FullAnalysisResult res1;
-    if (!analyzer_batch_analyze_shared(y, len, sr, pass1_window_ms, 1, shared_buffer, &res1)) return 0;
-
-    // Track high point durations and changes across frames
-    int num_frames = res1.num_frames;
-    double frame_dt_s = (num_frames > 1) ? (res1.times[1] - res1.times[0]) : 0.001;
-
-    HPChangeEvent hp_changes[1024];
-    int num_hp_changes = 0;
-    double last_hp_val = -999.0;
-
-    // High point duration map
-    double unique_hp_vals[1024];
-    double unique_hp_durs[1024];
-    int num_unique_hps = 0;
-
-    for (int i = 0; i < num_frames; i++) {
-        double raw_hp = res1.highest_peaks_ms[i];
-        if (raw_hp == -999.0) continue;
-        double val_ms = fabs(raw_hp);
-
-        // Accumulate duration
-        int found_idx = -1;
-        for (int u = 0; u < num_unique_hps; u++) {
-            if (fabs(unique_hp_vals[u] - val_ms) < 1e-3) {
-                found_idx = u;
-                break;
-            }
-        }
-        if (found_idx >= 0) {
-            unique_hp_durs[found_idx] += frame_dt_s;
-        } else if (num_unique_hps < 1024) {
-            unique_hp_vals[num_unique_hps] = val_ms;
-            unique_hp_durs[num_unique_hps] = frame_dt_s;
-            num_unique_hps++;
-        }
-
-        // High point change events
-        if (last_hp_val < 0.0 || fabs(val_ms - last_hp_val) > 1e-3) {
-            if (num_hp_changes < 1024) {
-                hp_changes[num_hp_changes].time_s = res1.times[i];
-                hp_changes[num_hp_changes].new_value_ms = val_ms;
-                num_hp_changes++;
-            }
-            last_hp_val = val_ms;
-        }
-    }
-
-    // Record and sum normalized cumulative transience buffer contours every 19ms (19 frames)
-    #define MAX_CONTOUR_LEN 15001
-    int contour_len = pass1_window_ms + 1;
-    if (contour_len > MAX_CONTOUR_LEN) contour_len = MAX_CONTOUR_LEN;
-
-    double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
-    int contour_sample_count = 0;
-
-    TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
-    if (contour_analyzer) {
-        analyzer_set_sample_rate(contour_analyzer, sr);
-        int hop = (int)(sr * 0.001);
-        int step = hop * 19; // Record buffer contour every 19 ms (19 frames)
-
-        for (int last_t = 0; last_t < len; last_t += step) {
-            int act_s = last_t - (int)(sr * 0.2);
-            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
-            if (win_s < 0) win_s = 0;
-
-            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-            if (res_chunk) {
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                int chunk_len = step;
-                if (last_t + step > len) chunk_len = len - last_t;
-                if (chunk_len > 0) {
-                    memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
-                }
-                analyzer_analyze_chunk(contour_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
-                free(push_ptr);
-                free(res_chunk);
-            }
-
-            double* cur_buf = analyzer_get_buffer(contour_analyzer);
-            if (cur_buf && accumulated_contour) {
-                for (int k = 0; k < contour_len; k++) {
-                    accumulated_contour[k] += cur_buf[k];
-                }
-                contour_sample_count++;
-            }
-        }
-        analyzer_destroy(contour_analyzer);
-    }
-
-    // Determine segment length as the high point (global maximum) of accumulated_contour
-    // Index 0 represents -15,000 ms (oldest sample in rolling window), and index (contour_len - 1) represents 0 ms (current peak).
-    // The lag time before the current peak corresponds to: (contour_len - 1 - k) ms.
-    int m_len = contour_len - 99; // Exclude last 99ms self-referential peak region
-    double max_contour_val = -1e9;
-    int best_lag_ms = 1000;
-
-    if (m_len > 0 && accumulated_contour) {
-        for (int k = 0; k < m_len; k++) {
-            if (accumulated_contour[k] > max_contour_val) {
-                max_contour_val = accumulated_contour[k];
-                best_lag_ms = (contour_len - 1) - k;
-            }
-        }
-    }
-
-    double best_bar_length_ms = (double)best_lag_ms;
-    if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
-
-    double dom_start_ms = best_bar_length_ms - 50.0;
-    double dom_end_ms = best_bar_length_ms + 50.0;
-
-    // Find the longest contiguous run of high points falling within range in Pass 1
-    double longest_hp_start_s = 0.0;
-    double longest_hp_end_s = 0.0;
-    double max_run_dur = 0.0;
-
-    double cur_run_start_s = -1.0;
-    double cur_run_end_s = -1.0;
-
-    for (int i = 0; i < num_frames; i++) {
-        double raw_hp = res1.highest_peaks_ms[i];
-        if (raw_hp != -999.0 && fabs(raw_hp) >= dom_start_ms && fabs(raw_hp) <= dom_end_ms) {
-            if (cur_run_start_s < 0.0) {
-                cur_run_start_s = res1.times[i];
-            }
-            cur_run_end_s = res1.times[i] + frame_dt_s;
-        } else {
-            if (cur_run_start_s >= 0.0) {
-                double run_dur = cur_run_end_s - cur_run_start_s;
-                if (run_dur > max_run_dur) {
-                    max_run_dur = run_dur;
-                    longest_hp_start_s = cur_run_start_s;
-                    longest_hp_end_s = cur_run_end_s;
-                }
-                cur_run_start_s = -1.0;
-                cur_run_end_s = -1.0;
-            }
-        }
-    }
-    if (cur_run_start_s >= 0.0) {
-        double run_dur = cur_run_end_s - cur_run_start_s;
-        if (run_dur > max_run_dur) {
-            max_run_dur = run_dur;
-            longest_hp_start_s = cur_run_start_s;
-            longest_hp_end_s = cur_run_end_s;
-        }
-    }
-
-    if (max_run_dur <= 0.0) {
-        longest_hp_start_s = 0.0;
-        longest_hp_end_s = (num_frames > 0) ? res1.times[num_frames - 1] : 0.0;
-    }
-
-    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
-    int hop = (int)(sr * 0.001);
-    int midpoint_frame = (hop > 0) ? (int)round(midpoint_s * (double)sr / (double)hop) : 0;
-    if (midpoint_frame < 0) midpoint_frame = 0;
-    if (midpoint_frame >= num_frames) midpoint_frame = (num_frames > 0) ? (num_frames - 1) : 0;
-
-    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
-    double midpoint_demarcation_line = 0.0;
-
-    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
-    if (mid_analyzer) {
-        analyzer_set_sample_rate(mid_analyzer, sr);
-        int target_sample = (int)round(midpoint_s * (double)sr);
-        if (target_sample > len) target_sample = len;
-        int step = hop * 100;
-
-        for (int last_t = 0; last_t < target_sample; last_t += step) {
-            int act_s = last_t - (int)(sr * 0.2);
-            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
-            if (win_s < 0) win_s = 0;
-
-            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-            if (res_chunk) {
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                int chunk_len = step;
-                if (last_t + step > target_sample) chunk_len = target_sample - last_t;
-                if (chunk_len > 0) {
-                    memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
-                }
-                analyzer_analyze_chunk(mid_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
-                free(push_ptr);
-                free(res_chunk);
-            }
-        }
-
-        double* cur_buf = analyzer_get_buffer(mid_analyzer);
-        if (cur_buf && midpoint_buffer) {
-            memcpy(midpoint_buffer, cur_buf, sizeof(double) * (pass1_window_ms + 1));
-        }
-        if (res1.demarcation_lines && midpoint_frame < num_frames) {
-            midpoint_demarcation_line = res1.demarcation_lines[midpoint_frame];
-        }
-        analyzer_destroy(mid_analyzer);
-    }
-
-    analyzer_free_analysis(&res1);
-
-    // Pass 2: Re-analyze with window_ms = clamp(best_bar_length * 2, 5000, 15000)
-    int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
-    if (pass2_win_ms > 15000) pass2_win_ms = 15000;
-    if (pass2_win_ms < 5000) pass2_win_ms = 5000;
-
-    FullAnalysisResult res2;
-    if (!analyzer_batch_analyze_shared(y, len, sr, pass2_win_ms, 1, shared_buffer, &res2)) return 0;
 
     // Export .ctbin binary file for Pass 2
     char ctbin_path[4096];
@@ -707,11 +507,11 @@ static int export_all_assets_and_html_internal(
         // Calculate average peak score in segment
         double score_sum = 0.0;
         int peak_cnt = 0;
-        for (int b = 0; b < res2.num_bands; b++) {
-            for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-                double peak_ms = res2.bands[b].peaks[k].time * 1000.0;
+        for (int b = 0; b < res2->num_bands; b++) {
+            for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+                double peak_ms = res2->bands[b].peaks[k].time * 1000.0;
                 if (peak_ms >= segments[seg_i].start_ms && peak_ms < segments[seg_i].end_ms) {
-                    score_sum += res2.bands[b].peaks[k].total_score;
+                    score_sum += res2->bands[b].peaks[k].total_score;
                     peak_cnt++;
                 }
             }
@@ -875,7 +675,7 @@ static int export_all_assets_and_html_internal(
 
     // Export snapshots.bin and snapshots.js
     int total_peaks = 0;
-    for (int b = 0; b < res2.num_bands; b++) total_peaks += res2.bands[b].num_peaks;
+    for (int b = 0; b < res2->num_bands; b++) total_peaks += res2->bands[b].num_peaks;
 
     char snap_bin_path[4096];
     snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", output_dir);
@@ -887,9 +687,9 @@ static int export_all_assets_and_html_internal(
     uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
 
     size_t snap_offset = 0;
-    for (int b = 0; b < res2.num_bands; b++) {
-        for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-            PeakResult* pr = &res2.bands[b].peaks[k];
+    for (int b = 0; b < res2->num_bands; b++) {
+        for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+            PeakResult* pr = &res2->bands[b].peaks[k];
             float* float32_snap = (float*)malloc(snap_len * sizeof(float));
             for (int i = 0; i < snap_len; i++) float32_snap[i] = (float)pr->snapshot[i];
 
@@ -925,20 +725,20 @@ static int export_all_assets_and_html_internal(
         fprintf(f_mf, "{\n");
         fprintf(f_mf, "  \"version\": 1,\n");
         fprintf(f_mf, "  \"sample_rate\": %d,\n", sr);
-        fprintf(f_mf, "  \"num_frames\": %d,\n", res2.num_frames);
+        fprintf(f_mf, "  \"num_frames\": %d,\n", res2->num_frames);
         fprintf(f_mf, "  \"window_ms\": %d,\n", pass2_win_ms);
-        fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2.tolerance);
-        fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2.max_peak_value);
-        fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2.min_score_seen);
-        fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2.max_score_seen);
+        fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2->tolerance);
+        fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2->max_peak_value);
+        fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2->min_score_seen);
+        fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2->max_score_seen);
         fprintf(f_mf, "  \"total_peaks\": %d,\n", total_peaks);
 
         fprintf(f_mf, "  \"peaks\": [\n");
         int peak_iter = 0;
         size_t curr_snap_offset = 0;
-        for (int b = 0; b < res2.num_bands; b++) {
-            for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-                PeakResult* pr = &res2.bands[b].peaks[k];
+        for (int b = 0; b < res2->num_bands; b++) {
+            for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+                PeakResult* pr = &res2->bands[b].peaks[k];
                 fprintf(f_mf, "    {\n");
                 fprintf(f_mf, "      \"p_idx\": %d,\n", pr->p_idx);
                 fprintf(f_mf, "      \"band_idx\": %d,\n", pr->band_idx);
@@ -1006,9 +806,9 @@ static int export_all_assets_and_html_internal(
 
         double global_max_pos = 1.0;
         double global_min_neg = -1.0;
-        for (int b = 0; b < res2.num_bands; b++) {
-            for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-                double s = res2.bands[b].peaks[k].total_score;
+        for (int b = 0; b < res2->num_bands; b++) {
+            for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+                double s = res2->bands[b].peaks[k].total_score;
                 if (s > 0 && (s > global_max_pos || global_max_pos == 1.0)) global_max_pos = s;
                 if (s < 0 && (s < global_min_neg || global_min_neg == -1.0)) global_min_neg = s;
             }
@@ -1029,7 +829,7 @@ static int export_all_assets_and_html_internal(
             fprintf(fp, "  \"best_bar_length\": %.2f,\n", best_bar_length_ms);
             fprintf(fp, "  \"global_max_pos_score\": %.6f,\n", global_max_pos);
             fprintf(fp, "  \"global_min_neg_score\": %.6f,\n", global_min_neg);
-            fprintf(fp, "  \"tolerance_ms\": %.4f,\n", res2.tolerance);
+            fprintf(fp, "  \"tolerance_ms\": %.4f,\n", res2->tolerance);
 
             // Waveform min/max
             fprintf(fp, "  \"waveform_min\": [");
@@ -1095,11 +895,11 @@ static int export_all_assets_and_html_internal(
 
                 fprintf(fp, "      \"peaks\": [\n");
                 int seg_peak_cnt = 0;
-                for (int b = 0; b < res2.num_bands; b++) {
-                    for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-                        double peak_ms = res2.bands[b].peaks[k].time * 1000.0;
+                for (int b = 0; b < res2->num_bands; b++) {
+                    for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+                        double peak_ms = res2->bands[b].peaks[k].time * 1000.0;
                         if (peak_ms >= segments[s].start_ms && peak_ms < segments[s].end_ms) {
-                            PeakResult* pr = &res2.bands[b].peaks[k];
+                            PeakResult* pr = &res2->bands[b].peaks[k];
                             fprintf(fp, "        {\"p_idx\": %d, \"band_idx\": %d, \"time_ms\": %.3f, \"total_score\": %.6f}%s\n",
                                     pr->p_idx, pr->band_idx, peak_ms, pr->total_score, (seg_peak_cnt < segments[s].peak_count - 1) ? "," : "");
                             seg_peak_cnt++;
@@ -1132,14 +932,14 @@ static int export_all_assets_and_html_internal(
             fprintf(fp, "  \"pass2_peaks\": [\n");
             int peak_iter = 0;
             size_t c_snap_offset = 0;
-            for (int b = 0; b < res2.num_bands; b++) {
-                for (int k = 0; k < res2.bands[b].num_peaks; k++) {
-                    PeakResult* pr = &res2.bands[b].peaks[k];
+            for (int b = 0; b < res2->num_bands; b++) {
+                for (int k = 0; k < res2->bands[b].num_peaks; k++) {
+                    PeakResult* pr = &res2->bands[b].peaks[k];
                     double t_ms = pr->time * 1000.0;
                     int f_idx = (int)round(t_ms);
                     if (f_idx < 0) f_idx = 0;
-                    if (f_idx >= res2.num_frames) f_idx = res2.num_frames - 1;
-                    double dem_line = (res2.demarcation_lines && res2.num_frames > 0) ? res2.demarcation_lines[f_idx] : 0.0;
+                    if (f_idx >= res2->num_frames) f_idx = res2->num_frames - 1;
+                    double dem_line = (res2->demarcation_lines && res2->num_frames > 0) ? res2->demarcation_lines[f_idx] : 0.0;
 
                     fprintf(fp, "    {\n");
                     fprintf(fp, "      \"p_idx\": %d,\n", pr->p_idx);
@@ -1174,15 +974,6 @@ static int export_all_assets_and_html_internal(
         free(wf_min);
         free(wf_max);
     }
-    if (midpoint_buffer) {
-        free(midpoint_buffer);
-        midpoint_buffer = NULL;
-    }
-    if (accumulated_contour) {
-        free(accumulated_contour);
-        accumulated_contour = NULL;
-    }
-
     free(segments);
 
     // Export HTML Report File with full JS renderer functions
@@ -1315,7 +1106,7 @@ static int export_all_assets_and_html_internal(
         fprintf(f_html, "    let hpChanges = [];\n");
         fprintf(f_html, "    let globalMaxPosScore = 1.0;\n");
         fprintf(f_html, "    let globalMinNegScore = -1.0;\n");
-        fprintf(f_html, "    let toleranceMs = %.4f;\n", res2.tolerance);
+        fprintf(f_html, "    let toleranceMs = %.4f;\n", res2->tolerance);
         fprintf(f_html, "    let pass2Peaks = [];\n");
         fprintf(f_html, "    let midpointSnapshot = null;\n");
         fprintf(f_html, "    let contourHistogram = null;\n\n");
@@ -1977,8 +1768,215 @@ static int export_all_assets_and_html_internal(
         fclose(f_html);
     }
 
-    analyzer_free_analysis(&res2);
     return 1;
+}
+
+static int export_all_assets_and_html_internal(
+    const char* audio_filepath,
+    const char* output_dir,
+    const char* stem_name,
+    const float* y,
+    int len,
+    int sr,
+    int pass1_window_ms,
+    SharedTransientBuffer* shared_buffer
+) {
+    (void)audio_filepath;
+    if (!output_dir || !stem_name || !y || len <= 0 || sr <= 0) return 0;
+
+    // Pass 1: Headless Analysis with 15000ms window to determine high points
+    FullAnalysisResult res1;
+    if (!analyzer_batch_analyze_shared(y, len, sr, pass1_window_ms, 1, shared_buffer, &res1)) return 0;
+
+    int num_frames = res1.num_frames;
+    double frame_dt_s = (num_frames > 1) ? (res1.times[1] - res1.times[0]) : 0.001;
+
+    HPChangeEvent hp_changes[1024];
+    int num_hp_changes = 0;
+    double last_hp_val = -999.0;
+
+    for (int i = 0; i < num_frames; i++) {
+        double raw_hp = res1.highest_peaks_ms[i];
+        if (raw_hp == -999.0) continue;
+        double val_ms = fabs(raw_hp);
+
+        if (last_hp_val < 0.0 || fabs(val_ms - last_hp_val) > 1e-3) {
+            if (num_hp_changes < 1024) {
+                hp_changes[num_hp_changes].time_s = res1.times[i];
+                hp_changes[num_hp_changes].new_value_ms = val_ms;
+                num_hp_changes++;
+            }
+            last_hp_val = val_ms;
+        }
+    }
+
+    int contour_len = pass1_window_ms + 1;
+    if (contour_len > MAX_CONTOUR_LEN) contour_len = MAX_CONTOUR_LEN;
+
+    double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
+    int contour_sample_count = 0;
+
+    TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
+    if (contour_analyzer) {
+        analyzer_set_sample_rate(contour_analyzer, sr);
+        int hop = (int)(sr * 0.001);
+        int step = hop * 19;
+
+        for (int last_t = 0; last_t < len; last_t += step) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+            if (res_chunk) {
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                int chunk_len = step;
+                if (last_t + step > len) chunk_len = len - last_t;
+                if (chunk_len > 0) memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
+                analyzer_analyze_chunk(contour_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+                free(push_ptr);
+                free(res_chunk);
+            }
+
+            double* cur_buf = analyzer_get_buffer(contour_analyzer);
+            if (cur_buf && accumulated_contour) {
+                for (int k = 0; k < contour_len; k++) accumulated_contour[k] += cur_buf[k];
+                contour_sample_count++;
+            }
+        }
+        analyzer_destroy(contour_analyzer);
+    }
+
+    int m_len = contour_len - 99;
+    double max_contour_val = -1e9;
+    int best_lag_ms = 1000;
+
+    if (m_len > 0 && accumulated_contour) {
+        for (int k = 0; k < m_len; k++) {
+            if (accumulated_contour[k] > max_contour_val) {
+                max_contour_val = accumulated_contour[k];
+                best_lag_ms = (contour_len - 1) - k;
+            }
+        }
+    }
+
+    double best_bar_length_ms = (double)best_lag_ms;
+    if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
+
+    double dom_start_ms = best_bar_length_ms - 50.0;
+    double dom_end_ms = best_bar_length_ms + 50.0;
+
+    double longest_hp_start_s = 0.0;
+    double longest_hp_end_s = 0.0;
+    double max_run_dur = 0.0;
+
+    double cur_run_start_s = -1.0;
+    double cur_run_end_s = -1.0;
+
+    for (int i = 0; i < num_frames; i++) {
+        double raw_hp = res1.highest_peaks_ms[i];
+        if (raw_hp != -999.0 && fabs(raw_hp) >= dom_start_ms && fabs(raw_hp) <= dom_end_ms) {
+            if (cur_run_start_s < 0.0) cur_run_start_s = res1.times[i];
+            cur_run_end_s = res1.times[i] + frame_dt_s;
+        } else {
+            if (cur_run_start_s >= 0.0) {
+                double run_dur = cur_run_end_s - cur_run_start_s;
+                if (run_dur > max_run_dur) {
+                    max_run_dur = run_dur;
+                    longest_hp_start_s = cur_run_start_s;
+                    longest_hp_end_s = cur_run_end_s;
+                }
+                cur_run_start_s = -1.0;
+                cur_run_end_s = -1.0;
+            }
+        }
+    }
+    if (cur_run_start_s >= 0.0) {
+        double run_dur = cur_run_end_s - cur_run_start_s;
+        if (run_dur > max_run_dur) {
+            max_run_dur = run_dur;
+            longest_hp_start_s = cur_run_start_s;
+            longest_hp_end_s = cur_run_end_s;
+        }
+    }
+
+    if (max_run_dur <= 0.0) {
+        longest_hp_start_s = 0.0;
+        longest_hp_end_s = (num_frames > 0) ? res1.times[num_frames - 1] : 0.0;
+    }
+
+    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
+    int hop = (int)(sr * 0.001);
+    int midpoint_frame = (hop > 0) ? (int)round(midpoint_s * (double)sr / (double)hop) : 0;
+    if (midpoint_frame < 0) midpoint_frame = 0;
+    if (midpoint_frame >= num_frames) midpoint_frame = (num_frames > 0) ? (num_frames - 1) : 0;
+
+    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
+    double midpoint_demarcation_line = 0.0;
+
+    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
+    if (mid_analyzer) {
+        analyzer_set_sample_rate(mid_analyzer, sr);
+        int target_sample = (int)round(midpoint_s * (double)sr);
+        if (target_sample > len) target_sample = len;
+        int step = hop * 100;
+
+        for (int last_t = 0; last_t < target_sample; last_t += step) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+            if (res_chunk) {
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                int chunk_len = step;
+                if (last_t + step > target_sample) chunk_len = target_sample - last_t;
+                if (chunk_len > 0) memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
+                analyzer_analyze_chunk(mid_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+                free(push_ptr);
+                free(res_chunk);
+            }
+        }
+
+        double* cur_buf = analyzer_get_buffer(mid_analyzer);
+        if (cur_buf && midpoint_buffer) memcpy(midpoint_buffer, cur_buf, sizeof(double) * (pass1_window_ms + 1));
+        if (res1.demarcation_lines && midpoint_frame < num_frames) midpoint_demarcation_line = res1.demarcation_lines[midpoint_frame];
+        analyzer_destroy(mid_analyzer);
+    }
+
+    analyzer_free_analysis(&res1);
+
+    int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
+    if (pass2_win_ms > 15000) pass2_win_ms = 15000;
+    if (pass2_win_ms < 5000) pass2_win_ms = 5000;
+
+    FullAnalysisResult res2;
+    if (!analyzer_batch_analyze_shared(y, len, sr, pass2_win_ms, 1, shared_buffer, &res2)) return 0;
+
+    int ret = export_single_stem_assets_from_res(
+        output_dir,
+        stem_name,
+        y,
+        len,
+        sr,
+        pass1_window_ms,
+        pass2_win_ms,
+        best_bar_length_ms,
+        hp_changes,
+        num_hp_changes,
+        accumulated_contour,
+        contour_len,
+        contour_sample_count,
+        midpoint_s,
+        longest_hp_start_s,
+        longest_hp_end_s,
+        midpoint_demarcation_line,
+        midpoint_buffer,
+        &res2
+    );
+
+    analyzer_free_analysis(&res2);
+    return ret;
 }
 
 int export_all_assets_and_html(
@@ -2036,8 +2034,13 @@ int export_group_assets_and_html(
     int hop = (int)(common_sr * 0.001);
     int step = hop * 19; // Sample contour every 19 ms
 
+    int total_p1_steps = (max_len + step - 1) / step;
+    double* group_hp_ms = (double*)calloc(total_p1_steps + 1, sizeof(double));
+    double* group_dem_lines = (double*)calloc(total_p1_steps + 1, sizeof(double));
+
     ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
     if (res_chunk) {
+        int step_idx = 0;
         for (int last_t = 0; last_t < max_len; last_t += step) {
             for (int i = 0; i < num_stems; i++) {
                 if (!pass1_analyzers[i]) continue;
@@ -2056,11 +2059,17 @@ int export_group_assets_and_html(
                 free(push_ptr);
             }
 
+            if (step_idx < total_p1_steps) {
+                group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
+                group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+            }
+
             // Record current state of shared accumulated buffer
             for (int k = 0; k < contour_len; k++) {
                 accumulated_contour[k] += group_shared.accumulated_buffer[k];
             }
             contour_sample_count++;
+            step_idx++;
         }
         free(res_chunk);
     }
@@ -2084,6 +2093,107 @@ int export_group_assets_and_html(
     }
     double best_bar_length_ms = (double)best_lag_ms;
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
+
+    // Calculate longest high-point midpoint history buffer snapshot across all group stems
+    double dom_start_ms = best_bar_length_ms - 50.0;
+    double dom_end_ms = best_bar_length_ms + 50.0;
+    double longest_hp_start_s = 0.0;
+    double longest_hp_end_s = 0.0;
+    double max_run_dur = 0.0;
+    double cur_run_start_s = -1.0;
+    double cur_run_end_s = -1.0;
+
+    double frame_dt_s = (double)step / (double)common_sr;
+
+    if (group_hp_ms) {
+        for (int s = 0; s < total_p1_steps; s++) {
+            double raw_hp = group_hp_ms[s];
+            double chunk_time_s = (double)(s * step) / (double)common_sr;
+            if (raw_hp != -999.0 && fabs(raw_hp) >= dom_start_ms && fabs(raw_hp) <= dom_end_ms) {
+                if (cur_run_start_s < 0.0) cur_run_start_s = chunk_time_s;
+                cur_run_end_s = chunk_time_s + frame_dt_s;
+            } else {
+                if (cur_run_start_s >= 0.0) {
+                    double run_dur = cur_run_end_s - cur_run_start_s;
+                    if (run_dur > max_run_dur) {
+                        max_run_dur = run_dur;
+                        longest_hp_start_s = cur_run_start_s;
+                        longest_hp_end_s = cur_run_end_s;
+                    }
+                    cur_run_start_s = -1.0;
+                    cur_run_end_s = -1.0;
+                }
+            }
+        }
+        if (cur_run_start_s >= 0.0) {
+            double run_dur = cur_run_end_s - cur_run_start_s;
+            if (run_dur > max_run_dur) {
+                max_run_dur = run_dur;
+                longest_hp_start_s = cur_run_start_s;
+                longest_hp_end_s = cur_run_end_s;
+            }
+        }
+    }
+    if (max_run_dur <= 0.0) {
+        longest_hp_start_s = 0.0;
+        longest_hp_end_s = (double)max_len / (double)common_sr;
+    }
+
+    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
+    int mid_step_idx = (int)round(midpoint_s / frame_dt_s);
+    if (mid_step_idx < 0) mid_step_idx = 0;
+    if (mid_step_idx >= total_p1_steps) mid_step_idx = (total_p1_steps > 0) ? (total_p1_steps - 1) : 0;
+
+    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
+    double midpoint_demarcation_line = (group_dem_lines && total_p1_steps > 0) ? group_dem_lines[mid_step_idx] : 0.0;
+
+    if (group_hp_ms) free(group_hp_ms);
+    if (group_dem_lines) free(group_dem_lines);
+
+    TransientAnalyzer** mid_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
+    SharedTransientBuffer mid_shared;
+    memset(&mid_shared, 0, sizeof(SharedTransientBuffer));
+    mid_shared.max_peak = 1.0;
+
+    for (int i = 0; i < num_stems; i++) {
+        mid_analyzers[i] = analyzer_create(1.0, &mid_shared, NULL, NULL, NULL, pass1_window_ms, 1);
+        if (mid_analyzers[i]) analyzer_set_sample_rate(mid_analyzers[i], stems[i].sr);
+    }
+
+    int target_sample = (int)round(midpoint_s * (double)common_sr);
+    if (target_sample > max_len) target_sample = max_len;
+    step = hop * 100;
+
+    ChunkAnalysisResult* mid_res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    if (mid_res_chunk) {
+        for (int last_t = 0; last_t < target_sample; last_t += step) {
+            for (int i = 0; i < num_stems; i++) {
+                if (!mid_analyzers[i]) continue;
+                int act_s = last_t - (int)(stems[i].sr * 0.2);
+                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
+                if (win_s < 0) win_s = 0;
+
+                memset(mid_res_chunk, 0, sizeof(ChunkAnalysisResult));
+                float* push_ptr = (float*)calloc(step, sizeof(float));
+                if (last_t < stems[i].len) {
+                    int chunk_len = step;
+                    if (last_t + step > target_sample) chunk_len = target_sample - last_t;
+                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
+                }
+                analyzer_analyze_chunk(mid_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, mid_res_chunk);
+                free(push_ptr);
+            }
+        }
+        free(mid_res_chunk);
+    }
+    for (int i = 0; i < num_stems; i++) {
+        if (mid_analyzers[i]) analyzer_destroy(mid_analyzers[i]);
+    }
+    free(mid_analyzers);
+
+    if (midpoint_buffer) {
+        memcpy(midpoint_buffer, mid_shared.accumulated_buffer, sizeof(double) * (pass1_window_ms + 1));
+    }
 
     int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
     if (pass2_win_ms > 15000) pass2_win_ms = 15000;
@@ -2414,8 +2524,29 @@ int export_group_assets_and_html(
             }
         }
 
-        // Export HTML report using res2_stems[i] instead of re-analyzing
-        // (Will be rendered directly from res2_stems[i] results)
+        // Export stem assets and HTML report directly from res2_stems[i] result using shared group Pass 1 assets
+        export_single_stem_assets_from_res(
+            stem_output_dir,
+            stems[i].stem_name,
+            stems[i].mono_data,
+            stems[i].len,
+            stems[i].sr,
+            pass1_window_ms,
+            pass2_win_ms,
+            best_bar_length_ms,
+            NULL,
+            0,
+            accumulated_contour,
+            contour_len,
+            contour_sample_count,
+            midpoint_s,
+            longest_hp_start_s,
+            longest_hp_end_s,
+            midpoint_demarcation_line,
+            midpoint_buffer,
+            &res2_stems[i]
+        );
+
         analyzer_free_analysis(&res2_stems[i]);
     }
     free(res2_stems);
@@ -2461,24 +2592,41 @@ int export_group_assets_and_html(
             drwav_uninit(&group_wav_out);
         }
 
-        // Export full combined group interactive HTML report & assets
+        // Export full combined group interactive HTML report & assets directly reusing shared Pass 1 & Pass 2 results
         char group_stem_name[1024];
         snprintf(group_stem_name, sizeof(group_stem_name), "group_%s", group_name);
 
-        export_all_assets_and_html_internal(
-            group_wav_path,
-            group_output_dir,
-            group_stem_name,
-            mono_combined,
-            max_len,
-            common_sr,
-            pass1_window_ms,
-            &group_shared
-        );
+        // Run Pass 2 on mono_combined with group_shared to get group res2
+        FullAnalysisResult res2_group;
+        if (analyzer_batch_analyze_shared(mono_combined, max_len, common_sr, pass2_win_ms, 1, &group_shared, &res2_group)) {
+            export_single_stem_assets_from_res(
+                group_output_dir,
+                group_stem_name,
+                mono_combined,
+                max_len,
+                common_sr,
+                pass1_window_ms,
+                pass2_win_ms,
+                best_bar_length_ms,
+                NULL,
+                0,
+                accumulated_contour,
+                contour_len,
+                contour_sample_count,
+                midpoint_s,
+                longest_hp_start_s,
+                longest_hp_end_s,
+                midpoint_demarcation_line,
+                midpoint_buffer,
+                &res2_group
+            );
+            analyzer_free_analysis(&res2_group);
+        }
 
         free(mono_combined);
     }
 
+    if (midpoint_buffer) free(midpoint_buffer);
     if (accumulated_contour) free(accumulated_contour);
     return 1;
 }
