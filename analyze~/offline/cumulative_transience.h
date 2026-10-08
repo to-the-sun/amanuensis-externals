@@ -142,9 +142,10 @@ typedef struct {
     long long total_frames_pushed; // To track global frame index alignment
     long long total_samples_received;
     double tolerance;
+    int num_bands;
 } TransientAnalyzer;
 
-TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func, int window_ms);
+TransientAnalyzer* analyzer_create(double max_peak_value, SharedTransientBuffer* shared_buffer, void* lock_obj, ct_lock_func lock_func, ct_lock_func unlock_func, int window_ms, int num_bands);
 void analyzer_destroy(TransientAnalyzer* self);
 void analyzer_clear(TransientAnalyzer* self);
 void analyzer_set_sample_rate(TransientAnalyzer* self, int sr);
@@ -202,6 +203,7 @@ typedef struct {
     float* times;
     int num_frames;
     float max_peak_value;
+    int num_bands;
     BandAnalysis bands[MAX_BANDS];
 
     // Batch analysis metrics history
@@ -220,12 +222,12 @@ typedef struct {
     double tolerance;
 } FullAnalysisResult;
 
-int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, FullAnalysisResult* result_out);
+int analyzer_batch_analyze(const float* y, int len, int sr, int window_ms, int num_bands, FullAnalysisResult* result_out);
 void analyzer_free_analysis(FullAnalysisResult* result);
 
 // OpenCL GPU Compute Shader Acceleration Interface
 int gpu_stft_init(void);
 void gpu_stft_cleanup(void);
-int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out, int num_frames);
+int gpu_stft_process(const float* pcm, int num_samples, int sr, float* flux_out, int num_frames, int num_bands);
 
 #endif

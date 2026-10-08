@@ -214,7 +214,7 @@ int export_ctbin(const char* output_filepath, const float* y, int len, int sr, i
     if (window_ms < 5000) window_ms = 5000;
 
     FullAnalysisResult res;
-    int success = analyzer_batch_analyze(y, len, sr, window_ms, &res);
+    int success = analyzer_batch_analyze(y, len, sr, window_ms, 1, &res);
     if (!success) return 0;
 
     FILE* f = fopen(output_filepath, "wb");
@@ -224,7 +224,7 @@ int export_ctbin(const char* output_filepath, const float* y, int len, int sr, i
     }
 
     int32_t total_peaks = 0;
-    for (int b = 0; b < MAX_BANDS; b++) total_peaks += res.bands[b].num_peaks;
+    for (int b = 0; b < res.num_bands; b++) total_peaks += res.bands[b].num_peaks;
 
     CTBinHeader header;
     memcpy(header.magic, "CTBN", 4);
@@ -255,7 +255,7 @@ int export_ctbin(const char* output_filepath, const float* y, int len, int sr, i
     }
 
     int snap_len = window_ms + 1;
-    for (int b = 0; b < MAX_BANDS; b++) {
+    for (int b = 0; b < res.num_bands; b++) {
         for (int k = 0; k < res.bands[b].num_peaks; k++) {
             PeakResult* pr = &res.bands[b].peaks[k];
             int32_t p_idx = pr->p_idx;
@@ -313,7 +313,7 @@ int export_all_assets_and_html(
 
     // Pass 1: Headless Analysis with 15000ms window to determine high points
     FullAnalysisResult res1;
-    if (!analyzer_batch_analyze(y, len, sr, pass1_window_ms, &res1)) return 0;
+    if (!analyzer_batch_analyze(y, len, sr, pass1_window_ms, 1, &res1)) return 0;
 
     // Track high point durations and changes across frames
     int num_frames = res1.num_frames;
@@ -368,7 +368,7 @@ int export_all_assets_and_html(
     double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
     int contour_sample_count = 0;
 
-    TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms);
+    TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
     if (contour_analyzer) {
         analyzer_set_sample_rate(contour_analyzer, sr);
         int hop = (int)(sr * 0.001);
@@ -476,7 +476,7 @@ int export_all_assets_and_html(
     double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
     double midpoint_demarcation_line = 0.0;
 
-    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms);
+    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
     if (mid_analyzer) {
         analyzer_set_sample_rate(mid_analyzer, sr);
         int target_sample = (int)round(midpoint_s * (double)sr);
@@ -520,7 +520,7 @@ int export_all_assets_and_html(
     if (pass2_win_ms < 5000) pass2_win_ms = 5000;
 
     FullAnalysisResult res2;
-    if (!analyzer_batch_analyze(y, len, sr, pass2_win_ms, &res2)) return 0;
+    if (!analyzer_batch_analyze(y, len, sr, pass2_win_ms, 1, &res2)) return 0;
 
     // Export .ctbin binary file for Pass 2
     char ctbin_path[4096];
@@ -570,7 +570,7 @@ int export_all_assets_and_html(
         // Calculate average peak score in segment
         double score_sum = 0.0;
         int peak_cnt = 0;
-        for (int b = 0; b < MAX_BANDS; b++) {
+        for (int b = 0; b < res2.num_bands; b++) {
             for (int k = 0; k < res2.bands[b].num_peaks; k++) {
                 double peak_ms = res2.bands[b].peaks[k].time * 1000.0;
                 if (peak_ms >= segments[seg_i].start_ms && peak_ms < segments[seg_i].end_ms) {
@@ -738,7 +738,7 @@ int export_all_assets_and_html(
 
     // Export snapshots.bin and snapshots.js
     int total_peaks = 0;
-    for (int b = 0; b < MAX_BANDS; b++) total_peaks += res2.bands[b].num_peaks;
+    for (int b = 0; b < res2.num_bands; b++) total_peaks += res2.bands[b].num_peaks;
 
     char snap_bin_path[4096];
     snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", output_dir);
@@ -750,7 +750,7 @@ int export_all_assets_and_html(
     uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
 
     size_t snap_offset = 0;
-    for (int b = 0; b < MAX_BANDS; b++) {
+    for (int b = 0; b < res2.num_bands; b++) {
         for (int k = 0; k < res2.bands[b].num_peaks; k++) {
             PeakResult* pr = &res2.bands[b].peaks[k];
             float* float32_snap = (float*)malloc(snap_len * sizeof(float));
@@ -799,7 +799,7 @@ int export_all_assets_and_html(
         fprintf(f_mf, "  \"peaks\": [\n");
         int peak_iter = 0;
         size_t curr_snap_offset = 0;
-        for (int b = 0; b < MAX_BANDS; b++) {
+        for (int b = 0; b < res2.num_bands; b++) {
             for (int k = 0; k < res2.bands[b].num_peaks; k++) {
                 PeakResult* pr = &res2.bands[b].peaks[k];
                 fprintf(f_mf, "    {\n");
@@ -869,7 +869,7 @@ int export_all_assets_and_html(
 
         double global_max_pos = 1.0;
         double global_min_neg = -1.0;
-        for (int b = 0; b < MAX_BANDS; b++) {
+        for (int b = 0; b < res2.num_bands; b++) {
             for (int k = 0; k < res2.bands[b].num_peaks; k++) {
                 double s = res2.bands[b].peaks[k].total_score;
                 if (s > 0 && (s > global_max_pos || global_max_pos == 1.0)) global_max_pos = s;
@@ -958,7 +958,7 @@ int export_all_assets_and_html(
 
                 fprintf(fp, "      \"peaks\": [\n");
                 int seg_peak_cnt = 0;
-                for (int b = 0; b < MAX_BANDS; b++) {
+                for (int b = 0; b < res2.num_bands; b++) {
                     for (int k = 0; k < res2.bands[b].num_peaks; k++) {
                         double peak_ms = res2.bands[b].peaks[k].time * 1000.0;
                         if (peak_ms >= segments[s].start_ms && peak_ms < segments[s].end_ms) {
@@ -995,7 +995,7 @@ int export_all_assets_and_html(
             fprintf(fp, "  \"pass2_peaks\": [\n");
             int peak_iter = 0;
             size_t c_snap_offset = 0;
-            for (int b = 0; b < MAX_BANDS; b++) {
+            for (int b = 0; b < res2.num_bands; b++) {
                 for (int k = 0; k < res2.bands[b].num_peaks; k++) {
                     PeakResult* pr = &res2.bands[b].peaks[k];
                     double t_ms = pr->time * 1000.0;
