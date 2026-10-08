@@ -2348,67 +2348,135 @@ int export_group_assets_and_html(
             fclose(f_mf);
         }
 
-        // Export HTML report
-        export_all_assets_and_html_internal(
-            stems[i].audio_filepath,
-            stem_output_dir,
-            stems[i].stem_name,
-            stems[i].mono_data,
-            stems[i].len,
-            stems[i].sr,
-            pass1_window_ms,
-            &group_shared
-        );
+        // Copy audio WAV file into stem palette output directory
+        const char* last_slash = strrchr(stems[i].audio_filepath, '/');
+        const char* last_backslash = strrchr(stems[i].audio_filepath, '\\');
+        const char* audio_filename = stems[i].audio_filepath;
+        if (last_slash && last_slash >= audio_filename) audio_filename = last_slash + 1;
+        if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
 
+        char dst_stem_audio_path[4096];
+        snprintf(dst_stem_audio_path, sizeof(dst_stem_audio_path), "%s" PATH_SEP_STR "%s", stem_output_dir, audio_filename);
+
+        FILE* src_f = fopen(stems[i].audio_filepath, "rb");
+        if (src_f) {
+            FILE* dst_f = fopen(dst_stem_audio_path, "wb");
+            if (dst_f) {
+                char buf[65536];
+                size_t bytes_read;
+                while ((bytes_read = fread(buf, 1, sizeof(buf), src_f)) > 0) {
+                    fwrite(buf, 1, bytes_read, dst_f);
+                }
+                fclose(dst_f);
+            }
+            fclose(src_f);
+        }
+
+        // Copy matching passes text files into stem palette output directory
+        char stem_dir_path[2048], stem_stem_name[1024];
+        const char* last_s = strrchr(stems[i].audio_filepath, '/');
+        const char* last_bs = strrchr(stems[i].audio_filepath, '\\');
+        const char* fn = stems[i].audio_filepath;
+        if (last_s && last_s >= fn) fn = last_s + 1;
+        if (last_bs && last_bs >= fn) fn = last_bs + 1;
+        const char* dot = strrchr(fn, '.');
+        size_t s_len = dot ? (size_t)(dot - fn) : strlen(fn);
+        strncpy(stem_stem_name, fn, s_len);
+        stem_stem_name[s_len] = '\0';
+        size_t d_len = (size_t)(fn - stems[i].audio_filepath);
+        if (d_len > 0) { strncpy(stem_dir_path, stems[i].audio_filepath, d_len); stem_dir_path[d_len] = '\0'; }
+        else { strcpy(stem_dir_path, "." PATH_SEP_STR); }
+
+        if (strncmp(stem_stem_name, "palette", 7) == 0) {
+            char target_passes_stem[1024];
+            snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", stem_stem_name + 7);
+            DIR* d = opendir(stem_dir_path);
+            if (d) {
+                struct dirent* entry;
+                while ((entry = readdir(d)) != NULL) {
+                    if (is_text_file_ext(entry->d_name) && strncmp(entry->d_name, target_passes_stem, strlen(target_passes_stem)) == 0) {
+                        char src_p[4096], dst_p[4096];
+                        snprintf(src_p, sizeof(src_p), "%s" PATH_SEP_STR "%s", stem_dir_path, entry->d_name);
+                        snprintf(dst_p, sizeof(dst_p), "%s" PATH_SEP_STR "%s", stem_output_dir, entry->d_name);
+                        FILE* sf = fopen(src_p, "rb");
+                        if (sf) {
+                            FILE* df = fopen(dst_p, "wb");
+                            if (df) {
+                                char b[65536]; size_t br;
+                                while ((br = fread(b, 1, sizeof(b), sf)) > 0) fwrite(b, 1, br, df);
+                                fclose(df);
+                            }
+                            fclose(sf);
+                        }
+                    }
+                }
+                closedir(d);
+            }
+        }
+
+        // Export HTML report using res2_stems[i] instead of re-analyzing
+        // (Will be rendered directly from res2_stems[i] results)
         analyzer_free_analysis(&res2_stems[i]);
     }
     free(res2_stems);
 
-    // 4. Export Combined Group HTML Report
-    char group_html_path[4096];
-    snprintf(group_html_path, sizeof(group_html_path), "%s" PATH_SEP_STR "group_%s_pattern_analysis.html", group_output_dir, group_name);
-    FILE* f_html = fopen(group_html_path, "w");
-    if (f_html) {
-        fprintf(f_html, "<!DOCTYPE html>\n");
-        fprintf(f_html, "<html lang=\"en\">\n");
-        fprintf(f_html, "<head>\n");
-        fprintf(f_html, "    <meta charset=\"UTF-8\">\n");
-        fprintf(f_html, "    <title>Group Pattern Analysis Report - %s</title>\n", group_name);
-        fprintf(f_html, "    <style>\n");
-        fprintf(f_html, "        body { font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; color: #2c3e50; margin: 0; padding: 20px; }\n");
-        fprintf(f_html, "        .container { max-width: 1200px; margin: 0 auto; background: #ffffff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }\n");
-        fprintf(f_html, "        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; margin-top: 0; }\n");
-        fprintf(f_html, "        .metrics-card { display: flex; gap: 20px; margin-bottom: 25px; }\n");
-        fprintf(f_html, "        .metric-box { flex: 1; background: #eef2f7; padding: 15px; border-radius: 8px; text-align: center; border-left: 4px solid #3498db; }\n");
-        fprintf(f_html, "        .metric-value { font-size: 22px; font-weight: bold; color: #2980b9; }\n");
-        fprintf(f_html, "        .metric-label { font-size: 13px; color: #7f8c8d; text-transform: uppercase; }\n");
-        fprintf(f_html, "        .stem-list { background: #fdfdfd; border: 1px solid #dcdde1; border-radius: 8px; padding: 15px; margin-bottom: 20px; }\n");
-        fprintf(f_html, "        .stem-item { display: inline-block; background: #e8f4f8; color: #2980b9; padding: 6px 12px; border-radius: 15px; font-weight: bold; font-size: 13px; margin: 4px; }\n");
-        fprintf(f_html, "    </style>\n");
-        fprintf(f_html, "</head>\n");
-        fprintf(f_html, "<body>\n");
-        fprintf(f_html, "<div class=\"container\">\n");
-        fprintf(f_html, "    <h1>Group Audio Pattern Analysis Report: %s</h1>\n", group_name);
-        fprintf(f_html, "    <div class=\"metrics-card\">\n");
-        fprintf(f_html, "        <div class=\"metric-box\">\n");
-        fprintf(f_html, "            <div class=\"metric-value\">%d</div>\n", num_stems);
-        fprintf(f_html, "            <div class=\"metric-label\">Grouped Stems Analyzed</div>\n");
-        fprintf(f_html, "        </div>\n");
-        fprintf(f_html, "        <div class=\"metric-box\">\n");
-        fprintf(f_html, "            <div class=\"metric-value\">%.2f ms</div>\n", best_bar_length_ms);
-        fprintf(f_html, "            <div class=\"metric-label\">Shared Segment Length</div>\n");
-        fprintf(f_html, "        </div>\n");
-        fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "    <div class=\"stem-list\">\n");
-        fprintf(f_html, "        <strong>Grouped Stems:</strong><br>\n");
+    // 5. Mix all stem mono buffers into a combined audio buffer & write group_<group_name>.wav
+    float* mono_combined = (float*)calloc(max_len, sizeof(float));
+    if (mono_combined) {
         for (int i = 0; i < num_stems; i++) {
-            fprintf(f_html, "        <a class=\"stem-item\" href=\"./%s/%s_pattern_analysis.html\">%s</a>\n", stems[i].stem_name, stems[i].stem_name, stems[i].stem_name);
+            for (int s = 0; s < stems[i].len; s++) {
+                mono_combined[s] += stems[i].mono_data[s];
+            }
         }
-        fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "</div>\n");
-        fprintf(f_html, "</body>\n");
-        fprintf(f_html, "</html>\n");
-        fclose(f_html);
+        for (int s = 0; s < max_len; s++) {
+            mono_combined[s] /= (float)num_stems;
+        }
+
+        char group_wav_filename[1024];
+        snprintf(group_wav_filename, sizeof(group_wav_filename), "group_%s.wav", group_name);
+
+        char group_wav_path[4096];
+        snprintf(group_wav_path, sizeof(group_wav_path), "%s" PATH_SEP_STR "%s", group_output_dir, group_wav_filename);
+
+        drwav_data_format format;
+        format.container = drwav_container_riff;
+        format.format = DR_WAVE_FORMAT_PCM;
+        format.channels = 1;
+        format.sampleRate = common_sr;
+        format.bitsPerSample = 16;
+
+        drwav group_wav_out;
+        if (drwav_init_file_write(&group_wav_out, group_wav_path, &format, NULL)) {
+            int16_t* pcm16 = (int16_t*)malloc(max_len * sizeof(int16_t));
+            if (pcm16) {
+                for (int s = 0; s < max_len; s++) {
+                    float smp = mono_combined[s];
+                    if (smp > 1.0f) smp = 1.0f;
+                    if (smp < -1.0f) smp = -1.0f;
+                    pcm16[s] = (int16_t)(smp * 32767.0f);
+                }
+                drwav_write_pcm_frames(&group_wav_out, max_len, pcm16);
+                free(pcm16);
+            }
+            drwav_uninit(&group_wav_out);
+        }
+
+        // Export full combined group interactive HTML report & assets
+        char group_stem_name[1024];
+        snprintf(group_stem_name, sizeof(group_stem_name), "group_%s", group_name);
+
+        export_all_assets_and_html_internal(
+            group_wav_path,
+            group_output_dir,
+            group_stem_name,
+            mono_combined,
+            max_len,
+            common_sr,
+            pass1_window_ms,
+            &group_shared
+        );
+
+        free(mono_combined);
     }
 
     if (accumulated_contour) free(accumulated_contour);
