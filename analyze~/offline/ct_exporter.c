@@ -65,6 +65,30 @@ static int iequals_ext(const char* a, const char* b) {
     return *a == *b;
 }
 
+static void url_encode_filename(const char* src, char* dst, size_t dst_size) {
+    size_t d = 0;
+    while (*src && d + 3 < dst_size) {
+        unsigned char c = (unsigned char)*src;
+        if (c == '#') {
+            dst[d++] = '%';
+            dst[d++] = '2';
+            dst[d++] = '3';
+        } else if (c == '%') {
+            dst[d++] = '%';
+            dst[d++] = '2';
+            dst[d++] = '5';
+        } else if (c == '?') {
+            dst[d++] = '%';
+            dst[d++] = '3';
+            dst[d++] = 'F';
+        } else {
+            dst[d++] = c;
+        }
+        src++;
+    }
+    dst[d] = '\0';
+}
+
 static int is_text_file_ext(const char* filename) {
     const char* dot = strrchr(filename, '.');
     if (!dot) return 0;
@@ -1049,6 +1073,9 @@ int export_all_assets_and_html(
     free(segments);
 
     // Export HTML Report File with full JS renderer functions
+    char encoded_stem_name[2048];
+    url_encode_filename(stem_name, encoded_stem_name, sizeof(encoded_stem_name));
+
     char html_filepath[4096];
     snprintf(html_filepath, sizeof(html_filepath), "%s" PATH_SEP_STR "%s_pattern_analysis.html", output_dir, stem_name);
     FILE* f_html = fopen(html_filepath, "w");
@@ -1121,7 +1148,7 @@ int export_all_assets_and_html(
 
         fprintf(f_html, "    <div class=\"section-title\">1. Interactive Audio Waveform, Pattern Map & Cumulative History High Point Changes</div>\n");
         fprintf(f_html, "    <div class=\"audio-controls\">\n");
-        fprintf(f_html, "        <audio id=\"audioPlayer\" controls src=\"%s.wav\"></audio>\n", stem_name);
+        fprintf(f_html, "        <audio id=\"audioPlayer\" controls src=\"%s.wav\"></audio>\n", encoded_stem_name);
         fprintf(f_html, "    </div>\n");
 
         fprintf(f_html, "    <div class=\"canvas-container\">\n");
