@@ -1453,7 +1453,8 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
         fprintf(f_html, "        histCtx.strokeStyle = '#dcdde1'; histCtx.lineWidth = 1; histCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
         fprintf(f_html, "        let maxVal = 0.0;\n");
-        fprintf(f_html, "        const mLen = numPts - 99;\n");
+        fprintf(f_html, "        const offsetPts = Math.round(99.0 / 15000.0 * (numPts - 1));\n");
+        fprintf(f_html, "        const mLen = numPts - offsetPts;\n");
         fprintf(f_html, "        for (let i = 0; i < (mLen > 0 ? mLen : numPts); i++) {\n");
         fprintf(f_html, "            if (contour[i] > maxVal) maxVal = contour[i];\n");
         fprintf(f_html, "        }\n");
