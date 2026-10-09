@@ -37,8 +37,10 @@ static void get_directory_and_stem(const char* filepath, char* out_dir, char* ou
     const char* dot = strrchr(filename, '.');
     size_t stem_len = dot ? (size_t)(dot - filename) : strlen(filename);
 
-    strncpy(out_stem, filename, stem_len);
-    out_stem[stem_len] = '\0';
+    if (out_stem) {
+        strncpy(out_stem, filename, stem_len);
+        out_stem[stem_len] = '\0';
+    }
 
     size_t dir_len = (size_t)(filename - filepath);
     if (dir_len > 0) {
@@ -356,30 +358,136 @@ static void* worker_thread_posix(void* arg) {
 }
 #endif
 
+static int process_group_files(const FileList* wav_files, const char* base_dir, int window_ms) {
+    if (!wav_files || wav_files->count <= 0) return 0;
+    int num_stems = wav_files->count;
+    printf("\n------------------------------------------------------------\n");
+    printf("Starting Grouped Stems Analysis across %d file(s) in %s...\n", num_stems, base_dir);
+
+    GroupStemInput* stems = (GroupStemInput*)calloc(num_stems, sizeof(GroupStemInput));
+    float** mono_buffers = (float**)calloc(num_stems, sizeof(float*));
+
+    for (int i = 0; i < num_stems; i++) {
+        char full_path[4096];
+        snprintf(full_path, sizeof(full_path), "%s%s", base_dir, wav_files->items[i]);
+
+        unsigned int channels, sample_rate;
+        drwav_uint64 total_pcm_frames;
+        float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
+            full_path, &channels, &sample_rate, &total_pcm_frames, NULL
+        );
+
+        if (!p_sample_data) {
+            printf("Error: Could not open or decode WAV file for grouping: %s\n", full_path);
+            for (int k = 0; k < i; k++) { free((void*)stems[k].audio_filepath); free((void*)stems[k].stem_name); free(mono_buffers[k]); }
+            free(stems); free(mono_buffers);
+            return 0;
+        }
+
+        float* mono_data = (float*)malloc(total_pcm_frames * sizeof(float));
+        if (channels == 1) {
+            memcpy(mono_data, p_sample_data, total_pcm_frames * sizeof(float));
+        } else {
+            for (drwav_uint64 f = 0; f < total_pcm_frames; f++) {
+                double sum = 0.0;
+                for (unsigned int c = 0; c < channels; c++) sum += p_sample_data[f * channels + c];
+                mono_data[f] = (float)(sum / channels);
+            }
+        }
+        drwav_free(p_sample_data, NULL);
+
+        mono_buffers[i] = mono_data;
+
+        char stem_dir[2048], stem_name[1024];
+        get_directory_and_stem(full_path, stem_dir, stem_name);
+
+        stems[i].audio_filepath = strdup(full_path);
+        stems[i].stem_name = strdup(stem_name);
+        stems[i].mono_data = mono_data;
+        stems[i].len = (int)total_pcm_frames;
+        stems[i].sr = (int)sample_rate;
+    }
+
+    // Determine group name from directory or default
+    const char* last_sep = strrchr(base_dir, PATH_SEP);
+    char group_name[1024] = "all_stems";
+    if (last_sep && strlen(last_sep + 1) > 0) {
+        snprintf(group_name, sizeof(group_name), "%s", last_sep + 1);
+    }
+
+    printf("\nRunning grouped cumulative transience analysis & asset exports in pure C...\n");
+
+    int success = export_group_assets_and_html(
+        stems,
+        num_stems,
+        base_dir,
+        group_name,
+        window_ms
+    );
+
+    for (int i = 0; i < num_stems; i++) {
+        free((void*)stems[i].audio_filepath);
+        free((void*)stems[i].stem_name);
+        free(mono_buffers[i]);
+    }
+    free(stems);
+    free(mono_buffers);
+
+    if (success) {
+        printf("\n============================================================\n");
+        printf("GROUP ANALYSIS COMPLETE FOR %d STEMS!\n", num_stems);
+        printf("Output Folder: %s[palettes]" PATH_SEP_STR "\n", base_dir);
+        printf("Group HTML Report: group_%s_pattern_analysis.html\n", group_name);
+        printf("============================================================\n");
+    }
+
+    return success;
+}
+
 int main(int argc, char** argv) {
     printf("============================================================\n");
     printf("  Standalone C Cumulative Transience Analyzer & Exporter\n");
     printf("============================================================\n\n");
 
-    if (argc >= 2) {
-        // Drag and drop or command line single-file argument provided
-        const char* audio_filepath = argv[1];
-        int window_ms = (argc >= 3) ? atoi(argv[2]) : 15000;
-        if (window_ms > 15000) window_ms = 15000;
-        if (window_ms < 5000) window_ms = 5000;
+    int is_group_mode = 0;
 
-        int success = process_single_file(audio_filepath, window_ms);
+    for (int i = 1; i < argc; i++) {
+        if (iequals(argv[i], "--group") || iequals(argv[i], "-g")) {
+            is_group_mode = 1;
+        }
+    }
 
-        printf("\nPress Enter to exit...");
-        getchar();
+    char target_dir[2048] = "";
+    int window_ms = 15000;
+
+    for (int i = 1; i < argc; i++) {
+        if (!iequals(argv[i], "--group") && !iequals(argv[i], "-g")) {
+            if (target_dir[0] == '\0') {
+                strncpy(target_dir, argv[i], sizeof(target_dir) - 1);
+                target_dir[sizeof(target_dir) - 1] = '\0';
+            }
+        }
+    }
+
+    if (target_dir[0] != '\0' && !is_group_mode) {
+        // Single file drag-and-drop or command line invocation
+        int success = process_single_file(target_dir, window_ms);
         return success ? 0 : 1;
     }
 
-    // No file arguments passed (e.g. double-clicked executable)
-    // Scan executable directory for all .wav files (excluding preview.wav and glued.wav)
+    // Determine directory to scan for WAV files
     char exe_dir[2048];
-    char exe_stem[1024];
-    get_directory_and_stem(argv[0], exe_dir, exe_stem);
+    if (target_dir[0] != '\0') {
+        struct stat st;
+        if (stat(target_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(exe_dir, sizeof(exe_dir), "%s" PATH_SEP_STR, target_dir);
+        } else {
+            get_directory_and_stem(target_dir, exe_dir, NULL);
+        }
+    } else {
+        // Fallback to current working directory if double clicked / run without explicit path argument
+        strcpy(exe_dir, "." PATH_SEP_STR);
+    }
 
     char scan_dir[2048];
     strncpy(scan_dir, exe_dir, sizeof(scan_dir) - 1);
@@ -434,9 +542,16 @@ int main(int argc, char** argv) {
         printf("  [%d/%d] %s\n", i + 1, wav_files.count, wav_files.items[i]);
     }
 
+    if (is_group_mode) {
+        int grp_success = process_group_files(&wav_files, exe_dir, window_ms);
+        file_list_free(&wav_files);
+        printf("\nPress Enter to exit...");
+        getchar();
+        return grp_success ? 0 : 1;
+    }
+
     int success_count = 0;
     int fail_count = 0;
-    int window_ms = 15000;
 
     int num_files = wav_files.count;
     ThreadTask* tasks = (ThreadTask*)calloc(num_files, sizeof(ThreadTask));
