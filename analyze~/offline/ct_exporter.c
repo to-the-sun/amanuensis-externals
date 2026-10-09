@@ -1501,6 +1501,16 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "            histCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; histCtx.beginPath(); histCtx.moveTo(x, padTop); histCtx.lineTo(x, padTop + graphH); histCtx.stroke();\n");
         fprintf(f_html, "            histCtx.fillText((Math.abs(msVal) < 1e-3) ? '0 ms' : `${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
         fprintf(f_html, "        }\n");
+        fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif'; histCtx.textAlign = 'right';\n");
+        fprintf(f_html, "        for (let ratio of [0.0, 0.25, 0.5, 0.75, 1.0]) {\n");
+        fprintf(f_html, "            const y = padTop + graphH - ratio * (graphH * 0.88);\n");
+        fprintf(f_html, "            const val = maxVal * ratio;\n");
+        fprintf(f_html, "            histCtx.strokeStyle = 'rgba(220, 221, 225, 0.6)'; histCtx.beginPath(); histCtx.moveTo(padLeft, y); histCtx.lineTo(padLeft + graphW, y); histCtx.stroke();\n");
+        fprintf(f_html, "            histCtx.fillText(val.toFixed(1), padLeft - 8, y + 4);\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        histCtx.save(); histCtx.translate(18, padTop + graphH / 2); histCtx.rotate(-Math.PI / 2); histCtx.textAlign = 'center';\n");
+        fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif';\n");
+        fprintf(f_html, "        histCtx.fillText('Accumulated Transience', 0, 0); histCtx.restore();\n");
         fprintf(f_html, "        histCtx.fillStyle = '#2c3e50'; histCtx.font = 'bold 13px Segoe UI, sans-serif'; histCtx.textAlign = 'left';\n");
         fprintf(f_html, "        histCtx.fillText(`Accumulated Buffer Contour Histogram (Segment Length: ${bestBarLengthMs.toFixed(2)} ms)`, padLeft, padTop - 10);\n");
         fprintf(f_html, "    }\n\n");
