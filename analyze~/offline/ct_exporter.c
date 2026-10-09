@@ -3055,9 +3055,6 @@ int export_group_assets_and_html(
                 mono_combined[s] += stems[i].mono_data[s];
             }
         }
-        for (int s = 0; s < max_len; s++) {
-            mono_combined[s] /= (float)num_stems;
-        }
 
         char group_wav_filename[1024];
         snprintf(group_wav_filename, sizeof(group_wav_filename), "group_%s.wav", group_name);
