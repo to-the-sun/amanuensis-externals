@@ -248,6 +248,8 @@ static void parse_passes_in_dir(const char* output_dir, PassInfo* out_passes, in
 }
 
 #define MAX_CONTOUR_LEN 15001
+#define CONTOUR_EVO_FRAMES 100
+#define CONTOUR_EVO_PTS 500
 
 #pragma pack(push, 1)
 typedef struct {
@@ -528,6 +530,9 @@ static int export_single_stem_assets_from_res(
     const double* accumulated_contour,
     int contour_len,
     int contour_sample_count,
+    const double* contour_evo,
+    int evo_frames,
+    int evo_pts,
     const FullAnalysisResult* res2
 ) {
 
@@ -929,7 +934,20 @@ static int export_single_stem_assets_from_res(
             for (int k = 0; k < contour_len; k++) {
                 fprintf(fp, "%.4f%s", accumulated_contour ? accumulated_contour[k] : 0.0, (k < contour_len - 1) ? "," : "");
             }
-            fprintf(fp, "]\n");
+            fprintf(fp, "]");
+            if (contour_evo && evo_frames > 0 && evo_pts > 0) {
+                fprintf(fp, ",\n    \"evolution\": [\n");
+                for (int f = 0; f < evo_frames; f++) {
+                    fprintf(fp, "      [");
+                    for (int p = 0; p < evo_pts; p++) {
+                        fprintf(fp, "%.4f%s", contour_evo[f * evo_pts + p], (p < evo_pts - 1) ? "," : "");
+                    }
+                    fprintf(fp, "]%s\n", (f < evo_frames - 1) ? "," : "");
+                }
+                fprintf(fp, "    ]\n");
+            } else {
+                fprintf(fp, "\n");
+            }
             fprintf(fp, "  },\n");
 
             // Patterns
@@ -1404,25 +1422,51 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        const W = histCanvas.width, H = histCanvas.height;\n");
         fprintf(f_html, "        histCtx.clearRect(0, 0, W, H);\n");
         fprintf(f_html, "        histCtx.fillStyle = '#ffffff'; histCtx.fillRect(0, 0, W, H);\n");
-        fprintf(f_html, "        if (!contourHistogram || !contourHistogram.contour || contourHistogram.contour.length === 0) {\n");
+        fprintf(f_html, "        if (!contourHistogram || (!contourHistogram.contour && !contourHistogram.evolution)) {\n");
         fprintf(f_html, "            histCtx.fillStyle = '#7f8c8d'; histCtx.font = '13px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
         fprintf(f_html, "            histCtx.fillText('No accumulated buffer contour histogram data available.', W / 2, H / 2);\n");
         fprintf(f_html, "            return;\n");
         fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const contour = contourHistogram.contour;\n");
+        fprintf(f_html, "        const curTimeS = audio ? (audio.currentTime || 0) : 0.0;\n");
+        fprintf(f_html, "        const durS = (audio && audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : totalDurationS;\n");
+        fprintf(f_html, "        const isEnded = audio ? (audio.ended || (durS > 0 && curTimeS >= durS - 0.05)) : false;\n");
+        fprintf(f_html, "        let progressFrac = (durS > 0) ? (curTimeS / durS) : 1.0;\n");
+        fprintf(f_html, "        if (progressFrac < 0) progressFrac = 0;\n");
+        fprintf(f_html, "        if (progressFrac > 1) progressFrac = 1;\n");
+        fprintf(f_html, "        let contour = contourHistogram.contour;\n");
+        fprintf(f_html, "        let isFinalState = isEnded || progressFrac >= 0.999;\n");
+        fprintf(f_html, "        if (contourHistogram.evolution && contourHistogram.evolution.length > 0) {\n");
+        fprintf(f_html, "            const evo = contourHistogram.evolution;\n");
+        fprintf(f_html, "            const numFrames = evo.length;\n");
+        fprintf(f_html, "            let frameIdx = Math.floor(progressFrac * numFrames);\n");
+        fprintf(f_html, "            if (frameIdx >= numFrames) frameIdx = numFrames - 1;\n");
+        fprintf(f_html, "            if (isFinalState) {\n");
+        fprintf(f_html, "                contour = contourHistogram.contour || evo[numFrames - 1];\n");
+        fprintf(f_html, "            } else {\n");
+        fprintf(f_html, "                contour = evo[frameIdx];\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (!contour || contour.length === 0) return;\n");
         fprintf(f_html, "        const numPts = contour.length;\n");
         fprintf(f_html, "        const maxX = numPts - 1;\n");
         fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
         fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
         fprintf(f_html, "        histCtx.strokeStyle = '#dcdde1'; histCtx.lineWidth = 1; histCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
-
-        fprintf(f_html, "        const mLen = numPts - 99;\n");
         fprintf(f_html, "        let maxVal = 0.0;\n");
-        fprintf(f_html, "        for (let i = 0; i < (mLen > 0 ? mLen : numPts); i++) {\n");
-        fprintf(f_html, "            if (contour[i] > maxVal) maxVal = contour[i];\n");
+        fprintf(f_html, "        const fullContour = contourHistogram.contour || (contourHistogram.evolution ? contourHistogram.evolution[contourHistogram.evolution.length - 1] : contour);\n");
+        fprintf(f_html, "        if (fullContour && fullContour.length > 0) {\n");
+        fprintf(f_html, "            const mLenFull = fullContour.length - 99;\n");
+        fprintf(f_html, "            for (let i = 0; i < (mLenFull > 0 ? mLenFull : fullContour.length); i++) {\n");
+        fprintf(f_html, "                if (fullContour[i] > maxVal) maxVal = fullContour[i];\n");
+        fprintf(f_html, "            }\n");
+        fprintf(f_html, "        }\n");
+        fprintf(f_html, "        if (maxVal <= 0) {\n");
+        fprintf(f_html, "            const mLen = numPts - 99;\n");
+        fprintf(f_html, "            for (let i = 0; i < (mLen > 0 ? mLen : numPts); i++) {\n");
+        fprintf(f_html, "                if (contour[i] > maxVal) maxVal = contour[i];\n");
+        fprintf(f_html, "            }\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        if (maxVal <= 0) maxVal = 1.0;\n");
-
         fprintf(f_html, "        histCtx.fillStyle = 'rgba(46, 204, 113, 0.15)';\n");
         fprintf(f_html, "        histCtx.beginPath();\n");
         fprintf(f_html, "        histCtx.moveTo(padLeft, padTop + graphH);\n");
@@ -1434,7 +1478,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        histCtx.lineTo(padLeft + graphW, padTop + graphH);\n");
         fprintf(f_html, "        histCtx.closePath();\n");
         fprintf(f_html, "        histCtx.fill();\n");
-
         fprintf(f_html, "        histCtx.strokeStyle = '#27ae60'; histCtx.lineWidth = 2.5; histCtx.beginPath();\n");
         fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
         fprintf(f_html, "            const x = padLeft + (i / maxX) * graphW;\n");
@@ -1442,20 +1485,19 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "            if (i === 0) histCtx.moveTo(x, y); else histCtx.lineTo(x, y);\n");
         fprintf(f_html, "        }\n");
         fprintf(f_html, "        histCtx.stroke();\n");
-
-        fprintf(f_html, "        const centroidMs = contourHistogram.high_point_ms || bestBarLengthMs;\n");
-        fprintf(f_html, "        const lineIdx = maxX - centroidMs;\n");
-        fprintf(f_html, "        const cx = padLeft + (lineIdx / maxX) * graphW;\n");
-        fprintf(f_html, "        if (cx >= padLeft && cx <= padLeft + graphW) {\n");
-        fprintf(f_html, "            histCtx.strokeStyle = '#f39c12'; histCtx.lineWidth = 2.5; histCtx.setLineDash([4, 4]);\n");
-        fprintf(f_html, "            histCtx.beginPath(); histCtx.moveTo(cx, padTop); histCtx.lineTo(cx, padTop + graphH); histCtx.stroke(); histCtx.setLineDash([]);\n");
+        fprintf(f_html, "        if (isFinalState) {\n");
+        fprintf(f_html, "            const centroidMs = contourHistogram.high_point_ms || bestBarLengthMs;\n");
+        fprintf(f_html, "            const cx = padLeft + (1.0 - (centroidMs / 15000.0)) * graphW;\n");
+        fprintf(f_html, "            if (cx >= padLeft && cx <= padLeft + graphW) {\n");
+        fprintf(f_html, "                histCtx.strokeStyle = '#f39c12'; histCtx.lineWidth = 2.5; histCtx.setLineDash([4, 4]);\n");
+        fprintf(f_html, "                histCtx.beginPath(); histCtx.moveTo(cx, padTop); histCtx.lineTo(cx, padTop + graphH); histCtx.stroke(); histCtx.setLineDash([]);\n");
+        fprintf(f_html, "            }\n");
         fprintf(f_html, "        }\n");
-
         fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
         fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
         fprintf(f_html, "            const frac = i / 5;\n");
         fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
-        fprintf(f_html, "            const msVal = (frac - 1.0) * maxX;\n");
+        fprintf(f_html, "            const msVal = (frac - 1.0) * 15000.0;\n");
         fprintf(f_html, "            histCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; histCtx.beginPath(); histCtx.moveTo(x, padTop); histCtx.lineTo(x, padTop + graphH); histCtx.stroke();\n");
         fprintf(f_html, "            histCtx.fillText((Math.abs(msVal) < 1e-3) ? '0 ms' : `${Math.round(msVal)} ms`, x, padTop + graphH + 18);\n");
         fprintf(f_html, "        }\n");
@@ -1770,12 +1812,15 @@ static int export_all_assets_and_html_internal(
 
     double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
     int contour_sample_count = 0;
+    double* contour_evo = (double*)calloc(CONTOUR_EVO_FRAMES * CONTOUR_EVO_PTS, sizeof(double));
 
     TransientAnalyzer* contour_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
     if (contour_analyzer) {
         analyzer_set_sample_rate(contour_analyzer, sr);
         int hop = (int)(sr * 0.001);
         int step = hop * 19;
+        int total_p1_steps = (len + step - 1) / step;
+        if (total_p1_steps < 1) total_p1_steps = 1;
 
         for (int last_t = 0; last_t < len; last_t += step) {
             int act_s = last_t - (int)(sr * 0.2);
@@ -1797,9 +1842,35 @@ static int export_all_assets_and_html_internal(
             if (cur_buf && accumulated_contour) {
                 for (int k = 0; k < contour_len; k++) accumulated_contour[k] += cur_buf[k];
                 contour_sample_count++;
+
+                if (contour_evo) {
+                    int f_idx = (int)(((double)contour_sample_count / total_p1_steps) * (CONTOUR_EVO_FRAMES - 1));
+                    if (f_idx < 0) f_idx = 0;
+                    if (f_idx >= CONTOUR_EVO_FRAMES) f_idx = CONTOUR_EVO_FRAMES - 1;
+                    for (int p = 0; p < CONTOUR_EVO_PTS; p++) {
+                        int src_k = (int)((double)p / (CONTOUR_EVO_PTS - 1) * (contour_len - 1));
+                        contour_evo[f_idx * CONTOUR_EVO_PTS + p] = accumulated_contour[src_k];
+                    }
+                }
             }
         }
         analyzer_destroy(contour_analyzer);
+
+        if (contour_evo) {
+            for (int f = 1; f < CONTOUR_EVO_FRAMES; f++) {
+                bool empty = true;
+                for (int p = 0; p < CONTOUR_EVO_PTS; p++) {
+                    if (contour_evo[f * CONTOUR_EVO_PTS + p] != 0.0) { empty = false; break; }
+                }
+                if (empty) {
+                    memcpy(&contour_evo[f * CONTOUR_EVO_PTS], &contour_evo[(f - 1) * CONTOUR_EVO_PTS], CONTOUR_EVO_PTS * sizeof(double));
+                }
+            }
+            for (int p = 0; p < CONTOUR_EVO_PTS; p++) {
+                int src_k = (int)((double)p / (CONTOUR_EVO_PTS - 1) * (contour_len - 1));
+                contour_evo[(CONTOUR_EVO_FRAMES - 1) * CONTOUR_EVO_PTS + p] = accumulated_contour[src_k];
+            }
+        }
     }
 
     int m_len = contour_len - 99;
@@ -1840,9 +1911,14 @@ static int export_all_assets_and_html_internal(
         accumulated_contour,
         contour_len,
         contour_sample_count,
+        contour_evo,
+        CONTOUR_EVO_FRAMES,
+        CONTOUR_EVO_PTS,
         &res2
     );
 
+    if (accumulated_contour) free(accumulated_contour);
+    if (contour_evo) free(contour_evo);
     analyzer_free_analysis(&res2);
     return ret;
 }
@@ -1888,6 +1964,9 @@ typedef struct {
     double* group_dem_lines;
     double* accumulated_contour;
     int contour_len;
+    double* contour_evo;
+    int evo_frames;
+    int evo_pts;
     volatile int* completed_steps_counter;
     GroupMutex* shared_mutex;
     GroupMutex* progress_mutex;
@@ -1930,6 +2009,15 @@ static unsigned int __stdcall pass1_stem_worker_win(void* arg) {
                 }
                 if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
                     t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                if (t->contour_evo && t->evo_frames > 0 && t->evo_pts > 0 && t->analyzer->shared_buffer) {
+                    int f_idx = (int)(((double)(step_idx + 1) / t->total_steps) * (t->evo_frames - 1));
+                    if (f_idx < 0) f_idx = 0;
+                    if (f_idx >= t->evo_frames) f_idx = t->evo_frames - 1;
+                    for (int p = 0; p < t->evo_pts; p++) {
+                        int src_k = (int)((double)p / (t->evo_pts - 1) * (t->contour_len - 1));
+                        t->contour_evo[f_idx * t->evo_pts + p] = t->analyzer->shared_buffer->accumulated_buffer[src_k];
+                    }
                 }
                 group_mutex_unlock(t->shared_mutex);
             }
@@ -1984,6 +2072,15 @@ static void* pass1_stem_worker_posix(void* arg) {
                 }
                 if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
                     t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                if (t->contour_evo && t->evo_frames > 0 && t->evo_pts > 0 && t->analyzer->shared_buffer) {
+                    int f_idx = (int)(((double)(step_idx + 1) / t->total_steps) * (t->evo_frames - 1));
+                    if (f_idx < 0) f_idx = 0;
+                    if (f_idx >= t->evo_frames) f_idx = t->evo_frames - 1;
+                    for (int p = 0; p < t->evo_pts; p++) {
+                        int src_k = (int)((double)p / (t->evo_pts - 1) * (t->contour_len - 1));
+                        t->contour_evo[f_idx * t->evo_pts + p] = t->analyzer->shared_buffer->accumulated_buffer[src_k];
+                    }
                 }
                 group_mutex_unlock(t->shared_mutex);
             }
@@ -2264,6 +2361,9 @@ typedef struct {
     const double* accumulated_contour;
     int contour_len;
     int contour_sample_count;
+    const double* contour_evo;
+    int evo_frames;
+    int evo_pts;
     FullAnalysisResult* res2_stem;
     volatile int* export_counter;
     GroupMutex* counter_mutex;
@@ -2278,6 +2378,9 @@ static void process_single_stem_export(
     const double* accumulated_contour,
     int contour_len,
     int contour_sample_count,
+    const double* contour_evo,
+    int evo_frames,
+    int evo_pts,
     FullAnalysisResult* res2_stem
 ) {
     char stem_output_dir[4096];
@@ -2458,6 +2561,9 @@ static void process_single_stem_export(
         accumulated_contour,
         contour_len,
         contour_sample_count,
+        contour_evo,
+        evo_frames,
+        evo_pts,
         res2_stem
     );
 }
@@ -2468,7 +2574,7 @@ static unsigned int __stdcall export_worker_win(void* arg) {
     process_single_stem_export(
         t->stem, t->parent_dir, t->pass2_win_ms,
         t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
-        t->contour_sample_count, t->res2_stem
+        t->contour_sample_count, t->contour_evo, t->evo_frames, t->evo_pts, t->res2_stem
     );
     group_mutex_lock(t->counter_mutex);
     (*(t->export_counter))++;
@@ -2483,7 +2589,7 @@ static void* export_worker_posix(void* arg) {
     process_single_stem_export(
         t->stem, t->parent_dir, t->pass2_win_ms,
         t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
-        t->contour_sample_count, t->res2_stem
+        t->contour_sample_count, t->contour_evo, t->evo_frames, t->evo_pts, t->res2_stem
     );
     group_mutex_lock(t->counter_mutex);
     (*(t->export_counter))++;
@@ -2542,6 +2648,7 @@ int export_group_assets_and_html(
     if (contour_len > MAX_CONTOUR_LEN) contour_len = MAX_CONTOUR_LEN;
     double* accumulated_contour = (double*)calloc(contour_len, sizeof(double));
     int contour_sample_count = 0;
+    double* contour_evo = (double*)calloc(CONTOUR_EVO_FRAMES * CONTOUR_EVO_PTS, sizeof(double));
 
     int hop = (int)(common_sr * 0.001);
     int step = hop * 19; // Sample contour every 19 ms
@@ -2575,6 +2682,9 @@ int export_group_assets_and_html(
         p1_tasks[i].group_dem_lines = group_dem_lines;
         p1_tasks[i].accumulated_contour = accumulated_contour;
         p1_tasks[i].contour_len = contour_len;
+        p1_tasks[i].contour_evo = contour_evo;
+        p1_tasks[i].evo_frames = CONTOUR_EVO_FRAMES;
+        p1_tasks[i].evo_pts = CONTOUR_EVO_PTS;
         p1_tasks[i].completed_steps_counter = &p1_completed_steps;
         p1_tasks[i].shared_mutex = &group_shared_mutex;
         p1_tasks[i].progress_mutex = &p1_progress_mutex;
@@ -2617,6 +2727,22 @@ int export_group_assets_and_html(
         memcpy(accumulated_contour, group_shared.accumulated_buffer, sizeof(double) * contour_len);
     }
     contour_sample_count = total_p1_steps;
+
+    if (contour_evo) {
+        for (int f = 1; f < CONTOUR_EVO_FRAMES; f++) {
+            bool empty = true;
+            for (int p = 0; p < CONTOUR_EVO_PTS; p++) {
+                if (contour_evo[f * CONTOUR_EVO_PTS + p] != 0.0) { empty = false; break; }
+            }
+            if (empty) {
+                memcpy(&contour_evo[f * CONTOUR_EVO_PTS], &contour_evo[(f - 1) * CONTOUR_EVO_PTS], CONTOUR_EVO_PTS * sizeof(double));
+            }
+        }
+        for (int p = 0; p < CONTOUR_EVO_PTS; p++) {
+            int src_k = (int)((double)p / (CONTOUR_EVO_PTS - 1) * (contour_len - 1));
+            contour_evo[(CONTOUR_EVO_FRAMES - 1) * CONTOUR_EVO_PTS + p] = accumulated_contour[src_k];
+        }
+    }
 
     for (int i = 0; i < num_stems; i++) {
         if (pass1_analyzers[i]) analyzer_destroy(pass1_analyzers[i]);
@@ -2867,6 +2993,9 @@ int export_group_assets_and_html(
         export_tasks[i].accumulated_contour = accumulated_contour;
         export_tasks[i].contour_len = contour_len;
         export_tasks[i].contour_sample_count = contour_sample_count;
+        export_tasks[i].contour_evo = contour_evo;
+        export_tasks[i].evo_frames = CONTOUR_EVO_FRAMES;
+        export_tasks[i].evo_pts = CONTOUR_EVO_PTS;
         export_tasks[i].res2_stem = &res2_stems[i];
         export_tasks[i].export_counter = &export_counter;
         export_tasks[i].counter_mutex = &export_mutex;
@@ -2970,6 +3099,9 @@ int export_group_assets_and_html(
                 accumulated_contour,
                 contour_len,
                 contour_sample_count,
+                contour_evo,
+                CONTOUR_EVO_FRAMES,
+                CONTOUR_EVO_PTS,
                 &res2_group
             );
             analyzer_free_analysis(&res2_group);
@@ -2979,5 +3111,6 @@ int export_group_assets_and_html(
     }
 
     if (accumulated_contour) free(accumulated_contour);
+    if (contour_evo) free(contour_evo);
     return 1;
 }
