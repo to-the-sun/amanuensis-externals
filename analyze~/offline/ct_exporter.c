@@ -521,7 +521,6 @@ static int export_single_stem_assets_from_res(
     const float* y,
     int len,
     int sr,
-    int pass1_window_ms,
     int pass2_win_ms,
     double best_bar_length_ms,
     const HPChangeEvent* hp_changes,
@@ -529,11 +528,6 @@ static int export_single_stem_assets_from_res(
     const double* accumulated_contour,
     int contour_len,
     int contour_sample_count,
-    double midpoint_s,
-    double longest_hp_start_s,
-    double longest_hp_end_s,
-    double midpoint_demarcation_line,
-    const double* midpoint_buffer,
     const FullAnalysisResult* res2
 ) {
 
@@ -989,23 +983,6 @@ static int export_single_stem_assets_from_res(
             }
             fprintf(fp, "  ],\n");
 
-            // Midpoint Snapshot Data
-            fprintf(fp, "  \"midpoint_snapshot\": {\n");
-            fprintf(fp, "    \"midpoint_time_s\": %.4f,\n", midpoint_s);
-            fprintf(fp, "    \"midpoint_time_ms\": %.2f,\n", midpoint_s * 1000.0);
-            fprintf(fp, "    \"longest_hp_val_ms\": %.2f,\n", best_bar_length_ms);
-            fprintf(fp, "    \"longest_hp_start_s\": %.4f,\n", longest_hp_start_s);
-            fprintf(fp, "    \"longest_hp_end_s\": %.4f,\n", longest_hp_end_s);
-            fprintf(fp, "    \"demarcation_line\": %.6f,\n", midpoint_demarcation_line);
-            fprintf(fp, "    \"buffer_len\": %d,\n", pass1_window_ms + 1);
-            fprintf(fp, "    \"buffer\": [");
-            int mid_buf_len = pass1_window_ms + 1;
-            for (int b_i = 0; b_i < mid_buf_len; b_i++) {
-                fprintf(fp, "%.4f%s", midpoint_buffer ? midpoint_buffer[b_i] : 0.0, (b_i < mid_buf_len - 1) ? "," : "");
-            }
-            fprintf(fp, "]\n");
-            fprintf(fp, "  },\n");
-
             // Flat peaks
             fprintf(fp, "  \"pass2_peaks\": [\n");
             int peak_iter = 0;
@@ -1122,12 +1099,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "    </div>\n");
         fprintf(f_html, "    <div class=\"hint\">💡 Accumulated 15,000ms cumulative transience buffer contour recorded across the song (sampled every 19ms). The gold dashed line marks the segment length high point.</div>\n");
 
-        fprintf(f_html, "    <div class=\"section-title\">Cumulative History Buffer at Longest High Point Midpoint</div>\n");
-        fprintf(f_html, "    <div class=\"canvas-container\" style=\"background: #ffffff;\">\n");
-        fprintf(f_html, "        <canvas id=\"midpointBufferCanvas\" width=\"1150\" height=\"250\"></canvas>\n");
-        fprintf(f_html, "    </div>\n");
-        fprintf(f_html, "    <div class=\"hint\">💡 State of the 15,000ms cumulative history buffer captured at the midpoint during the duration of the longest stable high point (determined on Pass 1). The red dashed line denotes the high point bar duration.</div>\n");
-
         fprintf(f_html, "    <div class=\"section-title\">1. Interactive Audio Waveform, Pattern Map & Cumulative History High Point Changes</div>\n");
         fprintf(f_html, "    <div class=\"audio-controls\">\n");
         fprintf(f_html, "        <audio id=\"audioPlayer\" controls src=\"%s.wav\"></audio>\n", encoded_stem_name);
@@ -1186,7 +1157,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "    let globalMinNegScore = -1.0;\n");
         fprintf(f_html, "    let toleranceMs = %.4f;\n", res2->tolerance);
         fprintf(f_html, "    let pass2Peaks = [];\n");
-        fprintf(f_html, "    let midpointSnapshot = null;\n");
         fprintf(f_html, "    let contourHistogram = null;\n\n");
 
         fprintf(f_html, "    const canvas = document.getElementById('waveformCanvas');\n");
@@ -1194,8 +1164,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "    const audio = document.getElementById('audioPlayer');\n");
         fprintf(f_html, "    const bufCanvas = document.getElementById('historyBufferCanvas');\n");
         fprintf(f_html, "    const bufCtx = bufCanvas ? bufCanvas.getContext('2d') : null;\n");
-        fprintf(f_html, "    const midCanvas = document.getElementById('midpointBufferCanvas');\n");
-        fprintf(f_html, "    const midCtx = midCanvas ? midCanvas.getContext('2d') : null;\n");
         fprintf(f_html, "    const histCanvas = document.getElementById('clusterHistogramCanvas');\n");
         fprintf(f_html, "    const histCtx = histCanvas ? histCanvas.getContext('2d') : null;\n\n");
 
@@ -1231,7 +1199,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        if (data.global_min_neg_score !== undefined) globalMinNegScore = data.global_min_neg_score;\n");
         fprintf(f_html, "        if (data.tolerance_ms !== undefined) toleranceMs = data.tolerance_ms;\n");
         fprintf(f_html, "        if (data.pass2_peaks) pass2Peaks = data.pass2_peaks;\n");
-        fprintf(f_html, "        if (data.midpoint_snapshot) midpointSnapshot = data.midpoint_snapshot;\n");
         fprintf(f_html, "        if (data.contour_histogram) contourHistogram = data.contour_histogram;\n");
         fprintf(f_html, "        renderAll();\n");
         fprintf(f_html, "    }\n\n");
@@ -1482,10 +1449,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        if (cx >= padLeft && cx <= padLeft + graphW) {\n");
         fprintf(f_html, "            histCtx.strokeStyle = '#f39c12'; histCtx.lineWidth = 2.5; histCtx.setLineDash([4, 4]);\n");
         fprintf(f_html, "            histCtx.beginPath(); histCtx.moveTo(cx, padTop); histCtx.lineTo(cx, padTop + graphH); histCtx.stroke(); histCtx.setLineDash([]);\n");
-        fprintf(f_html, "            histCtx.fillStyle = '#d35400'; histCtx.font = 'bold 12px Segoe UI, sans-serif';\n");
-        fprintf(f_html, "            histCtx.textAlign = (cx > padLeft + graphW - 160) ? 'right' : 'left';\n");
-        fprintf(f_html, "            const tx = (cx > padLeft + graphW - 160) ? cx - 6 : cx + 6;\n");
-        fprintf(f_html, "            histCtx.fillText(`Segment Length High Point: -${centroidMs.toFixed(2)} ms (${centroidMs.toFixed(2)} ms)`, tx, padTop + 18);\n");
         fprintf(f_html, "        }\n");
 
         fprintf(f_html, "        histCtx.fillStyle = '#7f8c8d'; histCtx.font = '11px Segoe UI, sans-serif'; histCtx.textAlign = 'center';\n");
@@ -1509,90 +1472,6 @@ static int export_single_stem_assets_from_res(
         fprintf(f_html, "        drawSegmentBox('boxPrev', 'canvasPrev', 'titlePrev', 'ratingPrev', prevSeg, 'Previous', curTimeMs);\n");
         fprintf(f_html, "        drawSegmentBox('boxCurr', 'canvasCurr', 'titleCurr', 'ratingCurr', currSeg, 'Current Playing', curTimeMs);\n");
         fprintf(f_html, "        drawSegmentBox('boxNext', 'canvasNext', 'titleNext', 'ratingNext', nextSeg, 'Next', curTimeMs);\n");
-        fprintf(f_html, "    }\n\n");
-
-        fprintf(f_html, "    function drawMidpointBuffer() {\n");
-        fprintf(f_html, "        if (!midCanvas || !midCtx) return;\n");
-        fprintf(f_html, "        const W = midCanvas.width, H = midCanvas.height;\n");
-        fprintf(f_html, "        midCtx.clearRect(0, 0, W, H);\n");
-        fprintf(f_html, "        midCtx.fillStyle = '#ffffff'; midCtx.fillRect(0, 0, W, H);\n");
-        fprintf(f_html, "        if (!midpointSnapshot || !midpointSnapshot.buffer) {\n");
-        fprintf(f_html, "            midCtx.fillStyle = '#7f8c8d'; midCtx.font = '13px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
-        fprintf(f_html, "            midCtx.fillText('No midpoint history buffer data available.', W / 2, H / 2);\n");
-        fprintf(f_html, "            return;\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const buf = midpointSnapshot.buffer;\n");
-        fprintf(f_html, "        const numPts = buf.length;\n");
-        fprintf(f_html, "        const pass1WinMs = 15000.0;\n");
-        fprintf(f_html, "        const snapBinMs = pass1WinMs / (numPts - 1 || 1);\n");
-        fprintf(f_html, "        const winStartMs = -pass1WinMs, winEndMs = 0.0;\n");
-        fprintf(f_html, "        let curMax = 0;\n");
-        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
-        fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
-        fprintf(f_html, "            if (sampleMs <= -99.0 + 1e-5 && buf[i] > curMax) curMax = buf[i];\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        if (curMax <= 0) curMax = 1.0;\n");
-        fprintf(f_html, "        const yMax = curMax * 1.1;\n");
-        fprintf(f_html, "        const padLeft = 70, padRight = 35, padTop = 35, padBottom = 45;\n");
-        fprintf(f_html, "        const graphW = W - padLeft - padRight, graphH = H - padTop - padBottom;\n");
-        fprintf(f_html, "        midCtx.strokeStyle = '#dcdde1'; midCtx.lineWidth = 1; midCtx.strokeRect(padLeft, padTop, graphW, graphH);\n");
-        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
-        fprintf(f_html, "        for (let i = 0; i <= 5; i++) {\n");
-        fprintf(f_html, "            const frac = i / 5;\n");
-        fprintf(f_html, "            const x = padLeft + frac * graphW;\n");
-        fprintf(f_html, "            const msVal = winStartMs + frac * pass1WinMs;\n");
-        fprintf(f_html, "            midCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; midCtx.beginPath(); midCtx.moveTo(x, padTop); midCtx.lineTo(x, padTop + graphH); midCtx.stroke();\n");
-        fprintf(f_html, "            midCtx.fillText((Math.abs(msVal) < 1e-3) ? '0ms' : `${Math.round(msVal)}ms`, x, padTop + graphH + 18);\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        midCtx.textAlign = 'right';\n");
-        fprintf(f_html, "        for (let ratio of [0.0, 0.25, 0.5, 0.75, 1.0]) {\n");
-        fprintf(f_html, "            const y = padTop + graphH - ratio * graphH;\n");
-        fprintf(f_html, "            midCtx.strokeStyle = 'rgba(220, 221, 225, 0.8)'; midCtx.beginPath(); midCtx.moveTo(padLeft, y); midCtx.lineTo(padLeft + graphW, y); midCtx.stroke();\n");
-        fprintf(f_html, "            midCtx.fillText((yMax * ratio).toFixed(2), padLeft - 8, y + 4);\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        const meanVal = midpointSnapshot.demarcation_line || 0;\n");
-        fprintf(f_html, "        const meanY = padTop + graphH - (meanVal / yMax) * graphH;\n");
-        fprintf(f_html, "        midCtx.strokeStyle = '#7f8c8d'; midCtx.lineWidth = 1.2; midCtx.setLineDash([5, 5]);\n");
-        fprintf(f_html, "        midCtx.beginPath(); midCtx.moveTo(padLeft, meanY); midCtx.lineTo(padLeft + graphW, meanY); midCtx.stroke(); midCtx.setLineDash([]);\n");
-        fprintf(f_html, "        midCtx.save(); midCtx.beginPath(); midCtx.rect(padLeft, padTop, graphW, graphH); midCtx.clip();\n");
-        fprintf(f_html, "        midCtx.strokeStyle = '#3498db'; midCtx.lineWidth = 2.0; midCtx.fillStyle = 'rgba(52, 152, 219, 0.15)';\n");
-        fprintf(f_html, "        midCtx.beginPath(); let firstPt = true; let lastDrawnMs = (0 - (numPts - 1)) * snapBinMs;\n");
-        fprintf(f_html, "        for (let i = 0; i < numPts; i++) {\n");
-        fprintf(f_html, "            const sampleMs = (i - (numPts - 1)) * snapBinMs;\n");
-        fprintf(f_html, "            if (sampleMs > -99.0 + 1e-5) continue;\n");
-        fprintf(f_html, "            const x = padLeft + ((sampleMs - winStartMs) / pass1WinMs) * graphW;\n");
-        fprintf(f_html, "            const y = padTop + graphH - (buf[i] / yMax) * graphH;\n");
-        fprintf(f_html, "            if (firstPt) { midCtx.moveTo(x, y); firstPt = false; } else { midCtx.lineTo(x, y); }\n");
-        fprintf(f_html, "            lastDrawnMs = sampleMs;\n");
-        fprintf(f_html, "        }\n");
-        fprintf(f_html, "        midCtx.stroke();\n");
-        fprintf(f_html, "        const endX = padLeft + ((lastDrawnMs - winStartMs) / pass1WinMs) * graphW;\n");
-        fprintf(f_html, "        const startX = padLeft + (((0 - (numPts - 1)) * snapBinMs - winStartMs) / pass1WinMs) * graphW;\n");
-        fprintf(f_html, "        midCtx.lineTo(endX, padTop + graphH); midCtx.lineTo(startX, padTop + graphH); midCtx.closePath(); midCtx.fill();\n");
-
-        fprintf(f_html, "        const hpVal = midpointSnapshot.longest_hp_val_ms || bestBarLengthMs;\n");
-        fprintf(f_html, "        if (hpVal > 0) {\n");
-        fprintf(f_html, "            const hpX = padLeft + (((-hpVal) - winStartMs) / pass1WinMs) * graphW;\n");
-        fprintf(f_html, "            if (hpX >= padLeft && hpX <= padLeft + graphW) {\n");
-        fprintf(f_html, "                midCtx.strokeStyle = '#e74c3c'; midCtx.lineWidth = 2.0; midCtx.setLineDash([4, 4]);\n");
-        fprintf(f_html, "                midCtx.beginPath(); midCtx.moveTo(hpX, padTop); midCtx.lineTo(hpX, padTop + graphH); midCtx.stroke(); midCtx.setLineDash([]);\n");
-        fprintf(f_html, "                midCtx.fillStyle = '#e74c3c'; midCtx.font = 'bold 11px Segoe UI, sans-serif';\n");
-        fprintf(f_html, "                midCtx.textAlign = (hpX > padLeft + graphW - 90) ? 'right' : 'left';\n");
-        fprintf(f_html, "                const textX = (hpX > padLeft + graphW - 90) ? hpX - 5 : hpX + 5;\n");
-        fprintf(f_html, "                midCtx.fillText(`High Point: ${Math.round(hpVal)}ms`, textX, padTop + 15);\n");
-        fprintf(f_html, "            }\n");
-        fprintf(f_html, "        }\n");
-
-        fprintf(f_html, "        midCtx.restore();\n");
-        fprintf(f_html, "        midCtx.save(); midCtx.translate(20, padTop + graphH / 2); midCtx.rotate(-Math.PI / 2);\n");
-        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
-        fprintf(f_html, "        midCtx.fillText('Transience Flux / Energy', 0, 0); midCtx.restore();\n");
-        fprintf(f_html, "        midCtx.fillStyle = '#7f8c8d'; midCtx.font = '11px Segoe UI, sans-serif'; midCtx.textAlign = 'center';\n");
-        fprintf(f_html, "        midCtx.fillText('Historical Window Time (ms)', padLeft + graphW / 2, padTop + graphH + 34);\n");
-        fprintf(f_html, "        const midTimeMs = midpointSnapshot.midpoint_time_ms || (midpointSnapshot.midpoint_time_s * 1000.0) || 0;\n");
-        fprintf(f_html, "        const midTimeStr = formatMSS(midTimeMs / 1000.0);\n");
-        fprintf(f_html, "        midCtx.fillStyle = '#2c3e50'; midCtx.font = 'bold 13px Segoe UI, sans-serif'; midCtx.textAlign = 'left';\n");
-        fprintf(f_html, "        midCtx.fillText(`15000ms Cumulative Buffer at Longest High Point Midpoint (${midTimeStr} / ${Math.round(midTimeMs)}ms - Bar: ${Math.round(hpVal)}ms)`, padLeft, padTop - 10);\n");
         fprintf(f_html, "    }\n\n");
 
         fprintf(f_html, "    function drawHistoryBuffer() {\n");
@@ -1767,7 +1646,6 @@ static int export_single_stem_assets_from_res(
 
         fprintf(f_html, "    function renderAll() {\n");
         fprintf(f_html, "        drawClusterHistogram();\n");
-        fprintf(f_html, "        drawMidpointBuffer();\n");
         fprintf(f_html, "        drawWaveformMap();\n");
         fprintf(f_html, "        updateSegmentInspector();\n");
         fprintf(f_html, "        drawHistoryBuffer();\n");
@@ -1867,7 +1745,6 @@ static int export_all_assets_and_html_internal(
     if (!analyzer_batch_analyze_shared(y, len, sr, pass1_window_ms, 1, shared_buffer, &res1)) return 0;
 
     int num_frames = res1.num_frames;
-    double frame_dt_s = (num_frames > 1) ? (res1.times[1] - res1.times[0]) : 0.001;
 
     HPChangeEvent hp_changes[1024];
     int num_hp_changes = 0;
@@ -1941,87 +1818,6 @@ static int export_all_assets_and_html_internal(
     double best_bar_length_ms = (double)best_lag_ms;
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
 
-    double dom_start_ms = best_bar_length_ms - 50.0;
-    double dom_end_ms = best_bar_length_ms + 50.0;
-
-    double longest_hp_start_s = 0.0;
-    double longest_hp_end_s = 0.0;
-    double max_run_dur = 0.0;
-
-    double cur_run_start_s = -1.0;
-    double cur_run_end_s = -1.0;
-
-    for (int i = 0; i < num_frames; i++) {
-        double raw_hp = res1.highest_peaks_ms[i];
-        if (raw_hp != -999.0 && fabs(raw_hp) >= dom_start_ms && fabs(raw_hp) <= dom_end_ms) {
-            if (cur_run_start_s < 0.0) cur_run_start_s = res1.times[i];
-            cur_run_end_s = res1.times[i] + frame_dt_s;
-        } else {
-            if (cur_run_start_s >= 0.0) {
-                double run_dur = cur_run_end_s - cur_run_start_s;
-                if (run_dur > max_run_dur) {
-                    max_run_dur = run_dur;
-                    longest_hp_start_s = cur_run_start_s;
-                    longest_hp_end_s = cur_run_end_s;
-                }
-                cur_run_start_s = -1.0;
-                cur_run_end_s = -1.0;
-            }
-        }
-    }
-    if (cur_run_start_s >= 0.0) {
-        double run_dur = cur_run_end_s - cur_run_start_s;
-        if (run_dur > max_run_dur) {
-            max_run_dur = run_dur;
-            longest_hp_start_s = cur_run_start_s;
-            longest_hp_end_s = cur_run_end_s;
-        }
-    }
-
-    if (max_run_dur <= 0.0) {
-        longest_hp_start_s = 0.0;
-        longest_hp_end_s = (num_frames > 0) ? res1.times[num_frames - 1] : 0.0;
-    }
-
-    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
-    int hop = (int)(sr * 0.001);
-    int midpoint_frame = (hop > 0) ? (int)round(midpoint_s * (double)sr / (double)hop) : 0;
-    if (midpoint_frame < 0) midpoint_frame = 0;
-    if (midpoint_frame >= num_frames) midpoint_frame = (num_frames > 0) ? (num_frames - 1) : 0;
-
-    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
-    double midpoint_demarcation_line = 0.0;
-
-    TransientAnalyzer* mid_analyzer = analyzer_create(1.0, NULL, NULL, NULL, NULL, pass1_window_ms, 1);
-    if (mid_analyzer) {
-        analyzer_set_sample_rate(mid_analyzer, sr);
-        int target_sample = (int)round(midpoint_s * (double)sr);
-        if (target_sample > len) target_sample = len;
-        int step = hop * 100;
-
-        for (int last_t = 0; last_t < target_sample; last_t += step) {
-            int act_s = last_t - (int)(sr * 0.2);
-            int win_s = act_s - (int)(sr * (pass1_window_ms / 1000.0));
-            if (win_s < 0) win_s = 0;
-
-            ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-            if (res_chunk) {
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                int chunk_len = step;
-                if (last_t + step > target_sample) chunk_len = target_sample - last_t;
-                if (chunk_len > 0) memcpy(push_ptr, y + last_t, sizeof(float) * chunk_len);
-                analyzer_analyze_chunk(mid_analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
-                free(push_ptr);
-                free(res_chunk);
-            }
-        }
-
-        double* cur_buf = analyzer_get_buffer(mid_analyzer);
-        if (cur_buf && midpoint_buffer) memcpy(midpoint_buffer, cur_buf, sizeof(double) * (pass1_window_ms + 1));
-        if (res1.demarcation_lines && midpoint_frame < num_frames) midpoint_demarcation_line = res1.demarcation_lines[midpoint_frame];
-        analyzer_destroy(mid_analyzer);
-    }
-
     analyzer_free_analysis(&res1);
 
     int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
@@ -2037,7 +1833,6 @@ static int export_all_assets_and_html_internal(
         y,
         len,
         sr,
-        pass1_window_ms,
         pass2_win_ms,
         best_bar_length_ms,
         hp_changes,
@@ -2045,11 +1840,6 @@ static int export_all_assets_and_html_internal(
         accumulated_contour,
         contour_len,
         contour_sample_count,
-        midpoint_s,
-        longest_hp_start_s,
-        longest_hp_end_s,
-        midpoint_demarcation_line,
-        midpoint_buffer,
         &res2
     );
 
@@ -2083,64 +1873,6 @@ static int get_max_worker_threads(void) {
     if (max_threads < 1) max_threads = 1;
     return max_threads;
 }
-
-typedef struct {
-    TransientAnalyzer* analyzer;
-    const float* mono_data;
-    int stem_len;
-    int sr;
-    int last_t;
-    int step;
-    int window_ms;
-    int hop;
-    ChunkAnalysisResult* res_chunk;
-} GroupChunkTask;
-
-#if defined(_WIN32) || defined(_WIN64)
-static unsigned int __stdcall chunk_worker_win(void* arg) {
-    GroupChunkTask* t = (GroupChunkTask*)arg;
-    if (!t->analyzer) return 0;
-    int act_s = t->last_t - (int)(t->sr * 0.2);
-    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
-    if (win_s < 0) win_s = 0;
-
-    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
-    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
-    if (push_ptr && t->last_t < t->stem_len) {
-        int rem = t->stem_len - t->last_t;
-        int chunk_len = t->step;
-        if (rem < chunk_len) chunk_len = rem;
-        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
-    }
-    if (push_ptr) {
-        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
-        free(push_ptr);
-    }
-    return 0;
-}
-#else
-static void* chunk_worker_posix(void* arg) {
-    GroupChunkTask* t = (GroupChunkTask*)arg;
-    if (!t->analyzer) return NULL;
-    int act_s = t->last_t - (int)(t->sr * 0.2);
-    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
-    if (win_s < 0) win_s = 0;
-
-    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
-    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
-    if (push_ptr && t->last_t < t->stem_len) {
-        int rem = t->stem_len - t->last_t;
-        int chunk_len = t->step;
-        if (rem < chunk_len) chunk_len = rem;
-        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
-    }
-    if (push_ptr) {
-        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
-        free(push_ptr);
-    }
-    return NULL;
-}
-#endif
 
 typedef struct {
     int stem_idx;
@@ -2527,17 +2259,11 @@ typedef struct {
     int stem_idx;
     const GroupStemInput* stem;
     const char* parent_dir;
-    int pass1_window_ms;
     int pass2_win_ms;
     double best_bar_length_ms;
     const double* accumulated_contour;
     int contour_len;
     int contour_sample_count;
-    double midpoint_s;
-    double longest_hp_start_s;
-    double longest_hp_end_s;
-    double midpoint_demarcation_line;
-    const double* midpoint_buffer;
     FullAnalysisResult* res2_stem;
     volatile int* export_counter;
     GroupMutex* counter_mutex;
@@ -2547,17 +2273,11 @@ typedef struct {
 static void process_single_stem_export(
     const GroupStemInput* stem,
     const char* parent_dir,
-    int pass1_window_ms,
     int pass2_win_ms,
     double best_bar_length_ms,
     const double* accumulated_contour,
     int contour_len,
     int contour_sample_count,
-    double midpoint_s,
-    double longest_hp_start_s,
-    double longest_hp_end_s,
-    double midpoint_demarcation_line,
-    const double* midpoint_buffer,
     FullAnalysisResult* res2_stem
 ) {
     char stem_output_dir[4096];
@@ -2731,7 +2451,6 @@ static void process_single_stem_export(
         stem->mono_data,
         stem->len,
         stem->sr,
-        pass1_window_ms,
         pass2_win_ms,
         best_bar_length_ms,
         NULL,
@@ -2739,11 +2458,6 @@ static void process_single_stem_export(
         accumulated_contour,
         contour_len,
         contour_sample_count,
-        midpoint_s,
-        longest_hp_start_s,
-        longest_hp_end_s,
-        midpoint_demarcation_line,
-        midpoint_buffer,
         res2_stem
     );
 }
@@ -2752,11 +2466,9 @@ static void process_single_stem_export(
 static unsigned int __stdcall export_worker_win(void* arg) {
     GroupExportTask* t = (GroupExportTask*)arg;
     process_single_stem_export(
-        t->stem, t->parent_dir, t->pass1_window_ms, t->pass2_win_ms,
+        t->stem, t->parent_dir, t->pass2_win_ms,
         t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
-        t->contour_sample_count, t->midpoint_s, t->longest_hp_start_s,
-        t->longest_hp_end_s, t->midpoint_demarcation_line,
-        t->midpoint_buffer, t->res2_stem
+        t->contour_sample_count, t->res2_stem
     );
     group_mutex_lock(t->counter_mutex);
     (*(t->export_counter))++;
@@ -2769,11 +2481,9 @@ static unsigned int __stdcall export_worker_win(void* arg) {
 static void* export_worker_posix(void* arg) {
     GroupExportTask* t = (GroupExportTask*)arg;
     process_single_stem_export(
-        t->stem, t->parent_dir, t->pass1_window_ms, t->pass2_win_ms,
+        t->stem, t->parent_dir, t->pass2_win_ms,
         t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
-        t->contour_sample_count, t->midpoint_s, t->longest_hp_start_s,
-        t->longest_hp_end_s, t->midpoint_demarcation_line,
-        t->midpoint_buffer, t->res2_stem
+        t->contour_sample_count, t->res2_stem
     );
     group_mutex_lock(t->counter_mutex);
     (*(t->export_counter))++;
@@ -2928,146 +2638,8 @@ int export_group_assets_and_html(
     double best_bar_length_ms = (double)best_lag_ms;
     if (best_bar_length_ms <= 0.0) best_bar_length_ms = 1000.0;
 
-    // Calculate longest high-point midpoint history buffer snapshot across all group stems
-    double dom_start_ms = best_bar_length_ms - 50.0;
-    double dom_end_ms = best_bar_length_ms + 50.0;
-    double longest_hp_start_s = 0.0;
-    double longest_hp_end_s = 0.0;
-    double max_run_dur = 0.0;
-    double cur_run_start_s = -1.0;
-    double cur_run_end_s = -1.0;
-
-    double frame_dt_s = (double)step / (double)common_sr;
-
-    if (group_hp_ms) {
-        for (int s = 0; s < total_p1_steps; s++) {
-            double raw_hp = group_hp_ms[s];
-            double chunk_time_s = (double)(s * step) / (double)common_sr;
-            if (raw_hp != -999.0 && fabs(raw_hp) >= dom_start_ms && fabs(raw_hp) <= dom_end_ms) {
-                if (cur_run_start_s < 0.0) cur_run_start_s = chunk_time_s;
-                cur_run_end_s = chunk_time_s + frame_dt_s;
-            } else {
-                if (cur_run_start_s >= 0.0) {
-                    double run_dur = cur_run_end_s - cur_run_start_s;
-                    if (run_dur > max_run_dur) {
-                        max_run_dur = run_dur;
-                        longest_hp_start_s = cur_run_start_s;
-                        longest_hp_end_s = cur_run_end_s;
-                    }
-                    cur_run_start_s = -1.0;
-                    cur_run_end_s = -1.0;
-                }
-            }
-        }
-        if (cur_run_start_s >= 0.0) {
-            double run_dur = cur_run_end_s - cur_run_start_s;
-            if (run_dur > max_run_dur) {
-                max_run_dur = run_dur;
-                longest_hp_start_s = cur_run_start_s;
-                longest_hp_end_s = cur_run_end_s;
-            }
-        }
-    }
-    if (max_run_dur <= 0.0) {
-        longest_hp_start_s = 0.0;
-        longest_hp_end_s = (double)max_len / (double)common_sr;
-    }
-
-    double midpoint_s = (longest_hp_start_s + longest_hp_end_s) / 2.0;
-    int mid_step_idx = (int)round(midpoint_s / frame_dt_s);
-    if (mid_step_idx < 0) mid_step_idx = 0;
-    if (mid_step_idx >= total_p1_steps) mid_step_idx = (total_p1_steps > 0) ? (total_p1_steps - 1) : 0;
-
-    double* midpoint_buffer = (double*)calloc(pass1_window_ms + 1, sizeof(double));
-    double midpoint_demarcation_line = (group_dem_lines && total_p1_steps > 0) ? group_dem_lines[mid_step_idx] : 0.0;
-
     if (group_hp_ms) free(group_hp_ms);
     if (group_dem_lines) free(group_dem_lines);
-
-    TransientAnalyzer** mid_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
-    SharedTransientBuffer mid_shared;
-    memset(&mid_shared, 0, sizeof(SharedTransientBuffer));
-    mid_shared.max_peak = 1.0;
-
-    GroupMutex mid_mutex;
-    group_mutex_init(&mid_mutex);
-
-    for (int i = 0; i < num_stems; i++) {
-        mid_analyzers[i] = analyzer_create(1.0, &mid_shared, &mid_mutex, group_mutex_lock, group_mutex_unlock, pass1_window_ms, 1);
-        if (mid_analyzers[i]) analyzer_set_sample_rate(mid_analyzers[i], stems[i].sr);
-    }
-
-    int target_sample = (int)round(midpoint_s * (double)common_sr);
-    if (target_sample > max_len) target_sample = max_len;
-    step = hop * 100;
-
-    int total_mid_steps = (target_sample + step - 1) / step;
-    if (total_mid_steps < 1) total_mid_steps = 1;
-
-    printf("\nCapturing Midpoint Snapshot across %d stem(s)...\n", num_stems);
-    print_progress_bar(0, total_mid_steps, "Capturing Midpoint Snapshot");
-
-    GroupChunkTask* mid_tasks = (GroupChunkTask*)calloc(num_stems, sizeof(GroupChunkTask));
-    ChunkAnalysisResult* mid_res_chunks = (ChunkAnalysisResult*)calloc(num_stems, sizeof(ChunkAnalysisResult));
-
-    int mid_step_count = 0;
-    for (int last_t = 0; last_t < target_sample; last_t += step) {
-        for (int i = 0; i < num_stems; i++) {
-            mid_tasks[i].analyzer = mid_analyzers[i];
-            mid_tasks[i].mono_data = stems[i].mono_data;
-            mid_tasks[i].stem_len = stems[i].len;
-            mid_tasks[i].sr = stems[i].sr;
-            mid_tasks[i].last_t = last_t;
-            mid_tasks[i].step = step;
-            mid_tasks[i].window_ms = pass1_window_ms;
-            mid_tasks[i].hop = hop;
-            mid_tasks[i].res_chunk = &mid_res_chunks[i];
-        }
-
-#if defined(_WIN32) || defined(_WIN64)
-        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
-            int batch_count = num_stems - batch_start;
-            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
-            HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
-            if (threads) {
-                for (int i = 0; i < batch_count; i++) {
-                    threads[i] = (HANDLE)_beginthreadex(NULL, 0, chunk_worker_win, &mid_tasks[batch_start + i], 0, NULL);
-                }
-                WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
-                for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
-                free(threads);
-            }
-        }
-#else
-        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
-            int batch_count = num_stems - batch_start;
-            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
-            pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
-            if (threads) {
-                for (int i = 0; i < batch_count; i++) {
-                    pthread_create(&threads[i], NULL, chunk_worker_posix, &mid_tasks[batch_start + i]);
-                }
-                for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
-                free(threads);
-            }
-        }
-#endif
-
-        mid_step_count++;
-        print_progress_bar(mid_step_count, total_mid_steps, "Capturing Midpoint Snapshot");
-    }
-
-    free(mid_tasks);
-    free(mid_res_chunks);
-    for (int i = 0; i < num_stems; i++) {
-        if (mid_analyzers[i]) analyzer_destroy(mid_analyzers[i]);
-    }
-    free(mid_analyzers);
-    group_mutex_destroy(&mid_mutex);
-
-    if (midpoint_buffer) {
-        memcpy(midpoint_buffer, mid_shared.accumulated_buffer, sizeof(double) * (pass1_window_ms + 1));
-    }
 
     int pass2_win_ms = (int)round(best_bar_length_ms * 2.0);
     if (pass2_win_ms > 15000) pass2_win_ms = 15000;
@@ -3290,17 +2862,11 @@ int export_group_assets_and_html(
         export_tasks[i].stem_idx = i;
         export_tasks[i].stem = &stems[i];
         export_tasks[i].parent_dir = parent_dir;
-        export_tasks[i].pass1_window_ms = pass1_window_ms;
         export_tasks[i].pass2_win_ms = pass2_win_ms;
         export_tasks[i].best_bar_length_ms = best_bar_length_ms;
         export_tasks[i].accumulated_contour = accumulated_contour;
         export_tasks[i].contour_len = contour_len;
         export_tasks[i].contour_sample_count = contour_sample_count;
-        export_tasks[i].midpoint_s = midpoint_s;
-        export_tasks[i].longest_hp_start_s = longest_hp_start_s;
-        export_tasks[i].longest_hp_end_s = longest_hp_end_s;
-        export_tasks[i].midpoint_demarcation_line = midpoint_demarcation_line;
-        export_tasks[i].midpoint_buffer = midpoint_buffer;
         export_tasks[i].res2_stem = &res2_stems[i];
         export_tasks[i].export_counter = &export_counter;
         export_tasks[i].counter_mutex = &export_mutex;
@@ -3397,7 +2963,6 @@ int export_group_assets_and_html(
                 mono_combined,
                 max_len,
                 common_sr,
-                pass1_window_ms,
                 pass2_win_ms,
                 best_bar_length_ms,
                 NULL,
@@ -3405,11 +2970,6 @@ int export_group_assets_and_html(
                 accumulated_contour,
                 contour_len,
                 contour_sample_count,
-                midpoint_s,
-                longest_hp_start_s,
-                longest_hp_end_s,
-                midpoint_demarcation_line,
-                midpoint_buffer,
                 &res2_group
             );
             analyzer_free_analysis(&res2_group);
@@ -3418,7 +2978,6 @@ int export_group_assets_and_html(
         free(mono_combined);
     }
 
-    if (midpoint_buffer) free(midpoint_buffer);
     if (accumulated_contour) free(accumulated_contour);
     return 1;
 }
