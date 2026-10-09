@@ -3050,9 +3050,24 @@ int export_group_assets_and_html(
     // 5. Mix all stem mono buffers into a combined audio buffer & write group_<group_name>.wav
     float* mono_combined = (float*)calloc(max_len, sizeof(float));
     if (mono_combined) {
+        float max_abs_val = 0.0f;
         for (int i = 0; i < num_stems; i++) {
             for (int s = 0; s < stems[i].len; s++) {
                 mono_combined[s] += stems[i].mono_data[s];
+            }
+        }
+
+        for (int s = 0; s < max_len; s++) {
+            float abs_smp = fabsf(mono_combined[s]);
+            if (abs_smp > max_abs_val) {
+                max_abs_val = abs_smp;
+            }
+        }
+
+        if (max_abs_val > 0.0f) {
+            float norm_factor = 1.0f / max_abs_val;
+            for (int s = 0; s < max_len; s++) {
+                mono_combined[s] *= norm_factor;
             }
         }
 
