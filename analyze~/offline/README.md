@@ -34,8 +34,9 @@ When invoked with `--group` (or `-g`), the analyzer executes multi-file grouped 
    - Slices isolated loop WAVs (`[loops]/pattern_N.wav`) and pass-aligned stem WAVs (`[stems]/pattern_N.wav`) directly using `dr_wav` in parallel across worker threads.
 5. **Combined Group Mix & Report**:
    - Sums and normalizes mono stem audio into `group_<name>.wav` and exports the interactive group-level HTML report (`group_<name>_pattern_analysis.html`).
-6. **Thread-Safe Console Progress Indicators**:
-   - Thread-safe console progress bar rendering (`print_progress_bar`) displays real-time percentage indicators across all pipeline stages (Decoding, Pass 1, Snapshot, STFT, Pass 2, Asset Export, Group Mixing, Group Report).
+6. **Thread Task Delegation & Fine-Grained Console Progress Indicators**:
+   - Thread task delegation logging outputs real-time console messages (`[Thread X/Y] Starting task: ...`) as worker threads pick up tasks.
+   - Thread-safe console progress bar rendering (`print_progress_bar`) displays fine-grained step/frame-level percentage indicators across all pipeline stages (Decoding, Pass 1, Snapshot, STFT, Pass 2, Asset Export, Group Mixing, Group Report).
 
 ## Generated HTML Report Layout
 

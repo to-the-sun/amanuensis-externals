@@ -56,6 +56,7 @@ void group_mutex_destroy(GroupMutex* mutex) {
 
 static GroupMutex g_progress_mutex;
 static int g_progress_mutex_inited = 0;
+static int g_last_printed_pct = -1;
 
 void print_progress_bar(int current, int total, const char* label) {
     if (total <= 0) return;
@@ -63,25 +64,34 @@ void print_progress_bar(int current, int total, const char* label) {
         group_mutex_init(&g_progress_mutex);
         g_progress_mutex_inited = 1;
     }
+
+    int pct = (int)(((double)current / (double)total) * 100.0);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
     group_mutex_lock(&g_progress_mutex);
 
-    int bar_width = 30;
-    float ratio = (float)current / (float)total;
-    if (ratio > 1.0f) ratio = 1.0f;
-    if (ratio < 0.0f) ratio = 0.0f;
-    int filled = (int)(ratio * bar_width);
+    if (current == 0 || current >= total || pct != g_last_printed_pct) {
+        g_last_printed_pct = pct;
+        int bar_width = 30;
+        float ratio = (float)current / (float)total;
+        if (ratio > 1.0f) ratio = 1.0f;
+        if (ratio < 0.0f) ratio = 0.0f;
+        int filled = (int)(ratio * bar_width);
 
-    printf("\r[%s] [", label ? label : "Progress");
-    for (int i = 0; i < bar_width; i++) {
-        if (i < filled) printf("=");
-        else if (i == filled) printf(">");
-        else printf(" ");
+        printf("\r[%s] [", label ? label : "Progress");
+        for (int i = 0; i < bar_width; i++) {
+            if (i < filled) printf("=");
+            else if (i == filled) printf(">");
+            else printf(" ");
+        }
+        printf("] %d/%d (%d%%)", current, total, pct);
+        if (current >= total) {
+            printf("\n");
+            g_last_printed_pct = -1;
+        }
+        fflush(stdout);
     }
-    printf("] %d/%d (%d%%)", current, total, (int)(ratio * 100.0f));
-    if (current >= total) {
-        printf("\n");
-    }
-    fflush(stdout);
 
     group_mutex_unlock(&g_progress_mutex);
 }
@@ -2075,6 +2085,402 @@ static int get_max_worker_threads(void) {
 }
 
 typedef struct {
+    TransientAnalyzer* analyzer;
+    const float* mono_data;
+    int stem_len;
+    int sr;
+    int last_t;
+    int step;
+    int window_ms;
+    int hop;
+    ChunkAnalysisResult* res_chunk;
+} GroupChunkTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall chunk_worker_win(void* arg) {
+    GroupChunkTask* t = (GroupChunkTask*)arg;
+    if (!t->analyzer) return 0;
+    int act_s = t->last_t - (int)(t->sr * 0.2);
+    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
+    if (win_s < 0) win_s = 0;
+
+    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
+    if (push_ptr && t->last_t < t->stem_len) {
+        int rem = t->stem_len - t->last_t;
+        int chunk_len = t->step;
+        if (rem < chunk_len) chunk_len = rem;
+        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
+    }
+    if (push_ptr) {
+        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
+        free(push_ptr);
+    }
+    return 0;
+}
+#else
+static void* chunk_worker_posix(void* arg) {
+    GroupChunkTask* t = (GroupChunkTask*)arg;
+    if (!t->analyzer) return NULL;
+    int act_s = t->last_t - (int)(t->sr * 0.2);
+    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
+    if (win_s < 0) win_s = 0;
+
+    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
+    if (push_ptr && t->last_t < t->stem_len) {
+        int rem = t->stem_len - t->last_t;
+        int chunk_len = t->step;
+        if (rem < chunk_len) chunk_len = rem;
+        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
+    }
+    if (push_ptr) {
+        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
+        free(push_ptr);
+    }
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    TransientAnalyzer* analyzer;
+    int max_len;
+    int pass1_window_ms;
+    int common_sr;
+    int hop;
+    int step;
+    int total_steps;
+    double* group_hp_ms;
+    double* group_dem_lines;
+    double* accumulated_contour;
+    int contour_len;
+    volatile int* completed_steps_counter;
+    GroupMutex* shared_mutex;
+    GroupMutex* progress_mutex;
+    int total_stems;
+} Pass1StemTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall pass1_stem_worker_win(void* arg) {
+    Pass1StemTask* t = (Pass1StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass1_window_ms;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    int step_idx = 0;
+    for (int last_t = 0; last_t < t->max_len; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            if (step_idx < t->total_steps) {
+                group_mutex_lock(t->shared_mutex);
+                if (res_chunk->metrics.highest_peak_valid && res_chunk->metrics.highest_peak_ms > t->group_hp_ms[step_idx]) {
+                    t->group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_ms;
+                }
+                if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
+                    t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                group_mutex_unlock(t->shared_mutex);
+            }
+        }
+        step_idx++;
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 1: High Point Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return 0;
+}
+#else
+static void* pass1_stem_worker_posix(void* arg) {
+    Pass1StemTask* t = (Pass1StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass1_window_ms;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    int step_idx = 0;
+    for (int last_t = 0; last_t < t->max_len; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            if (step_idx < t->total_steps) {
+                group_mutex_lock(t->shared_mutex);
+                if (res_chunk->metrics.highest_peak_valid && res_chunk->metrics.highest_peak_ms > t->group_hp_ms[step_idx]) {
+                    t->group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_ms;
+                }
+                if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
+                    t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                group_mutex_unlock(t->shared_mutex);
+            }
+        }
+        step_idx++;
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 1: High Point Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    TransientAnalyzer* analyzer;
+    FullAnalysisResult* res2_stem;
+    int max_len;
+    int flush_samples;
+    int pass2_win_ms;
+    int common_sr;
+    int hop;
+    int step;
+    int total_steps;
+    float* gpu_flux;
+    int gpu_ok;
+    PeakResult** pband;
+    int* pcap;
+    volatile int* completed_steps_counter;
+    GroupMutex* shared_mutex;
+    GroupMutex* progress_mutex;
+    int total_stems;
+} Pass2StemTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall pass2_stem_worker_win(void* arg) {
+    Pass2StemTask* t = (Pass2StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass2_win_ms;
+    int num_f = t->res2_stem->num_frames;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    for (int last_t = 0; last_t < t->max_len + t->flush_samples; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            for (int b = 0; b < 1; b++) {
+                for (int k = 0; k < 100; k++) {
+                    int f = act_s / hop + k;
+                    if (f >= 0 && f < num_f) {
+                        if (t->gpu_ok) {
+                            t->res2_stem->bands[b].envelope[f] = t->gpu_flux[b * num_f + f];
+                        } else {
+                            t->res2_stem->bands[b].envelope[f] = res_chunk->last_flux[b][k];
+                        }
+                        t->res2_stem->bands[b].rolling_dynamic_smoothing[f] = res_chunk->last_dynamic_smoothing[b][k];
+                        t->res2_stem->bands[b].rolling_prominence[f] = res_chunk->last_prominence[b][k];
+                        t->res2_stem->bands[b].rolling_prominence_avg[f] = (float)res_chunk->metrics.band_prominence_avgs[b];
+                        t->res2_stem->bands[b].rolling_prominence_half_max[f] = (float)res_chunk->metrics.band_prominence_half_maxes[b];
+                        t->res2_stem->bands[b].rolling_smoothing_avg[f] = (float)res_chunk->metrics.band_smoothing_avgs[b];
+                        t->res2_stem->bands[b].rolling_flux_avg[f] = (float)res_chunk->metrics.band_flux_avgs[b];
+                        t->res2_stem->bands[b].rolling_threshold[f] = (float)res_chunk->metrics.band_midpoints[b];
+                        t->res2_stem->bands[b].rolling_lookback[f] = (float)res_chunk->metrics.band_lookbacks[b];
+                        t->res2_stem->bands[b].rolling_avg_delta[f] = (float)res_chunk->metrics.band_avg_deltas[b];
+                        t->res2_stem->bands[b].rolling_total_delta[f] = (float)res_chunk->metrics.band_total_deltas[b];
+                        t->res2_stem->bands[b].rolling_p_count[f] = res_chunk->metrics.band_p_counts[b];
+                    }
+                }
+            }
+            for (int k = 0; k < 100; k++) {
+                int f = act_s / hop + k;
+                if (f >= 0 && f < num_f) {
+                    t->res2_stem->ratings[f] = res_chunk->metrics.rating;
+                    t->res2_stem->std_devs[f] = res_chunk->metrics.std_dev;
+                    t->res2_stem->means[f] = res_chunk->metrics.mean;
+                    t->res2_stem->contrasts[f] = res_chunk->metrics.contrast;
+                    t->res2_stem->stability_scores[f] = res_chunk->metrics.stability_score;
+                    t->res2_stem->highest_peaks_ms[f] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
+                    t->res2_stem->demarcation_lines[f] = res_chunk->metrics.demarcation_line;
+                    t->res2_stem->rolling_global_flux_avg[f] = (float)res_chunk->metrics.global_flux_avg;
+                    t->res2_stem->rolling_global_smoothing_avg[f] = (float)res_chunk->metrics.global_smoothing_avg;
+                }
+            }
+            for (int k = 0; k < res_chunk->peak_list.num_peaks; k++) {
+                PeakResult* pr = &res_chunk->peak_list.peaks[k];
+                int b = pr->band_idx;
+                if (t->res2_stem->bands[b].num_peaks >= t->pcap[b]) {
+                    t->pcap[b] *= 2;
+                    PeakResult* np = (PeakResult*)realloc(t->pband[b], sizeof(PeakResult) * t->pcap[b]);
+                    if (np) t->pband[b] = np;
+                }
+                if (t->pband[b]) {
+                    memcpy(&t->pband[b][t->res2_stem->bands[b].num_peaks++], pr, sizeof(PeakResult));
+                }
+            }
+        }
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 2: Group Transience Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return 0;
+}
+#else
+static void* pass2_stem_worker_posix(void* arg) {
+    Pass2StemTask* t = (Pass2StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass2_win_ms;
+    int num_f = t->res2_stem->num_frames;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    for (int last_t = 0; last_t < t->max_len + t->flush_samples; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            for (int b = 0; b < 1; b++) {
+                for (int k = 0; k < 100; k++) {
+                    int f = act_s / hop + k;
+                    if (f >= 0 && f < num_f) {
+                        if (t->gpu_ok) {
+                            t->res2_stem->bands[b].envelope[f] = t->gpu_flux[b * num_f + f];
+                        } else {
+                            t->res2_stem->bands[b].envelope[f] = res_chunk->last_flux[b][k];
+                        }
+                        t->res2_stem->bands[b].rolling_dynamic_smoothing[f] = res_chunk->last_dynamic_smoothing[b][k];
+                        t->res2_stem->bands[b].rolling_prominence[f] = res_chunk->last_prominence[b][k];
+                        t->res2_stem->bands[b].rolling_prominence_avg[f] = (float)res_chunk->metrics.band_prominence_avgs[b];
+                        t->res2_stem->bands[b].rolling_prominence_half_max[f] = (float)res_chunk->metrics.band_prominence_half_maxes[b];
+                        t->res2_stem->bands[b].rolling_smoothing_avg[f] = (float)res_chunk->metrics.band_smoothing_avgs[b];
+                        t->res2_stem->bands[b].rolling_flux_avg[f] = (float)res_chunk->metrics.band_flux_avgs[b];
+                        t->res2_stem->bands[b].rolling_threshold[f] = (float)res_chunk->metrics.band_midpoints[b];
+                        t->res2_stem->bands[b].rolling_lookback[f] = (float)res_chunk->metrics.band_lookbacks[b];
+                        t->res2_stem->bands[b].rolling_avg_delta[f] = (float)res_chunk->metrics.band_avg_deltas[b];
+                        t->res2_stem->bands[b].rolling_total_delta[f] = (float)res_chunk->metrics.band_total_deltas[b];
+                        t->res2_stem->bands[b].rolling_p_count[f] = res_chunk->metrics.band_p_counts[b];
+                    }
+                }
+            }
+            for (int k = 0; k < 100; k++) {
+                int f = act_s / hop + k;
+                if (f >= 0 && f < num_f) {
+                    t->res2_stem->ratings[f] = res_chunk->metrics.rating;
+                    t->res2_stem->std_devs[f] = res_chunk->metrics.std_dev;
+                    t->res2_stem->means[f] = res_chunk->metrics.mean;
+                    t->res2_stem->contrasts[f] = res_chunk->metrics.contrast;
+                    t->res2_stem->stability_scores[f] = res_chunk->metrics.stability_score;
+                    t->res2_stem->highest_peaks_ms[f] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
+                    t->res2_stem->demarcation_lines[f] = res_chunk->metrics.demarcation_line;
+                    t->res2_stem->rolling_global_flux_avg[f] = (float)res_chunk->metrics.global_flux_avg;
+                    t->res2_stem->rolling_global_smoothing_avg[f] = (float)res_chunk->metrics.global_smoothing_avg;
+                }
+            }
+            for (int k = 0; k < res_chunk->peak_list.num_peaks; k++) {
+                PeakResult* pr = &res_chunk->peak_list.peaks[k];
+                int b = pr->band_idx;
+                if (t->res2_stem->bands[b].num_peaks >= t->pcap[b]) {
+                    t->pcap[b] *= 2;
+                    PeakResult* np = (PeakResult*)realloc(t->pband[b], sizeof(PeakResult) * t->pcap[b]);
+                    if (np) t->pband[b] = np;
+                }
+                if (t->pband[b]) {
+                    memcpy(&t->pband[b][t->res2_stem->bands[b].num_peaks++], pr, sizeof(PeakResult));
+                }
+            }
+        }
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 2: Group Transience Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return NULL;
+}
+#endif
+
+typedef struct {
     int stem_idx;
     const GroupStemInput* stem;
     float* gpu_flux;
@@ -2394,6 +2800,12 @@ int export_group_assets_and_html(
     snprintf(group_output_dir, sizeof(group_output_dir), "%s" PATH_SEP_STR "[palettes]", parent_dir);
     mkdir_p(group_output_dir);
 
+    // Ensure progress bar mutex is initialized prior to spawning threads
+    if (!g_progress_mutex_inited) {
+        group_mutex_init(&g_progress_mutex);
+        g_progress_mutex_inited = 1;
+    }
+
     // 2. Shared Transient Buffer Allocation for Group Analysis
     SharedTransientBuffer group_shared;
     memset(&group_shared, 0, sizeof(SharedTransientBuffer));
@@ -2425,44 +2837,76 @@ int export_group_assets_and_html(
     int step = hop * 19; // Sample contour every 19 ms
 
     int total_p1_steps = (max_len + step - 1) / step;
+    if (total_p1_steps < 1) total_p1_steps = 1;
     double* group_hp_ms = (double*)calloc(total_p1_steps + 1, sizeof(double));
     double* group_dem_lines = (double*)calloc(total_p1_steps + 1, sizeof(double));
 
-    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (res_chunk) {
-        int step_idx = 0;
-        for (int last_t = 0; last_t < max_len; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!pass1_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int max_worker_threads = get_max_worker_threads();
 
-                memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int chunk_len = step;
-                    if (last_t + step > stems[i].len) chunk_len = stems[i].len - last_t;
-                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
-                }
-                analyzer_analyze_chunk(pass1_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, res_chunk);
-                free(push_ptr);
-            }
+    printf("\nStarting Pass 1: High Point Analysis across %d stem(s) using %d CPU worker thread(s)...\n", num_stems, max_worker_threads);
+    print_progress_bar(0, total_p1_steps, "Pass 1: High Point Analysis");
 
-            if (step_idx < total_p1_steps) {
-                group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
-                group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
-            }
+    Pass1StemTask* p1_tasks = (Pass1StemTask*)calloc(num_stems, sizeof(Pass1StemTask));
+    volatile int p1_completed_steps = 0;
+    GroupMutex p1_progress_mutex;
+    group_mutex_init(&p1_progress_mutex);
 
-            // Record current state of shared accumulated buffer
-            for (int k = 0; k < contour_len; k++) {
-                accumulated_contour[k] += group_shared.accumulated_buffer[k];
-            }
-            contour_sample_count++;
-            step_idx++;
-        }
-        free(res_chunk);
+    for (int i = 0; i < num_stems; i++) {
+        p1_tasks[i].stem_idx = i;
+        p1_tasks[i].stem = &stems[i];
+        p1_tasks[i].analyzer = pass1_analyzers[i];
+        p1_tasks[i].max_len = max_len;
+        p1_tasks[i].pass1_window_ms = pass1_window_ms;
+        p1_tasks[i].common_sr = common_sr;
+        p1_tasks[i].hop = hop;
+        p1_tasks[i].step = step;
+        p1_tasks[i].total_steps = total_p1_steps;
+        p1_tasks[i].group_hp_ms = group_hp_ms;
+        p1_tasks[i].group_dem_lines = group_dem_lines;
+        p1_tasks[i].accumulated_contour = accumulated_contour;
+        p1_tasks[i].contour_len = contour_len;
+        p1_tasks[i].completed_steps_counter = &p1_completed_steps;
+        p1_tasks[i].shared_mutex = &group_shared_mutex;
+        p1_tasks[i].progress_mutex = &p1_progress_mutex;
+        p1_tasks[i].total_stems = num_stems;
     }
+
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, pass1_stem_worker_win, &p1_tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
+        }
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, pass1_stem_worker_posix, &p1_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
+        }
+    }
+#endif
+
+    free(p1_tasks);
+    group_mutex_destroy(&p1_progress_mutex);
+
+    if (accumulated_contour) {
+        memcpy(accumulated_contour, group_shared.accumulated_buffer, sizeof(double) * contour_len);
+    }
+    contour_sample_count = total_p1_steps;
 
     for (int i = 0; i < num_stems; i++) {
         if (pass1_analyzers[i]) analyzer_destroy(pass1_analyzers[i]);
@@ -2557,28 +3001,64 @@ int export_group_assets_and_html(
     if (target_sample > max_len) target_sample = max_len;
     step = hop * 100;
 
-    ChunkAnalysisResult* mid_res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (mid_res_chunk) {
-        for (int last_t = 0; last_t < target_sample; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!mid_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int total_mid_steps = (target_sample + step - 1) / step;
+    if (total_mid_steps < 1) total_mid_steps = 1;
 
-                memset(mid_res_chunk, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int chunk_len = step;
-                    if (last_t + step > target_sample) chunk_len = target_sample - last_t;
-                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
+    printf("\nCapturing Midpoint Snapshot across %d stem(s)...\n", num_stems);
+    print_progress_bar(0, total_mid_steps, "Capturing Midpoint Snapshot");
+
+    GroupChunkTask* mid_tasks = (GroupChunkTask*)calloc(num_stems, sizeof(GroupChunkTask));
+    ChunkAnalysisResult* mid_res_chunks = (ChunkAnalysisResult*)calloc(num_stems, sizeof(ChunkAnalysisResult));
+
+    int mid_step_count = 0;
+    for (int last_t = 0; last_t < target_sample; last_t += step) {
+        for (int i = 0; i < num_stems; i++) {
+            mid_tasks[i].analyzer = mid_analyzers[i];
+            mid_tasks[i].mono_data = stems[i].mono_data;
+            mid_tasks[i].stem_len = stems[i].len;
+            mid_tasks[i].sr = stems[i].sr;
+            mid_tasks[i].last_t = last_t;
+            mid_tasks[i].step = step;
+            mid_tasks[i].window_ms = pass1_window_ms;
+            mid_tasks[i].hop = hop;
+            mid_tasks[i].res_chunk = &mid_res_chunks[i];
+        }
+
+#if defined(_WIN32) || defined(_WIN64)
+        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+            int batch_count = num_stems - batch_start;
+            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+            HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+            if (threads) {
+                for (int i = 0; i < batch_count; i++) {
+                    threads[i] = (HANDLE)_beginthreadex(NULL, 0, chunk_worker_win, &mid_tasks[batch_start + i], 0, NULL);
                 }
-                analyzer_analyze_chunk(mid_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, mid_res_chunk);
-                free(push_ptr);
+                WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+                for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+                free(threads);
             }
         }
-        free(mid_res_chunk);
+#else
+        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+            int batch_count = num_stems - batch_start;
+            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+            pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+            if (threads) {
+                for (int i = 0; i < batch_count; i++) {
+                    pthread_create(&threads[i], NULL, chunk_worker_posix, &mid_tasks[batch_start + i]);
+                }
+                for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+                free(threads);
+            }
+        }
+#endif
+
+        mid_step_count++;
+        print_progress_bar(mid_step_count, total_mid_steps, "Capturing Midpoint Snapshot");
     }
+
+    free(mid_tasks);
+    free(mid_res_chunks);
     for (int i = 0; i < num_stems; i++) {
         if (mid_analyzers[i]) analyzer_destroy(mid_analyzers[i]);
     }
@@ -2670,8 +3150,6 @@ int export_group_assets_and_html(
         }
     }
 
-    int max_worker_threads = get_max_worker_threads();
-
 #if defined(_WIN32) || defined(_WIN64)
     for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
         int batch_count = num_stems - batch_start;
@@ -2710,76 +3188,70 @@ int export_group_assets_and_html(
     int flush_samples = (int)(common_sr * 0.3);
     step = hop * 100;
 
-    ChunkAnalysisResult* pass2_chunk_res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (pass2_chunk_res) {
-        for (int last_t = 0; last_t < max_len + flush_samples; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!pass2_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass2_win_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int total_p2_steps = (max_len + flush_samples + step - 1) / step;
+    if (total_p2_steps < 1) total_p2_steps = 1;
 
-                memset(pass2_chunk_res, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int rem = stems[i].len - last_t;
-                    memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * (rem < step ? rem : step));
-                }
-                analyzer_analyze_chunk(pass2_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, pass2_chunk_res);
-                free(push_ptr);
+    printf("\nStarting Pass 2: Group Transience Analysis across %d stem(s)...\n", num_stems);
+    print_progress_bar(0, total_p2_steps, "Pass 2: Group Transience Analysis");
 
-                int num_f = res2_stems[i].num_frames;
-                for (int b = 0; b < 1; b++) {
-                    for (int k = 0; k < 100; k++) {
-                        int f = act_s / hop + k;
-                        if (f >= 0 && f < num_f) {
-                            if (pass2_gpu_ok[i]) {
-                                res2_stems[i].bands[b].envelope[f] = pass2_gpu_flux[i][b * num_f + f];
-                            } else {
-                                res2_stems[i].bands[b].envelope[f] = pass2_chunk_res->last_flux[b][k];
-                            }
-                            res2_stems[i].bands[b].rolling_dynamic_smoothing[f] = pass2_chunk_res->last_dynamic_smoothing[b][k];
-                            res2_stems[i].bands[b].rolling_prominence[f] = pass2_chunk_res->last_prominence[b][k];
-                            res2_stems[i].bands[b].rolling_prominence_avg[f] = (float)pass2_chunk_res->metrics.band_prominence_avgs[b];
-                            res2_stems[i].bands[b].rolling_prominence_half_max[f] = (float)pass2_chunk_res->metrics.band_prominence_half_maxes[b];
-                            res2_stems[i].bands[b].rolling_smoothing_avg[f] = (float)pass2_chunk_res->metrics.band_smoothing_avgs[b];
-                            res2_stems[i].bands[b].rolling_flux_avg[f] = (float)pass2_chunk_res->metrics.band_flux_avgs[b];
-                            res2_stems[i].bands[b].rolling_threshold[f] = (float)pass2_chunk_res->metrics.band_midpoints[b];
-                            res2_stems[i].bands[b].rolling_lookback[f] = (float)pass2_chunk_res->metrics.band_lookbacks[b];
-                            res2_stems[i].bands[b].rolling_avg_delta[f] = (float)pass2_chunk_res->metrics.band_avg_deltas[b];
-                            res2_stems[i].bands[b].rolling_total_delta[f] = (float)pass2_chunk_res->metrics.band_total_deltas[b];
-                            res2_stems[i].bands[b].rolling_p_count[f] = pass2_chunk_res->metrics.band_p_counts[b];
-                        }
-                    }
-                }
-                for (int k = 0; k < 100; k++) {
-                    int f = act_s / hop + k;
-                    if (f >= 0 && f < num_f) {
-                        res2_stems[i].ratings[f] = pass2_chunk_res->metrics.rating;
-                        res2_stems[i].std_devs[f] = pass2_chunk_res->metrics.std_dev;
-                        res2_stems[i].means[f] = pass2_chunk_res->metrics.mean;
-                        res2_stems[i].contrasts[f] = pass2_chunk_res->metrics.contrast;
-                        res2_stems[i].stability_scores[f] = pass2_chunk_res->metrics.stability_score;
-                        res2_stems[i].highest_peaks_ms[f] = pass2_chunk_res->metrics.highest_peak_valid ? pass2_chunk_res->metrics.highest_peak_ms : -999.0;
-                        res2_stems[i].demarcation_lines[f] = pass2_chunk_res->metrics.demarcation_line;
-                        res2_stems[i].rolling_global_flux_avg[f] = (float)pass2_chunk_res->metrics.global_flux_avg;
-                        res2_stems[i].rolling_global_smoothing_avg[f] = (float)pass2_chunk_res->metrics.global_smoothing_avg;
-                    }
-                }
-                for (int k = 0; k < pass2_chunk_res->peak_list.num_peaks; k++) {
-                    PeakResult* pr = &pass2_chunk_res->peak_list.peaks[k];
-                    int b = pr->band_idx;
-                    if (res2_stems[i].bands[b].num_peaks >= pcap[i][b]) {
-                        pcap[i][b] *= 2;
-                        PeakResult* np = realloc(pband[i][b], sizeof(PeakResult) * pcap[i][b]);
-                        if (np) pband[i][b] = np;
-                    }
-                    memcpy(&pband[i][b][res2_stems[i].bands[b].num_peaks++], pr, sizeof(PeakResult));
-                }
-            }
-        }
-        free(pass2_chunk_res);
+    Pass2StemTask* p2_tasks = (Pass2StemTask*)calloc(num_stems, sizeof(Pass2StemTask));
+    volatile int p2_completed_steps = 0;
+    GroupMutex p2_progress_mutex;
+    group_mutex_init(&p2_progress_mutex);
+
+    for (int i = 0; i < num_stems; i++) {
+        p2_tasks[i].stem_idx = i;
+        p2_tasks[i].stem = &stems[i];
+        p2_tasks[i].analyzer = pass2_analyzers[i];
+        p2_tasks[i].res2_stem = &res2_stems[i];
+        p2_tasks[i].max_len = max_len;
+        p2_tasks[i].flush_samples = flush_samples;
+        p2_tasks[i].pass2_win_ms = pass2_win_ms;
+        p2_tasks[i].common_sr = common_sr;
+        p2_tasks[i].hop = hop;
+        p2_tasks[i].step = step;
+        p2_tasks[i].total_steps = total_p2_steps;
+        p2_tasks[i].gpu_flux = pass2_gpu_flux[i];
+        p2_tasks[i].gpu_ok = pass2_gpu_ok[i];
+        p2_tasks[i].pband = pband[i];
+        p2_tasks[i].pcap = pcap[i];
+        p2_tasks[i].completed_steps_counter = &p2_completed_steps;
+        p2_tasks[i].shared_mutex = &group_shared_mutex;
+        p2_tasks[i].progress_mutex = &p2_progress_mutex;
+        p2_tasks[i].total_stems = num_stems;
     }
+
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, pass2_stem_worker_win, &p2_tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
+        }
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, pass2_stem_worker_posix, &p2_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
+        }
+    }
+#endif
+
+    free(p2_tasks);
+    group_mutex_destroy(&p2_progress_mutex);
 
     for (int i = 0; i < num_stems; i++) {
         if (pass2_gpu_flux[i]) free(pass2_gpu_flux[i]);

@@ -373,6 +373,7 @@ typedef struct {
 #if defined(_WIN32) || defined(_WIN64)
 static unsigned int __stdcall decode_worker_win(void* arg) {
     GroupDecodeTask* t = (GroupDecodeTask*)arg;
+    printf("[Thread %d/%d] Decoding stem audio: %s\n", t->stem_index + 1, t->total_stems, t->filename);
     unsigned int channels, sample_rate;
     drwav_uint64 total_pcm_frames;
     float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
@@ -423,6 +424,7 @@ static unsigned int __stdcall decode_worker_win(void* arg) {
 #else
 static void* decode_worker_posix(void* arg) {
     GroupDecodeTask* t = (GroupDecodeTask*)arg;
+    printf("[Thread %d/%d] Decoding stem audio: %s\n", t->stem_index + 1, t->total_stems, t->filename);
     unsigned int channels, sample_rate;
     drwav_uint64 total_pcm_frames;
     float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
