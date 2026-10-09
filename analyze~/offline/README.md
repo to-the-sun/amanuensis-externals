@@ -19,6 +19,25 @@ The C pipeline operates in two passes without Python dependencies:
    - Scans for and copies any matching text files (located in the audio file folder) whose names match the audio file except starting with "passes" instead of "palette" into the destination folder.
    - Exports binary assets (`.ctbin`, `snapshots.bin`), Base64 snapshot fallbacks (`snapshots.js`), structured JSON data (`manifest.json`, `report_data.json`, `report_data.js`), pattern WAV slices, and an interactive HTML report (`<stem>_pattern_analysis.html`).
 
+## Grouped Analysis & Multithreading Architecture (`--group` / `-g`)
+
+When invoked with `--group` (or `-g`), the analyzer executes multi-file grouped stem analysis across all WAV files in a target palette directory, computing shared cross-stem transience metrics while maximizing multi-core CPU and GPU utilization:
+
+1. **Parallel Stem WAV Decoding**:
+   - Spawns CPU worker threads (`_beginthreadex` on Windows, `pthread_create` on POSIX) to decode PCM audio frames and perform stereo-to-mono downmixing across all stems concurrently.
+2. **Parallel STFT Envelope Pre-Computation**:
+   - Dispatches STFT spectral flux envelope calculation for all stems in parallel across CPU worker threads and OpenCL GPU compute queues (`gpu_stft_process`).
+3. **Thread-Safe Lockstep Chunk Processing**:
+   - Pass 1 and Pass 2 time-step chunk loops execute concurrently across stems, with thread synchronization (`GroupMutex`: `CRITICAL_SECTION` / `pthread_mutex_t`) protecting shared accumulated transience updates (`SharedTransientBuffer`).
+4. **Parallel Per-Stem Asset Export & WAV Slicing**:
+   - Concurrently exports `.ctbin`, `snapshots.bin`, `snapshots.js`, `manifest.json`, `report_data.json/js`, and `<stem>_pattern_analysis.html` for all stems.
+   - Slices isolated loop WAVs (`[loops]/pattern_N.wav`) and pass-aligned stem WAVs (`[stems]/pattern_N.wav`) directly using `dr_wav` in parallel across worker threads.
+5. **Combined Group Mix & Report**:
+   - Sums and normalizes mono stem audio into `group_<name>.wav` and exports the interactive group-level HTML report (`group_<name>_pattern_analysis.html`).
+6. **Thread Task Delegation & Fine-Grained Console Progress Indicators**:
+   - Thread task delegation logging outputs real-time console messages (`[Thread X/Y] Starting task: ...`) as worker threads pick up tasks.
+   - Thread-safe console progress bar rendering (`print_progress_bar`) displays fine-grained step/frame-level percentage indicators across all pipeline stages (Decoding, Pass 1, Snapshot, STFT, Pass 2, Asset Export, Group Mixing, Group Report).
+
 ## Generated HTML Report Layout
 
 The interactive report (`<audio_stem>_pattern_analysis.html`) features:

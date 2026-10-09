@@ -18,6 +18,84 @@
 #define mkdir_cross(dir) mkdir(dir, 0755)
 #endif
 
+void group_mutex_init(GroupMutex* mutex) {
+    if (!mutex) return;
+#if defined(_WIN32) || defined(_WIN64)
+    InitializeCriticalSection(mutex);
+#else
+    pthread_mutex_init(mutex, NULL);
+#endif
+}
+
+void group_mutex_lock(void* lock_obj) {
+    if (!lock_obj) return;
+#if defined(_WIN32) || defined(_WIN64)
+    EnterCriticalSection((CRITICAL_SECTION*)lock_obj);
+#else
+    pthread_mutex_lock((pthread_mutex_t*)lock_obj);
+#endif
+}
+
+void group_mutex_unlock(void* lock_obj) {
+    if (!lock_obj) return;
+#if defined(_WIN32) || defined(_WIN64)
+    LeaveCriticalSection((CRITICAL_SECTION*)lock_obj);
+#else
+    pthread_mutex_unlock((pthread_mutex_t*)lock_obj);
+#endif
+}
+
+void group_mutex_destroy(GroupMutex* mutex) {
+    if (!mutex) return;
+#if defined(_WIN32) || defined(_WIN64)
+    DeleteCriticalSection(mutex);
+#else
+    pthread_mutex_destroy(mutex);
+#endif
+}
+
+static GroupMutex g_progress_mutex;
+static int g_progress_mutex_inited = 0;
+static int g_last_printed_pct = -1;
+
+void print_progress_bar(int current, int total, const char* label) {
+    if (total <= 0) return;
+    if (!g_progress_mutex_inited) {
+        group_mutex_init(&g_progress_mutex);
+        g_progress_mutex_inited = 1;
+    }
+
+    int pct = (int)(((double)current / (double)total) * 100.0);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
+    group_mutex_lock(&g_progress_mutex);
+
+    if (current == 0 || current >= total || pct != g_last_printed_pct) {
+        g_last_printed_pct = pct;
+        int bar_width = 30;
+        float ratio = (float)current / (float)total;
+        if (ratio > 1.0f) ratio = 1.0f;
+        if (ratio < 0.0f) ratio = 0.0f;
+        int filled = (int)(ratio * bar_width);
+
+        printf("\r[%s] [", label ? label : "Progress");
+        for (int i = 0; i < bar_width; i++) {
+            if (i < filled) printf("=");
+            else if (i == filled) printf(">");
+            else printf(" ");
+        }
+        printf("] %d/%d (%d%%)", current, total, pct);
+        if (current >= total) {
+            printf("\n");
+            g_last_printed_pct = -1;
+        }
+        fflush(stdout);
+    }
+
+    group_mutex_unlock(&g_progress_mutex);
+}
+
 int mkdir_p(const char* path) {
     if (!path || !*path) return 0;
     char tmp[4096];
@@ -1991,6 +2069,721 @@ int export_all_assets_and_html(
     return export_all_assets_and_html_internal(audio_filepath, output_dir, stem_name, y, len, sr, pass1_window_ms, NULL);
 }
 
+static int get_max_worker_threads(void) {
+    int max_threads = 4;
+#if defined(_WIN32) || defined(_WIN64)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    if (sysinfo.dwNumberOfProcessors > 0) max_threads = (int)sysinfo.dwNumberOfProcessors;
+#else
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nprocs > 0) max_threads = (int)nprocs;
+#endif
+    if (max_threads > 16) max_threads = 16;
+    if (max_threads < 1) max_threads = 1;
+    return max_threads;
+}
+
+typedef struct {
+    TransientAnalyzer* analyzer;
+    const float* mono_data;
+    int stem_len;
+    int sr;
+    int last_t;
+    int step;
+    int window_ms;
+    int hop;
+    ChunkAnalysisResult* res_chunk;
+} GroupChunkTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall chunk_worker_win(void* arg) {
+    GroupChunkTask* t = (GroupChunkTask*)arg;
+    if (!t->analyzer) return 0;
+    int act_s = t->last_t - (int)(t->sr * 0.2);
+    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
+    if (win_s < 0) win_s = 0;
+
+    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
+    if (push_ptr && t->last_t < t->stem_len) {
+        int rem = t->stem_len - t->last_t;
+        int chunk_len = t->step;
+        if (rem < chunk_len) chunk_len = rem;
+        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
+    }
+    if (push_ptr) {
+        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
+        free(push_ptr);
+    }
+    return 0;
+}
+#else
+static void* chunk_worker_posix(void* arg) {
+    GroupChunkTask* t = (GroupChunkTask*)arg;
+    if (!t->analyzer) return NULL;
+    int act_s = t->last_t - (int)(t->sr * 0.2);
+    int win_s = act_s - (int)(t->sr * (t->window_ms / 1000.0));
+    if (win_s < 0) win_s = 0;
+
+    memset(t->res_chunk, 0, sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)calloc(t->step > 0 ? t->step : 1, sizeof(float));
+    if (push_ptr && t->last_t < t->stem_len) {
+        int rem = t->stem_len - t->last_t;
+        int chunk_len = t->step;
+        if (rem < chunk_len) chunk_len = rem;
+        if (chunk_len > 0) memcpy(push_ptr, t->mono_data + t->last_t, sizeof(float) * chunk_len);
+    }
+    if (push_ptr) {
+        analyzer_analyze_chunk(t->analyzer, push_ptr, t->step, t->sr, win_s / t->hop, act_s / t->hop, t->res_chunk);
+        free(push_ptr);
+    }
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    TransientAnalyzer* analyzer;
+    int max_len;
+    int pass1_window_ms;
+    int common_sr;
+    int hop;
+    int step;
+    int total_steps;
+    double* group_hp_ms;
+    double* group_dem_lines;
+    double* accumulated_contour;
+    int contour_len;
+    volatile int* completed_steps_counter;
+    GroupMutex* shared_mutex;
+    GroupMutex* progress_mutex;
+    int total_stems;
+} Pass1StemTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall pass1_stem_worker_win(void* arg) {
+    Pass1StemTask* t = (Pass1StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass1_window_ms;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    int step_idx = 0;
+    for (int last_t = 0; last_t < t->max_len; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            if (step_idx < t->total_steps) {
+                group_mutex_lock(t->shared_mutex);
+                if (res_chunk->metrics.highest_peak_valid && res_chunk->metrics.highest_peak_ms > t->group_hp_ms[step_idx]) {
+                    t->group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_ms;
+                }
+                if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
+                    t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                group_mutex_unlock(t->shared_mutex);
+            }
+        }
+        step_idx++;
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 1: High Point Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return 0;
+}
+#else
+static void* pass1_stem_worker_posix(void* arg) {
+    Pass1StemTask* t = (Pass1StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass1_window_ms;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    int step_idx = 0;
+    for (int last_t = 0; last_t < t->max_len; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            if (step_idx < t->total_steps) {
+                group_mutex_lock(t->shared_mutex);
+                if (res_chunk->metrics.highest_peak_valid && res_chunk->metrics.highest_peak_ms > t->group_hp_ms[step_idx]) {
+                    t->group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_ms;
+                }
+                if (res_chunk->metrics.demarcation_line > t->group_dem_lines[step_idx]) {
+                    t->group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
+                }
+                group_mutex_unlock(t->shared_mutex);
+            }
+        }
+        step_idx++;
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 1: High Point Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    TransientAnalyzer* analyzer;
+    FullAnalysisResult* res2_stem;
+    int max_len;
+    int flush_samples;
+    int pass2_win_ms;
+    int common_sr;
+    int hop;
+    int step;
+    int total_steps;
+    float* gpu_flux;
+    int gpu_ok;
+    PeakResult** pband;
+    int* pcap;
+    volatile int* completed_steps_counter;
+    GroupMutex* shared_mutex;
+    GroupMutex* progress_mutex;
+    int total_stems;
+} Pass2StemTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall pass2_stem_worker_win(void* arg) {
+    Pass2StemTask* t = (Pass2StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass2_win_ms;
+    int num_f = t->res2_stem->num_frames;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    for (int last_t = 0; last_t < t->max_len + t->flush_samples; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            for (int b = 0; b < 1; b++) {
+                for (int k = 0; k < 100; k++) {
+                    int f = act_s / hop + k;
+                    if (f >= 0 && f < num_f) {
+                        if (t->gpu_ok) {
+                            t->res2_stem->bands[b].envelope[f] = t->gpu_flux[b * num_f + f];
+                        } else {
+                            t->res2_stem->bands[b].envelope[f] = res_chunk->last_flux[b][k];
+                        }
+                        t->res2_stem->bands[b].rolling_dynamic_smoothing[f] = res_chunk->last_dynamic_smoothing[b][k];
+                        t->res2_stem->bands[b].rolling_prominence[f] = res_chunk->last_prominence[b][k];
+                        t->res2_stem->bands[b].rolling_prominence_avg[f] = (float)res_chunk->metrics.band_prominence_avgs[b];
+                        t->res2_stem->bands[b].rolling_prominence_half_max[f] = (float)res_chunk->metrics.band_prominence_half_maxes[b];
+                        t->res2_stem->bands[b].rolling_smoothing_avg[f] = (float)res_chunk->metrics.band_smoothing_avgs[b];
+                        t->res2_stem->bands[b].rolling_flux_avg[f] = (float)res_chunk->metrics.band_flux_avgs[b];
+                        t->res2_stem->bands[b].rolling_threshold[f] = (float)res_chunk->metrics.band_midpoints[b];
+                        t->res2_stem->bands[b].rolling_lookback[f] = (float)res_chunk->metrics.band_lookbacks[b];
+                        t->res2_stem->bands[b].rolling_avg_delta[f] = (float)res_chunk->metrics.band_avg_deltas[b];
+                        t->res2_stem->bands[b].rolling_total_delta[f] = (float)res_chunk->metrics.band_total_deltas[b];
+                        t->res2_stem->bands[b].rolling_p_count[f] = res_chunk->metrics.band_p_counts[b];
+                    }
+                }
+            }
+            for (int k = 0; k < 100; k++) {
+                int f = act_s / hop + k;
+                if (f >= 0 && f < num_f) {
+                    t->res2_stem->ratings[f] = res_chunk->metrics.rating;
+                    t->res2_stem->std_devs[f] = res_chunk->metrics.std_dev;
+                    t->res2_stem->means[f] = res_chunk->metrics.mean;
+                    t->res2_stem->contrasts[f] = res_chunk->metrics.contrast;
+                    t->res2_stem->stability_scores[f] = res_chunk->metrics.stability_score;
+                    t->res2_stem->highest_peaks_ms[f] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
+                    t->res2_stem->demarcation_lines[f] = res_chunk->metrics.demarcation_line;
+                    t->res2_stem->rolling_global_flux_avg[f] = (float)res_chunk->metrics.global_flux_avg;
+                    t->res2_stem->rolling_global_smoothing_avg[f] = (float)res_chunk->metrics.global_smoothing_avg;
+                }
+            }
+            for (int k = 0; k < res_chunk->peak_list.num_peaks; k++) {
+                PeakResult* pr = &res_chunk->peak_list.peaks[k];
+                int b = pr->band_idx;
+                if (t->res2_stem->bands[b].num_peaks >= t->pcap[b]) {
+                    t->pcap[b] *= 2;
+                    PeakResult* np = (PeakResult*)realloc(t->pband[b], sizeof(PeakResult) * t->pcap[b]);
+                    if (np) t->pband[b] = np;
+                }
+                if (t->pband[b]) {
+                    memcpy(&t->pband[b][t->res2_stem->bands[b].num_peaks++], pr, sizeof(PeakResult));
+                }
+            }
+        }
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 2: Group Transience Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return 0;
+}
+#else
+static void* pass2_stem_worker_posix(void* arg) {
+    Pass2StemTask* t = (Pass2StemTask*)arg;
+    int len = t->stem->len;
+    int sr = t->stem->sr;
+    int step = t->step;
+    int hop = t->hop;
+    int win_ms = t->pass2_win_ms;
+    int num_f = t->res2_stem->num_frames;
+
+    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
+    float* push_ptr = (float*)malloc((step > 0 ? step : 1) * sizeof(float));
+
+    for (int last_t = 0; last_t < t->max_len + t->flush_samples; last_t += step) {
+        if (t->analyzer && push_ptr && res_chunk) {
+            int act_s = last_t - (int)(sr * 0.2);
+            int win_s = act_s - (int)(sr * (win_ms / 1000.0));
+            if (win_s < 0) win_s = 0;
+
+            memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
+            memset(push_ptr, 0, step * sizeof(float));
+
+            if (last_t < len) {
+                int rem = len - last_t;
+                int chunk_len = (rem < step) ? rem : step;
+                if (chunk_len > 0) memcpy(push_ptr, t->stem->mono_data + last_t, sizeof(float) * chunk_len);
+            }
+            analyzer_analyze_chunk(t->analyzer, push_ptr, step, sr, win_s / hop, act_s / hop, res_chunk);
+
+            for (int b = 0; b < 1; b++) {
+                for (int k = 0; k < 100; k++) {
+                    int f = act_s / hop + k;
+                    if (f >= 0 && f < num_f) {
+                        if (t->gpu_ok) {
+                            t->res2_stem->bands[b].envelope[f] = t->gpu_flux[b * num_f + f];
+                        } else {
+                            t->res2_stem->bands[b].envelope[f] = res_chunk->last_flux[b][k];
+                        }
+                        t->res2_stem->bands[b].rolling_dynamic_smoothing[f] = res_chunk->last_dynamic_smoothing[b][k];
+                        t->res2_stem->bands[b].rolling_prominence[f] = res_chunk->last_prominence[b][k];
+                        t->res2_stem->bands[b].rolling_prominence_avg[f] = (float)res_chunk->metrics.band_prominence_avgs[b];
+                        t->res2_stem->bands[b].rolling_prominence_half_max[f] = (float)res_chunk->metrics.band_prominence_half_maxes[b];
+                        t->res2_stem->bands[b].rolling_smoothing_avg[f] = (float)res_chunk->metrics.band_smoothing_avgs[b];
+                        t->res2_stem->bands[b].rolling_flux_avg[f] = (float)res_chunk->metrics.band_flux_avgs[b];
+                        t->res2_stem->bands[b].rolling_threshold[f] = (float)res_chunk->metrics.band_midpoints[b];
+                        t->res2_stem->bands[b].rolling_lookback[f] = (float)res_chunk->metrics.band_lookbacks[b];
+                        t->res2_stem->bands[b].rolling_avg_delta[f] = (float)res_chunk->metrics.band_avg_deltas[b];
+                        t->res2_stem->bands[b].rolling_total_delta[f] = (float)res_chunk->metrics.band_total_deltas[b];
+                        t->res2_stem->bands[b].rolling_p_count[f] = res_chunk->metrics.band_p_counts[b];
+                    }
+                }
+            }
+            for (int k = 0; k < 100; k++) {
+                int f = act_s / hop + k;
+                if (f >= 0 && f < num_f) {
+                    t->res2_stem->ratings[f] = res_chunk->metrics.rating;
+                    t->res2_stem->std_devs[f] = res_chunk->metrics.std_dev;
+                    t->res2_stem->means[f] = res_chunk->metrics.mean;
+                    t->res2_stem->contrasts[f] = res_chunk->metrics.contrast;
+                    t->res2_stem->stability_scores[f] = res_chunk->metrics.stability_score;
+                    t->res2_stem->highest_peaks_ms[f] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
+                    t->res2_stem->demarcation_lines[f] = res_chunk->metrics.demarcation_line;
+                    t->res2_stem->rolling_global_flux_avg[f] = (float)res_chunk->metrics.global_flux_avg;
+                    t->res2_stem->rolling_global_smoothing_avg[f] = (float)res_chunk->metrics.global_smoothing_avg;
+                }
+            }
+            for (int k = 0; k < res_chunk->peak_list.num_peaks; k++) {
+                PeakResult* pr = &res_chunk->peak_list.peaks[k];
+                int b = pr->band_idx;
+                if (t->res2_stem->bands[b].num_peaks >= t->pcap[b]) {
+                    t->pcap[b] *= 2;
+                    PeakResult* np = (PeakResult*)realloc(t->pband[b], sizeof(PeakResult) * t->pcap[b]);
+                    if (np) t->pband[b] = np;
+                }
+                if (t->pband[b]) {
+                    memcpy(&t->pband[b][t->res2_stem->bands[b].num_peaks++], pr, sizeof(PeakResult));
+                }
+            }
+        }
+
+        group_mutex_lock(t->progress_mutex);
+        (*(t->completed_steps_counter))++;
+        int cnt = *(t->completed_steps_counter);
+        int total_work = t->total_steps * t->total_stems;
+        print_progress_bar(cnt, total_work, "Pass 2: Group Transience Analysis");
+        group_mutex_unlock(t->progress_mutex);
+    }
+
+    if (push_ptr) free(push_ptr);
+    if (res_chunk) free(res_chunk);
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    float* gpu_flux;
+    int num_f;
+    int gpu_ok;
+    volatile int* completed_counter;
+    GroupMutex* counter_mutex;
+    int total_stems;
+} GroupSTFTTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall stft_worker_win(void* arg) {
+    GroupSTFTTask* t = (GroupSTFTTask*)arg;
+    if (t->gpu_flux) {
+        t->gpu_ok = gpu_stft_process(t->stem->mono_data, t->stem->len, t->stem->sr, t->gpu_flux, t->num_f, 1);
+    } else {
+        t->gpu_ok = 0;
+    }
+    group_mutex_lock(t->counter_mutex);
+    (*(t->completed_counter))++;
+    int cnt = *(t->completed_counter);
+    print_progress_bar(cnt, t->total_stems, "Pre-computing STFT Envelopes");
+    group_mutex_unlock(t->counter_mutex);
+    return 0;
+}
+#else
+static void* stft_worker_posix(void* arg) {
+    GroupSTFTTask* t = (GroupSTFTTask*)arg;
+    if (t->gpu_flux) {
+        t->gpu_ok = gpu_stft_process(t->stem->mono_data, t->stem->len, t->stem->sr, t->gpu_flux, t->num_f, 1);
+    } else {
+        t->gpu_ok = 0;
+    }
+    group_mutex_lock(t->counter_mutex);
+    (*(t->completed_counter))++;
+    int cnt = *(t->completed_counter);
+    print_progress_bar(cnt, t->total_stems, "Pre-computing STFT Envelopes");
+    group_mutex_unlock(t->counter_mutex);
+    return NULL;
+}
+#endif
+
+typedef struct {
+    int stem_idx;
+    const GroupStemInput* stem;
+    const char* parent_dir;
+    int pass1_window_ms;
+    int pass2_win_ms;
+    double best_bar_length_ms;
+    const double* accumulated_contour;
+    int contour_len;
+    int contour_sample_count;
+    double midpoint_s;
+    double longest_hp_start_s;
+    double longest_hp_end_s;
+    double midpoint_demarcation_line;
+    const double* midpoint_buffer;
+    FullAnalysisResult* res2_stem;
+    volatile int* export_counter;
+    GroupMutex* counter_mutex;
+    int total_stems;
+} GroupExportTask;
+
+static void process_single_stem_export(
+    const GroupStemInput* stem,
+    const char* parent_dir,
+    int pass1_window_ms,
+    int pass2_win_ms,
+    double best_bar_length_ms,
+    const double* accumulated_contour,
+    int contour_len,
+    int contour_sample_count,
+    double midpoint_s,
+    double longest_hp_start_s,
+    double longest_hp_end_s,
+    double midpoint_demarcation_line,
+    const double* midpoint_buffer,
+    FullAnalysisResult* res2_stem
+) {
+    char stem_output_dir[4096];
+    snprintf(stem_output_dir, sizeof(stem_output_dir), "%s" PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", parent_dir, stem->stem_name);
+    mkdir_p(stem_output_dir);
+
+    // Export .ctbin
+    char ctbin_path[4096];
+    snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", stem_output_dir, stem->stem_name);
+    export_ctbin(ctbin_path, stem->mono_data, stem->len, stem->sr, pass2_win_ms);
+
+    // Export snapshots.bin and snapshots.js
+    int total_peaks = res2_stem->bands[0].num_peaks;
+    char snap_bin_path[4096];
+    snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", stem_output_dir);
+    FILE* f_snap = fopen(snap_bin_path, "wb");
+
+    int snap_len = pass2_win_ms + 1;
+    size_t float32_bytes_per_snap = snap_len * sizeof(float);
+    size_t total_snap_bytes = total_peaks * float32_bytes_per_snap;
+    uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
+
+    size_t snap_offset = 0;
+    for (int k = 0; k < total_peaks; k++) {
+        PeakResult* pr = &res2_stem->bands[0].peaks[k];
+        float* float32_snap = (float*)malloc(snap_len * sizeof(float));
+        for (int s = 0; s < snap_len; s++) float32_snap[s] = (float)pr->snapshot[s];
+
+        if (f_snap) fwrite(float32_snap, sizeof(float), snap_len, f_snap);
+        if (all_snap_buf) memcpy(all_snap_buf + snap_offset, float32_snap, float32_bytes_per_snap);
+
+        snap_offset += float32_bytes_per_snap;
+        free(float32_snap);
+    }
+    if (f_snap) fclose(f_snap);
+
+    char snap_js_path[4096];
+    snprintf(snap_js_path, sizeof(snap_js_path), "%s" PATH_SEP_STR "snapshots.js", stem_output_dir);
+    FILE* f_snap_js = fopen(snap_js_path, "w");
+    if (f_snap_js && all_snap_buf) {
+        size_t b64_len = 4 * ((total_snap_bytes + 2) / 3);
+        char* b64_str = (char*)malloc(b64_len + 1);
+        if (b64_str) {
+            base64_encode(all_snap_buf, total_snap_bytes, b64_str);
+            fprintf(f_snap_js, "window.snapshotsBase64 = '%s';\n", b64_str);
+            free(b64_str);
+        }
+        fclose(f_snap_js);
+    }
+    free(all_snap_buf);
+
+    // Export manifest.json
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s" PATH_SEP_STR "manifest.json", stem_output_dir);
+    FILE* f_mf = fopen(manifest_path, "w");
+    if (f_mf) {
+        fprintf(f_mf, "{\n");
+        fprintf(f_mf, "  \"version\": 1,\n");
+        fprintf(f_mf, "  \"sample_rate\": %d,\n", stem->sr);
+        fprintf(f_mf, "  \"num_frames\": %d,\n", res2_stem->num_frames);
+        fprintf(f_mf, "  \"window_ms\": %d,\n", pass2_win_ms);
+        fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2_stem->tolerance);
+        fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2_stem->max_peak_value);
+        fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2_stem->min_score_seen);
+        fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2_stem->max_score_seen);
+        fprintf(f_mf, "  \"total_peaks\": %d,\n", total_peaks);
+        fprintf(f_mf, "  \"peaks\": [\n");
+
+        size_t curr_snap_offset = 0;
+        for (int k = 0; k < total_peaks; k++) {
+            PeakResult* pr = &res2_stem->bands[0].peaks[k];
+            fprintf(f_mf, "    {\n");
+            fprintf(f_mf, "      \"p_idx\": %d,\n", pr->p_idx);
+            fprintf(f_mf, "      \"band_idx\": %d,\n", pr->band_idx);
+            fprintf(f_mf, "      \"time_s\": %.6f,\n", pr->time);
+            fprintf(f_mf, "      \"time_ms\": %.3f,\n", pr->time * 1000.0);
+            fprintf(f_mf, "      \"peak_val\": %.6f,\n", pr->peak_val);
+            fprintf(f_mf, "      \"total_score\": %.6f,\n", pr->total_score);
+            fprintf(f_mf, "      \"detected_peak_val\": %.6f,\n", pr->detected_peak_val);
+            fprintf(f_mf, "      \"thresh_val\": %.6f,\n", pr->thresh_val);
+            fprintf(f_mf, "      \"left_min\": %.6f,\n", pr->left_min);
+            fprintf(f_mf, "      \"right_min\": %.6f,\n", pr->right_min);
+            fprintf(f_mf, "      \"prominence\": %.6f,\n", pr->prominence);
+            fprintf(f_mf, "      \"snap_offset\": %llu,\n", (unsigned long long)curr_snap_offset);
+            fprintf(f_mf, "      \"snap_len\": %d,\n", snap_len);
+            fprintf(f_mf, "      \"qualifiers\": [\n");
+            for (int q = 0; q < pr->num_qualifiers; q++) {
+                fprintf(f_mf, "        {\"ms\": %.3f, \"val\": %.6f, \"orig_ms\": %.3f}%s\n",
+                        pr->qualifiers[q].ms, pr->qualifiers[q].val, pr->qualifiers[q].orig_ms,
+                        (q < pr->num_qualifiers - 1) ? "," : "");
+            }
+            fprintf(f_mf, "      ]\n");
+            fprintf(f_mf, "    }%s\n", (k < total_peaks - 1) ? "," : "");
+            curr_snap_offset += float32_bytes_per_snap;
+        }
+        fprintf(f_mf, "  ]\n");
+        fprintf(f_mf, "}\n");
+        fclose(f_mf);
+    }
+
+    // Copy audio WAV file into stem palette output directory
+    const char* last_slash = strrchr(stem->audio_filepath, '/');
+    const char* last_backslash = strrchr(stem->audio_filepath, '\\');
+    const char* audio_filename = stem->audio_filepath;
+    if (last_slash && last_slash >= audio_filename) audio_filename = last_slash + 1;
+    if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
+
+    char dst_stem_audio_path[4096];
+    snprintf(dst_stem_audio_path, sizeof(dst_stem_audio_path), "%s" PATH_SEP_STR "%s", stem_output_dir, audio_filename);
+
+    FILE* src_f = fopen(stem->audio_filepath, "rb");
+    if (src_f) {
+        FILE* dst_f = fopen(dst_stem_audio_path, "wb");
+        if (dst_f) {
+            char buf[65536];
+            size_t bytes_read;
+            while ((bytes_read = fread(buf, 1, sizeof(buf), src_f)) > 0) {
+                fwrite(buf, 1, bytes_read, dst_f);
+            }
+            fclose(dst_f);
+        }
+        fclose(src_f);
+    }
+
+    // Copy matching passes text files into stem palette output directory
+    char stem_dir_path[2048], stem_stem_name[1024];
+    const char* last_s = strrchr(stem->audio_filepath, '/');
+    const char* last_bs = strrchr(stem->audio_filepath, '\\');
+    const char* fn = stem->audio_filepath;
+    if (last_s && last_s >= fn) fn = last_s + 1;
+    if (last_bs && last_bs >= fn) fn = last_bs + 1;
+    const char* dot = strrchr(fn, '.');
+    size_t s_len = dot ? (size_t)(dot - fn) : strlen(fn);
+    strncpy(stem_stem_name, fn, s_len);
+    stem_stem_name[s_len] = '\0';
+    size_t d_len = (size_t)(fn - stem->audio_filepath);
+    if (d_len > 0) { strncpy(stem_dir_path, stem->audio_filepath, d_len); stem_dir_path[d_len] = '\0'; }
+    else { strcpy(stem_dir_path, "." PATH_SEP_STR); }
+
+    if (strncmp(stem_stem_name, "palette", 7) == 0) {
+        char target_passes_stem[1024];
+        snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", stem_stem_name + 7);
+        DIR* d = opendir(stem_dir_path);
+        if (d) {
+            struct dirent* entry;
+            while ((entry = readdir(d)) != NULL) {
+                if (is_text_file_ext(entry->d_name) && strncmp(entry->d_name, target_passes_stem, strlen(target_passes_stem)) == 0) {
+                    char src_p[4096], dst_p[4096];
+                    snprintf(src_p, sizeof(src_p), "%s" PATH_SEP_STR "%s", stem_dir_path, entry->d_name);
+                    snprintf(dst_p, sizeof(dst_p), "%s" PATH_SEP_STR "%s", stem_output_dir, entry->d_name);
+                    FILE* sf = fopen(src_p, "rb");
+                    if (sf) {
+                        FILE* df = fopen(dst_p, "wb");
+                        if (df) {
+                            char b[65536]; size_t br;
+                            while ((br = fread(b, 1, sizeof(b), sf)) > 0) fwrite(b, 1, br, df);
+                            fclose(df);
+                        }
+                        fclose(sf);
+                    }
+                }
+            }
+            closedir(d);
+        }
+    }
+
+    // Export stem assets and HTML report directly from res2_stem result using shared group Pass 1 assets
+    export_single_stem_assets_from_res(
+        stem_output_dir,
+        stem->stem_name,
+        stem->mono_data,
+        stem->len,
+        stem->sr,
+        pass1_window_ms,
+        pass2_win_ms,
+        best_bar_length_ms,
+        NULL,
+        0,
+        accumulated_contour,
+        contour_len,
+        contour_sample_count,
+        midpoint_s,
+        longest_hp_start_s,
+        longest_hp_end_s,
+        midpoint_demarcation_line,
+        midpoint_buffer,
+        res2_stem
+    );
+}
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall export_worker_win(void* arg) {
+    GroupExportTask* t = (GroupExportTask*)arg;
+    process_single_stem_export(
+        t->stem, t->parent_dir, t->pass1_window_ms, t->pass2_win_ms,
+        t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
+        t->contour_sample_count, t->midpoint_s, t->longest_hp_start_s,
+        t->longest_hp_end_s, t->midpoint_demarcation_line,
+        t->midpoint_buffer, t->res2_stem
+    );
+    group_mutex_lock(t->counter_mutex);
+    (*(t->export_counter))++;
+    int cnt = *(t->export_counter);
+    print_progress_bar(cnt, t->total_stems, "Exporting Stem Assets & Slicing Pattern WAVs");
+    group_mutex_unlock(t->counter_mutex);
+    return 0;
+}
+#else
+static void* export_worker_posix(void* arg) {
+    GroupExportTask* t = (GroupExportTask*)arg;
+    process_single_stem_export(
+        t->stem, t->parent_dir, t->pass1_window_ms, t->pass2_win_ms,
+        t->best_bar_length_ms, t->accumulated_contour, t->contour_len,
+        t->contour_sample_count, t->midpoint_s, t->longest_hp_start_s,
+        t->longest_hp_end_s, t->midpoint_demarcation_line,
+        t->midpoint_buffer, t->res2_stem
+    );
+    group_mutex_lock(t->counter_mutex);
+    (*(t->export_counter))++;
+    int cnt = *(t->export_counter);
+    print_progress_bar(cnt, t->total_stems, "Exporting Stem Assets & Slicing Pattern WAVs");
+    group_mutex_unlock(t->counter_mutex);
+    return NULL;
+}
+#endif
+
 int export_group_assets_and_html(
     const GroupStemInput* stems,
     int num_stems,
@@ -2007,6 +2800,12 @@ int export_group_assets_and_html(
     snprintf(group_output_dir, sizeof(group_output_dir), "%s" PATH_SEP_STR "[palettes]", parent_dir);
     mkdir_p(group_output_dir);
 
+    // Ensure progress bar mutex is initialized prior to spawning threads
+    if (!g_progress_mutex_inited) {
+        group_mutex_init(&g_progress_mutex);
+        g_progress_mutex_inited = 1;
+    }
+
     // 2. Shared Transient Buffer Allocation for Group Analysis
     SharedTransientBuffer group_shared;
     memset(&group_shared, 0, sizeof(SharedTransientBuffer));
@@ -2014,12 +2813,15 @@ int export_group_assets_and_html(
     group_shared.min_score_seen = DBL_MAX;
     group_shared.max_score_seen = -DBL_MAX;
 
+    GroupMutex group_shared_mutex;
+    group_mutex_init(&group_shared_mutex);
+
     TransientAnalyzer** pass1_analyzers = (TransientAnalyzer**)calloc(num_stems, sizeof(TransientAnalyzer*));
     int max_len = 0;
     int common_sr = stems[0].sr;
 
     for (int i = 0; i < num_stems; i++) {
-        pass1_analyzers[i] = analyzer_create(1.0, &group_shared, NULL, NULL, NULL, pass1_window_ms, 1);
+        pass1_analyzers[i] = analyzer_create(1.0, &group_shared, &group_shared_mutex, group_mutex_lock, group_mutex_unlock, pass1_window_ms, 1);
         if (pass1_analyzers[i]) {
             analyzer_set_sample_rate(pass1_analyzers[i], stems[i].sr);
         }
@@ -2035,44 +2837,76 @@ int export_group_assets_and_html(
     int step = hop * 19; // Sample contour every 19 ms
 
     int total_p1_steps = (max_len + step - 1) / step;
+    if (total_p1_steps < 1) total_p1_steps = 1;
     double* group_hp_ms = (double*)calloc(total_p1_steps + 1, sizeof(double));
     double* group_dem_lines = (double*)calloc(total_p1_steps + 1, sizeof(double));
 
-    ChunkAnalysisResult* res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (res_chunk) {
-        int step_idx = 0;
-        for (int last_t = 0; last_t < max_len; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!pass1_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int max_worker_threads = get_max_worker_threads();
 
-                memset(res_chunk, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int chunk_len = step;
-                    if (last_t + step > stems[i].len) chunk_len = stems[i].len - last_t;
-                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
-                }
-                analyzer_analyze_chunk(pass1_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, res_chunk);
-                free(push_ptr);
-            }
+    printf("\nStarting Pass 1: High Point Analysis across %d stem(s) using %d CPU worker thread(s)...\n", num_stems, max_worker_threads);
+    print_progress_bar(0, total_p1_steps, "Pass 1: High Point Analysis");
 
-            if (step_idx < total_p1_steps) {
-                group_hp_ms[step_idx] = res_chunk->metrics.highest_peak_valid ? res_chunk->metrics.highest_peak_ms : -999.0;
-                group_dem_lines[step_idx] = res_chunk->metrics.demarcation_line;
-            }
+    Pass1StemTask* p1_tasks = (Pass1StemTask*)calloc(num_stems, sizeof(Pass1StemTask));
+    volatile int p1_completed_steps = 0;
+    GroupMutex p1_progress_mutex;
+    group_mutex_init(&p1_progress_mutex);
 
-            // Record current state of shared accumulated buffer
-            for (int k = 0; k < contour_len; k++) {
-                accumulated_contour[k] += group_shared.accumulated_buffer[k];
-            }
-            contour_sample_count++;
-            step_idx++;
-        }
-        free(res_chunk);
+    for (int i = 0; i < num_stems; i++) {
+        p1_tasks[i].stem_idx = i;
+        p1_tasks[i].stem = &stems[i];
+        p1_tasks[i].analyzer = pass1_analyzers[i];
+        p1_tasks[i].max_len = max_len;
+        p1_tasks[i].pass1_window_ms = pass1_window_ms;
+        p1_tasks[i].common_sr = common_sr;
+        p1_tasks[i].hop = hop;
+        p1_tasks[i].step = step;
+        p1_tasks[i].total_steps = total_p1_steps;
+        p1_tasks[i].group_hp_ms = group_hp_ms;
+        p1_tasks[i].group_dem_lines = group_dem_lines;
+        p1_tasks[i].accumulated_contour = accumulated_contour;
+        p1_tasks[i].contour_len = contour_len;
+        p1_tasks[i].completed_steps_counter = &p1_completed_steps;
+        p1_tasks[i].shared_mutex = &group_shared_mutex;
+        p1_tasks[i].progress_mutex = &p1_progress_mutex;
+        p1_tasks[i].total_stems = num_stems;
     }
+
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, pass1_stem_worker_win, &p1_tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
+        }
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, pass1_stem_worker_posix, &p1_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
+        }
+    }
+#endif
+
+    free(p1_tasks);
+    group_mutex_destroy(&p1_progress_mutex);
+
+    if (accumulated_contour) {
+        memcpy(accumulated_contour, group_shared.accumulated_buffer, sizeof(double) * contour_len);
+    }
+    contour_sample_count = total_p1_steps;
 
     for (int i = 0; i < num_stems; i++) {
         if (pass1_analyzers[i]) analyzer_destroy(pass1_analyzers[i]);
@@ -2155,8 +2989,11 @@ int export_group_assets_and_html(
     memset(&mid_shared, 0, sizeof(SharedTransientBuffer));
     mid_shared.max_peak = 1.0;
 
+    GroupMutex mid_mutex;
+    group_mutex_init(&mid_mutex);
+
     for (int i = 0; i < num_stems; i++) {
-        mid_analyzers[i] = analyzer_create(1.0, &mid_shared, NULL, NULL, NULL, pass1_window_ms, 1);
+        mid_analyzers[i] = analyzer_create(1.0, &mid_shared, &mid_mutex, group_mutex_lock, group_mutex_unlock, pass1_window_ms, 1);
         if (mid_analyzers[i]) analyzer_set_sample_rate(mid_analyzers[i], stems[i].sr);
     }
 
@@ -2164,32 +3001,69 @@ int export_group_assets_and_html(
     if (target_sample > max_len) target_sample = max_len;
     step = hop * 100;
 
-    ChunkAnalysisResult* mid_res_chunk = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (mid_res_chunk) {
-        for (int last_t = 0; last_t < target_sample; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!mid_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass1_window_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int total_mid_steps = (target_sample + step - 1) / step;
+    if (total_mid_steps < 1) total_mid_steps = 1;
 
-                memset(mid_res_chunk, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int chunk_len = step;
-                    if (last_t + step > target_sample) chunk_len = target_sample - last_t;
-                    if (chunk_len > 0) memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * chunk_len);
+    printf("\nCapturing Midpoint Snapshot across %d stem(s)...\n", num_stems);
+    print_progress_bar(0, total_mid_steps, "Capturing Midpoint Snapshot");
+
+    GroupChunkTask* mid_tasks = (GroupChunkTask*)calloc(num_stems, sizeof(GroupChunkTask));
+    ChunkAnalysisResult* mid_res_chunks = (ChunkAnalysisResult*)calloc(num_stems, sizeof(ChunkAnalysisResult));
+
+    int mid_step_count = 0;
+    for (int last_t = 0; last_t < target_sample; last_t += step) {
+        for (int i = 0; i < num_stems; i++) {
+            mid_tasks[i].analyzer = mid_analyzers[i];
+            mid_tasks[i].mono_data = stems[i].mono_data;
+            mid_tasks[i].stem_len = stems[i].len;
+            mid_tasks[i].sr = stems[i].sr;
+            mid_tasks[i].last_t = last_t;
+            mid_tasks[i].step = step;
+            mid_tasks[i].window_ms = pass1_window_ms;
+            mid_tasks[i].hop = hop;
+            mid_tasks[i].res_chunk = &mid_res_chunks[i];
+        }
+
+#if defined(_WIN32) || defined(_WIN64)
+        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+            int batch_count = num_stems - batch_start;
+            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+            HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+            if (threads) {
+                for (int i = 0; i < batch_count; i++) {
+                    threads[i] = (HANDLE)_beginthreadex(NULL, 0, chunk_worker_win, &mid_tasks[batch_start + i], 0, NULL);
                 }
-                analyzer_analyze_chunk(mid_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, mid_res_chunk);
-                free(push_ptr);
+                WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+                for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+                free(threads);
             }
         }
-        free(mid_res_chunk);
+#else
+        for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+            int batch_count = num_stems - batch_start;
+            if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+            pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+            if (threads) {
+                for (int i = 0; i < batch_count; i++) {
+                    pthread_create(&threads[i], NULL, chunk_worker_posix, &mid_tasks[batch_start + i]);
+                }
+                for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+                free(threads);
+            }
+        }
+#endif
+
+        mid_step_count++;
+        print_progress_bar(mid_step_count, total_mid_steps, "Capturing Midpoint Snapshot");
     }
+
+    free(mid_tasks);
+    free(mid_res_chunks);
     for (int i = 0; i < num_stems; i++) {
         if (mid_analyzers[i]) analyzer_destroy(mid_analyzers[i]);
     }
     free(mid_analyzers);
+    group_mutex_destroy(&mid_mutex);
 
     if (midpoint_buffer) {
         memcpy(midpoint_buffer, mid_shared.accumulated_buffer, sizeof(double) * (pass1_window_ms + 1));
@@ -2212,6 +3086,13 @@ int export_group_assets_and_html(
     int* pass2_gpu_ok = (int*)calloc(num_stems, sizeof(int));
     PeakResult*** pband = (PeakResult***)calloc(num_stems, sizeof(PeakResult**));
     int** pcap = (int**)calloc(num_stems, sizeof(int*));
+
+    GroupSTFTTask* stft_tasks = (GroupSTFTTask*)calloc(num_stems, sizeof(GroupSTFTTask));
+    volatile int stft_counter = 0;
+    GroupMutex stft_mutex;
+    group_mutex_init(&stft_mutex);
+
+    print_progress_bar(0, num_stems, "Pre-computing STFT Envelopes");
 
     for (int i = 0; i < num_stems; i++) {
         pcap[i] = (int*)calloc(MAX_BANDS, sizeof(int));
@@ -2250,93 +3131,127 @@ int export_group_assets_and_html(
         }
 
         pass2_gpu_flux[i] = (float*)malloc(sizeof(float) * 1 * num_f);
-        if (pass2_gpu_flux[i]) {
-            pass2_gpu_ok[i] = gpu_stft_process(stems[i].mono_data, stems[i].len, stems[i].sr, pass2_gpu_flux[i], num_f, 1);
-        }
 
-        pass2_analyzers[i] = analyzer_create(1.0, &group_shared, NULL, NULL, NULL, pass2_win_ms, 1);
+        stft_tasks[i].stem_idx = i;
+        stft_tasks[i].stem = &stems[i];
+        stft_tasks[i].gpu_flux = pass2_gpu_flux[i];
+        stft_tasks[i].num_f = num_f;
+        stft_tasks[i].completed_counter = &stft_counter;
+        stft_tasks[i].counter_mutex = &stft_mutex;
+        stft_tasks[i].total_stems = num_stems;
+
+        pass2_analyzers[i] = analyzer_create(1.0, &group_shared, &group_shared_mutex, group_mutex_lock, group_mutex_unlock, pass2_win_ms, 1);
         if (pass2_analyzers[i]) analyzer_set_sample_rate(pass2_analyzers[i], stems[i].sr);
 
         pband[i] = (PeakResult**)malloc(sizeof(PeakResult*) * MAX_BANDS);
         for (int b = 0; b < MAX_BANDS; b++) {
-            pcap[i][b] = 1024;
+            pcap[i][b] = 32;
             pband[i][b] = (PeakResult*)malloc(sizeof(PeakResult) * pcap[i][b]);
         }
     }
 
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, stft_worker_win, &stft_tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
+        }
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, stft_worker_posix, &stft_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
+        }
+    }
+#endif
+
+    for (int i = 0; i < num_stems; i++) {
+        pass2_gpu_ok[i] = stft_tasks[i].gpu_ok;
+    }
+    free(stft_tasks);
+    group_mutex_destroy(&stft_mutex);
+
     int flush_samples = (int)(common_sr * 0.3);
     step = hop * 100;
 
-    ChunkAnalysisResult* pass2_chunk_res = (ChunkAnalysisResult*)malloc(sizeof(ChunkAnalysisResult));
-    if (pass2_chunk_res) {
-        for (int last_t = 0; last_t < max_len + flush_samples; last_t += step) {
-            for (int i = 0; i < num_stems; i++) {
-                if (!pass2_analyzers[i]) continue;
-                int act_s = last_t - (int)(stems[i].sr * 0.2);
-                int win_s = act_s - (int)(stems[i].sr * (pass2_win_ms / 1000.0));
-                if (win_s < 0) win_s = 0;
+    int total_p2_steps = (max_len + flush_samples + step - 1) / step;
+    if (total_p2_steps < 1) total_p2_steps = 1;
 
-                memset(pass2_chunk_res, 0, sizeof(ChunkAnalysisResult));
-                float* push_ptr = (float*)calloc(step, sizeof(float));
-                if (last_t < stems[i].len) {
-                    int rem = stems[i].len - last_t;
-                    memcpy(push_ptr, stems[i].mono_data + last_t, sizeof(float) * (rem < step ? rem : step));
-                }
-                analyzer_analyze_chunk(pass2_analyzers[i], push_ptr, step, stems[i].sr, win_s / hop, act_s / hop, pass2_chunk_res);
-                free(push_ptr);
+    printf("\nStarting Pass 2: Group Transience Analysis across %d stem(s)...\n", num_stems);
+    print_progress_bar(0, total_p2_steps, "Pass 2: Group Transience Analysis");
 
-                int num_f = res2_stems[i].num_frames;
-                for (int b = 0; b < 1; b++) {
-                    for (int k = 0; k < 100; k++) {
-                        int f = act_s / hop + k;
-                        if (f >= 0 && f < num_f) {
-                            if (pass2_gpu_ok[i]) {
-                                res2_stems[i].bands[b].envelope[f] = pass2_gpu_flux[i][b * num_f + f];
-                            } else {
-                                res2_stems[i].bands[b].envelope[f] = pass2_chunk_res->last_flux[b][k];
-                            }
-                            res2_stems[i].bands[b].rolling_dynamic_smoothing[f] = pass2_chunk_res->last_dynamic_smoothing[b][k];
-                            res2_stems[i].bands[b].rolling_prominence[f] = pass2_chunk_res->last_prominence[b][k];
-                            res2_stems[i].bands[b].rolling_prominence_avg[f] = (float)pass2_chunk_res->metrics.band_prominence_avgs[b];
-                            res2_stems[i].bands[b].rolling_prominence_half_max[f] = (float)pass2_chunk_res->metrics.band_prominence_half_maxes[b];
-                            res2_stems[i].bands[b].rolling_smoothing_avg[f] = (float)pass2_chunk_res->metrics.band_smoothing_avgs[b];
-                            res2_stems[i].bands[b].rolling_flux_avg[f] = (float)pass2_chunk_res->metrics.band_flux_avgs[b];
-                            res2_stems[i].bands[b].rolling_threshold[f] = (float)pass2_chunk_res->metrics.band_midpoints[b];
-                            res2_stems[i].bands[b].rolling_lookback[f] = (float)pass2_chunk_res->metrics.band_lookbacks[b];
-                            res2_stems[i].bands[b].rolling_avg_delta[f] = (float)pass2_chunk_res->metrics.band_avg_deltas[b];
-                            res2_stems[i].bands[b].rolling_total_delta[f] = (float)pass2_chunk_res->metrics.band_total_deltas[b];
-                            res2_stems[i].bands[b].rolling_p_count[f] = pass2_chunk_res->metrics.band_p_counts[b];
-                        }
-                    }
-                }
-                for (int k = 0; k < 100; k++) {
-                    int f = act_s / hop + k;
-                    if (f >= 0 && f < num_f) {
-                        res2_stems[i].ratings[f] = pass2_chunk_res->metrics.rating;
-                        res2_stems[i].std_devs[f] = pass2_chunk_res->metrics.std_dev;
-                        res2_stems[i].means[f] = pass2_chunk_res->metrics.mean;
-                        res2_stems[i].contrasts[f] = pass2_chunk_res->metrics.contrast;
-                        res2_stems[i].stability_scores[f] = pass2_chunk_res->metrics.stability_score;
-                        res2_stems[i].highest_peaks_ms[f] = pass2_chunk_res->metrics.highest_peak_valid ? pass2_chunk_res->metrics.highest_peak_ms : -999.0;
-                        res2_stems[i].demarcation_lines[f] = pass2_chunk_res->metrics.demarcation_line;
-                        res2_stems[i].rolling_global_flux_avg[f] = (float)pass2_chunk_res->metrics.global_flux_avg;
-                        res2_stems[i].rolling_global_smoothing_avg[f] = (float)pass2_chunk_res->metrics.global_smoothing_avg;
-                    }
-                }
-                for (int k = 0; k < pass2_chunk_res->peak_list.num_peaks; k++) {
-                    PeakResult* pr = &pass2_chunk_res->peak_list.peaks[k];
-                    int b = pr->band_idx;
-                    if (res2_stems[i].bands[b].num_peaks >= pcap[i][b]) {
-                        pcap[i][b] *= 2;
-                        PeakResult* np = realloc(pband[i][b], sizeof(PeakResult) * pcap[i][b]);
-                        if (np) pband[i][b] = np;
-                    }
-                    memcpy(&pband[i][b][res2_stems[i].bands[b].num_peaks++], pr, sizeof(PeakResult));
-                }
-            }
-        }
-        free(pass2_chunk_res);
+    Pass2StemTask* p2_tasks = (Pass2StemTask*)calloc(num_stems, sizeof(Pass2StemTask));
+    volatile int p2_completed_steps = 0;
+    GroupMutex p2_progress_mutex;
+    group_mutex_init(&p2_progress_mutex);
+
+    for (int i = 0; i < num_stems; i++) {
+        p2_tasks[i].stem_idx = i;
+        p2_tasks[i].stem = &stems[i];
+        p2_tasks[i].analyzer = pass2_analyzers[i];
+        p2_tasks[i].res2_stem = &res2_stems[i];
+        p2_tasks[i].max_len = max_len;
+        p2_tasks[i].flush_samples = flush_samples;
+        p2_tasks[i].pass2_win_ms = pass2_win_ms;
+        p2_tasks[i].common_sr = common_sr;
+        p2_tasks[i].hop = hop;
+        p2_tasks[i].step = step;
+        p2_tasks[i].total_steps = total_p2_steps;
+        p2_tasks[i].gpu_flux = pass2_gpu_flux[i];
+        p2_tasks[i].gpu_ok = pass2_gpu_ok[i];
+        p2_tasks[i].pband = pband[i];
+        p2_tasks[i].pcap = pcap[i];
+        p2_tasks[i].completed_steps_counter = &p2_completed_steps;
+        p2_tasks[i].shared_mutex = &group_shared_mutex;
+        p2_tasks[i].progress_mutex = &p2_progress_mutex;
+        p2_tasks[i].total_stems = num_stems;
     }
+
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, pass2_stem_worker_win, &p2_tasks[batch_start + i], 0, NULL);
+            }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
+        }
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, pass2_stem_worker_posix, &p2_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
+        }
+    }
+#endif
+
+    free(p2_tasks);
+    group_mutex_destroy(&p2_progress_mutex);
 
     for (int i = 0; i < num_stems; i++) {
         if (pass2_gpu_flux[i]) free(pass2_gpu_flux[i]);
@@ -2361,199 +3276,72 @@ int export_group_assets_and_html(
     free(pass2_analyzers);
     free(pass2_gpu_flux);
     free(pass2_gpu_ok);
+    group_mutex_destroy(&group_shared_mutex);
 
     // 4. Export individual stem assets & HTML using res2_stems results
+    print_progress_bar(0, num_stems, "Exporting Stem Assets & Slicing Pattern WAVs");
+
+    GroupExportTask* export_tasks = (GroupExportTask*)calloc(num_stems, sizeof(GroupExportTask));
+    volatile int export_counter = 0;
+    GroupMutex export_mutex;
+    group_mutex_init(&export_mutex);
+
     for (int i = 0; i < num_stems; i++) {
-        char stem_output_dir[4096];
-        snprintf(stem_output_dir, sizeof(stem_output_dir), "%s" PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", parent_dir, stems[i].stem_name);
-        mkdir_p(stem_output_dir);
+        export_tasks[i].stem_idx = i;
+        export_tasks[i].stem = &stems[i];
+        export_tasks[i].parent_dir = parent_dir;
+        export_tasks[i].pass1_window_ms = pass1_window_ms;
+        export_tasks[i].pass2_win_ms = pass2_win_ms;
+        export_tasks[i].best_bar_length_ms = best_bar_length_ms;
+        export_tasks[i].accumulated_contour = accumulated_contour;
+        export_tasks[i].contour_len = contour_len;
+        export_tasks[i].contour_sample_count = contour_sample_count;
+        export_tasks[i].midpoint_s = midpoint_s;
+        export_tasks[i].longest_hp_start_s = longest_hp_start_s;
+        export_tasks[i].longest_hp_end_s = longest_hp_end_s;
+        export_tasks[i].midpoint_demarcation_line = midpoint_demarcation_line;
+        export_tasks[i].midpoint_buffer = midpoint_buffer;
+        export_tasks[i].res2_stem = &res2_stems[i];
+        export_tasks[i].export_counter = &export_counter;
+        export_tasks[i].counter_mutex = &export_mutex;
+        export_tasks[i].total_stems = num_stems;
+    }
 
-        // Export .ctbin
-        char ctbin_path[4096];
-        snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", stem_output_dir, stems[i].stem_name);
-        export_ctbin(ctbin_path, stems[i].mono_data, stems[i].len, stems[i].sr, pass2_win_ms);
-
-        // Export snapshots.bin and snapshots.js
-        int total_peaks = res2_stems[i].bands[0].num_peaks;
-        char snap_bin_path[4096];
-        snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", stem_output_dir);
-        FILE* f_snap = fopen(snap_bin_path, "wb");
-
-        int snap_len = pass2_win_ms + 1;
-        size_t float32_bytes_per_snap = snap_len * sizeof(float);
-        size_t total_snap_bytes = total_peaks * float32_bytes_per_snap;
-        uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
-
-        size_t snap_offset = 0;
-        for (int k = 0; k < total_peaks; k++) {
-            PeakResult* pr = &res2_stems[i].bands[0].peaks[k];
-            float* float32_snap = (float*)malloc(snap_len * sizeof(float));
-            for (int s = 0; s < snap_len; s++) float32_snap[s] = (float)pr->snapshot[s];
-
-            if (f_snap) fwrite(float32_snap, sizeof(float), snap_len, f_snap);
-            if (all_snap_buf) memcpy(all_snap_buf + snap_offset, float32_snap, float32_bytes_per_snap);
-
-            snap_offset += float32_bytes_per_snap;
-            free(float32_snap);
-        }
-        if (f_snap) fclose(f_snap);
-
-        char snap_js_path[4096];
-        snprintf(snap_js_path, sizeof(snap_js_path), "%s" PATH_SEP_STR "snapshots.js", stem_output_dir);
-        FILE* f_snap_js = fopen(snap_js_path, "w");
-        if (f_snap_js && all_snap_buf) {
-            size_t b64_len = 4 * ((total_snap_bytes + 2) / 3);
-            char* b64_str = (char*)malloc(b64_len + 1);
-            if (b64_str) {
-                base64_encode(all_snap_buf, total_snap_bytes, b64_str);
-                fprintf(f_snap_js, "window.snapshotsBase64 = '%s';\n", b64_str);
-                free(b64_str);
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, export_worker_win, &export_tasks[batch_start + i], 0, NULL);
             }
-            fclose(f_snap_js);
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) CloseHandle(threads[i]);
+            free(threads);
         }
-        free(all_snap_buf);
-
-        // Export manifest.json
-        char manifest_path[4096];
-        snprintf(manifest_path, sizeof(manifest_path), "%s" PATH_SEP_STR "manifest.json", stem_output_dir);
-        FILE* f_mf = fopen(manifest_path, "w");
-        if (f_mf) {
-            fprintf(f_mf, "{\n");
-            fprintf(f_mf, "  \"version\": 1,\n");
-            fprintf(f_mf, "  \"sample_rate\": %d,\n", stems[i].sr);
-            fprintf(f_mf, "  \"num_frames\": %d,\n", res2_stems[i].num_frames);
-            fprintf(f_mf, "  \"window_ms\": %d,\n", pass2_win_ms);
-            fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2_stems[i].tolerance);
-            fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2_stems[i].max_peak_value);
-            fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2_stems[i].min_score_seen);
-            fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2_stems[i].max_score_seen);
-            fprintf(f_mf, "  \"total_peaks\": %d,\n", total_peaks);
-            fprintf(f_mf, "  \"peaks\": [\n");
-
-            size_t curr_snap_offset = 0;
-            for (int k = 0; k < total_peaks; k++) {
-                PeakResult* pr = &res2_stems[i].bands[0].peaks[k];
-                fprintf(f_mf, "    {\n");
-                fprintf(f_mf, "      \"p_idx\": %d,\n", pr->p_idx);
-                fprintf(f_mf, "      \"band_idx\": %d,\n", pr->band_idx);
-                fprintf(f_mf, "      \"time_s\": %.6f,\n", pr->time);
-                fprintf(f_mf, "      \"time_ms\": %.3f,\n", pr->time * 1000.0);
-                fprintf(f_mf, "      \"peak_val\": %.6f,\n", pr->peak_val);
-                fprintf(f_mf, "      \"total_score\": %.6f,\n", pr->total_score);
-                fprintf(f_mf, "      \"detected_peak_val\": %.6f,\n", pr->detected_peak_val);
-                fprintf(f_mf, "      \"thresh_val\": %.6f,\n", pr->thresh_val);
-                fprintf(f_mf, "      \"left_min\": %.6f,\n", pr->left_min);
-                fprintf(f_mf, "      \"right_min\": %.6f,\n", pr->right_min);
-                fprintf(f_mf, "      \"prominence\": %.6f,\n", pr->prominence);
-                fprintf(f_mf, "      \"snap_offset\": %llu,\n", (unsigned long long)curr_snap_offset);
-                fprintf(f_mf, "      \"snap_len\": %d,\n", snap_len);
-                fprintf(f_mf, "      \"qualifiers\": [\n");
-                for (int q = 0; q < pr->num_qualifiers; q++) {
-                    fprintf(f_mf, "        {\"ms\": %.3f, \"val\": %.6f, \"orig_ms\": %.3f}%s\n",
-                            pr->qualifiers[q].ms, pr->qualifiers[q].val, pr->qualifiers[q].orig_ms,
-                            (q < pr->num_qualifiers - 1) ? "," : "");
-                }
-                fprintf(f_mf, "      ]\n");
-                fprintf(f_mf, "    }%s\n", (k < total_peaks - 1) ? "," : "");
-                curr_snap_offset += float32_bytes_per_snap;
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_worker_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_worker_threads) batch_count = max_worker_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, export_worker_posix, &export_tasks[batch_start + i]);
             }
-            fprintf(f_mf, "  ]\n");
-            fprintf(f_mf, "}\n");
-            fclose(f_mf);
+            for (int i = 0; i < batch_count; i++) pthread_join(threads[i], NULL);
+            free(threads);
         }
+    }
+#endif
 
-        // Copy audio WAV file into stem palette output directory
-        const char* last_slash = strrchr(stems[i].audio_filepath, '/');
-        const char* last_backslash = strrchr(stems[i].audio_filepath, '\\');
-        const char* audio_filename = stems[i].audio_filepath;
-        if (last_slash && last_slash >= audio_filename) audio_filename = last_slash + 1;
-        if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
-
-        char dst_stem_audio_path[4096];
-        snprintf(dst_stem_audio_path, sizeof(dst_stem_audio_path), "%s" PATH_SEP_STR "%s", stem_output_dir, audio_filename);
-
-        FILE* src_f = fopen(stems[i].audio_filepath, "rb");
-        if (src_f) {
-            FILE* dst_f = fopen(dst_stem_audio_path, "wb");
-            if (dst_f) {
-                char buf[65536];
-                size_t bytes_read;
-                while ((bytes_read = fread(buf, 1, sizeof(buf), src_f)) > 0) {
-                    fwrite(buf, 1, bytes_read, dst_f);
-                }
-                fclose(dst_f);
-            }
-            fclose(src_f);
-        }
-
-        // Copy matching passes text files into stem palette output directory
-        char stem_dir_path[2048], stem_stem_name[1024];
-        const char* last_s = strrchr(stems[i].audio_filepath, '/');
-        const char* last_bs = strrchr(stems[i].audio_filepath, '\\');
-        const char* fn = stems[i].audio_filepath;
-        if (last_s && last_s >= fn) fn = last_s + 1;
-        if (last_bs && last_bs >= fn) fn = last_bs + 1;
-        const char* dot = strrchr(fn, '.');
-        size_t s_len = dot ? (size_t)(dot - fn) : strlen(fn);
-        strncpy(stem_stem_name, fn, s_len);
-        stem_stem_name[s_len] = '\0';
-        size_t d_len = (size_t)(fn - stems[i].audio_filepath);
-        if (d_len > 0) { strncpy(stem_dir_path, stems[i].audio_filepath, d_len); stem_dir_path[d_len] = '\0'; }
-        else { strcpy(stem_dir_path, "." PATH_SEP_STR); }
-
-        if (strncmp(stem_stem_name, "palette", 7) == 0) {
-            char target_passes_stem[1024];
-            snprintf(target_passes_stem, sizeof(target_passes_stem), "passes%s", stem_stem_name + 7);
-            DIR* d = opendir(stem_dir_path);
-            if (d) {
-                struct dirent* entry;
-                while ((entry = readdir(d)) != NULL) {
-                    if (is_text_file_ext(entry->d_name) && strncmp(entry->d_name, target_passes_stem, strlen(target_passes_stem)) == 0) {
-                        char src_p[4096], dst_p[4096];
-                        snprintf(src_p, sizeof(src_p), "%s" PATH_SEP_STR "%s", stem_dir_path, entry->d_name);
-                        snprintf(dst_p, sizeof(dst_p), "%s" PATH_SEP_STR "%s", stem_output_dir, entry->d_name);
-                        FILE* sf = fopen(src_p, "rb");
-                        if (sf) {
-                            FILE* df = fopen(dst_p, "wb");
-                            if (df) {
-                                char b[65536]; size_t br;
-                                while ((br = fread(b, 1, sizeof(b), sf)) > 0) fwrite(b, 1, br, df);
-                                fclose(df);
-                            }
-                            fclose(sf);
-                        }
-                    }
-                }
-                closedir(d);
-            }
-        }
-
-        // Export stem assets and HTML report directly from res2_stems[i] result using shared group Pass 1 assets
-        export_single_stem_assets_from_res(
-            stem_output_dir,
-            stems[i].stem_name,
-            stems[i].mono_data,
-            stems[i].len,
-            stems[i].sr,
-            pass1_window_ms,
-            pass2_win_ms,
-            best_bar_length_ms,
-            NULL,
-            0,
-            accumulated_contour,
-            contour_len,
-            contour_sample_count,
-            midpoint_s,
-            longest_hp_start_s,
-            longest_hp_end_s,
-            midpoint_demarcation_line,
-            midpoint_buffer,
-            &res2_stems[i]
-        );
-
+    for (int i = 0; i < num_stems; i++) {
         analyzer_free_analysis(&res2_stems[i]);
     }
     free(res2_stems);
+    free(export_tasks);
+    group_mutex_destroy(&export_mutex);
 
     // 5. Mix all stem mono buffers into a combined audio buffer & write group_<group_name>.wav
     float* mono_combined = (float*)calloc(max_len, sizeof(float));

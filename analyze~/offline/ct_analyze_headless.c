@@ -358,6 +358,122 @@ static void* worker_thread_posix(void* arg) {
 }
 #endif
 
+typedef struct {
+    int stem_index;
+    char full_path[4096];
+    char filename[1024];
+    GroupStemInput* stem_out;
+    float** mono_buffer_out;
+    volatile int* decoded_counter;
+    GroupMutex* counter_mutex;
+    int total_stems;
+    int success;
+} GroupDecodeTask;
+
+#if defined(_WIN32) || defined(_WIN64)
+static unsigned int __stdcall decode_worker_win(void* arg) {
+    GroupDecodeTask* t = (GroupDecodeTask*)arg;
+    printf("[Thread %d/%d] Decoding stem audio: %s\n", t->stem_index + 1, t->total_stems, t->filename);
+    unsigned int channels, sample_rate;
+    drwav_uint64 total_pcm_frames;
+    float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
+        t->full_path, &channels, &sample_rate, &total_pcm_frames, NULL
+    );
+    if (!p_sample_data) {
+        printf("\nError: Could not open or decode WAV file: %s\n", t->full_path);
+        t->success = 0;
+        return 0;
+    }
+    float* mono_data = (float*)malloc(total_pcm_frames * sizeof(float));
+    if (!mono_data) {
+        drwav_free(p_sample_data, NULL);
+        t->success = 0;
+        return 0;
+    }
+    if (channels == 1) {
+        memcpy(mono_data, p_sample_data, total_pcm_frames * sizeof(float));
+    } else {
+        for (drwav_uint64 f = 0; f < total_pcm_frames; f++) {
+            double sum = 0.0;
+            for (unsigned int c = 0; c < channels; c++) sum += p_sample_data[f * channels + c];
+            mono_data[f] = (float)(sum / channels);
+        }
+    }
+    drwav_free(p_sample_data, NULL);
+
+    char stem_dir[2048], stem_name[1024];
+    get_directory_and_stem(t->full_path, stem_dir, stem_name);
+
+    t->stem_out->audio_filepath = strdup(t->full_path);
+    t->stem_out->stem_name = strdup(stem_name);
+    t->stem_out->mono_data = mono_data;
+    t->stem_out->len = (int)total_pcm_frames;
+    t->stem_out->sr = (int)sample_rate;
+
+    *(t->mono_buffer_out) = mono_data;
+    t->success = 1;
+
+    group_mutex_lock(t->counter_mutex);
+    (*(t->decoded_counter))++;
+    int cnt = *(t->decoded_counter);
+    print_progress_bar(cnt, t->total_stems, "Decoding Audio Stems");
+    group_mutex_unlock(t->counter_mutex);
+
+    return 0;
+}
+#else
+static void* decode_worker_posix(void* arg) {
+    GroupDecodeTask* t = (GroupDecodeTask*)arg;
+    printf("[Thread %d/%d] Decoding stem audio: %s\n", t->stem_index + 1, t->total_stems, t->filename);
+    unsigned int channels, sample_rate;
+    drwav_uint64 total_pcm_frames;
+    float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
+        t->full_path, &channels, &sample_rate, &total_pcm_frames, NULL
+    );
+    if (!p_sample_data) {
+        printf("\nError: Could not open or decode WAV file: %s\n", t->full_path);
+        t->success = 0;
+        return NULL;
+    }
+    float* mono_data = (float*)malloc(total_pcm_frames * sizeof(float));
+    if (!mono_data) {
+        drwav_free(p_sample_data, NULL);
+        t->success = 0;
+        return NULL;
+    }
+    if (channels == 1) {
+        memcpy(mono_data, p_sample_data, total_pcm_frames * sizeof(float));
+    } else {
+        for (drwav_uint64 f = 0; f < total_pcm_frames; f++) {
+            double sum = 0.0;
+            for (unsigned int c = 0; c < channels; c++) sum += p_sample_data[f * channels + c];
+            mono_data[f] = (float)(sum / channels);
+        }
+    }
+    drwav_free(p_sample_data, NULL);
+
+    char stem_dir[2048], stem_name[1024];
+    get_directory_and_stem(t->full_path, stem_dir, stem_name);
+
+    t->stem_out->audio_filepath = strdup(t->full_path);
+    t->stem_out->stem_name = strdup(stem_name);
+    t->stem_out->mono_data = mono_data;
+    t->stem_out->len = (int)total_pcm_frames;
+    t->stem_out->sr = (int)sample_rate;
+
+    *(t->mono_buffer_out) = mono_data;
+    t->success = 1;
+
+    group_mutex_lock(t->counter_mutex);
+    (*(t->decoded_counter))++;
+    int cnt = *(t->decoded_counter);
+    print_progress_bar(cnt, t->total_stems, "Decoding Audio Stems");
+    group_mutex_unlock(t->counter_mutex);
+
+    return NULL;
+}
+#endif
+
 static int process_group_files(const FileList* wav_files, const char* base_dir, int window_ms) {
     if (!wav_files || wav_files->count <= 0) return 0;
     int num_stems = wav_files->count;
@@ -366,46 +482,92 @@ static int process_group_files(const FileList* wav_files, const char* base_dir, 
 
     GroupStemInput* stems = (GroupStemInput*)calloc(num_stems, sizeof(GroupStemInput));
     float** mono_buffers = (float**)calloc(num_stems, sizeof(float*));
+    GroupDecodeTask* decode_tasks = (GroupDecodeTask*)calloc(num_stems, sizeof(GroupDecodeTask));
+
+    int max_threads = 4;
+#if defined(_WIN32) || defined(_WIN64)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    if (sysinfo.dwNumberOfProcessors > 0) max_threads = (int)sysinfo.dwNumberOfProcessors;
+#else
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nprocs > 0) max_threads = (int)nprocs;
+#endif
+    if (max_threads > 16) max_threads = 16;
+    if (max_threads < 1) max_threads = 1;
+
+    volatile int decoded_count = 0;
+    GroupMutex counter_mutex;
+    group_mutex_init(&counter_mutex);
+
+    print_progress_bar(0, num_stems, "Decoding Audio Stems");
 
     for (int i = 0; i < num_stems; i++) {
-        char full_path[4096];
-        snprintf(full_path, sizeof(full_path), "%s%s", base_dir, wav_files->items[i]);
+        decode_tasks[i].stem_index = i;
+        snprintf(decode_tasks[i].full_path, sizeof(decode_tasks[i].full_path), "%s%s", base_dir, wav_files->items[i]);
+        strncpy(decode_tasks[i].filename, wav_files->items[i], sizeof(decode_tasks[i].filename) - 1);
+        decode_tasks[i].stem_out = &stems[i];
+        decode_tasks[i].mono_buffer_out = &mono_buffers[i];
+        decode_tasks[i].decoded_counter = &decoded_count;
+        decode_tasks[i].counter_mutex = &counter_mutex;
+        decode_tasks[i].total_stems = num_stems;
+        decode_tasks[i].success = 0;
+    }
 
-        unsigned int channels, sample_rate;
-        drwav_uint64 total_pcm_frames;
-        float* p_sample_data = drwav_open_file_and_read_pcm_frames_f32(
-            full_path, &channels, &sample_rate, &total_pcm_frames, NULL
-        );
-
-        if (!p_sample_data) {
-            printf("Error: Could not open or decode WAV file for grouping: %s\n", full_path);
-            for (int k = 0; k < i; k++) { free((void*)stems[k].audio_filepath); free((void*)stems[k].stem_name); free(mono_buffers[k]); }
-            free(stems); free(mono_buffers);
-            return 0;
-        }
-
-        float* mono_data = (float*)malloc(total_pcm_frames * sizeof(float));
-        if (channels == 1) {
-            memcpy(mono_data, p_sample_data, total_pcm_frames * sizeof(float));
-        } else {
-            for (drwav_uint64 f = 0; f < total_pcm_frames; f++) {
-                double sum = 0.0;
-                for (unsigned int c = 0; c < channels; c++) sum += p_sample_data[f * channels + c];
-                mono_data[f] = (float)(sum / channels);
+#if defined(_WIN32) || defined(_WIN64)
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_threads) batch_count = max_threads;
+        HANDLE* threads = (HANDLE*)malloc(batch_count * sizeof(HANDLE));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                threads[i] = (HANDLE)_beginthreadex(NULL, 0, decode_worker_win, &decode_tasks[batch_start + i], 0, NULL);
             }
+            WaitForMultipleObjects(batch_count, threads, TRUE, INFINITE);
+            for (int i = 0; i < batch_count; i++) {
+                CloseHandle(threads[i]);
+            }
+            free(threads);
         }
-        drwav_free(p_sample_data, NULL);
+    }
+#else
+    for (int batch_start = 0; batch_start < num_stems; batch_start += max_threads) {
+        int batch_count = num_stems - batch_start;
+        if (batch_count > max_threads) batch_count = max_threads;
+        pthread_t* threads = (pthread_t*)malloc(batch_count * sizeof(pthread_t));
+        if (threads) {
+            for (int i = 0; i < batch_count; i++) {
+                pthread_create(&threads[i], NULL, decode_worker_posix, &decode_tasks[batch_start + i]);
+            }
+            for (int i = 0; i < batch_count; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            free(threads);
+        }
+    }
+#endif
 
-        mono_buffers[i] = mono_data;
+    group_mutex_destroy(&counter_mutex);
 
-        char stem_dir[2048], stem_name[1024];
-        get_directory_and_stem(full_path, stem_dir, stem_name);
+    int decode_failed = 0;
+    for (int i = 0; i < num_stems; i++) {
+        if (!decode_tasks[i].success) {
+            decode_failed = 1;
+            break;
+        }
+    }
+    free(decode_tasks);
 
-        stems[i].audio_filepath = strdup(full_path);
-        stems[i].stem_name = strdup(stem_name);
-        stems[i].mono_data = mono_data;
-        stems[i].len = (int)total_pcm_frames;
-        stems[i].sr = (int)sample_rate;
+    if (decode_failed) {
+        printf("Error: Decoding failed for one or more stems.\n");
+        for (int k = 0; k < num_stems; k++) {
+            if (stems[k].audio_filepath) free((void*)stems[k].audio_filepath);
+            if (stems[k].stem_name) free((void*)stems[k].stem_name);
+            if (mono_buffers[k]) free(mono_buffers[k]);
+        }
+        free(stems);
+        free(mono_buffers);
+        return 0;
     }
 
     // Determine group name from directory or default

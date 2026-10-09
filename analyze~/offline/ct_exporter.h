@@ -13,7 +13,24 @@ extern "C" {
 #define PATH_SEP_STR "/"
 #endif
 
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#include <process.h>
+typedef CRITICAL_SECTION GroupMutex;
+#else
+#include <pthread.h>
+#include <unistd.h>
+typedef pthread_mutex_t GroupMutex;
+#endif
+
 #include "cumulative_transience.h"
+
+void group_mutex_init(GroupMutex* mutex);
+void group_mutex_lock(void* lock_obj);
+void group_mutex_unlock(void* lock_obj);
+void group_mutex_destroy(GroupMutex* mutex);
+
+void print_progress_bar(int current, int total, const char* label);
 
 int mkdir_p(const char* path);
 
