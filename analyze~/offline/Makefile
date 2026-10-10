@@ -11,10 +11,10 @@ OBJECTS = $(SOURCES:.c=.o)
 all: $(TARGET) $(WIN_TARGET)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) $(OBJECTS) -o $@ $(LDFLAGS) || $(CC) $(CFLAGS) $(OBJECTS) -o $@ -lm -lpthread
+	$(CC) $(CFLAGS) $(OBJECTS) -o $@ $(LDFLAGS) 2>/dev/null || $(CC) $(CFLAGS) $(OBJECTS) -o $@ -lm -lpthread
 
 $(WIN_TARGET): $(SOURCES)
-	$(WIN_CC) $(CFLAGS) $(SOURCES) -o $@ -lm -lpthread -lOpenCL || $(WIN_CC) $(CFLAGS) $(SOURCES) -o $@ -lm
+	$(WIN_CC) $(CFLAGS) $(SOURCES) -o $@ -lm -lpthread -lOpenCL 2>/dev/null || $(WIN_CC) $(CFLAGS) $(SOURCES) -o $@ -lm
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

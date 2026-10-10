@@ -261,10 +261,12 @@ int analyzer_process_peak(TransientAnalyzer* self, int p_idx, int global_p_idx, 
 
     int win_len = self->window_ms + 1;
     int start = p_idx - self->window_ms;
+    double peak_val = (double)env_ptr[p_idx];
     double peak_flux[BUFFER_LEN];
     for (int i = 0; i < win_len; i++) {
         int idx = start + i;
-        peak_flux[i] = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
+        double raw_flux = (idx < 0 || idx >= env_len) ? 0.0 : (double)env_ptr[idx];
+        peak_flux[i] = raw_flux * peak_val;
     }
 
     if (self->lock_func) self->lock_func(self->lock_obj);
