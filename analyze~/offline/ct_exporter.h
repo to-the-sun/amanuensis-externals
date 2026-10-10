@@ -59,7 +59,8 @@ int export_group_assets_and_html(
     int num_stems,
     const char* parent_dir,
     const char* group_name,
-    int pass1_window_ms
+    int pass1_window_ms,
+    const char* original_audio_filepath
 );
 
 #ifdef __cplusplus

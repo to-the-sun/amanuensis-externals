@@ -2621,7 +2621,8 @@ int export_group_assets_and_html(
     int num_stems,
     const char* parent_dir,
     const char* group_name,
-    int pass1_window_ms
+    int pass1_window_ms,
+    const char* original_audio_filepath
 ) {
     if (!stems || num_stems <= 0 || !parent_dir || !group_name) return 0;
     if (pass1_window_ms > 15000) pass1_window_ms = 15000;
@@ -3051,30 +3052,107 @@ int export_group_assets_and_html(
     free(export_tasks);
     group_mutex_destroy(&export_mutex);
 
-    // 5. Mix all stem mono buffers into a combined audio buffer & write group_<group_name>.wav
-    float* mono_combined = (float*)calloc(max_len, sizeof(float));
-    if (mono_combined) {
-        float max_abs_val = 0.0f;
-        for (int i = 0; i < num_stems; i++) {
-            for (int s = 0; s < stems[i].len; s++) {
-                mono_combined[s] += stems[i].mono_data[s];
+    // 5. Obtain group audio buffer: check for original audio file first before reconstructing from stems
+    float* mono_combined = NULL;
+    int group_audio_len = 0;
+    int group_audio_sr = common_sr;
+    char loaded_orig_path[4096] = "";
+
+    // Candidate search list for original audio file
+    const char* cand_paths[3] = { NULL, NULL, NULL };
+    int num_cands = 0;
+
+    if (original_audio_filepath && original_audio_filepath[0] != '\0') {
+        cand_paths[num_cands++] = original_audio_filepath;
+    }
+
+    char fallback_orig[4096];
+    snprintf(fallback_orig, sizeof(fallback_orig), "%s" PATH_SEP_STR "original.wav", parent_dir);
+    cand_paths[num_cands++] = fallback_orig;
+
+    char fallback_glued[4096];
+    snprintf(fallback_glued, sizeof(fallback_glued), "%s" PATH_SEP_STR "glued.wav", parent_dir);
+    cand_paths[num_cands++] = fallback_glued;
+
+    for (int c = 0; c < num_cands; c++) {
+        const char* path_to_try = cand_paths[c];
+        if (!path_to_try || path_to_try[0] == '\0') continue;
+
+        unsigned int orig_ch = 0, orig_sr = 0;
+        drwav_uint64 orig_frames = 0;
+        float* orig_pcm = drwav_open_file_and_read_pcm_frames_f32(path_to_try, &orig_ch, &orig_sr, &orig_frames, NULL);
+
+        if (orig_pcm && orig_frames > 0 && orig_sr > 0) {
+            mono_combined = (float*)malloc(orig_frames * sizeof(float));
+            if (mono_combined) {
+                group_audio_len = (int)orig_frames;
+                group_audio_sr = (int)orig_sr;
+                strncpy(loaded_orig_path, path_to_try, sizeof(loaded_orig_path) - 1);
+
+                if (orig_ch == 1) {
+                    memcpy(mono_combined, orig_pcm, orig_frames * sizeof(float));
+                } else {
+                    for (drwav_uint64 f = 0; f < orig_frames; f++) {
+                        double sum = 0.0;
+                        for (unsigned int ch_i = 0; ch_i < orig_ch; ch_i++) {
+                            sum += orig_pcm[f * orig_ch + ch_i];
+                        }
+                        mono_combined[f] = (float)(sum / orig_ch);
+                    }
+                }
+                drwav_free(orig_pcm, NULL);
+
+                float max_abs_val = 0.0f;
+                for (int s = 0; s < group_audio_len; s++) {
+                    float abs_smp = fabsf(mono_combined[s]);
+                    if (abs_smp > max_abs_val) max_abs_val = abs_smp;
+                }
+
+                if (max_abs_val > 0.0f) {
+                    float norm_factor = 1.0f / max_abs_val;
+                    for (int s = 0; s < group_audio_len; s++) {
+                        mono_combined[s] *= norm_factor;
+                    }
+                }
+
+                printf("\nUsing original audio file for group report: %s\n", loaded_orig_path);
+                break;
+            }
+            drwav_free(orig_pcm, NULL);
+        }
+    }
+
+    if (!mono_combined) {
+        printf("\nReconstructing group audio file from %d stems...\n", num_stems);
+        group_audio_len = max_len;
+        group_audio_sr = common_sr;
+        mono_combined = (float*)calloc(group_audio_len, sizeof(float));
+
+        if (mono_combined) {
+            float max_abs_val = 0.0f;
+            for (int i = 0; i < num_stems; i++) {
+                for (int s = 0; s < stems[i].len; s++) {
+                    mono_combined[s] += stems[i].mono_data[s];
+                }
+            }
+
+            for (int s = 0; s < group_audio_len; s++) {
+                float abs_smp = fabsf(mono_combined[s]);
+                if (abs_smp > max_abs_val) {
+                    max_abs_val = abs_smp;
+                }
+            }
+
+            if (max_abs_val > 0.0f) {
+                float norm_factor = 1.0f / max_abs_val;
+                for (int s = 0; s < group_audio_len; s++) {
+                    mono_combined[s] *= norm_factor;
+                }
             }
         }
+    }
 
-        for (int s = 0; s < max_len; s++) {
-            float abs_smp = fabsf(mono_combined[s]);
-            if (abs_smp > max_abs_val) {
-                max_abs_val = abs_smp;
-            }
-        }
-
-        if (max_abs_val > 0.0f) {
-            float norm_factor = 1.0f / max_abs_val;
-            for (int s = 0; s < max_len; s++) {
-                mono_combined[s] *= norm_factor;
-            }
-        }
-
+    if (mono_combined && group_audio_len > 0) {
         char group_wav_filename[1024];
         snprintf(group_wav_filename, sizeof(group_wav_filename), "group_%s.wav", group_name);
 
@@ -3085,20 +3163,20 @@ int export_group_assets_and_html(
         format.container = drwav_container_riff;
         format.format = DR_WAVE_FORMAT_PCM;
         format.channels = 1;
-        format.sampleRate = common_sr;
+        format.sampleRate = group_audio_sr;
         format.bitsPerSample = 16;
 
         drwav group_wav_out;
         if (drwav_init_file_write(&group_wav_out, group_wav_path, &format, NULL)) {
-            int16_t* pcm16 = (int16_t*)malloc(max_len * sizeof(int16_t));
+            int16_t* pcm16 = (int16_t*)malloc(group_audio_len * sizeof(int16_t));
             if (pcm16) {
-                for (int s = 0; s < max_len; s++) {
+                for (int s = 0; s < group_audio_len; s++) {
                     float smp = mono_combined[s];
                     if (smp > 1.0f) smp = 1.0f;
                     if (smp < -1.0f) smp = -1.0f;
                     pcm16[s] = (int16_t)(smp * 32767.0f);
                 }
-                drwav_write_pcm_frames(&group_wav_out, max_len, pcm16);
+                drwav_write_pcm_frames(&group_wav_out, group_audio_len, pcm16);
                 free(pcm16);
             }
             drwav_uninit(&group_wav_out);
@@ -3108,15 +3186,15 @@ int export_group_assets_and_html(
         char group_stem_name[1024];
         snprintf(group_stem_name, sizeof(group_stem_name), "group_%s", group_name);
 
-        // Run Pass 2 on mono_combined with group_shared to get group res2
+        // Run Pass 2 on group mono audio with group_shared to get group res2
         FullAnalysisResult res2_group;
-        if (analyzer_batch_analyze_shared(mono_combined, max_len, common_sr, pass2_win_ms, 1, &group_shared, &res2_group)) {
+        if (analyzer_batch_analyze_shared(mono_combined, group_audio_len, group_audio_sr, pass2_win_ms, 1, &group_shared, &res2_group)) {
             export_single_stem_assets_from_res(
                 group_output_dir,
                 group_stem_name,
                 mono_combined,
-                max_len,
-                common_sr,
+                group_audio_len,
+                group_audio_sr,
                 pass2_win_ms,
                 best_bar_length_ms,
                 NULL,
