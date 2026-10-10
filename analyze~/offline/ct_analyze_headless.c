@@ -474,7 +474,7 @@ static void* decode_worker_posix(void* arg) {
 }
 #endif
 
-static int process_group_files(const FileList* wav_files, const char* base_dir, int window_ms) {
+static int process_group_files(const FileList* wav_files, const char* base_dir, int window_ms, const char* original_audio_filepath) {
     if (!wav_files || wav_files->count <= 0) return 0;
     int num_stems = wav_files->count;
     printf("\n------------------------------------------------------------\n");
@@ -578,13 +578,17 @@ static int process_group_files(const FileList* wav_files, const char* base_dir, 
     }
 
     printf("\nRunning grouped cumulative transience analysis & asset exports in pure C...\n");
+    if (original_audio_filepath && original_audio_filepath[0] != '\0') {
+        printf("Original audio file specified: %s\n", original_audio_filepath);
+    }
 
     int success = export_group_assets_and_html(
         stems,
         num_stems,
         base_dir,
         group_name,
-        window_ms
+        window_ms,
+        original_audio_filepath
     );
 
     for (int i = 0; i < num_stems; i++) {
@@ -612,18 +616,26 @@ int main(int argc, char** argv) {
     printf("============================================================\n\n");
 
     int is_group_mode = 0;
+    char target_dir[2048] = "";
+    char original_audio_filepath[4096] = "";
+    int window_ms = 15000;
 
     for (int i = 1; i < argc; i++) {
         if (iequals(argv[i], "--group") || iequals(argv[i], "-g")) {
             is_group_mode = 1;
-        }
-    }
-
-    char target_dir[2048] = "";
-    int window_ms = 15000;
-
-    for (int i = 1; i < argc; i++) {
-        if (!iequals(argv[i], "--group") && !iequals(argv[i], "-g")) {
+        } else if (iequals(argv[i], "--original") || iequals(argv[i], "-o") || iequals(argv[i], "--original-audio")) {
+            if (i + 1 < argc) {
+                strncpy(original_audio_filepath, argv[i + 1], sizeof(original_audio_filepath) - 1);
+                original_audio_filepath[sizeof(original_audio_filepath) - 1] = '\0';
+                i++;
+            }
+        } else if (istarts_with(argv[i], "--original=") || istarts_with(argv[i], "-o=") || istarts_with(argv[i], "--original-audio=")) {
+            const char* eq = strchr(argv[i], '=');
+            if (eq) {
+                strncpy(original_audio_filepath, eq + 1, sizeof(original_audio_filepath) - 1);
+                original_audio_filepath[sizeof(original_audio_filepath) - 1] = '\0';
+            }
+        } else {
             if (target_dir[0] == '\0') {
                 strncpy(target_dir, argv[i], sizeof(target_dir) - 1);
                 target_dir[sizeof(target_dir) - 1] = '\0';
@@ -705,7 +717,12 @@ int main(int argc, char** argv) {
     }
 
     if (is_group_mode) {
-        int grp_success = process_group_files(&wav_files, exe_dir, window_ms);
+        int grp_success = process_group_files(
+            &wav_files,
+            exe_dir,
+            window_ms,
+            original_audio_filepath[0] != '\0' ? original_audio_filepath : NULL
+        );
         file_list_free(&wav_files);
         printf("\nPress Enter to exit...");
         getchar();
