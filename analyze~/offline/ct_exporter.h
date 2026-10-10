@@ -34,6 +34,7 @@ void print_progress_bar(int current, int total, const char* label);
 
 int mkdir_p(const char* path);
 
+int export_ctbin_from_res(const char* output_filepath, const FullAnalysisResult* res, int sr, int window_ms);
 int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms);
 
 int export_all_assets_and_html(
