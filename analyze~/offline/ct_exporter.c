@@ -160,6 +160,10 @@ static void url_encode_filename(const char* src, char* dst, size_t dst_size) {
             dst[d++] = '%';
             dst[d++] = '3';
             dst[d++] = 'F';
+        } else if (c == ' ') {
+            dst[d++] = '%';
+            dst[d++] = '2';
+            dst[d++] = '0';
         } else {
             dst[d++] = c;
         }
@@ -315,56 +319,48 @@ static void base64_encode(const unsigned char* in, size_t in_len, char* out) {
     out[j] = '\0';
 }
 
-int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms) {
-    if (!output_filepath || !y || len <= 0 || sr <= 0) return 0;
+int export_ctbin_from_res(const char* output_filepath, const FullAnalysisResult* res, int sr, int window_ms) {
+    if (!output_filepath || !res || sr <= 0) return 0;
     if (window_ms > 15000) window_ms = 15000;
     if (window_ms < 5000) window_ms = 5000;
 
-    FullAnalysisResult res;
-    int success = analyzer_batch_analyze(y, len, sr, window_ms, 1, &res);
-    if (!success) return 0;
-
     FILE* f = fopen(output_filepath, "wb");
-    if (!f) {
-        analyzer_free_analysis(&res);
-        return 0;
-    }
+    if (!f) return 0;
 
     int32_t total_peaks = 0;
-    for (int b = 0; b < res.num_bands; b++) total_peaks += res.bands[b].num_peaks;
+    for (int b = 0; b < res->num_bands; b++) total_peaks += res->bands[b].num_peaks;
 
     CTBinHeader header;
     memcpy(header.magic, "CTBN", 4);
     header.version = 1;
     header.sample_rate = sr;
-    header.num_frames = res.num_frames;
+    header.num_frames = res->num_frames;
     header.window_ms = window_ms;
-    header.tolerance = res.tolerance;
-    header.max_peak_value = res.max_peak_value;
-    header.min_score_seen = res.min_score_seen;
-    header.max_score_seen = res.max_score_seen;
+    header.tolerance = res->tolerance;
+    header.max_peak_value = res->max_peak_value;
+    header.min_score_seen = res->min_score_seen;
+    header.max_score_seen = res->max_score_seen;
     header.total_peaks = total_peaks;
 
     if (!write_bytes(f, &header, sizeof(CTBinHeader), 1)) {
         fclose(f);
-        analyzer_free_analysis(&res);
         return 0;
     }
 
-    int num_frames = res.num_frames;
+    int num_frames = res->num_frames;
     if (num_frames > 0) {
-        write_bytes(f, res.times, sizeof(float), num_frames);
-        write_bytes(f, res.ratings, sizeof(double), num_frames);
-        write_bytes(f, res.highest_peaks_ms, sizeof(double), num_frames);
-        write_bytes(f, res.demarcation_lines, sizeof(double), num_frames);
-        write_bytes(f, res.rolling_global_flux_avg, sizeof(float), num_frames);
-        write_bytes(f, res.rolling_global_smoothing_avg, sizeof(float), num_frames);
+        write_bytes(f, res->times, sizeof(float), num_frames);
+        write_bytes(f, res->ratings, sizeof(double), num_frames);
+        write_bytes(f, res->highest_peaks_ms, sizeof(double), num_frames);
+        write_bytes(f, res->demarcation_lines, sizeof(double), num_frames);
+        write_bytes(f, res->rolling_global_flux_avg, sizeof(float), num_frames);
+        write_bytes(f, res->rolling_global_smoothing_avg, sizeof(float), num_frames);
     }
 
     int snap_len = window_ms + 1;
-    for (int b = 0; b < res.num_bands; b++) {
-        for (int k = 0; k < res.bands[b].num_peaks; k++) {
-            PeakResult* pr = &res.bands[b].peaks[k];
+    for (int b = 0; b < res->num_bands; b++) {
+        for (int k = 0; k < res->bands[b].num_peaks; k++) {
+            PeakResult* pr = &res->bands[b].peaks[k];
             int32_t p_idx = pr->p_idx;
             int32_t band_idx = pr->band_idx;
             double time_s = pr->time;
@@ -402,8 +398,21 @@ int export_ctbin(const char* output_filepath, const float* y, int len, int sr, i
     }
 
     fclose(f);
-    analyzer_free_analysis(&res);
     return 1;
+}
+
+int export_ctbin(const char* output_filepath, const float* y, int len, int sr, int window_ms) {
+    if (!output_filepath || !y || len <= 0 || sr <= 0) return 0;
+    if (window_ms > 15000) window_ms = 15000;
+    if (window_ms < 5000) window_ms = 5000;
+
+    FullAnalysisResult res;
+    int success = analyzer_batch_analyze(y, len, sr, window_ms, 1, &res);
+    if (!success) return 0;
+
+    int ret = export_ctbin_from_res(output_filepath, &res, sr, window_ms);
+    analyzer_free_analysis(&res);
+    return ret;
 }
 
 static int analyzer_batch_analyze_shared(
@@ -536,10 +545,10 @@ static int export_single_stem_assets_from_res(
     const FullAnalysisResult* res2
 ) {
 
-    // Export .ctbin binary file for Pass 2
+    // Export .ctbin binary file for Pass 2 directly from existing res2
     char ctbin_path[4096];
     snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", output_dir, stem_name);
-    export_ctbin(ctbin_path, y, len, sr, pass2_win_ms);
+    export_ctbin_from_res(ctbin_path, res2, sr, pass2_win_ms);
 
     // Segment transience grouping & scoring
     double total_duration_ms = ((double)len / (double)sr) * 1000.0;
@@ -2403,109 +2412,9 @@ static void process_single_stem_export(
     snprintf(stem_output_dir, sizeof(stem_output_dir), "%s" PATH_SEP_STR "[palettes]" PATH_SEP_STR "%s", parent_dir, stem->stem_name);
     mkdir_p(stem_output_dir);
 
-    // Export .ctbin
-    char ctbin_path[4096];
-    snprintf(ctbin_path, sizeof(ctbin_path), "%s" PATH_SEP_STR "%s.ctbin", stem_output_dir, stem->stem_name);
-    export_ctbin(ctbin_path, stem->mono_data, stem->len, stem->sr, pass2_win_ms);
-
-    // Export snapshots.bin and snapshots.js
-    int total_peaks = res2_stem->bands[0].num_peaks;
-    char snap_bin_path[4096];
-    snprintf(snap_bin_path, sizeof(snap_bin_path), "%s" PATH_SEP_STR "snapshots.bin", stem_output_dir);
-    FILE* f_snap = fopen(snap_bin_path, "wb");
-
-    int snap_len = pass2_win_ms + 1;
-    size_t float32_bytes_per_snap = snap_len * sizeof(float);
-    size_t total_snap_bytes = total_peaks * float32_bytes_per_snap;
-    uint8_t* all_snap_buf = (uint8_t*)malloc(total_snap_bytes ? total_snap_bytes : 1);
-
-    size_t snap_offset = 0;
-    for (int k = 0; k < total_peaks; k++) {
-        PeakResult* pr = &res2_stem->bands[0].peaks[k];
-        float* float32_snap = (float*)malloc(snap_len * sizeof(float));
-        for (int s = 0; s < snap_len; s++) float32_snap[s] = (float)pr->snapshot[s];
-
-        if (f_snap) fwrite(float32_snap, sizeof(float), snap_len, f_snap);
-        if (all_snap_buf) memcpy(all_snap_buf + snap_offset, float32_snap, float32_bytes_per_snap);
-
-        snap_offset += float32_bytes_per_snap;
-        free(float32_snap);
-    }
-    if (f_snap) fclose(f_snap);
-
-    char snap_js_path[4096];
-    snprintf(snap_js_path, sizeof(snap_js_path), "%s" PATH_SEP_STR "snapshots.js", stem_output_dir);
-    FILE* f_snap_js = fopen(snap_js_path, "w");
-    if (f_snap_js && all_snap_buf) {
-        size_t b64_len = 4 * ((total_snap_bytes + 2) / 3);
-        char* b64_str = (char*)malloc(b64_len + 1);
-        if (b64_str) {
-            base64_encode(all_snap_buf, total_snap_bytes, b64_str);
-            fprintf(f_snap_js, "window.snapshotsBase64 = '%s';\n", b64_str);
-            free(b64_str);
-        }
-        fclose(f_snap_js);
-    }
-    free(all_snap_buf);
-
-    // Export manifest.json
-    char manifest_path[4096];
-    snprintf(manifest_path, sizeof(manifest_path), "%s" PATH_SEP_STR "manifest.json", stem_output_dir);
-    FILE* f_mf = fopen(manifest_path, "w");
-    if (f_mf) {
-        fprintf(f_mf, "{\n");
-        fprintf(f_mf, "  \"version\": 1,\n");
-        fprintf(f_mf, "  \"sample_rate\": %d,\n", stem->sr);
-        fprintf(f_mf, "  \"num_frames\": %d,\n", res2_stem->num_frames);
-        fprintf(f_mf, "  \"window_ms\": %d,\n", pass2_win_ms);
-        fprintf(f_mf, "  \"tolerance\": %.4f,\n", res2_stem->tolerance);
-        fprintf(f_mf, "  \"max_peak_value\": %.6f,\n", res2_stem->max_peak_value);
-        fprintf(f_mf, "  \"min_score_seen\": %.6f,\n", res2_stem->min_score_seen);
-        fprintf(f_mf, "  \"max_score_seen\": %.6f,\n", res2_stem->max_score_seen);
-        fprintf(f_mf, "  \"total_peaks\": %d,\n", total_peaks);
-        fprintf(f_mf, "  \"peaks\": [\n");
-
-        size_t curr_snap_offset = 0;
-        for (int k = 0; k < total_peaks; k++) {
-            PeakResult* pr = &res2_stem->bands[0].peaks[k];
-            fprintf(f_mf, "    {\n");
-            fprintf(f_mf, "      \"p_idx\": %d,\n", pr->p_idx);
-            fprintf(f_mf, "      \"band_idx\": %d,\n", pr->band_idx);
-            fprintf(f_mf, "      \"time_s\": %.6f,\n", pr->time);
-            fprintf(f_mf, "      \"time_ms\": %.3f,\n", pr->time * 1000.0);
-            fprintf(f_mf, "      \"peak_val\": %.6f,\n", pr->peak_val);
-            fprintf(f_mf, "      \"total_score\": %.6f,\n", pr->total_score);
-            fprintf(f_mf, "      \"detected_peak_val\": %.6f,\n", pr->detected_peak_val);
-            fprintf(f_mf, "      \"thresh_val\": %.6f,\n", pr->thresh_val);
-            fprintf(f_mf, "      \"left_min\": %.6f,\n", pr->left_min);
-            fprintf(f_mf, "      \"right_min\": %.6f,\n", pr->right_min);
-            fprintf(f_mf, "      \"prominence\": %.6f,\n", pr->prominence);
-            fprintf(f_mf, "      \"snap_offset\": %llu,\n", (unsigned long long)curr_snap_offset);
-            fprintf(f_mf, "      \"snap_len\": %d,\n", snap_len);
-            fprintf(f_mf, "      \"qualifiers\": [\n");
-            for (int q = 0; q < pr->num_qualifiers; q++) {
-                fprintf(f_mf, "        {\"ms\": %.3f, \"val\": %.6f, \"orig_ms\": %.3f}%s\n",
-                        pr->qualifiers[q].ms, pr->qualifiers[q].val, pr->qualifiers[q].orig_ms,
-                        (q < pr->num_qualifiers - 1) ? "," : "");
-            }
-            fprintf(f_mf, "      ]\n");
-            fprintf(f_mf, "    }%s\n", (k < total_peaks - 1) ? "," : "");
-            curr_snap_offset += float32_bytes_per_snap;
-        }
-        fprintf(f_mf, "  ]\n");
-        fprintf(f_mf, "}\n");
-        fclose(f_mf);
-    }
-
-    // Copy audio WAV file into stem palette output directory
-    const char* last_slash = strrchr(stem->audio_filepath, '/');
-    const char* last_backslash = strrchr(stem->audio_filepath, '\\');
-    const char* audio_filename = stem->audio_filepath;
-    if (last_slash && last_slash >= audio_filename) audio_filename = last_slash + 1;
-    if (last_backslash && last_backslash >= audio_filename) audio_filename = last_backslash + 1;
-
+    // Copy audio WAV file into stem palette output directory as <stem_name>.wav
     char dst_stem_audio_path[4096];
-    snprintf(dst_stem_audio_path, sizeof(dst_stem_audio_path), "%s" PATH_SEP_STR "%s", stem_output_dir, audio_filename);
+    snprintf(dst_stem_audio_path, sizeof(dst_stem_audio_path), "%s" PATH_SEP_STR "%s.wav", stem_output_dir, stem->stem_name);
 
     FILE* src_f = fopen(stem->audio_filepath, "rb");
     if (src_f) {
